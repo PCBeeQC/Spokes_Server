@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
@@ -37,6 +38,9 @@ public class NotificationRoutingServiceTests : IDisposable
         private readonly Mock<ICryptoService> _mockCrypto;
         private readonly Mock<IDataProtectionProvider> _mockDataProtection;
         private readonly Mock<IDataProtector> _mockDataProtector;
+        private readonly EmailAccountRepository _emailAccounts;
+        private readonly EmailInboxRepository _emailInboxes;
+        private readonly EmailSendingIdentityRepository _emailIdentities;
         private readonly EmailFolderRepository _emailFolders;
         private readonly EmailMessageRepository _emailMessages;
         private readonly ChatChannelRepository _chatChannels;
@@ -52,12 +56,13 @@ public class NotificationRoutingServiceTests : IDisposable
             _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_NotifRouting_" + Guid.NewGuid().ToString());
             Directory.CreateDirectory(_testDataDir);
 
-            var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir } };
+            var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
             _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
 
             _companyProfile = new CompanyProfileRepository(_persistence, _config);
+            _companyProfile.Save(new CompanyProfile { Edition = "Business" });
             _employees = new EmployeeRepository(_persistence, _config);
             _projects = new ProjectRepository(_persistence, _config);
             _readStates = new ChatReadStateRepository(_persistence, _config, _companyProfile);
@@ -74,6 +79,9 @@ public class NotificationRoutingServiceTests : IDisposable
             _mockDataProtection = new Mock<IDataProtectionProvider>();
             _mockDataProtection.Setup(d => d.CreateProtector(It.IsAny<string>())).Returns(_mockDataProtector.Object);
 
+            _emailAccounts = new EmailAccountRepository(_persistence, _config);
+            _emailInboxes = new EmailInboxRepository(_persistence, _config);
+            _emailIdentities = new EmailSendingIdentityRepository(_persistence, _config);
             _emailFolders = new EmailFolderRepository(_persistence, _config);
             _emailMessages = new EmailMessageRepository(_persistence, _config);
             _chatChannels = new ChatChannelRepository(_persistence, _config);
@@ -89,6 +97,9 @@ public class NotificationRoutingServiceTests : IDisposable
             commContext.Setup(c => c.ChatChannels).Returns(_chatChannels);
             commContext.Setup(c => c.ChatMessages).Returns(_chatMessages);
             commContext.Setup(c => c.ChatReadStates).Returns(_readStates);
+            commContext.Setup(c => c.EmailAccounts).Returns(_emailAccounts);
+            commContext.Setup(c => c.EmailInboxes).Returns(_emailInboxes);
+            commContext.Setup(c => c.EmailSendingIdentities).Returns(_emailIdentities);
             commContext.Setup(c => c.EmailFolders).Returns(_emailFolders);
             commContext.Setup(c => c.EmailMessages).Returns(_emailMessages);
 
@@ -107,7 +118,6 @@ public class NotificationRoutingServiceTests : IDisposable
             _service = new NotificationRoutingService(
                 commContext.Object,
                 hrContext.Object,
-                projectsContext.Object,
                 coreContext.Object,
                 _mockWebPush.Object,
                 _queue,
@@ -129,13 +139,25 @@ public class NotificationRoutingServiceTests : IDisposable
             }
         }
 
+        private void SavePersonalEmailAccount(string userId)
+        {
+            _emailAccounts.Save(new EmailAccount
+            {
+                Id = userId,
+                OwnerEmployeeId = userId,
+                EmailAddress = $"{userId}@example.com",
+                IsServerManaged = false
+            });
+        }
+
         [Fact]
         public void GetTotalBadgeCount_CalculatesCountsCorrectly()
         {
             var userId = "user-1";
+            SavePersonalEmailAccount(userId);
             
             // Setup an unread email folder
-            var folder = new EmailFolder { Id = "fold-1", AccountId = userId, Path = "INBOX", UnreadCount = 1 };
+            var folder = new EmailFolder { Id = "fold-1", AccountId = userId, Path = "INBOX", IsInbox = true, UnreadCount = 1 };
             _emailFolders.Save(folder);
 
             var email = new EmailMessage { Id = "email-1", AccountId = userId, FolderPath = "INBOX", IsRead = false };
@@ -146,7 +168,7 @@ public class NotificationRoutingServiceTests : IDisposable
             _chatChannels.Save(channel);
 
             // Add recipient employee
-            var employee = new Employee { Id = userId, FirstName = "Test", LastName = "User", IsActive = true };
+            var employee = new Employee { Id = userId, FirstName = "Test", LastName = "User", IsActive = true, Permissions = [AppPermissions.Email.Use] };
             _employees.Save(employee);
 
             // Set notification level to All
@@ -173,6 +195,7 @@ public class NotificationRoutingServiceTests : IDisposable
         public void GetTotalBadgeCount_WhenLastEmailVisitedAtSet_CountsOnlyNewerUnreadEmails()
         {
             var userId = "user-visit-routing";
+            SavePersonalEmailAccount(userId);
             var visitTime = DateTimeOffset.UtcNow;
 
             var folder = new EmailFolder { Id = "fold-visit-r", AccountId = userId, Path = "INBOX", IsInbox = true, UnreadCount = 2 };
@@ -203,6 +226,7 @@ public class NotificationRoutingServiceTests : IDisposable
                 FirstName = "Test",
                 LastName = "User",
                 IsActive = true,
+                Permissions = [AppPermissions.Email.Use],
                 LastEmailVisitedAt = visitTime
             });
 
@@ -331,7 +355,9 @@ public class NotificationRoutingServiceTests : IDisposable
         public void GetBadgeBreakdown_ReturnsCorrectBreakdown()
         {
             var userId = "user-1";
-            var folder = new EmailFolder { Id = "fold-1", AccountId = userId, Path = "INBOX", UnreadCount = 1 };
+            SavePersonalEmailAccount(userId);
+            _employees.Save(new Employee { Id = userId, FirstName = "Test", LastName = "User", IsActive = true, Permissions = [AppPermissions.Email.Use] });
+            var folder = new EmailFolder { Id = "fold-1", AccountId = userId, Path = "INBOX", IsInbox = true, UnreadCount = 1 };
             _emailFolders.Save(folder);
             var email = new EmailMessage { Id = "email-1", AccountId = userId, FolderPath = "INBOX", IsRead = false };
             _emailMessages.Save(email);
@@ -342,13 +368,14 @@ public class NotificationRoutingServiceTests : IDisposable
             Assert.IsType<BadgeBreakdownResult>(syncResult);
             Assert.Equal(1, syncResult.Count);
             Assert.Equal(1, syncTotal);
-            Assert.True(syncResult.Breakdown.ContainsKey("Email_INBOX"));
+            Assert.True(syncResult.Breakdown.ContainsKey("Email_Unseen"));
         }
 
         [Fact]
         public async Task RouteEmailNotificationAsync_SendsPush()
         {
-            var employee = new Employee { Id = "user-1", PushNotificationsEnabled = true, EmailNotificationsEnabled = true };
+            SavePersonalEmailAccount("user-1");
+            var employee = new Employee { Id = "user-1", IsActive = true, PushNotificationsEnabled = true, EmailNotificationsEnabled = true, Permissions = [AppPermissions.Email.Use] };
             _employees.Save(employee);
             var email = new EmailMessage { Id = "email-1", AccountId = "user-1", FromName = "Test", Subject = "Subj", FolderPath = "INBOX" };
             
@@ -370,7 +397,8 @@ public class NotificationRoutingServiceTests : IDisposable
         [Fact]
         public async Task RouteEmailNotificationAsync_UsesCustomNotificationSound_WhenConfigured()
         {
-            var employee = new Employee { Id = "user-sound-email", PushNotificationsEnabled = true, EmailNotificationsEnabled = true };
+            SavePersonalEmailAccount("user-sound-email");
+            var employee = new Employee { Id = "user-sound-email", IsActive = true, PushNotificationsEnabled = true, EmailNotificationsEnabled = true, Permissions = [AppPermissions.Email.Use] };
             employee.SetNotificationSound("email", "mixkit_happy_bell_alert_601");
             _employees.Save(employee);
             var email = new EmailMessage { Id = "email-custom", AccountId = "user-sound-email", FromName = "Test", Subject = "Subj", FolderPath = "INBOX" };
@@ -616,49 +644,6 @@ public class NotificationRoutingServiceTests : IDisposable
         }
 
         [Fact]
-        public void Constructor_WithBoundedContexts_InstantiatesSuccessfully()
-        {
-            var mockComm = new Mock<CommunicationContext>();
-            mockComm.Setup(c => c.ChatChannels).Returns(_chatChannels);
-            mockComm.Setup(c => c.ChatMessages).Returns(_chatMessages);
-            mockComm.Setup(c => c.ChatReadStates).Returns(_readStates);
-            mockComm.Setup(c => c.EmailFolders).Returns(_emailFolders);
-            mockComm.Setup(c => c.EmailMessages).Returns(_emailMessages);
-
-            var mockHr = new Mock<HrContext>();
-            mockHr.Setup(h => h.Employees).Returns(_employees);
-            mockHr.Setup(h => h.Teams).Returns(_teams);
-
-            var mockProjects = new Mock<ProjectsContext>();
-            mockProjects.Setup(p => p.Projects).Returns(_projects);
-
-            var mockCore = new Mock<CoreContext>();
-            mockCore.Setup(c => c.CompanyProfile).Returns(_companyProfile);
-
-            var filter = new NotificationRecipientFilter(_readStates, _chatMessages);
-            var decryptor = new NotificationContentDecryptor(_keystore, _mockCrypto.Object);
-            var limiter = new NotificationRateLimiter(_readStates, _chatMessages);
-
-            var service = new NotificationRoutingService(
-                mockComm.Object,
-                mockHr.Object,
-                mockProjects.Object,
-                mockCore.Object,
-                _mockWebPush.Object,
-                _queue,
-                _keystore,
-                _mockCrypto.Object,
-                _mockDataProtection.Object,
-                new Mock<IChatChannelAccessService>().Object,
-                filter,
-                decryptor,
-                limiter,
-                _mockLogger.Object);
-
-            Assert.NotNull(service);
-        }
-
-        [Fact]
         public async Task RouteChatNotificationAsync_WhenEncryptedMessage_PopulatesIsEncryptedAndMaskedProperties()
         {
             var sender = new Employee { Id = "user-sender", FirstName = "Alice", LastName = "Smith", IsActive = true };
@@ -751,6 +736,7 @@ public class NotificationRoutingServiceTests : IDisposable
         public void GetBadgeBreakdown_PopulatesUnreadByThreadAndReadWatermarksUtc_ForWakeReconciliation()
         {
             var userId = "user-wake-1";
+            SavePersonalEmailAccount(userId);
             var emailVisit = new DateTimeOffset(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
             var chatReadTime = new DateTime(2026, 10, 28, 15, 0, 0, DateTimeKind.Utc);
 
@@ -791,6 +777,9 @@ public class NotificationRoutingServiceTests : IDisposable
             commContext.Setup(c => c.ChatChannels).Returns(_chatChannels);
             commContext.Setup(c => c.ChatMessages).Returns(_chatMessages);
             commContext.Setup(c => c.ChatReadStates).Returns(_readStates);
+            commContext.Setup(c => c.EmailAccounts).Returns(_emailAccounts);
+            commContext.Setup(c => c.EmailInboxes).Returns(_emailInboxes);
+            commContext.Setup(c => c.EmailSendingIdentities).Returns(_emailIdentities);
             commContext.Setup(c => c.EmailFolders).Returns(_emailFolders);
             commContext.Setup(c => c.EmailMessages).Returns(_emailMessages);
             commContext.Setup(c => c.ReportedMessages).Returns(reportedMessages);
@@ -808,7 +797,6 @@ public class NotificationRoutingServiceTests : IDisposable
             var svc = new NotificationRoutingService(
                 commContext.Object,
                 hrContext.Object,
-                projectsContext.Object,
                 coreContext.Object,
                 _mockWebPush.Object,
                 _queue,
@@ -922,6 +910,73 @@ public class NotificationRoutingServiceTests : IDisposable
             _mockWebPush.Verify(w => w.SendClearNotificationAsync("user-1", $"call_{channelId}"), Times.Once);
             _mockWebPush.Verify(w => w.SendClearNotificationAsync("user-sender", $"call_{channelId}"), Times.Once);
         }
-    }
 
+        [Fact]
+        public void GetTotalBadgeCount_And_GetBadgeBreakdown_ExcludeEmailBadges_WhenFamilyEditionOrMissingEmailUsePermission()
+        {
+            var noPermUserId = "user-no-email-perm";
+            SavePersonalEmailAccount(noPermUserId);
+            _employees.Save(new Employee
+            {
+                Id = noPermUserId,
+                FirstName = "NoPerm",
+                IsActive = true,
+                LastEmailVisitedAt = DateTimeOffset.UtcNow.AddHours(-2)
+            });
+            _emailFolders.Save(new EmailFolder { Id = "fold-noperm", AccountId = noPermUserId, Path = "INBOX", IsInbox = true, UnreadCount = 2 });
+            _emailMessages.Save(new EmailMessage { Id = "em-noperm", AccountId = noPermUserId, FolderPath = "INBOX", IsRead = false, Date = DateTimeOffset.UtcNow });
+
+            Assert.Equal(0, _service.GetTotalBadgeCount(noPermUserId));
+            var noPermBreakdown = _service.GetBadgeBreakdown(noPermUserId);
+            Assert.Equal(0, noPermBreakdown.Count);
+            Assert.False(noPermBreakdown.UnreadByThread.ContainsKey($"email-{noPermUserId}"));
+            Assert.False(noPermBreakdown.ReadWatermarksUtc.ContainsKey($"email-{noPermUserId}"));
+
+            var permUserId = "user-with-email-perm";
+            SavePersonalEmailAccount(permUserId);
+            _employees.Save(new Employee
+            {
+                Id = permUserId,
+                FirstName = "Perm",
+                IsActive = true,
+                Permissions = [AppPermissions.Email.Use],
+                LastEmailVisitedAt = DateTimeOffset.UtcNow.AddHours(-2)
+            });
+            _emailFolders.Save(new EmailFolder { Id = "fold-perm", AccountId = permUserId, Path = "INBOX", IsInbox = true, UnreadCount = 1 });
+            _emailMessages.Save(new EmailMessage { Id = "em-perm", AccountId = permUserId, FolderPath = "INBOX", IsRead = false, Date = DateTimeOffset.UtcNow });
+
+            Assert.Equal(1, _service.GetTotalBadgeCount(permUserId));
+
+            _companyProfile.Save(new CompanyProfile { Edition = "Family" });
+            Assert.Equal(0, _service.GetTotalBadgeCount(permUserId));
+            var familyBreakdown = _service.GetBadgeBreakdown(permUserId);
+            Assert.Equal(0, familyBreakdown.Count);
+            Assert.False(familyBreakdown.UnreadByThread.ContainsKey($"email-{permUserId}"));
+            Assert.False(familyBreakdown.ReadWatermarksUtc.ContainsKey($"email-{permUserId}"));
+        }
+
+        [Fact]
+        public async Task RouteEmailNotificationAsync_SkipsPush_WhenFamilyEditionOrUserLacksEmailUseOrIsSuspended()
+        {
+            var noPermUser = new Employee { Id = "user-push-noperm", IsActive = true, PushNotificationsEnabled = true, EmailNotificationsEnabled = true };
+            var suspendedUser = new Employee { Id = "user-push-susp", IsActive = true, IsSuspended = true, PushNotificationsEnabled = true, EmailNotificationsEnabled = true, Permissions = [AppPermissions.Email.Use] };
+            var permUser = new Employee { Id = "user-push-perm", IsActive = true, PushNotificationsEnabled = true, EmailNotificationsEnabled = true, Permissions = [AppPermissions.Email.Use] };
+            _employees.Save(noPermUser);
+            _employees.Save(suspendedUser);
+            _employees.Save(permUser);
+            SavePersonalEmailAccount(noPermUser.Id);
+            SavePersonalEmailAccount(suspendedUser.Id);
+            SavePersonalEmailAccount(permUser.Id);
+
+            _mockPushDecision.Setup(p => p.DetermineNotificationTier(It.IsAny<string>())).Returns(PresenceTier.All);
+
+            await _service.RouteEmailNotificationAsync(new EmailMessage { Id = "e-1", AccountId = noPermUser.Id, FromName = "Sender", Subject = "S1", FolderPath = "INBOX" });
+            await _service.RouteEmailNotificationAsync(new EmailMessage { Id = "e-2", AccountId = suspendedUser.Id, FromName = "Sender", Subject = "S2", FolderPath = "INBOX" });
+            _mockWebPush.Verify(w => w.SendNotificationAsync(It.IsAny<PushNotificationRequest>()), Times.Never);
+
+            _companyProfile.Save(new CompanyProfile { Edition = "Family" });
+            await _service.RouteEmailNotificationAsync(new EmailMessage { Id = "e-3", AccountId = permUser.Id, FromName = "Sender", Subject = "S3", FolderPath = "INBOX" });
+            _mockWebPush.Verify(w => w.SendNotificationAsync(It.IsAny<PushNotificationRequest>()), Times.Never);
+        }
+    }
 

@@ -1,17 +1,21 @@
 @using Spokes_Server.Core.Helpers
 @using Spokes_Server.Core.Models.Common
+@using Spokes_Server.Core.Services.Security
 @inject IJSRuntime JS
+@inject FileUrlSigner FileUrls
 
-@if (IsUploading)
-{
-    <MudChip T="string"
-             Size="@Size"
-             Variant="@Variant"
-             Color="Color.Default"
-             Class="@($"file-attachment-chip uploading {Class}".Trim())"
-             Style="@Style"
-             OnClose="@HandleCancel"
-             CloseIcon="@Icons.Material.Filled.Close">
+<MudChip T="string"
+         Size="@Size"
+         Variant="@Variant"
+         Color="@(IsUploading ? Color.Default : ChipColor)"
+         Class="@($"file-attachment-chip {(IsUploading ? "uploading " : "")}{Class}".Trim())"
+         Style="@Style"
+         title="@(!IsUploading ? TooltipText : null)"
+         OnClick="@EffectiveOnClick"
+         OnClose="@EffectiveOnClose"
+         CloseIcon="@(IsUploading || CanRemove ? Icons.Material.Filled.Close : null)">
+    @if (IsUploading)
+    {
         <MudProgressCircular Size="Size.Small"
                              Indeterminate="@(UploadProgress < 0)"
                              Value="@(UploadProgress < 0 ? 0 : UploadProgress)"
@@ -25,31 +29,19 @@
                 <span class="mud-text-secondary ml-1" style="font-size: 0.8em;">(@DisplayProgressText)</span>
             }
         </span>
-    </MudChip>
-}
-else
-{
-    <MudTooltip Text="@TooltipText">
-        <MudChip T="string"
-                 Size="@Size"
-                 Variant="@Variant"
-                 Color="@ChipColor"
-                 Class="@($"file-attachment-chip {Class}".Trim())"
-                 Style="@Style"
-                 OnClick="@HandleClick"
-                 OnClose="@CloseCallback"
-                 CloseIcon="@(CanRemove ? Icons.Material.Filled.Close : null)">
-            <MudIcon Icon="@FileIcon" Size="Size.Small" Class="mr-1" />
-            <span class="text-truncate" style="max-width: @MaxWidthPx;">
-                @DisplayFileName
-                @if (ShowSize && EffectiveFileSizeBytes > 0)
-                {
-                    <span class="mud-text-secondary ml-1" style="font-size: 0.8em;">(@FileHelper.FormatBytes(EffectiveFileSizeBytes))</span>
-                }
-            </span>
-        </MudChip>
-    </MudTooltip>
-}
+    }
+    else
+    {
+        <MudIcon Icon="@FileIcon" Size="Size.Small" Class="mr-1" />
+        <span class="text-truncate" style="max-width: @MaxWidthPx;">
+            @DisplayFileName
+            @if (ShowSize && EffectiveFileSizeBytes > 0)
+            {
+                <span class="mud-text-secondary ml-1" style="font-size: 0.8em;">(@FileHelper.FormatBytes(EffectiveFileSizeBytes))</span>
+            }
+        </span>
+    }
+</MudChip>
 
 @code {
     [Parameter] public IFileAttachment? Attachment { get; set; }
@@ -101,7 +93,7 @@ else
 
     private Color ChipColor => IsImage ? Color.Info : Color.Default;
 
-    private string FileIcon => FileHelper.GetFileIcon(DisplayFileName, EffectiveContentType);
+    private string FileIcon => FileUiHelper.GetFileIcon(DisplayFileName, EffectiveContentType);
 
     private string? DisplayProgressText =>
         UploadProgress >= 0 ? $"{Math.Round(UploadProgress)}%" : null;
@@ -129,11 +121,17 @@ else
 
         if (AllowDownload && !string.IsNullOrWhiteSpace(EffectiveFilePath))
         {
-            await JS.InvokeVoidAsync("open", EffectiveFilePath, "_blank");
+            await JS.InvokeVoidAsync("open", FileUrls.SignUrl(EffectiveFilePath), "_blank");
         }
     }
 
     private bool CanRemove => !ReadOnly && OnRemove.HasDelegate;
+
+    private EventCallback<Microsoft.AspNetCore.Components.Web.MouseEventArgs> EffectiveOnClick =>
+        IsUploading ? default : EventCallback.Factory.Create<Microsoft.AspNetCore.Components.Web.MouseEventArgs>(this, HandleClick);
+
+    private EventCallback<MudChip<string>> EffectiveOnClose =>
+        IsUploading ? EventCallback.Factory.Create<MudChip<string>>(this, HandleCancel) : CloseCallback;
 
     private EventCallback<MudChip<string>> CloseCallback =>
         CanRemove ? EventCallback.Factory.Create<MudChip<string>>(this, (Func<MudChip<string>, Task>)HandleRemove) : default;

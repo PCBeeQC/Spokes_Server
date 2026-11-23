@@ -7,7 +7,7 @@ namespace Spokes_Server.Core.Services.Communication.Email;
 
 public interface IEmailFolderService
 {
-    Task<SpokesResult<EmailFolder>> CreateFolderAsync(string accountId, string parentFolderPath, string newFolderName, CancellationToken cancellationToken = default);
-    Task<SpokesResult> DeleteFolderAsync(string accountId, string folderPath, CancellationToken cancellationToken = default);
-    Task<SpokesResult> RenameFolderAsync(string accountId, string folderPath, string newName, CancellationToken cancellationToken = default);
+    Task<SpokesResult<EmailFolder>> CreateFolderAsync(string accountId, string parentFolderPath, string newFolderName, string? callerEmployeeId = null, CancellationToken cancellationToken = default);
+    Task<SpokesResult> DeleteFolderAsync(string accountId, string folderPath, string? callerEmployeeId = null, CancellationToken cancellationToken = default);
+    Task<SpokesResult> RenameFolderAsync(string accountId, string folderPath, string newName, string? callerEmployeeId = null, CancellationToken cancellationToken = default);
 }

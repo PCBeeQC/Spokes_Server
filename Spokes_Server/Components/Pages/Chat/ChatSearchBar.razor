@@ -3,8 +3,10 @@
 @using Spokes_Server.Core.Models.HR
 @inject ChatSecurityService ChatSecurityService
 @inject ScopedKeystoreService ScopedKeystore
+@inject IUserPrivacyService PrivacyService
+@inject Database Db
 
-<div style="position: relative;" @onclick="OnSearchContainerClicked" @onfocusin="OnSearchContainerClicked">
+<div style="position: relative; @(IsMobile ? "width: 100%; min-width: 0;" : "")" @onclick="OnSearchContainerClicked" @onfocusin="OnSearchContainerClicked">
     <MudTextField T="string"
                   Value="@_searchQuery"
                   ValueChanged="OnSearchInputChanged"
@@ -20,7 +22,7 @@
                   Clearable="true"
                   OnClearButtonClick="ClearSearch"
                   Class="my-n2"
-                  Style="min-width: 340px;"
+                  Style="@(IsMobile ? "width: 100%; min-width: 0;" : "min-width: 340px;")"
                   UserAttributes="@_inputAttributes" />
 
     @* Smart Autocomplete Suggestions Popover *@
@@ -30,7 +32,9 @@
                   @onmousedown:preventDefault="true"
                   @onclick:stopPropagation="true"
                   @onfocusin:stopPropagation="true"
-                  Style="position: absolute; top: 100%; left: 0; right: 0; z-index: 120; min-width: 340px; max-height: 320px; overflow-y: auto; margin-top: 4px; border-radius: 8px;">
+                  Style="@(IsMobile
+                      ? "position: absolute; top: 100%; left: 0; right: 0; z-index: 120; max-height: 320px; overflow-y: auto; margin-top: 4px; border-radius: 8px;"
+                      : "position: absolute; top: 100%; left: 0; right: 0; z-index: 120; min-width: 340px; max-height: 320px; overflow-y: auto; margin-top: 4px; border-radius: 8px;")">
             <MudText Typo="Typo.caption" Color="Color.Secondary" Class="px-3 pt-1 pb-1" Style="font-weight: 600;">
                 @Loc["Filter Suggestions"]
             </MudText>
@@ -79,7 +83,9 @@
         <MudPaper Elevation="6" Class="pa-0"
                   @onclick:stopPropagation="true"
                   @onfocusin:stopPropagation="true"
-                  Style="position: absolute; top: 100%; right: 0; z-index: 100; min-width: 360px; max-width: 520px; max-height: 420px; overflow-y: auto; margin-top: 4px; border-radius: 8px;">
+                  Style="@(IsMobile
+                      ? "position: absolute; top: 100%; left: 0; right: 0; z-index: 100; max-height: 420px; overflow-y: auto; margin-top: 4px; border-radius: 8px;"
+                      : "position: absolute; top: 100%; right: 0; z-index: 100; min-width: 360px; max-width: 520px; max-height: 420px; overflow-y: auto; margin-top: 4px; border-radius: 8px;")">
             <MudList T="string" Dense="true" Class="py-1">
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="px-3 py-1">
                     @string.Format(Loc["{0} results found"].Value, _searchResults.Count)
@@ -123,7 +129,9 @@
     }
     else if (_searchResults != null && !_searchResults.Any() && !string.IsNullOrWhiteSpace(_searchQuery))
     {
-        <MudPaper Elevation="4" Class="pa-3" Style="position: absolute; top: 100%; right: 0; z-index: 100; min-width: 280px; margin-top: 4px; border-radius: 8px;">
+        <MudPaper Elevation="4" Class="pa-3" Style="@(IsMobile
+            ? "position: absolute; top: 100%; left: 0; right: 0; z-index: 100; margin-top: 4px; border-radius: 8px;"
+            : "position: absolute; top: 100%; right: 0; z-index: 100; min-width: 280px; margin-top: 4px; border-radius: 8px;")">
             <MudText Typo="Typo.body2" Color="Color.Secondary" Align="Align.Center">
                 @Loc["No messages found"]
             </MudText>
@@ -135,7 +143,20 @@
     [Parameter] public string? ChannelId { get; set; }
     [Parameter] public string? CurrentUserId { get; set; }
     [Parameter] public List<Employee> Employees { get; set; } = [];
+    [Parameter] public List<Employee>? SuggestionEmployees { get; set; }
     [Parameter] public EventCallback<string> OnResultSelected { get; set; }
+    [Parameter] public bool IsMobile { get; set; }
+
+    private List<SearchSuggestion> GetSuggestionsForCurrentQuery()
+    {
+        var viewer = !string.IsNullOrEmpty(CurrentUserId) ? Db.Employees.GetById(CurrentUserId) : null;
+        return ChatSearchSuggestionService.GetSuggestions(
+            _searchQuery,
+            _searchQuery.Length,
+            CurrentUserId,
+            SuggestionEmployees ?? Employees,
+            m => PrivacyService.CanViewUserEmail(viewer, m));
+    }
 
     private string _searchQuery = "";
     private List<ChatMessage>? _searchResults;
@@ -156,7 +177,7 @@
     {
         if (!_showSuggestions && (_searchResults == null || !_searchResults.Any()))
         {
-            _suggestions = ChatSearchSuggestionService.GetSuggestions(_searchQuery, _searchQuery.Length, CurrentUserId, Employees);
+            _suggestions = GetSuggestionsForCurrentQuery();
             _showSuggestions = _suggestions.Count > 0;
             _selectedSuggestionIndex = _suggestions.Count > 0 ? 0 : -1;
         }
@@ -165,7 +186,7 @@
     private void OnSearchInputChanged(string value)
     {
         _searchQuery = value;
-        _suggestions = ChatSearchSuggestionService.GetSuggestions(_searchQuery, _searchQuery.Length, CurrentUserId, Employees);
+        _suggestions = GetSuggestionsForCurrentQuery();
         _showSuggestions = _suggestions.Count > 0;
         _selectedSuggestionIndex = _suggestions.Count > 0 ? 0 : -1;
     }
@@ -215,7 +236,7 @@
         // keep autocomplete active and immediately populate child suggestions (e.g. members, dates, sub-tags)
         if (suggestion.ReplacementText.EndsWith(':'))
         {
-            _suggestions = ChatSearchSuggestionService.GetSuggestions(_searchQuery, _searchQuery.Length, CurrentUserId, Employees);
+            _suggestions = GetSuggestionsForCurrentQuery();
             _showSuggestions = _suggestions.Count > 0;
             _selectedSuggestionIndex = _suggestions.Count > 0 ? 0 : -1;
             StateHasChanged();

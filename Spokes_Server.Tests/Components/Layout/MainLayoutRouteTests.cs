@@ -77,4 +77,20 @@ public class MainLayoutRouteTests
         var result = MainLayout.IsChatChannelUrl(url);
         Assert.Equal(expected, result);
     }
+
+    [Theory]
+    [InlineData("http://localhost:5000/chat/ch-general", "ch-general")]
+    [InlineData("http://localhost:5000/chat/ch-123?filter=all", "ch-123")]
+    [InlineData("http://localhost:5000/chat/ch-123#bottom", "ch-123")]
+    [InlineData("/chat/ch-relative?client=mobile", "ch-relative")]
+    [InlineData("http://localhost:5000/chat", null)]
+    [InlineData("http://localhost:5000/chat/", null)]
+    [InlineData("/chat", null)]
+    [InlineData("http://localhost:5000/", null)]
+    [InlineData("http://localhost:5000/albums/123", null)]
+    [InlineData(null, null)]
+    public void ExtractChatChannelId_ExtractsExpectedChannelId(string? url, string? expected)
+    {
+        Assert.Equal(expected, MainLayout.ExtractChatChannelId(url));
+    }
 }

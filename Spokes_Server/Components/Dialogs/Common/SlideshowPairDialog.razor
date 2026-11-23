@@ -1,4 +1,5 @@
 @using Microsoft.AspNetCore.SignalR
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Services.Communication.Chat
@@ -13,7 +14,6 @@
 @inject IHubContext<SlideshowHub> HubContext
 @inject Database Db
 @inject AlbumService AlbumService
-@inject FileTokenService FileTokenService
 @inject ScopedKeystoreService KeystoreService
 @inject UserService UserService
 @inject NavigationManager Nav
@@ -141,7 +141,7 @@
         var profile = Db.CompanyProfile.Get();
         var serverConfig = Db.ServerConfigs.GetOrCreateGlobalConfig();
         var licenseResult = LicenseValidation.ValidateLicense(profile?.LicensePayload, serverConfig);
-        _isPassActive = LicenseValidationService.IsLicenseActive(licenseResult.Status);
+        _isPassActive = CastService.IsDemoMode() || LicenseValidationService.IsLicenseActive(licenseResult.Status);
     }
 
     private string GetTvPairUrl()
@@ -177,8 +177,37 @@
 
         try
         {
+            var currentUser = await UserService.GetEmployeeAsync();
+            if (currentUser is not { IsActiveUnsuspended: true })
+            {
+                _isCastConnecting = false;
+                _errorMessage = Loc["Authentication required."].Value;
+                StateHasChanged();
+                return;
+            }
+
+            var liveAlbum = Album != null ? Db.Albums.GetById(Album.Id) : null;
+            if (liveAlbum == null ||
+                !currentUser.HasPermission(AppPermissions.Albums.View) ||
+                !AlbumService.CanUserViewAlbum(liveAlbum, currentUser.Id))
+            {
+                Logger.LogWarning("User {UserId} unauthorized to cast album {AlbumId} via SlideshowPairDialog", currentUser.Id, Album?.Id);
+                _isCastConnecting = false;
+                _errorMessage = Loc["You do not have permission to view this album."].Value;
+                StateHasChanged();
+                return;
+            }
+
+            var initPayload = await CastService.GetCastInitPayloadAsync(Nav.BaseUri);
+            if (!initPayload.IsDemo && string.IsNullOrWhiteSpace(initPayload.CastTicket))
+            {
+                _isCastConnecting = false;
+                _errorMessage = ResolveCastErrorMessage(initPayload.AuthorizationErrorCode, initPayload.AuthorizationError);
+                StateHasChanged();
+                return;
+            }
+
             await JS.InvokeVoidAsync("window.ensureCastScriptsLoaded");
-            var initPayload = CastService.GetCastInitPayload(Nav.BaseUri);
             bool launched = await JS.InvokeAsync<bool>("spokesCast.requestCastSession", initPayload, _dotNetRef);
             if (!launched)
             {
@@ -218,10 +247,24 @@
     public void OnCastAuthFailed(string error, string detail)
     {
         _isCastConnecting = false;
-        _errorMessage = !string.IsNullOrWhiteSpace(detail)
-            ? detail
-            : Loc["A valid Spokes Pass is required to cast photo albums to TV."].Value;
+        _errorMessage = ResolveCastErrorMessage(error, detail);
         InvokeAsync(StateHasChanged);
+    }
+
+    private string ResolveCastErrorMessage(string? errorCode, string? detail)
+    {
+        if (!string.IsNullOrWhiteSpace(detail))
+        {
+            return detail;
+        }
+
+        if (SpokesRelayClient.IsLicenseProblemCode(errorCode) ||
+            string.Equals(errorCode, "LICENSE_REQUIRED", StringComparison.OrdinalIgnoreCase))
+        {
+            return Loc["A valid Spokes Pass is required to cast photo albums to TV."].Value;
+        }
+
+        return Loc["Failed to connect to Google Cast."].Value;
     }
 
     private async Task PairAndConnect()
@@ -239,13 +282,16 @@
         try
         {
             var currentUser = await UserService.GetEmployeeAsync();
-            if (currentUser == null || !currentUser.IsActive || currentUser.IsSuspended || currentUser.IsBanned)
+            if (currentUser is not { IsActiveUnsuspended: true })
             {
                 _errorMessage = Loc["Authentication required."].Value;
                 return;
             }
 
-            if (!AlbumService.CanUserViewAlbum(Album, currentUser.Id))
+            var liveAlbum = Db.Albums.GetById(Album.Id);
+            if (liveAlbum == null ||
+                !currentUser.HasPermission(AppPermissions.Albums.View) ||
+                !AlbumService.CanUserViewAlbum(liveAlbum, currentUser.Id))
             {
                 Logger.LogWarning("User {UserId} unauthorized to present album {AlbumId} via SlideshowPairDialog", currentUser.Id, Album.Id);
                 _errorMessage = Loc["You do not have permission to view this album."].Value;
@@ -254,58 +300,35 @@
 
             // Derive plain album key if encrypted
             string? plainAlbumKey = null;
-            if (Album.IsEncrypted)
+            if (liveAlbum.IsEncrypted)
             {
                 string? privateKey = KeystoreService.IsUnlocked ? KeystoreService.GetPrivateKey() : null;
-                plainAlbumKey = AlbumService.GetPlainAlbumKey(Album, currentUser.Id, privateKey);
+                plainAlbumKey = AlbumService.GetPlainAlbumKey(liveAlbum, currentUser.Id, privateKey);
+                if (string.IsNullOrEmpty(plainAlbumKey))
+                {
+                    _errorMessage = Loc["Unlock your security vault to present encrypted albums."].Value;
+                    return;
+                }
             }
 
             string hostConnectionId = $"blazor_host_{currentUser.Id}_{Guid.NewGuid():N}";
 
-            var allowedMedia = Album.Media.ToDictionary(m => m.Id, m => System.IO.Path.GetFileName(m.FilePath));
-            var bridge = new UserScopedSlideshowBridge(ServiceProvider, currentUser, Album.Id, plainAlbumKey, allowedMedia);
+            var allowedMedia = liveAlbum.Media.ToDictionary(m => m.Id, m => System.IO.Path.GetFileName(m.FilePath));
+            var bridge = new UserScopedSlideshowBridge(ServiceProvider, currentUser, liveAlbum.Id, plainAlbumKey, allowedMedia);
 
-            if (!SessionService.TryPair(pin, currentUser.Id, hostConnectionId, Album.Id, out var session, out var error, bridge))
+            if (!SessionService.TryPair(pin, currentUser.Id, hostConnectionId, liveAlbum.Id, out var session, out var error, bridge))
             {
                 _errorMessage = error ?? Loc["Invalid or expired PIN."].Value;
                 return;
             }
 
             // Prepare slideshow media items routed to dedicated SlideshowMediaController
-            var items = new List<SlideshowMediaItem>();
-            var allEmployees = Db.Employees.GetAll();
-
-            foreach (var media in Album.Media)
-            {
-                string baseUrl = $"/spokesapi/slideshow/{session!.SessionId}/media/{media.Id}";
-
-                var uploader = allEmployees.FirstOrDefault(e => e.Id == media.AddedByUserId);
-                string uploaderName = uploader != null ? $"{uploader.FirstName} {uploader.LastName}".Trim() : string.Empty;
-
-                items.Add(new SlideshowMediaItem
-                {
-                    Id = media.Id,
-                    FileName = media.FileName,
-                    Url = SlideshowSessionService.AppendSecretQuery(baseUrl, session.TvSecret),
-                    ThumbnailUrl = SlideshowSessionService.AppendSecretQuery($"{baseUrl}/thumb", session.TvSecret),
-                    ContentType = media.ContentType,
-                    ImageWidth = media.ImageWidth,
-                    ImageHeight = media.ImageHeight,
-                    DurationSeconds = media.DurationSeconds,
-                    AddedAt = media.AddedAt,
-                    AddedByUserName = uploaderName,
-                    FileSizeBytes = media.FileSizeBytes
-                });
-            }
-
-            var stagePayload = new SlideshowStagePayload
-            {
-                SessionId = session!.SessionId,
-                AlbumId = Album.Id,
-                AlbumTitle = Album.Title,
-                InitialIndex = Math.Clamp(InitialIndex, 0, Math.Max(0, items.Count - 1)),
-                Items = items
-            };
+            var stagePayload = SlideshowStagePayload.Create(
+                session!.SessionId,
+                session.TvSecret,
+                liveAlbum,
+                InitialIndex,
+                SlideshowSessionService.AppendSecretQuery);
 
             // Notify in-memory TV Stage (Blazor Server) AND SignalR clients
             SessionService.NotifySessionStarted(session.SessionId, stagePayload);
@@ -316,7 +339,7 @@
 
             _hasPaired = true;
             MudDialog.Close(DialogResult.Ok(session.SessionId));
-            Nav.NavigateTo($"/albums/{Album.Id}/remote/{session.SessionId}");
+            Nav.NavigateTo($"/albums/{liveAlbum.Id}/remote/{session.SessionId}");
         }
         catch (Exception ex)
         {

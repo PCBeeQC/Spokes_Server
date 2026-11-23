@@ -4,6 +4,19 @@
 
 window.spokesVault = {
 
+    _getCurrentOrigin: function () {
+        if (window.spokesAuth && typeof window.spokesAuth.getCanonicalOrigin === 'function') {
+            return window.spokesAuth.getCanonicalOrigin();
+        }
+        try {
+            const parsed = new URL(window.location.href);
+            if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+                return parsed.origin.toLowerCase();
+            }
+        } catch (e) {}
+        return '';
+    },
+
     /**
      * Reads the stored encrypted vault key from Capacitor Preferences.
      * Returns { key: string } if found, or null if not available.
@@ -12,20 +25,15 @@ window.spokesVault = {
     getStoredVaultKey: async function () {
         if (window.Capacitor?.Plugins?.Preferences) {
             try {
-                const vaultKey = 'chat_vault_key_' + window.location.hostname;
-                let res = await window.Capacitor.Plugins.Preferences.get({ key: vaultKey });
+                const currentOrigin = this._getCurrentOrigin();
+                if (!currentOrigin) return null;
+                const prefs = window.Capacitor.Plugins.Preferences;
+                const value = window.spokesAuth?._getOriginPrefAsync
+                    ? await window.spokesAuth._getOriginPrefAsync(prefs, 'chat_vault_key', currentOrigin, true)
+                    : (await prefs.get({ key: 'chat_vault_key::' + currentOrigin }))?.value;
 
-                // Migration: if namespaced key is missing, check legacy global key
-                if (!res || !res.value) {
-                    res = await window.Capacitor.Plugins.Preferences.get({ key: 'chat_vault_key' });
-                    if (res && res.value) {
-                        await window.Capacitor.Plugins.Preferences.set({ key: vaultKey, value: res.value });
-                        await window.Capacitor.Plugins.Preferences.remove({ key: 'chat_vault_key' });
-                    }
-                }
-
-                if (res && res.value) {
-                    return { key: res.value };
+                if (value) {
+                    return { key: value };
                 }
             } catch (e) {
                 console.warn('[Vault] Failed to read from Preferences:', e);
@@ -43,20 +51,25 @@ window.spokesVault = {
      */
     storeVaultKey: async function (encryptedKey) {
         if (window.Capacitor?.Plugins?.Preferences) {
-            const key = 'chat_vault_key_' + window.location.hostname;
+            const currentOrigin = this._getCurrentOrigin();
+            if (!currentOrigin) return;
+            const key = 'chat_vault_key::' + currentOrigin;
             await window.Capacitor.Plugins.Preferences.set({ key, value: encryptedKey });
         }
     },
 
     /**
-     * Clears all stored vault keys from Capacitor Preferences.
-     * Removes both the namespaced key and any legacy global keys.
+     * Clears all stored vault keys from Capacitor Preferences for the current origin.
      */
     clearStoredVaultKey: async function () {
+        if (window.spokesMediaLoader && typeof window.spokesMediaLoader.clearEncryptedCache === 'function') {
+            try { await window.spokesMediaLoader.clearEncryptedCache(); } catch (e) {}
+        }
         if (window.Capacitor?.isNativePlatform?.()) {
-            const vaultKeyHost = 'chat_vault_key_' + window.location.hostname;
-            await window.Capacitor.Plugins.Preferences.remove({ key: vaultKeyHost });
-            await window.Capacitor.Plugins.Preferences.remove({ key: 'chat_vault_key' });
+            const currentOrigin = this._getCurrentOrigin();
+            if (currentOrigin) {
+                await window.Capacitor.Plugins.Preferences.remove({ key: 'chat_vault_key::' + currentOrigin });
+            }
         }
     },
 
@@ -84,9 +97,42 @@ window.spokesVault = {
             if (data && data.vaultKey) {
                 await this.storeVaultKey(data.vaultKey);
             }
+            if (data && data.success !== false && window.spokesMediaLoader && typeof window.spokesMediaLoader.setVaultPersisted === 'function') {
+                window.spokesMediaLoader.setVaultPersisted(true);
+            }
             return data;
         } catch (e) {
             console.warn('[Vault] Login failed:', e);
+            return { success: false };
+        }
+    },
+
+    /**
+     * Silently renews (sliding expiry) or upgrades (v1 -> v2) an active vault session via
+     * /spokesapi/vault/renew without exposing the plaintext password to JavaScript.
+     * @returns {Promise<{success: boolean, vaultKey?: string}>}
+     */
+    renew: async function () {
+        try {
+            const headers = window.spokesAuth?.getHeaders
+                ? await window.spokesAuth.getHeaders()
+                : {};
+            const response = await fetch('/spokesapi/vault/renew', {
+                method: 'POST',
+                credentials: 'include',
+                cache: 'no-store',
+                headers: headers
+            });
+            if (!response.ok) {
+                return { success: false };
+            }
+            const data = await response.json();
+            if (data && data.vaultKey) {
+                await this.storeVaultKey(data.vaultKey);
+            }
+            return data;
+        } catch (e) {
+            console.warn('[Vault] Renewal failed:', e);
             return { success: false };
         }
     },
@@ -96,6 +142,9 @@ window.spokesVault = {
      * DeviceSession.HasVaultCookie) and removes any stored Capacitor Preferences key.
      */
     logout: async function () {
+        if (window.spokesMediaLoader && typeof window.spokesMediaLoader.clearEncryptedCache === 'function') {
+            try { await window.spokesMediaLoader.clearEncryptedCache(); } catch (e) {}
+        }
         try {
             const headers = window.spokesAuth?.getHeaders
                 ? await window.spokesAuth.getHeaders()
@@ -133,5 +182,3 @@ window.spokesVault = {
         return { hasCookie: false };
     }
 };
-
-window.spokes_vault = window.spokesVault;

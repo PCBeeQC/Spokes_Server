@@ -15,7 +15,7 @@ public class SupplierRepositoryTests : RepositoryTestFixture<SupplierRepository>
         var supplier = new Supplier
         {
             Id = "sup-1",
-            Info = new ClientInfo
+            ContactInfo = new ClientInfo
             {
                 BusinessName = "Acme Corp",
                 ContactPersonEmail = "info@acme.com"
@@ -27,7 +27,7 @@ public class SupplierRepositoryTests : RepositoryTestFixture<SupplierRepository>
         var result = _repo.GetById("sup-1");
         Assert.NotNull(result);
         Assert.Equal("Acme Corp", result.Name);
-        Assert.Equal("info@acme.com", result.Info.ContactPersonEmail);
+        Assert.Equal("info@acme.com", result.ContactInfo.ContactPersonEmail);
     }
 
     [Fact]
@@ -36,7 +36,7 @@ public class SupplierRepositoryTests : RepositoryTestFixture<SupplierRepository>
         var supplier = new Supplier
         {
             Id = "sup-disk",
-            Info = new ClientInfo { BusinessName = "Global Components" }
+            ContactInfo = new ClientInfo { BusinessName = "Global Components" }
         };
 
         _repo.Save(supplier);
@@ -49,8 +49,8 @@ public class SupplierRepositoryTests : RepositoryTestFixture<SupplierRepository>
     [Fact]
     public void GetAll_ReturnsAllSavedSuppliers()
     {
-        var sup1 = new Supplier { Id = "sup-a", Info = new ClientInfo { BusinessName = "Supplier A" } };
-        var sup2 = new Supplier { Id = "sup-b", Info = new ClientInfo { BusinessName = "Supplier B" } };
+        var sup1 = new Supplier { Id = "sup-a", ContactInfo = new ClientInfo { BusinessName = "Supplier A" } };
+        var sup2 = new Supplier { Id = "sup-b", ContactInfo = new ClientInfo { BusinessName = "Supplier B" } };
 
         _repo.Save(sup1);
         _repo.Save(sup2);
@@ -67,7 +67,7 @@ public class SupplierRepositoryTests : RepositoryTestFixture<SupplierRepository>
         var supplier = new Supplier
         {
             Id = "sup-del",
-            Info = new ClientInfo { BusinessName = "To Delete" }
+            ContactInfo = new ClientInfo { BusinessName = "To Delete" }
         };
         _repo.Save(supplier);
         _writer.FlushAll();
@@ -91,7 +91,7 @@ public class SupplierRepositoryTests : RepositoryTestFixture<SupplierRepository>
         var supplier = new Supplier
         {
             Id = "sup-disk-loaded",
-            Info = new ClientInfo { BusinessName = "Disk Supplier" }
+            ContactInfo = new ClientInfo { BusinessName = "Disk Supplier" }
         };
         File.WriteAllText(Path.Combine(suppliersDir, "sup-disk-loaded.json"), JsonSerializer.Serialize(supplier));
 
@@ -106,9 +106,9 @@ public class SupplierRepositoryTests : RepositoryTestFixture<SupplierRepository>
     [Fact]
     public void Search_FiltersAndLimitsCorrectly()
     {
-        var s1 = new Supplier { Id = "s-1", Info = new ClientInfo { BusinessName = "Acme Tools" } };
-        var s2 = new Supplier { Id = "s-2", Info = new ClientInfo { BusinessName = "Acme Supplies" } };
-        var s3 = new Supplier { Id = "s-3", Info = new ClientInfo { BusinessName = "Beta Hardware" } };
+        var s1 = new Supplier { Id = "s-1", ContactInfo = new ClientInfo { BusinessName = "Acme Tools" } };
+        var s2 = new Supplier { Id = "s-2", ContactInfo = new ClientInfo { BusinessName = "Acme Supplies" } };
+        var s3 = new Supplier { Id = "s-3", ContactInfo = new ClientInfo { BusinessName = "Beta Hardware" } };
 
         _repo.Save(s1);
         _repo.Save(s2);

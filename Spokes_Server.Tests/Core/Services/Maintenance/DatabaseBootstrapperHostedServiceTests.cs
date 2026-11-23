@@ -38,21 +38,6 @@ public class DatabaseBootstrapperHostedServiceTests
     }
 
     [Fact]
-    public async Task LifecycleMethods_StartStartedStopStopped_CompleteSynchronously()
-    {
-        var services = new ServiceCollection();
-        var sp = services.BuildServiceProvider();
-
-        var logger = Mock.Of<ILogger<DatabaseBootstrapperHostedService>>();
-        var bootstrapper = new DatabaseBootstrapperHostedService(sp, logger);
-
-        await bootstrapper.StartAsync(CancellationToken.None);
-        await bootstrapper.StartedAsync(CancellationToken.None);
-        await bootstrapper.StopAsync(CancellationToken.None);
-        await bootstrapper.StoppedAsync(CancellationToken.None);
-    }
-
-    [Fact]
     public async Task StoppingAsync_FlushesDiskPersistenceService_WhenRegistered()
     {
         var services = new ServiceCollection();

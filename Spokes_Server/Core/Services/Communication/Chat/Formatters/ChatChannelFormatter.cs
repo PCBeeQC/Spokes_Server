@@ -30,6 +30,40 @@ public static class ChatChannelFormatter
     }
 
     /// <summary>
+    /// Resolves the target participant ID for a 1-on-1 direct message (including self-DMs).
+    /// Returns null for non-DM channels, empty participant lists, or multi-participant group DMs.
+    /// </summary>
+    public static string? GetDirectMessageParticipantId(ChatChannel? channel, string? currentUserId)
+    {
+        if (channel == null || channel.ChannelType != ChatChannelType.Direct)
+            return null;
+
+        if (channel.ParticipantIds == null || channel.ParticipantIds.Count == 0 || channel.ParticipantIds.Count > 2)
+            return null;
+
+        if (IsSelfDirectMessage(channel, currentUserId))
+            return currentUserId;
+
+        return channel.ParticipantIds.FirstOrDefault(id => !string.IsNullOrEmpty(id) && id != currentUserId)
+               ?? channel.ParticipantIds.FirstOrDefault(id => !string.IsNullOrEmpty(id));
+    }
+
+    /// <summary>
+    /// Resolves the target <see cref="Employee"/> for a 1-on-1 direct message (including self-DMs).
+    /// </summary>
+    public static Employee? GetDirectMessageParticipant(
+        ChatChannel? channel,
+        string? currentUserId,
+        IEnumerable<Employee>? employees)
+    {
+        var participantId = GetDirectMessageParticipantId(channel, currentUserId);
+        if (string.IsNullOrEmpty(participantId) || employees == null)
+            return null;
+
+        return employees.FirstOrDefault(e => e.Id == participantId);
+    }
+
+    /// <summary>
     /// Gets the display name for a channel relative to the viewing user.
     /// </summary>
     public static string GetDisplayName(
@@ -52,18 +86,10 @@ public static class ChatChannelFormatter
                     return $"{name} {youSuffix}".Trim();
                 }
 
-                var otherUserId = channel.ParticipantIds.FirstOrDefault(id => id != currentUserId)
-                                  ?? channel.ParticipantIds.FirstOrDefault();
+                var otherUserId = GetDirectMessageParticipantId(channel, currentUserId);
 
                 if (otherUserId != null)
                 {
-                    if (!string.IsNullOrEmpty(currentUserId) && otherUserId == currentUserId)
-                    {
-                        var currentUser = getEmployee(currentUserId);
-                        var name = !string.IsNullOrWhiteSpace(currentUser?.FullName) ? currentUser.FullName : "Unknown User";
-                        return $"{name} {youSuffix}".Trim();
-                    }
-
                     var otherUser = getEmployee(otherUserId);
                     return !string.IsNullOrWhiteSpace(otherUser?.FullName) ? otherUser.FullName : "Unknown User";
                 }
@@ -78,17 +104,7 @@ public static class ChatChannelFormatter
                 if (!string.IsNullOrEmpty(channel.Name) && channel.Name != "Direct Message")
                     return channel.Name;
 
-                var otherParticipantIds = channel.ParticipantIds
-                    .Where(id => string.IsNullOrEmpty(currentUserId) || id != currentUserId)
-                    .ToList();
-
-                var names = otherParticipantIds
-                    .Select(id => getEmployee(id)?.FirstName)
-                    .Where(n => !string.IsNullOrWhiteSpace(n))
-                    .Take(3)
-                    .ToList();
-
-                return names.Count > 0 ? string.Join(", ", names) : "Direct Message";
+                return FormatGroupParticipantNames(channel, currentUserId, getEmployee, "Direct Message", showOverflowCount: false);
             }
         }
 
@@ -97,26 +113,33 @@ public static class ChatChannelFormatter
             if (!string.IsNullOrEmpty(channel.Name))
                 return channel.Name;
 
-            var otherParticipantIds = channel.ParticipantIds
-                .Where(id => string.IsNullOrEmpty(currentUserId) || id != currentUserId)
-                .ToList();
-
-            var names = otherParticipantIds
-                .Select(id => getEmployee(id)?.FirstName)
-                .Where(n => !string.IsNullOrWhiteSpace(n))
-                .Take(3)
-                .ToList();
-
-            if (otherParticipantIds.Count > 3)
-                return string.Join(", ", names) + $" +{otherParticipantIds.Count - 3}";
-
-            if (names.Count > 0)
-                return string.Join(", ", names);
-
-            return "Group Chat";
+            return FormatGroupParticipantNames(channel, currentUserId, getEmployee, "Group Chat", showOverflowCount: true);
         }
 
         return !string.IsNullOrWhiteSpace(channel.Name) ? channel.Name : "Unnamed Channel";
+    }
+
+    private static string FormatGroupParticipantNames(
+        ChatChannel channel,
+        string? currentUserId,
+        Func<string, Employee?> getEmployee,
+        string fallbackName,
+        bool showOverflowCount)
+    {
+        var otherParticipantIds = channel.ParticipantIds
+            .Where(id => string.IsNullOrEmpty(currentUserId) || id != currentUserId)
+            .ToList();
+
+        var names = otherParticipantIds
+            .Select(id => getEmployee(id)?.FirstName)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Take(3)
+            .ToList();
+
+        if (showOverflowCount && otherParticipantIds.Count > 3)
+            return string.Join(", ", names) + $" +{otherParticipantIds.Count - 3}";
+
+        return names.Count > 0 ? string.Join(", ", names) : fallbackName;
     }
 
     /// <summary>

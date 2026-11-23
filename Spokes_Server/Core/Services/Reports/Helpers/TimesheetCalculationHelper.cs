@@ -87,8 +87,7 @@ public static class TimesheetCalculationHelper
         WeeklyGroupBy groupBy)
     {
         // Normalize week start to Monday
-        var diff = (7 + (weekStartDate.DayOfWeek - DayOfWeek.Monday)) % 7;
-        var monday = weekStartDate.Date.AddDays(-diff);
+        var monday = TimesheetDateRangeHelper.GetMondayOfWeek(weekStartDate);
         var sunday = monday.AddDays(6);
 
         var weekDays = Enumerable.Range(0, 7).Select(i => monday.AddDays(i)).ToList();
@@ -117,24 +116,9 @@ public static class TimesheetCalculationHelper
                 EntityName = GetWeeklyGroupName(firstItem, groupBy),
                 Subtitle = GetWeeklyGroupSubtitle(firstItem, groupBy),
                 Color = groupBy == WeeklyGroupBy.Project ? firstItem.ProjectColor : "#3B82F6",
-                TargetHours = 40m
+                TargetHours = 40m,
+                Cells = BuildWeekCells(grp, monday)
             };
-
-            for (int i = 0; i < 7; i++)
-            {
-                var dayDate = monday.AddDays(i);
-                var dayItems = grp.Where(e => e.Entry.Date.Date == dayDate).ToList();
-
-                row.Cells.Add(new TimesheetWeeklyCell
-                {
-                    Date = dayDate,
-                    DayOfWeek = dayDate.DayOfWeek,
-                    DayLabel = dayDate.ToString("ddd dd"),
-                    Hours = dayItems.Sum(e => e.Entry.Hours),
-                    BillableHours = dayItems.Where(e => e.Entry.IsBillable).Sum(e => e.Entry.Hours),
-                    BillableAmount = dayItems.Sum(e => e.BillableAmount)
-                });
-            }
 
             // Subrows: if grouped by Employee, break down by Project; if Project, break down by Employee
             var subGroupKeySelector = groupBy == WeeklyGroupBy.Employee
@@ -150,24 +134,9 @@ public static class TimesheetCalculationHelper
                     EntityId = sub.Key,
                     EntityName = sub.Key,
                     Subtitle = groupBy == WeeklyGroupBy.Employee ? subFirst.ClientId : subFirst.TeamName,
-                    Color = subFirst.ProjectColor
+                    Color = subFirst.ProjectColor,
+                    Cells = BuildWeekCells(sub, monday)
                 };
-
-                for (int i = 0; i < 7; i++)
-                {
-                    var dayDate = monday.AddDays(i);
-                    var dayItems = sub.Where(e => e.Entry.Date.Date == dayDate).ToList();
-
-                    subRow.Cells.Add(new TimesheetWeeklyCell
-                    {
-                        Date = dayDate,
-                        DayOfWeek = dayDate.DayOfWeek,
-                        DayLabel = dayDate.ToString("ddd dd"),
-                        Hours = dayItems.Sum(e => e.Entry.Hours),
-                        BillableHours = dayItems.Where(e => e.Entry.IsBillable).Sum(e => e.Entry.Hours),
-                        BillableAmount = dayItems.Sum(e => e.BillableAmount)
-                    });
-                }
 
                 row.SubRows.Add(subRow);
             }
@@ -186,6 +155,28 @@ public static class TimesheetCalculationHelper
         }
 
         return matrix;
+    }
+
+    private static List<TimesheetWeeklyCell> BuildWeekCells(IEnumerable<TimesheetReportEntry> items, DateTime monday)
+    {
+        var itemList = items.ToList();
+        var cells = new List<TimesheetWeeklyCell>(7);
+        for (int i = 0; i < 7; i++)
+        {
+            var dayDate = monday.AddDays(i);
+            var dayItems = itemList.Where(e => e.Entry.Date.Date == dayDate).ToList();
+            cells.Add(new TimesheetWeeklyCell
+            {
+                Date = dayDate,
+                DayOfWeek = dayDate.DayOfWeek,
+                DayLabel = dayDate.ToString("ddd dd"),
+                Hours = dayItems.Sum(e => e.Entry.Hours),
+                BillableHours = dayItems.Where(e => e.Entry.IsBillable).Sum(e => e.Entry.Hours),
+                BillableAmount = dayItems.Sum(e => e.BillableAmount)
+            });
+        }
+
+        return cells;
     }
 
     private static string GetPrimaryGroupKey(TimesheetReportEntry e, ReportGroupBy groupBy) => groupBy switch

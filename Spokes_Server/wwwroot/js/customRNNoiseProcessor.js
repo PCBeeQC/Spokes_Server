@@ -1,13 +1,43 @@
-import { createMonoMediaStreamDestination, createVoiceConditioningStage } from './voiceCaptureConditioner.js';
+import { createMonoMediaStreamDestination, createVoiceConditioningStage, ensureVoiceLevelerWorkletLoaded } from './voiceCaptureConditioner.js';
 
 const _rnnoiseLoadedContexts = new WeakSet();
+const _rnnoiseLoadingPromises = new WeakMap();
+const RNNOISE_WORKLET_PATH = '/lib/noise-suppression/rnnoise-processor.js';
 
-async function ensureRnnoiseWorkletLoaded(audioContext) {
+function markVoiceDiag(label) {
+    try {
+        if (typeof window !== 'undefined' && window.spokesChatDiagnostics?.isEnabled?.()) {
+            window.spokesChatDiagnostics.mark(label);
+        }
+    } catch (_) {}
+}
+
+export async function ensureRnnoiseWorkletLoaded(audioContext) {
+    if (!audioContext || !audioContext.audioWorklet || audioContext.state === 'closed') {
+        return;
+    }
     if (_rnnoiseLoadedContexts.has(audioContext)) {
         return;
     }
-    await audioContext.audioWorklet.addModule('/lib/noise-suppression/rnnoise-processor.js');
-    _rnnoiseLoadedContexts.add(audioContext);
+    let pending = _rnnoiseLoadingPromises.get(audioContext);
+    if (!pending) {
+        const workletUrl = (typeof window !== 'undefined' && typeof window.spokesResolveAssetUrl === 'function')
+            ? window.spokesResolveAssetUrl(RNNOISE_WORKLET_PATH)
+            : RNNOISE_WORKLET_PATH;
+        markVoiceDiag('Voice: rnnoiseWorklet.addModule Start');
+        pending = audioContext.audioWorklet.addModule(workletUrl)
+            .then(() => {
+                _rnnoiseLoadedContexts.add(audioContext);
+                _rnnoiseLoadingPromises.delete(audioContext);
+                markVoiceDiag('Voice: rnnoiseWorklet.addModule Done');
+            })
+            .catch((err) => {
+                _rnnoiseLoadingPromises.delete(audioContext);
+                throw err;
+            });
+        _rnnoiseLoadingPromises.set(audioContext, pending);
+    }
+    await pending;
 }
 
 export class CustomRNNoiseProcessor {
@@ -20,13 +50,23 @@ export class CustomRNNoiseProcessor {
         this.destination = null;
         this.processedTrack = null;
         this.originalTrack = null;
-        this.stationaryRoomMode = Boolean(options.stationaryRoomMode);
+        this.autoGainEnabled = options.autoGainEnabled !== false;
     }
 
-    setStationaryRoomMode(enabled) {
-        this.stationaryRoomMode = Boolean(enabled);
+    async preload(audioContext) {
+        if (!audioContext || !audioContext.audioWorklet || audioContext.state === 'closed') {
+            return;
+        }
+        await Promise.all([
+            ensureRnnoiseWorkletLoaded(audioContext),
+            ensureVoiceLevelerWorkletLoaded(audioContext).catch(() => false)
+        ]);
+    }
+
+    setAutoGainEnabled(enabled) {
+        this.autoGainEnabled = Boolean(enabled);
         if (this.conditioningStage) {
-            this.conditioningStage.setStationaryRoomMode(this.stationaryRoomMode);
+            this.conditioningStage.setAutoGainEnabled(this.autoGainEnabled);
         }
     }
 
@@ -40,7 +80,7 @@ export class CustomRNNoiseProcessor {
             this.audioContext = candidateCtx;
             this._ownsAudioContext = false;
         } else {
-            this.audioContext = new AudioCtx({ sampleRate: 48000 });
+            this.audioContext = new AudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
             this._ownsAudioContext = true;
         }
 
@@ -65,20 +105,28 @@ export class CustomRNNoiseProcessor {
             channelCountMode: 'explicit',
             outputChannelCount: [1]
         });
+        markVoiceDiag('Voice: rnnoiseWorklet Node Created');
+
+        this.destination = createMonoMediaStreamDestination(this.audioContext);
+
+        // Pre-load conditioning stage BEFORE creating MediaStreamAudioSourceNode so Chromium's
+        // PushPullFIFO never accumulates 100-140ms of buffered mic audio during async worklet compilation.
+        try {
+            this.conditioningStage = await createVoiceConditioningStage(this.audioContext, this.autoGainEnabled);
+            markVoiceDiag('Voice: Conditioning Stage Ready');
+        } catch (condErr) {
+            console.warn('[CustomRNNoiseProcessor] Conditioning stage unavailable, falling back to direct RNNoise chain:', condErr);
+            this.conditioningStage = null;
+        }
 
         const stream = new MediaStream([this.originalTrack]);
         this.sourceNode = this.audioContext.createMediaStreamSource(stream);
-        this.destination = createMonoMediaStreamDestination(this.audioContext);
-
-        try {
-            this.conditioningStage = await createVoiceConditioningStage(this.audioContext, this.stationaryRoomMode);
+        if (this.conditioningStage) {
             this.sourceNode.connect(this.conditioningStage.preNode);
             this.conditioningStage.preNode.connect(this.workletNode);
             this.workletNode.connect(this.conditioningStage.postNode);
             this.conditioningStage.postNode.connect(this.destination);
-        } catch (condErr) {
-            console.warn('[CustomRNNoiseProcessor] Conditioning stage unavailable, falling back to direct RNNoise chain:', condErr);
-            this.conditioningStage = null;
+        } else {
             this.sourceNode.connect(this.workletNode);
             this.workletNode.connect(this.destination);
         }
@@ -86,15 +134,64 @@ export class CustomRNNoiseProcessor {
         this.processedTrack = this.destination.stream.getAudioTracks()[0];
     }
 
-    async restart(opts) {
-        const sharedCtx = (this._ownsAudioContext === false && this.audioContext && this.audioContext.state !== 'closed')
-            ? this.audioContext
-            : null;
-        await this.destroy();
+    async restart(opts = {}) {
+        const nextTrack = opts.track || opts.mediaStreamTrack;
+        if (nextTrack) {
+            this.originalTrack = nextTrack;
+        }
+        if (!this.originalTrack) {
+            throw new Error("No track provided");
+        }
+
+        if (this.audioContext &&
+            this.audioContext.state !== 'closed' &&
+            this.workletNode &&
+            this.destination &&
+            this.processedTrack &&
+            this.processedTrack.readyState !== 'ended') {
+            if (this.audioContext.state === 'suspended') {
+                try {
+                    await this.audioContext.resume();
+                } catch (_) {}
+            }
+            if (this.flushCaptureFifo()) {
+                return;
+            }
+        }
+
         await this.init({
             ...opts,
-            audioContext: opts?.audioContext || opts?.localTrack?.audioContext || sharedCtx
+            track: this.originalTrack,
+            audioContext: opts.audioContext || opts.localTrack?.audioContext || this.audioContext
         });
+    }
+
+    flushCaptureFifo() {
+        if (!this.audioContext || !this.originalTrack || !this.workletNode || !this.destination) {
+            return false;
+        }
+        if (this.originalTrack.readyState !== 'live') {
+            return false;
+        }
+        try {
+            if (this.sourceNode) {
+                try { this.sourceNode.disconnect(); } catch (_) {}
+                this.sourceNode = null;
+            }
+            if (this.workletNode.port) {
+                this.workletNode.port.postMessage({ type: 'FLUSH_BUFFER' });
+            }
+            const stream = new MediaStream([this.originalTrack]);
+            this.sourceNode = this.audioContext.createMediaStreamSource(stream);
+            if (this.conditioningStage && this.conditioningStage.preNode) {
+                this.sourceNode.connect(this.conditioningStage.preNode);
+            } else {
+                this.sourceNode.connect(this.workletNode);
+            }
+            return true;
+        } catch (_) {
+            return false;
+        }
     }
 
     async destroy() {

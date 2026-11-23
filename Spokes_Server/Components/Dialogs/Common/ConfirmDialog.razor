@@ -1,12 +1,30 @@
+@implements IBackDismissHandler
+
 <MudDialog>
     <DialogContent>
+        @if (!string.IsNullOrWhiteSpace(AlertText))
+        {
+            <MudAlert Severity="@AlertSeverity" Dense="true" Class="mb-3">@AlertText</MudAlert>
+        }
         <MudText>@(ContentText == "Are you sure?" ? Loc["Are you sure?"].Value : ContentText)</MudText>
+        @if (ShowReasonInput)
+        {
+            <MudTextField @bind-Value="_reason"
+                          Label="@(string.IsNullOrWhiteSpace(ReasonLabel) ? Loc["Reason"].Value : ReasonLabel)"
+                          Placeholder="@ReasonPlaceholder"
+                          Required="@ReasonRequired"
+                          Immediate="true"
+                          Lines="3"
+                          Variant="Variant.Outlined"
+                          Class="mt-3"
+                          AutoFocus="true" />
+        }
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel" Disabled="_isProcessing">@(string.IsNullOrWhiteSpace(CancelText) ? Loc["Cancel"].Value : CancelText)</MudButton>
         <MudButton Color="@Color"
                    Variant="Variant.Filled"
-                   Disabled="_isProcessing"
+                   Disabled="@(_isProcessing || (ShowReasonInput && ReasonRequired && string.IsNullOrWhiteSpace(_reason)))"
                    OnClick="SubmitAsync">
             @if (_isProcessing)
             {
@@ -25,8 +43,15 @@
     [Parameter] public string? CancelText { get; set; }
     [Parameter] public Color Color { get; set; } = Color.Primary;
     [Parameter] public Func<Task>? OnConfirmAsync { get; set; }
+    [Parameter] public string? AlertText { get; set; }
+    [Parameter] public Severity AlertSeverity { get; set; } = Severity.Warning;
+    [Parameter] public bool ShowReasonInput { get; set; }
+    [Parameter] public bool ReasonRequired { get; set; }
+    [Parameter] public string? ReasonLabel { get; set; }
+    [Parameter] public string? ReasonPlaceholder { get; set; }
 
     private bool _isProcessing;
+    private string _reason = string.Empty;
 
     private void Cancel()
     {
@@ -34,9 +59,13 @@
         MudDialog.Cancel();
     }
 
+    public Task<BackDismissAction> OnBackRequestedAsync() =>
+        Task.FromResult(_isProcessing ? BackDismissAction.Block : BackDismissAction.DefaultCancel);
+
     private async Task SubmitAsync()
     {
         if (_isProcessing) return;
+        if (ShowReasonInput && ReasonRequired && string.IsNullOrWhiteSpace(_reason)) return;
 
         if (OnConfirmAsync != null)
         {
@@ -54,6 +83,6 @@
             }
         }
 
-        MudDialog.Close(DialogResult.Ok(true));
+        MudDialog.Close(ShowReasonInput ? DialogResult.Ok((_reason ?? string.Empty).Trim()) : DialogResult.Ok(true));
     }
 }

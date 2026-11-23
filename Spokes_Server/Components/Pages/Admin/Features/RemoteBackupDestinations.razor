@@ -1,14 +1,30 @@
 @namespace Spokes_Server.Components.Pages.Admin.Features
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Identity
 @using Spokes_Server.Core.Services.Maintenance.Destinations
 @using Spokes_Server.Core.Services.Licensing
+@using Spokes_Server.Core.Services.Security
 @implements IDisposable
 @inject Database Db
 @inject BackupDestinationCoordinator DestinationCoordinator
 @inject LicenseValidationService LicenseValidationService
-@inject Spokes_Server.Core.Services.Security.EncryptionService EncryptionService
+@inject UserService UserService
+@inject OAuthStateNonceService OAuthStateNonce
 @inject NavigationManager Nav
 @inject ISnackbar Snackbar
 
+@if (!_isEffectiveAdmin)
+{
+    <SettingsCard Title="@Loc["Remote Backup Destinations"]"
+                  Icon="@Icons.Material.Filled.CloudSync"
+                  Description="@Loc["Administrator access is required to view or manage remote backup destinations."]">
+        <MudAlert Severity="Severity.Warning" Dense="true">
+            @Loc["Only an active Global Administrator can view or modify remote backup destination credentials."]
+        </MudAlert>
+    </SettingsCard>
+}
+else
+{
 @* --- Card 2: Remote Backup Destinations --- *@
 <SettingsCard Title="@Loc["Remote Backup Destinations"]"
               Icon="@Icons.Material.Filled.CloudSync"
@@ -24,245 +40,64 @@
 
     <MudStack Spacing="3">
         @* --- 1. Local / NAS Mount --- *@
-        <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
-            @{
-                var mountStatus = DestinationCoordinator.GetStatus(BackupDestinationType.LocalMount);
-                bool isMountOpen = _expanded.GetValueOrDefault(BackupDestinationType.LocalMount, false);
-            }
-            <div class="d-flex align-center justify-space-between gap-3 cursor-pointer" @onclick="() => ToggleOpen(BackupDestinationType.LocalMount)">
-                <div class="d-flex align-center gap-3">
-                    <MudIcon Icon="@Icons.Material.Filled.FolderShared" Color="@(Profile.Backup.SecondaryMount.IsEnabled ? Color.Primary : Color.Default)" />
-                    <div>
-                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Loc["Local / NAS Mount"]</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-none d-sm-block">
-                            @Loc["Attached volume, secondary disk, or mounted NFS/SMB share."]
-                        </MudText>
-                    </div>
-                </div>
-                <div class="d-flex align-center gap-2" @onclick:stopPropagation="true">
-                    @if (mountStatus.State == RemoteUploadState.Uploading)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
-                            @($"{mountStatus.Percent:F0}%")
-                        </MudChip>
-                    }
-                    else if (mountStatus.State == RemoteUploadState.Success)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Check">
-                            @Loc["Uploaded"]
-                        </MudChip>
-                    }
-                    else if (mountStatus.State == RemoteUploadState.Failed)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Error">
-                            @Loc["Upload Failed"]
-                        </MudChip>
-                    }
-                    else if (Profile.Backup.SecondaryMount.IsEnabled)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">
-                            @Loc["Enabled"]
-                        </MudChip>
-                    }
-
-                    <MudSwitch T="bool" Value="@Profile.Backup.SecondaryMount.IsEnabled"
-                               ValueChanged="@((bool v) => ToggleDestination(BackupDestinationType.LocalMount, v))"
-                               Color="Color.Primary" Class="ma-0" />
-                    <MudIconButton Icon="@(isMountOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                                   Size="Size.Small"
-                                   OnClick="() => ToggleOpen(BackupDestinationType.LocalMount)" />
-                </div>
-            </div>
-
-            @if (mountStatus.State == RemoteUploadState.Uploading)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between mb-1">
-                        <MudText Typo="Typo.caption" Color="Color.Primary">
-                            @Loc["Uploading backup to remote destination..."]
-                        </MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @mountStatus.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Primary" Value="@mountStatus.Percent" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (mountStatus.State == RemoteUploadState.Success)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <div class="d-flex align-center gap-1">
-                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
-                            <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
-                                @Loc["Upload complete"]
-                            </MudText>
-                        </div>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @mountStatus.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Success" Value="100" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (mountStatus.State == RemoteUploadState.Failed && !string.IsNullOrEmpty(mountStatus.ErrorMessage))
-            {
-                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
-                    @Loc["Upload failed:"] @mountStatus.ErrorMessage
-                </MudAlert>
-            }
-
-            <MudCollapse Expanded="@isMountOpen">
-                <MudDivider Class="my-3" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
-                    @Loc["Copy backup archives to an attached volume, secondary disk, or mounted NFS/SMB share."]
-                </MudText>
-
-                <MudGrid Spacing="3">
-                    <MudItem xs="12" sm="8">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.SecondaryMount.MountPath"
-                                      Label="@Loc["Mount / Directory Path"]"
-                                      HelperText="@Loc["e.g. /mnt/nas/backups or \\\\nas\\backups"]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                         @bind-Value="Profile.Backup.SecondaryMount.RetentionCount"
-                                         Label="@Loc["Backups to Keep"]" Min="1" Max="100" />
-                    </MudItem>
-                </MudGrid>
-
-                <div class="d-flex flex-wrap align-center gap-3 mt-3 pt-2">
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                               StartIcon="@Icons.Material.Filled.CheckCircle"
-                               Disabled="@_isTestingMount"
-                               OnClick="TestMountConnection">
-                        @if (_isTestingMount)
-                        {
-                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                            <span>@Loc["Testing..."]</span>
-                        }
-                        else
-                        {
-                            <span>@Loc["Test Mount Access"]</span>
-                        }
-                    </MudButton>
-                    @if (!string.IsNullOrEmpty(_mountTestMessage))
-                    {
-                        <MudText Typo="Typo.caption" Color="@(_mountTestSuccess ? Color.Success : Color.Error)">
-                            @_mountTestMessage
-                        </MudText>
-                    }
-                </div>
-            </MudCollapse>
-        </MudPaper>
+        @{
+            var mountTest = GetTestState(BackupDestinationType.LocalMount);
+        }
+        <BackupDestinationCard Title="@Loc["Local / NAS Mount"]"
+                               Subtitle="@Loc["Attached volume, secondary disk, or mounted NFS/SMB share."]"
+                               ExpandedDescription="@Loc["Copy backup archives to an attached volume, secondary disk, or mounted NFS/SMB share."]"
+                               Icon="@Icons.Material.Filled.FolderShared"
+                               Status="@DestinationCoordinator.GetStatus(BackupDestinationType.LocalMount)"
+                               IsEnabled="@Profile.Backup.SecondaryMount.IsEnabled"
+                               IsEnabledChanged="@((bool v) => ToggleDestination(BackupDestinationType.LocalMount, v))"
+                               IsExpanded="@IsExpanded(BackupDestinationType.LocalMount)"
+                               OnToggleExpanded="@(() => ToggleOpenAsync(BackupDestinationType.LocalMount))"
+                               TestButtonLabel="@Loc["Test Mount Access"]"
+                               IsTesting="@mountTest.IsTesting"
+                               TestMessage="@mountTest.Message"
+                               TestSuccess="@mountTest.Success"
+                               OnTestConnection="@(() => TestConnectionAsync(BackupDestinationType.LocalMount))">
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="8">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.SecondaryMount.MountPath"
+                                  Label="@Loc["Mount / Directory Path"]"
+                                  HelperText="@Loc["e.g. /mnt/nas/backups or \\\\nas\\backups"]" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudNumericField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     @bind-Value="Profile.Backup.SecondaryMount.RetentionCount"
+                                     Label="@Loc["Backups to Keep"]" Min="1" Max="100" />
+                </MudItem>
+            </MudGrid>
+        </BackupDestinationCard>
 
         @* --- 2. Google Drive --- *@
-        <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
-            @{
-                var gdriveStatus = DestinationCoordinator.GetStatus(BackupDestinationType.GoogleDrive);
-                bool isGDriveOpen = _expanded.GetValueOrDefault(BackupDestinationType.GoogleDrive, false);
-                var gDriveLicense = LicenseValidationService.ValidateLicense(Profile.LicensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
-                bool isGDrivePassActive = LicenseValidationService.IsLicenseActive(gDriveLicense.Status);
-                bool hasExistingGDriveSetup = !string.IsNullOrEmpty(Profile.Backup.GoogleDrive.RefreshToken);
-            }
-            <div class="d-flex align-center justify-space-between gap-3 cursor-pointer" @onclick="() => ToggleOpen(BackupDestinationType.GoogleDrive)">
-                <div class="d-flex align-center gap-3">
-                    <MudIcon Icon="@Icons.Custom.Brands.Google" Color="@(Profile.Backup.GoogleDrive.IsEnabled ? Color.Primary : Color.Default)" />
-                    <div>
-                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Loc["Google Drive"]</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-none d-sm-block">
-                            @Loc["Upload backups directly to your Google Drive. Requires an active Spokes Pass."]
-                        </MudText>
-                    </div>
-                </div>
-                <div class="d-flex align-center gap-2" @onclick:stopPropagation="true">
-                    @if (gdriveStatus.State == RemoteUploadState.Uploading)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
-                            @($"{gdriveStatus.Percent:F0}%")
-                        </MudChip>
-                    }
-                    else if (gdriveStatus.State == RemoteUploadState.Success)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Check">
-                            @Loc["Uploaded"]
-                        </MudChip>
-                    }
-                    else if (gdriveStatus.State == RemoteUploadState.Failed)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Error">
-                            @Loc["Upload Failed"]
-                        </MudChip>
-                    }
-                    else if (Profile.Backup.GoogleDrive.IsEnabled)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">
-                            @Loc["Enabled"]
-                        </MudChip>
-                    }
-
-                    else if (hasExistingGDriveSetup)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
-                            @Loc["Connected (Disabled)"]
-                        </MudChip>
-                    }
-
-                    <MudSwitch T="bool" Value="@Profile.Backup.GoogleDrive.IsEnabled"
-                               ValueChanged="@((bool v) => ToggleDestination(BackupDestinationType.GoogleDrive, v))"
-                               Disabled="@(!isGDrivePassActive && !hasExistingGDriveSetup)"
-                               Color="Color.Primary" Class="ma-0" />
-                    <MudIconButton Icon="@(isGDriveOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                                   Size="Size.Small"
-                                   OnClick="() => ToggleOpen(BackupDestinationType.GoogleDrive)" />
-                </div>
-            </div>
-
-            @if (gdriveStatus.State == RemoteUploadState.Uploading)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between mb-1">
-                        <MudText Typo="Typo.caption" Color="Color.Primary">
-                            @Loc["Uploading backup to remote destination..."]
-                        </MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @gdriveStatus.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Primary" Value="@gdriveStatus.Percent" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (gdriveStatus.State == RemoteUploadState.Success)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <div class="d-flex align-center gap-1">
-                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
-                            <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
-                                @Loc["Upload complete"]
-                            </MudText>
-                        </div>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @gdriveStatus.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Success" Value="100" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (gdriveStatus.State == RemoteUploadState.Failed && !string.IsNullOrEmpty(gdriveStatus.ErrorMessage))
-            {
-                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
-                    @Loc["Upload failed:"] @gdriveStatus.ErrorMessage
-                </MudAlert>
-            }
-
-            <MudCollapse Expanded="@isGDriveOpen">
-                <MudDivider Class="my-3" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
-                    @Loc["Upload backups directly to your Google Drive. Requires an active Spokes Pass."]
-                </MudText>
-
+        @{
+            var gDriveLicense = LicenseValidationService.ValidateLicense(Profile.LicensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
+            bool isGDrivePassActive = LicenseValidationService.IsLicenseActive(gDriveLicense.Status);
+            bool hasExistingGDriveSetup = !string.IsNullOrEmpty(Profile.Backup.GoogleDrive.RefreshToken);
+            var gdriveTest = GetTestState(BackupDestinationType.GoogleDrive);
+        }
+        <BackupDestinationCard Title="@Loc["Google Drive"]"
+                               Subtitle="@Loc["Upload backups directly to your Google Drive. Requires an active Spokes Pass."]"
+                               ExpandedDescription="@Loc["Upload backups directly to your Google Drive. Requires an active Spokes Pass."]"
+                               Icon="@Icons.Custom.Brands.Google"
+                               Status="@DestinationCoordinator.GetStatus(BackupDestinationType.GoogleDrive)"
+                               IsEnabled="@Profile.Backup.GoogleDrive.IsEnabled"
+                               IsEnabledChanged="@((bool v) => ToggleDestination(BackupDestinationType.GoogleDrive, v))"
+                               SwitchDisabled="@(!isGDrivePassActive && !hasExistingGDriveSetup)"
+                               ShowConnectedDisabledBadge="@hasExistingGDriveSetup"
+                               IsExpanded="@IsExpanded(BackupDestinationType.GoogleDrive)"
+                               OnToggleExpanded="@(() => ToggleOpenAsync(BackupDestinationType.GoogleDrive))"
+                               ShowFooter="@(isGDrivePassActive || hasExistingGDriveSetup)"
+                               ShowTestButton="@hasExistingGDriveSetup"
+                               TestButtonLabel="@Loc["Test Connection"]"
+                               IsTesting="@gdriveTest.IsTesting"
+                               TestMessage="@gdriveTest.Message"
+                               TestSuccess="@gdriveTest.Success"
+                               OnTestConnection="@(() => TestConnectionAsync(BackupDestinationType.GoogleDrive))">
+            <ChildContent>
                 @if (hasExistingGDriveSetup && !Profile.Backup.GoogleDrive.IsEnabled)
                 {
                     <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mb-3">
@@ -301,155 +136,54 @@
                                              Label="@Loc["Backups to Keep"]" Min="1" Max="100" />
                         </MudItem>
                     </MudGrid>
-
-                    <div class="d-flex flex-wrap align-center gap-3 mt-3 pt-2">
-                        @if (string.IsNullOrEmpty(Profile.Backup.GoogleDrive.RefreshToken))
-                        {
-                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                                       StartIcon="@Icons.Custom.Brands.Google"
-                                       Disabled="@(!isGDrivePassActive)"
-                                       OnClick="ConnectGoogleDrive">
-                                @Loc["Connect Google Drive"]
-                            </MudButton>
-                        }
-                        else
-                        {
-                            <MudChip T="string" Color="Color.Success" Size="Size.Small" Icon="@Icons.Material.Filled.CheckCircle">
-                                @Loc["Connected to Google Drive"]
-                            </MudChip>
-                            <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
-                                       OnClick="DisconnectGoogleDrive">
-                                @Loc["Disconnect"]
-                            </MudButton>
-                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                       StartIcon="@Icons.Material.Filled.CheckCircle"
-                                       Disabled="@_isTestingGDrive"
-                                       OnClick="TestGoogleDriveConnection">
-                                @if (_isTestingGDrive)
-                                {
-                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                                    <span>@Loc["Testing..."]</span>
-                                }
-                                else
-                                {
-                                    <span>@Loc["Test Connection"]</span>
-                                }
-                            </MudButton>
-                        }
-
-                        @if (!string.IsNullOrEmpty(_gdriveTestMessage))
-                        {
-                            <MudText Typo="Typo.caption" Color="@(_gdriveTestSuccess ? Color.Success : Color.Error)">
-                                @_gdriveTestMessage
-                            </MudText>
-                        }
-                    </div>
                 }
-            </MudCollapse>
-        </MudPaper>
+            </ChildContent>
+            <ExtraFooterActions>
+                @if (!hasExistingGDriveSetup)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Custom.Brands.Google"
+                               Disabled="@(!isGDrivePassActive)"
+                               OnClick="ConnectGoogleDrive">
+                        @Loc["Connect Google Drive"]
+                    </MudButton>
+                }
+                else
+                {
+                    <MudChip T="string" Color="Color.Success" Size="Size.Small" Icon="@Icons.Material.Filled.CheckCircle">
+                        @Loc["Connected to Google Drive"]
+                    </MudChip>
+                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                               OnClick="DisconnectGoogleDrive">
+                        @Loc["Disconnect"]
+                    </MudButton>
+                }
+            </ExtraFooterActions>
+        </BackupDestinationCard>
 
         @* --- 3. GitHub --- *@
-        <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
-            @{
-                var githubStatus = DestinationCoordinator.GetStatus(BackupDestinationType.GitHub);
-                bool isGitHubOpen = _expanded.GetValueOrDefault(BackupDestinationType.GitHub, false);
-                bool isGitHubConnected = !string.IsNullOrWhiteSpace(Profile.Backup.GitHub.PersonalAccessToken);
-            }
-            <div class="d-flex align-center justify-space-between gap-3 cursor-pointer" @onclick="() => ToggleOpenAsync(BackupDestinationType.GitHub)">
-                <div class="d-flex align-center gap-3">
-                    <MudIcon Icon="@Icons.Custom.Brands.GitHub" Color="@(Profile.Backup.GitHub.IsEnabled ? Color.Primary : Color.Default)" />
-                    <div>
-                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Loc["GitHub"]</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-none d-sm-block">
-                            @Loc["Sync individual server data files to a GitHub repository folder so Git tracks file changes."]
-                        </MudText>
-                    </div>
-                </div>
-                <div class="d-flex align-center gap-2" @onclick:stopPropagation="true">
-                    @if (githubStatus.State == RemoteUploadState.Uploading)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
-                            @($"{githubStatus.Percent:F0}%")
-                        </MudChip>
-                    }
-                    else if (githubStatus.State == RemoteUploadState.Success)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Check">
-                            @Loc["Uploaded"]
-                        </MudChip>
-                    }
-                    else if (githubStatus.State == RemoteUploadState.Failed)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Error">
-                            @Loc["Upload Failed"]
-                        </MudChip>
-                    }
-                    else if (Profile.Backup.GitHub.IsEnabled)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">
-                            @Loc["Enabled"]
-                        </MudChip>
-                    }
-
-                    else if (isGitHubConnected)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
-                            @Loc["Connected (Disabled)"]
-                        </MudChip>
-                    }
-
-                    <MudSwitch T="bool" Value="@Profile.Backup.GitHub.IsEnabled"
-                               ValueChanged="@((bool v) => ToggleDestination(BackupDestinationType.GitHub, v))"
-                               Color="Color.Primary" Class="ma-0" />
-                    <MudIconButton Icon="@(isGitHubOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                                   Size="Size.Small"
-                                   OnClick="() => ToggleOpenAsync(BackupDestinationType.GitHub)" />
-                </div>
-            </div>
-
-            @if (githubStatus.State == RemoteUploadState.Uploading)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between mb-1">
-                        <MudText Typo="Typo.caption" Color="Color.Primary">
-                            @Loc["Syncing backup files to GitHub repository..."]
-                        </MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @githubStatus.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Primary" Value="@githubStatus.Percent" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (githubStatus.State == RemoteUploadState.Success)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <div class="d-flex align-center gap-1">
-                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
-                            <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
-                                @Loc["Upload complete"]
-                            </MudText>
-                        </div>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @githubStatus.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Success" Value="100" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (githubStatus.State == RemoteUploadState.Failed && !string.IsNullOrEmpty(githubStatus.ErrorMessage))
-            {
-                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
-                    @Loc["Upload failed:"] @githubStatus.ErrorMessage
-                </MudAlert>
-            }
-
-            <MudCollapse Expanded="@isGitHubOpen">
-                <MudDivider Class="my-3" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
-                    @Loc["Copy all server data files directly into a GitHub repository folder so Git can track individual file changes across commits."]
-                </MudText>
+        @{
+            bool isGitHubConnected = !string.IsNullOrWhiteSpace(Profile.Backup.GitHub.PersonalAccessToken);
+            var githubTest = GetTestState(BackupDestinationType.GitHub);
+        }
+        <BackupDestinationCard Title="@Loc["GitHub"]"
+                               Subtitle="@Loc["Sync individual server data files to a GitHub repository folder so Git tracks file changes."]"
+                               ExpandedDescription="@Loc["Copy all server data files directly into a GitHub repository folder so Git can track individual file changes across commits."]"
+                               UploadingText="@Loc["Syncing backup files to GitHub repository..."]"
+                               Icon="@Icons.Custom.Brands.GitHub"
+                               Status="@DestinationCoordinator.GetStatus(BackupDestinationType.GitHub)"
+                               IsEnabled="@Profile.Backup.GitHub.IsEnabled"
+                               IsEnabledChanged="@((bool v) => ToggleDestination(BackupDestinationType.GitHub, v))"
+                               ShowConnectedDisabledBadge="@isGitHubConnected"
+                               IsExpanded="@IsExpanded(BackupDestinationType.GitHub)"
+                               OnToggleExpanded="@(() => ToggleOpenAsync(BackupDestinationType.GitHub))"
+                               ShowTestButton="@isGitHubConnected"
+                               TestButtonLabel="@Loc["Test Connection"]"
+                               IsTesting="@githubTest.IsTesting"
+                               TestMessage="@githubTest.Message"
+                               TestSuccess="@githubTest.Success"
+                               OnTestConnection="@(() => TestConnectionAsync(BackupDestinationType.GitHub))">
+            <ChildContent>
                 <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
                     @Loc["GitHub backups store individual data files directly in the repository for version tracking and external tool access. Files synced to GitHub are not encrypted with the backup archive password, regardless of the backup encryption setting."]
                 </MudAlert>
@@ -514,544 +248,213 @@
                                          HelperText="@(_isLoadingGitHubFolders ? Loc["Loading folders from repository..."].Value : Loc["Select an existing folder or type a new folder path (created automatically)"])" />
                     </MudItem>
                 </MudGrid>
-
-                <div class="d-flex flex-wrap align-center gap-3 mt-3 pt-2">
-                    @if (isGitHubConnected)
-                    {
-                        <MudChip T="string" Color="Color.Success" Size="Size.Small" Icon="@Icons.Material.Filled.CheckCircle">
-                            @(string.IsNullOrWhiteSpace(Profile.Backup.GitHub.AccountUsername)
-                                ? Loc["Connected to GitHub"].Value
-                                : $"{Loc["Connected to GitHub"].Value} (@{Profile.Backup.GitHub.AccountUsername})")
-                        </MudChip>
-                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
-                                   OnClick="DisconnectGitHub">
-                            @Loc["Disconnect"]
-                        </MudButton>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.CheckCircle"
-                                   Disabled="@_isTestingGitHub"
-                                   OnClick="TestGitHubConnection">
-                            @if (_isTestingGitHub)
-                            {
-                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                                <span>@Loc["Testing..."]</span>
-                            }
-                            else
-                            {
-                                <span>@Loc["Test Connection"]</span>
-                            }
-                        </MudButton>
-                    }
-
-                    @if (!string.IsNullOrEmpty(_githubTestMessage))
-                    {
-                        <MudText Typo="Typo.caption" Color="@(_githubTestSuccess ? Color.Success : Color.Error)">
-                            @_githubTestMessage
-                        </MudText>
-                    }
-                </div>
-            </MudCollapse>
-        </MudPaper>
+            </ChildContent>
+            <ExtraFooterActions>
+                @if (isGitHubConnected)
+                {
+                    <MudChip T="string" Color="Color.Success" Size="Size.Small" Icon="@Icons.Material.Filled.CheckCircle">
+                        @(string.IsNullOrWhiteSpace(Profile.Backup.GitHub.AccountUsername)
+                            ? Loc["Connected to GitHub"].Value
+                            : $"{Loc["Connected to GitHub"].Value} (@{Profile.Backup.GitHub.AccountUsername})")
+                    </MudChip>
+                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                               OnClick="DisconnectGitHub">
+                        @Loc["Disconnect"]
+                    </MudButton>
+                }
+            </ExtraFooterActions>
+        </BackupDestinationCard>
 
         @* --- 4. S3 / Compatible --- *@
-        <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
-            @{
-                var s3Status = DestinationCoordinator.GetStatus(BackupDestinationType.S3);
-                bool isS3Open = _expanded.GetValueOrDefault(BackupDestinationType.S3, false);
-            }
-            <div class="d-flex align-center justify-space-between gap-3 cursor-pointer" @onclick="() => ToggleOpen(BackupDestinationType.S3)">
-                <div class="d-flex align-center gap-3">
-                    <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Color="@(Profile.Backup.S3.IsEnabled ? Color.Primary : Color.Default)" />
-                    <div>
-                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Loc["S3 / Compatible"]</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-none d-sm-block">
-                            @Loc["Cloudflare R2, MinIO, Backblaze B2, AWS S3, or Wasabi."]
-                        </MudText>
-                    </div>
-                </div>
-                <div class="d-flex align-center gap-2" @onclick:stopPropagation="true">
-                    @if (s3Status.State == RemoteUploadState.Uploading)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
-                            @($"{s3Status.Percent:F0}%")
-                        </MudChip>
-                    }
-                    else if (s3Status.State == RemoteUploadState.Success)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Check">
-                            @Loc["Uploaded"]
-                        </MudChip>
-                    }
-                    else if (s3Status.State == RemoteUploadState.Failed)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Error">
-                            @Loc["Upload Failed"]
-                        </MudChip>
-                    }
-                    else if (Profile.Backup.S3.IsEnabled)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">
-                            @Loc["Enabled"]
-                        </MudChip>
-                    }
+        @{
+            var s3Test = GetTestState(BackupDestinationType.S3);
+        }
+        <BackupDestinationCard Title="@Loc["S3 / Compatible"]"
+                               Subtitle="@Loc["Cloudflare R2, MinIO, Backblaze B2, AWS S3, or Wasabi."]"
+                               ExpandedDescription="@Loc["Upload backups to Cloudflare R2, MinIO, Backblaze B2, AWS S3, or Wasabi."]"
+                               Icon="@Icons.Material.Filled.CloudUpload"
+                               Status="@DestinationCoordinator.GetStatus(BackupDestinationType.S3)"
+                               IsEnabled="@Profile.Backup.S3.IsEnabled"
+                               IsEnabledChanged="@((bool v) => ToggleDestination(BackupDestinationType.S3, v))"
+                               IsExpanded="@IsExpanded(BackupDestinationType.S3)"
+                               OnToggleExpanded="@(() => ToggleOpenAsync(BackupDestinationType.S3))"
+                               TestButtonLabel="@Loc["Test S3 Connection"]"
+                               IsTesting="@s3Test.IsTesting"
+                               TestMessage="@s3Test.Message"
+                               TestSuccess="@s3Test.Success"
+                               OnTestConnection="@(() => TestConnectionAsync(BackupDestinationType.S3))">
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="8">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.S3.Endpoint"
+                                  Label="@Loc["Endpoint URL"]"
+                                  HelperText="@Loc["e.g. https://<accountid>.r2.cloudflarestorage.com or http://minio:9000 (leave empty for AWS S3)"]" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.S3.BucketName"
+                                  Label="@Loc["Bucket Name"]" Required="true" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.S3.Region"
+                                  Label="@Loc["Region"]" HelperText="@Loc["e.g. auto, us-east-1"]" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.S3.Prefix"
+                                  Label="@Loc["Object Prefix / Folder"]" HelperText="@Loc["e.g. spokes-backups"]" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudNumericField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     @bind-Value="Profile.Backup.S3.RetentionCount"
+                                     Label="@Loc["Backups to Keep"]" Min="1" Max="100" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.S3.AccessKey"
+                                  Label="@Loc["Access Key ID"]" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.S3.SecretKey"
+                                  Label="@Loc["Secret Access Key"]" InputType="InputType.Password" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudSwitch @bind-Value="Profile.Backup.S3.ForcePathStyle" Color="Color.Primary"
+                               Label="@Loc["Force Path Style (Required for MinIO and self-hosted S3)"]" />
+                </MudItem>
+            </MudGrid>
+        </BackupDestinationCard>
 
-                    <MudSwitch T="bool" Value="@Profile.Backup.S3.IsEnabled"
-                               ValueChanged="@((bool v) => ToggleDestination(BackupDestinationType.S3, v))"
-                               Color="Color.Primary" Class="ma-0" />
-                    <MudIconButton Icon="@(isS3Open ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                                   Size="Size.Small"
-                                   OnClick="() => ToggleOpen(BackupDestinationType.S3)" />
-                </div>
-            </div>
+        @* --- 5. WebDAV --- *@
+        @{
+            var webdavTest = GetTestState(BackupDestinationType.WebDav);
+        }
+        <BackupDestinationCard Title="@Loc["WebDAV"]"
+                               Subtitle="@Loc["Nextcloud, ownCloud, Synology, or Hetzner Storage Box."]"
+                               ExpandedDescription="@Loc["Upload backups to Nextcloud, ownCloud, Synology, or Hetzner Storage Box."]"
+                               Icon="@Icons.Material.Filled.Http"
+                               Status="@DestinationCoordinator.GetStatus(BackupDestinationType.WebDav)"
+                               IsEnabled="@Profile.Backup.WebDav.IsEnabled"
+                               IsEnabledChanged="@((bool v) => ToggleDestination(BackupDestinationType.WebDav, v))"
+                               IsExpanded="@IsExpanded(BackupDestinationType.WebDav)"
+                               OnToggleExpanded="@(() => ToggleOpenAsync(BackupDestinationType.WebDav))"
+                               TestButtonLabel="@Loc["Test WebDAV Connection"]"
+                               IsTesting="@webdavTest.IsTesting"
+                               TestMessage="@webdavTest.Message"
+                               TestSuccess="@webdavTest.Success"
+                               OnTestConnection="@(() => TestConnectionAsync(BackupDestinationType.WebDav))">
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="8">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.WebDav.ServerUrl"
+                                  Label="@Loc["WebDAV Target URL"]"
+                                  HelperText="@Loc["e.g. https://nextcloud.example.com/remote.php/dav/files/user/backups/"]" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudNumericField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     @bind-Value="Profile.Backup.WebDav.RetentionCount"
+                                     Label="@Loc["Backups to Keep"]" Min="1" Max="100" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.WebDav.Username"
+                                  Label="@Loc["Username"]" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.WebDav.Password"
+                                  Label="@Loc["Password / App Token"]" InputType="InputType.Password" />
+                </MudItem>
+            </MudGrid>
+        </BackupDestinationCard>
 
-            @if (s3Status.State == RemoteUploadState.Uploading)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between mb-1">
-                        <MudText Typo="Typo.caption" Color="Color.Primary">
-                            @Loc["Uploading backup to remote destination..."]
-                        </MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @s3Status.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Primary" Value="@s3Status.Percent" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (s3Status.State == RemoteUploadState.Success)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <div class="d-flex align-center gap-1">
-                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
-                            <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
-                                @Loc["Upload complete"]
-                            </MudText>
-                        </div>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @s3Status.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Success" Value="100" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (s3Status.State == RemoteUploadState.Failed && !string.IsNullOrEmpty(s3Status.ErrorMessage))
-            {
-                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
-                    @Loc["Upload failed:"] @s3Status.ErrorMessage
-                </MudAlert>
-            }
-
-            <MudCollapse Expanded="@isS3Open">
-                <MudDivider Class="my-3" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
-                    @Loc["Upload backups to Cloudflare R2, MinIO, Backblaze B2, AWS S3, or Wasabi."]
-                </MudText>
-
-                <MudGrid Spacing="3">
-                    <MudItem xs="12" sm="8">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.S3.Endpoint"
-                                      Label="@Loc["Endpoint URL"]"
-                                      HelperText="@Loc["e.g. https://<accountid>.r2.cloudflarestorage.com or http://minio:9000 (leave empty for AWS S3)"]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.S3.BucketName"
-                                      Label="@Loc["Bucket Name"]" Required="true" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.S3.Region"
-                                      Label="@Loc["Region"]" HelperText="@Loc["e.g. auto, us-east-1"]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.S3.Prefix"
-                                      Label="@Loc["Object Prefix / Folder"]" HelperText="@Loc["e.g. spokes-backups"]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                         @bind-Value="Profile.Backup.S3.RetentionCount"
-                                         Label="@Loc["Backups to Keep"]" Min="1" Max="100" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.S3.AccessKey"
-                                      Label="@Loc["Access Key ID"]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.S3.SecretKey"
-                                      Label="@Loc["Secret Access Key"]" InputType="InputType.Password" />
-                    </MudItem>
-                    <MudItem xs="12">
-                        <MudSwitch @bind-Value="Profile.Backup.S3.ForcePathStyle" Color="Color.Primary"
-                                   Label="@Loc["Force Path Style (Required for MinIO and self-hosted S3)"]" />
-                    </MudItem>
-                </MudGrid>
-
-                <div class="d-flex flex-wrap align-center gap-3 mt-3 pt-2">
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                               StartIcon="@Icons.Material.Filled.CheckCircle"
-                               Disabled="@_isTestingS3"
-                               OnClick="TestS3Connection">
-                        @if (_isTestingS3)
-                        {
-                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                            <span>@Loc["Testing..."]</span>
-                        }
-                        else
-                        {
-                            <span>@Loc["Test S3 Connection"]</span>
-                        }
+        @* --- 6. SFTP (SSH) --- *@
+        @{
+            var sftpTest = GetTestState(BackupDestinationType.Sftp);
+        }
+        <BackupDestinationCard Title="@Loc["SFTP (SSH)"]"
+                               Subtitle="@Loc["Upload backups to any remote Linux host or NAS over SSH/SFTP."]"
+                               ExpandedDescription="@Loc["Upload backups to any remote Linux host or NAS over SSH/SFTP."]"
+                               Icon="@Icons.Material.Filled.Terminal"
+                               Status="@DestinationCoordinator.GetStatus(BackupDestinationType.Sftp)"
+                               IsEnabled="@Profile.Backup.Sftp.IsEnabled"
+                               IsEnabledChanged="@((bool v) => ToggleDestination(BackupDestinationType.Sftp, v))"
+                               IsExpanded="@IsExpanded(BackupDestinationType.Sftp)"
+                               OnToggleExpanded="@(() => ToggleOpenAsync(BackupDestinationType.Sftp))"
+                               TestButtonLabel="@Loc["Test SFTP Connection"]"
+                               IsTesting="@sftpTest.IsTesting"
+                               TestMessage="@sftpTest.Message"
+                               TestSuccess="@sftpTest.Success"
+                               OnTestConnection="@(() => TestConnectionAsync(BackupDestinationType.Sftp))">
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="6">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.Sftp.Host"
+                                  Label="@Loc["Host / IP Address"]" />
+                </MudItem>
+                <MudItem xs="12" sm="2">
+                    <MudNumericField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     @bind-Value="Profile.Backup.Sftp.Port"
+                                     Label="@Loc["Port"]" Min="1" Max="65535" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudNumericField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     @bind-Value="Profile.Backup.Sftp.RetentionCount"
+                                     Label="@Loc["Backups to Keep"]" Min="1" Max="100" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.Sftp.Username"
+                                  Label="@Loc["Username"]" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.Sftp.Password"
+                                  Label="@Loc["Password"]" InputType="InputType.Password" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.Sftp.RemotePath"
+                                  Label="@Loc["Remote Directory"]" HelperText="@Loc["e.g. /backups"]" />
+                </MudItem>
+                <MudItem xs="12" sm="8">
+                    <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  @bind-Value="Profile.Backup.Sftp.TrustedHostKeyFingerprint"
+                                  Placeholder="SHA256:..."
+                                  Label="@Loc["Trusted SSH Host Key Fingerprint"]"
+                                  HelperText="@Loc["Pinned automatically on first connection (TOFU), or enter an expected SHA256:... fingerprint manually."]" />
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="d-flex align-start pt-4">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.RestartAlt"
+                               Disabled="@(sftpTest.IsTesting || string.IsNullOrWhiteSpace(Profile.Backup.Sftp.TrustedHostKeyFingerprint))"
+                               OnClick="ResetSftpHostKey">
+                        @Loc["Reset / Re-trust Host Key"]
                     </MudButton>
-                    @if (!string.IsNullOrEmpty(_s3TestMessage))
-                    {
-                        <MudText Typo="Typo.caption" Color="@(_s3TestSuccess ? Color.Success : Color.Error)">
-                            @_s3TestMessage
-                        </MudText>
-                    }
-                </div>
-            </MudCollapse>
-        </MudPaper>
-
-        @* --- 4. WebDAV --- *@
-        <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
-            @{
-                var webdavStatus = DestinationCoordinator.GetStatus(BackupDestinationType.WebDav);
-                bool isWebDavOpen = _expanded.GetValueOrDefault(BackupDestinationType.WebDav, false);
-            }
-            <div class="d-flex align-center justify-space-between gap-3 cursor-pointer" @onclick="() => ToggleOpen(BackupDestinationType.WebDav)">
-                <div class="d-flex align-center gap-3">
-                    <MudIcon Icon="@Icons.Material.Filled.Http" Color="@(Profile.Backup.WebDav.IsEnabled ? Color.Primary : Color.Default)" />
-                    <div>
-                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Loc["WebDAV"]</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-none d-sm-block">
-                            @Loc["Nextcloud, ownCloud, Synology, or Hetzner Storage Box."]
-                        </MudText>
-                    </div>
-                </div>
-                <div class="d-flex align-center gap-2" @onclick:stopPropagation="true">
-                    @if (webdavStatus.State == RemoteUploadState.Uploading)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
-                            @($"{webdavStatus.Percent:F0}%")
-                        </MudChip>
-                    }
-                    else if (webdavStatus.State == RemoteUploadState.Success)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Check">
-                            @Loc["Uploaded"]
-                        </MudChip>
-                    }
-                    else if (webdavStatus.State == RemoteUploadState.Failed)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Error">
-                            @Loc["Upload Failed"]
-                        </MudChip>
-                    }
-                    else if (Profile.Backup.WebDav.IsEnabled)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">
-                            @Loc["Enabled"]
-                        </MudChip>
-                    }
-
-                    <MudSwitch T="bool" Value="@Profile.Backup.WebDav.IsEnabled"
-                               ValueChanged="@((bool v) => ToggleDestination(BackupDestinationType.WebDav, v))"
-                               Color="Color.Primary" Class="ma-0" />
-                    <MudIconButton Icon="@(isWebDavOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                                   Size="Size.Small"
-                                   OnClick="() => ToggleOpen(BackupDestinationType.WebDav)" />
-                </div>
-            </div>
-
-            @if (webdavStatus.State == RemoteUploadState.Uploading)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between mb-1">
-                        <MudText Typo="Typo.caption" Color="Color.Primary">
-                            @Loc["Uploading backup to remote destination..."]
-                        </MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @webdavStatus.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Primary" Value="@webdavStatus.Percent" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (webdavStatus.State == RemoteUploadState.Success)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <div class="d-flex align-center gap-1">
-                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
-                            <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
-                                @Loc["Upload complete"]
-                            </MudText>
-                        </div>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @webdavStatus.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Success" Value="100" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (webdavStatus.State == RemoteUploadState.Failed && !string.IsNullOrEmpty(webdavStatus.ErrorMessage))
-            {
-                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
-                    @Loc["Upload failed:"] @webdavStatus.ErrorMessage
-                </MudAlert>
-            }
-
-            <MudCollapse Expanded="@isWebDavOpen">
-                <MudDivider Class="my-3" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
-                    @Loc["Upload backups to Nextcloud, ownCloud, Synology, or Hetzner Storage Box."]
-                </MudText>
-
-                <MudGrid Spacing="3">
-                    <MudItem xs="12" sm="8">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.WebDav.ServerUrl"
-                                      Label="@Loc["WebDAV Target URL"]"
-                                      HelperText="@Loc["e.g. https://nextcloud.example.com/remote.php/dav/files/user/backups/"]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                         @bind-Value="Profile.Backup.WebDav.RetentionCount"
-                                         Label="@Loc["Backups to Keep"]" Min="1" Max="100" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.WebDav.Username"
-                                      Label="@Loc["Username"]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.WebDav.Password"
-                                      Label="@Loc["Password / App Token"]" InputType="InputType.Password" />
-                    </MudItem>
-                </MudGrid>
-
-                <div class="d-flex flex-wrap align-center gap-3 mt-3 pt-2">
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                               StartIcon="@Icons.Material.Filled.CheckCircle"
-                               Disabled="@_isTestingWebDav"
-                               OnClick="TestWebDavConnection">
-                        @if (_isTestingWebDav)
-                        {
-                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                            <span>@Loc["Testing..."]</span>
-                        }
-                        else
-                        {
-                            <span>@Loc["Test WebDAV Connection"]</span>
-                        }
-                    </MudButton>
-                    @if (!string.IsNullOrEmpty(_webdavTestMessage))
-                    {
-                        <MudText Typo="Typo.caption" Color="@(_webdavTestSuccess ? Color.Success : Color.Error)">
-                            @_webdavTestMessage
-                        </MudText>
-                    }
-                </div>
-            </MudCollapse>
-        </MudPaper>
-
-        @* --- 5. SFTP (SSH) --- *@
-        <MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
-            @{
-                var sftpStatus = DestinationCoordinator.GetStatus(BackupDestinationType.Sftp);
-                bool isSftpOpen = _expanded.GetValueOrDefault(BackupDestinationType.Sftp, false);
-            }
-            <div class="d-flex align-center justify-space-between gap-3 cursor-pointer" @onclick="() => ToggleOpen(BackupDestinationType.Sftp)">
-                <div class="d-flex align-center gap-3">
-                    <MudIcon Icon="@Icons.Material.Filled.Terminal" Color="@(Profile.Backup.Sftp.IsEnabled ? Color.Primary : Color.Default)" />
-                    <div>
-                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Loc["SFTP (SSH)"]</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-none d-sm-block">
-                            @Loc["Upload backups to any remote Linux host or NAS over SSH/SFTP."]
-                        </MudText>
-                    </div>
-                </div>
-                <div class="d-flex align-center gap-2" @onclick:stopPropagation="true">
-                    @if (sftpStatus.State == RemoteUploadState.Uploading)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
-                            @($"{sftpStatus.Percent:F0}%")
-                        </MudChip>
-                    }
-                    else if (sftpStatus.State == RemoteUploadState.Success)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Check">
-                            @Loc["Uploaded"]
-                        </MudChip>
-                    }
-                    else if (sftpStatus.State == RemoteUploadState.Failed)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Error">
-                            @Loc["Upload Failed"]
-                        </MudChip>
-                    }
-                    else if (Profile.Backup.Sftp.IsEnabled)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">
-                            @Loc["Enabled"]
-                        </MudChip>
-                    }
-
-                    <MudSwitch T="bool" Value="@Profile.Backup.Sftp.IsEnabled"
-                               ValueChanged="@((bool v) => ToggleDestination(BackupDestinationType.Sftp, v))"
-                               Color="Color.Primary" Class="ma-0" />
-                    <MudIconButton Icon="@(isSftpOpen ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                                   Size="Size.Small"
-                                   OnClick="() => ToggleOpen(BackupDestinationType.Sftp)" />
-                </div>
-            </div>
-
-            @if (sftpStatus.State == RemoteUploadState.Uploading)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between mb-1">
-                        <MudText Typo="Typo.caption" Color="Color.Primary">
-                            @Loc["Uploading backup to remote destination..."]
-                        </MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @sftpStatus.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Primary" Value="@sftpStatus.Percent" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (sftpStatus.State == RemoteUploadState.Success)
-            {
-                <div class="mt-3">
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <div class="d-flex align-center gap-1">
-                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
-                            <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
-                                @Loc["Upload complete"]
-                            </MudText>
-                        </div>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @sftpStatus.FormattedProgress
-                        </MudText>
-                    </div>
-                    <MudProgressLinear Color="Color.Success" Value="100" Rounded="true" Size="Size.Medium" />
-                </div>
-            }
-            else if (sftpStatus.State == RemoteUploadState.Failed && !string.IsNullOrEmpty(sftpStatus.ErrorMessage))
-            {
-                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
-                    @Loc["Upload failed:"] @sftpStatus.ErrorMessage
-                </MudAlert>
-            }
-
-            <MudCollapse Expanded="@isSftpOpen">
-                <MudDivider Class="my-3" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
-                    @Loc["Upload backups to any remote Linux host or NAS over SSH/SFTP."]
-                </MudText>
-
-                <MudGrid Spacing="3">
-                    <MudItem xs="12" sm="6">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.Sftp.Host"
-                                      Label="@Loc["Host / IP Address"]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="2">
-                        <MudNumericField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                         @bind-Value="Profile.Backup.Sftp.Port"
-                                         Label="@Loc["Port"]" Min="1" Max="65535" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudNumericField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                         @bind-Value="Profile.Backup.Sftp.RetentionCount"
-                                         Label="@Loc["Backups to Keep"]" Min="1" Max="100" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.Sftp.Username"
-                                      Label="@Loc["Username"]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.Sftp.Password"
-                                      Label="@Loc["Password"]" InputType="InputType.Password" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.Sftp.RemotePath"
-                                      Label="@Loc["Remote Directory"]" HelperText="@Loc["e.g. /backups"]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="8">
-                        <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                      @bind-Value="Profile.Backup.Sftp.TrustedHostKeyFingerprint"
-                                      Placeholder="SHA256:..."
-                                      Label="@Loc["Trusted SSH Host Key Fingerprint"]"
-                                      HelperText="@Loc["Pinned automatically on first connection (TOFU), or enter an expected SHA256:... fingerprint manually."]" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4" Class="d-flex align-start pt-4">
-                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.RestartAlt"
-                                   Disabled="@(_isTestingSftp || string.IsNullOrWhiteSpace(Profile.Backup.Sftp.TrustedHostKeyFingerprint))"
-                                   OnClick="ResetSftpHostKey">
-                            @Loc["Reset / Re-trust Host Key"]
-                        </MudButton>
-                    </MudItem>
-                </MudGrid>
-
-                <div class="d-flex flex-wrap align-center gap-3 mt-3 pt-2">
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                               StartIcon="@Icons.Material.Filled.CheckCircle"
-                               Disabled="@_isTestingSftp"
-                               OnClick="TestSftpConnection">
-                        @if (_isTestingSftp)
-                        {
-                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                            <span>@Loc["Testing..."]</span>
-                        }
-                        else
-                        {
-                            <span>@Loc["Test SFTP Connection"]</span>
-                        }
-                    </MudButton>
-                    @if (!string.IsNullOrEmpty(_sftpTestMessage))
-                    {
-                        <MudText Typo="Typo.caption" Color="@(_sftpTestSuccess ? Color.Success : Color.Error)">
-                            @_sftpTestMessage
-                        </MudText>
-                    }
-                </div>
-            </MudCollapse>
-        </MudPaper>
+                </MudItem>
+            </MudGrid>
+        </BackupDestinationCard>
     </MudStack>
 </SettingsCard>
+}
 
 @code {
     [Parameter] public CompanyProfile Profile { get; set; } = default!;
-    [Parameter] public EventCallback OnProfileChanged { get; set; }
 
+    private sealed class DestinationTestState
+    {
+        public bool IsTesting { get; set; }
+        public bool Success { get; set; }
+        public string? Message { get; set; }
+    }
+
+    private bool _isEffectiveAdmin;
     private readonly Dictionary<BackupDestinationType, bool> _expanded = new();
-
-    private bool _isTestingMount;
-    private string? _mountTestMessage;
-    private bool _mountTestSuccess;
-
-    private bool _isTestingS3;
-    private string? _s3TestMessage;
-    private bool _s3TestSuccess;
-
-    private bool _isTestingGDrive;
-    private string? _gdriveTestMessage;
-    private bool _gdriveTestSuccess;
+    private readonly Dictionary<BackupDestinationType, DestinationTestState> _testStates = new();
 
     private bool _isConnectingGitHub;
-    private bool _isTestingGitHub;
-    private string? _githubTestMessage;
-    private bool _githubTestSuccess;
     private string _githubTokenInput = string.Empty;
     private bool _isLoadingGitHubRepos;
     private bool _isLoadingGitHubFolders;
@@ -1060,30 +463,57 @@
     private List<string> _githubFolders = new();
     private MudAutocomplete<string>? _githubFolderAutocomplete;
 
-    private bool _isTestingWebDav;
-    private string? _webdavTestMessage;
-    private bool _webdavTestSuccess;
+    private bool IsExpanded(BackupDestinationType type) => _expanded.GetValueOrDefault(type, false);
 
-    private bool _isTestingSftp;
-    private string? _sftpTestMessage;
-    private bool _sftpTestSuccess;
-
-    protected override void OnInitialized()
+    private DestinationTestState GetTestState(BackupDestinationType type)
     {
+        if (!_testStates.TryGetValue(type, out var state))
+        {
+            state = new DestinationTestState();
+            _testStates[type] = state;
+        }
+        return state;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var caller = await UserService.GetEmployeeAsync();
+        _isEffectiveAdmin = caller is { IsActiveUnsuspended: true } && caller.IsEffectiveAdmin;
+        if (!_isEffectiveAdmin)
+        {
+            return;
+        }
+
         // Initial state: Collapsed if disabled, open if enabled
-        _expanded[BackupDestinationType.LocalMount] = Profile?.Backup.SecondaryMount.IsEnabled ?? false;
-        _expanded[BackupDestinationType.S3] = Profile?.Backup.S3.IsEnabled ?? false;
-        _expanded[BackupDestinationType.GoogleDrive] = Profile?.Backup.GoogleDrive.IsEnabled ?? false;
-        _expanded[BackupDestinationType.GitHub] = Profile?.Backup.GitHub.IsEnabled ?? false;
-        _expanded[BackupDestinationType.WebDav] = Profile?.Backup.WebDav.IsEnabled ?? false;
-        _expanded[BackupDestinationType.Sftp] = Profile?.Backup.Sftp.IsEnabled ?? false;
+        foreach (var type in Enum.GetValues<BackupDestinationType>())
+        {
+            _expanded[type] = Profile?.Backup.GetDestinationConfig(type).IsEnabled ?? false;
+        }
 
         DestinationCoordinator.OnDestinationStatusChanged += HandleDestinationStatusChanged;
     }
 
+    private async Task<Employee?> RequireEffectiveAdminAsync()
+    {
+        var caller = await UserService.GetEmployeeAsync();
+        _isEffectiveAdmin = caller is { IsActiveUnsuspended: true } && caller.IsEffectiveAdmin;
+        if (!_isEffectiveAdmin)
+        {
+            Snackbar.Add(Loc["Only an active Global Administrator can perform remote backup operations."].Value, Severity.Error);
+            return null;
+        }
+
+        return caller;
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && _expanded.GetValueOrDefault(BackupDestinationType.GitHub, false) &&
+        if (!_isEffectiveAdmin)
+        {
+            return;
+        }
+
+        if (firstRender && IsExpanded(BackupDestinationType.GitHub) &&
             !string.IsNullOrWhiteSpace(Profile?.Backup.GitHub.PersonalAccessToken))
         {
             await EnsureGitHubMetadataLoadedAsync();
@@ -1092,6 +522,7 @@
 
     private void HandleDestinationStatusChanged(BackupDestinationType type, DestinationUploadStatus status)
     {
+        if (!_isEffectiveAdmin) return;
         SyncPersistedBackupSecrets(type);
         _ = InvokeAsync(StateHasChanged);
     }
@@ -1115,15 +546,20 @@
         DestinationCoordinator.OnDestinationStatusChanged -= HandleDestinationStatusChanged;
     }
 
-    private void ToggleOpen(BackupDestinationType type)
-    {
-        _expanded[type] = !_expanded.GetValueOrDefault(type, false);
-    }
-
     private async Task ToggleOpenAsync(BackupDestinationType type)
     {
-        bool newState = !_expanded.GetValueOrDefault(type, false);
+        if (type == BackupDestinationType.GitHub)
+        {
+            if (await RequireEffectiveAdminAsync() == null) return;
+        }
+        else if (!_isEffectiveAdmin)
+        {
+            return;
+        }
+
+        bool newState = !IsExpanded(type);
         _expanded[type] = newState;
+
         if (type == BackupDestinationType.GitHub && newState && !string.IsNullOrWhiteSpace(Profile.Backup.GitHub.PersonalAccessToken))
         {
             await EnsureGitHubMetadataLoadedAsync();
@@ -1132,33 +568,14 @@
 
     private async Task ToggleDestination(BackupDestinationType type, bool isEnabled)
     {
-        switch (type)
-        {
-            case BackupDestinationType.LocalMount:
-                Profile.Backup.SecondaryMount.IsEnabled = isEnabled;
-                break;
-            case BackupDestinationType.S3:
-                Profile.Backup.S3.IsEnabled = isEnabled;
-                break;
-            case BackupDestinationType.GoogleDrive:
-                Profile.Backup.GoogleDrive.IsEnabled = isEnabled;
-                break;
-            case BackupDestinationType.GitHub:
-                Profile.Backup.GitHub.IsEnabled = isEnabled;
-                break;
-            case BackupDestinationType.WebDav:
-                Profile.Backup.WebDav.IsEnabled = isEnabled;
-                break;
-            case BackupDestinationType.Sftp:
-                Profile.Backup.Sftp.IsEnabled = isEnabled;
-                break;
-        }
+        if (await RequireEffectiveAdminAsync() == null) return;
+
+        Profile.Backup.GetDestinationConfig(type).IsEnabled = isEnabled;
 
         // Turning ON opens the card, turning OFF collapses it
         _expanded[type] = isEnabled;
 
         Db.CompanyProfile.Save(Profile);
-        await OnProfileChanged.InvokeAsync();
 
         if (type == BackupDestinationType.GitHub && isEnabled && !string.IsNullOrWhiteSpace(Profile.Backup.GitHub.PersonalAccessToken))
         {
@@ -1166,113 +583,36 @@
         }
     }
 
-    private async Task TestMountConnection()
+    private async Task TestConnectionAsync(BackupDestinationType type)
     {
-        _isTestingMount = true;
-        _mountTestMessage = Loc["Testing connection..."].Value;
+        if (await RequireEffectiveAdminAsync() == null) return;
+
+        var testState = GetTestState(type);
+        testState.IsTesting = true;
+        testState.Message = Loc["Testing connection..."].Value;
         Db.CompanyProfile.Save(Profile);
         StateHasChanged();
 
         try
         {
-            var res = await DestinationCoordinator.TestConnectionAsync(BackupDestinationType.LocalMount);
-            _mountTestSuccess = res.Success;
-            _mountTestMessage = res.Message;
+            var res = await DestinationCoordinator.TestConnectionAsync(type);
+            testState.Success = res.Success;
+            testState.Message = res.Message;
         }
         finally
         {
-            _isTestingMount = false;
-            StateHasChanged();
-        }
-    }
-
-    private async Task TestS3Connection()
-    {
-        _isTestingS3 = true;
-        _s3TestMessage = Loc["Testing connection..."].Value;
-        Db.CompanyProfile.Save(Profile);
-        StateHasChanged();
-
-        try
-        {
-            var res = await DestinationCoordinator.TestConnectionAsync(BackupDestinationType.S3);
-            _s3TestSuccess = res.Success;
-            _s3TestMessage = res.Message;
-        }
-        finally
-        {
-            _isTestingS3 = false;
-            StateHasChanged();
-        }
-    }
-
-    private async Task TestGoogleDriveConnection()
-    {
-        _isTestingGDrive = true;
-        _gdriveTestMessage = Loc["Testing connection..."].Value;
-        Db.CompanyProfile.Save(Profile);
-        StateHasChanged();
-
-        try
-        {
-            var res = await DestinationCoordinator.TestConnectionAsync(BackupDestinationType.GoogleDrive);
-            _gdriveTestSuccess = res.Success;
-            _gdriveTestMessage = res.Message;
-        }
-        finally
-        {
-            _isTestingGDrive = false;
-            StateHasChanged();
-        }
-    }
-
-    private async Task TestWebDavConnection()
-    {
-        _isTestingWebDav = true;
-        _webdavTestMessage = Loc["Testing connection..."].Value;
-        Db.CompanyProfile.Save(Profile);
-        StateHasChanged();
-
-        try
-        {
-            var res = await DestinationCoordinator.TestConnectionAsync(BackupDestinationType.WebDav);
-            _webdavTestSuccess = res.Success;
-            _webdavTestMessage = res.Message;
-        }
-        finally
-        {
-            _isTestingWebDav = false;
-            StateHasChanged();
-        }
-    }
-
-    private async Task TestSftpConnection()
-    {
-        _isTestingSftp = true;
-        _sftpTestMessage = Loc["Testing connection..."].Value;
-        Db.CompanyProfile.Save(Profile);
-        StateHasChanged();
-
-        try
-        {
-            var res = await DestinationCoordinator.TestConnectionAsync(BackupDestinationType.Sftp);
-            _sftpTestSuccess = res.Success;
-            _sftpTestMessage = res.Message;
-        }
-        finally
-        {
-            SyncPersistedBackupSecrets(BackupDestinationType.Sftp);
-            _isTestingSftp = false;
+            SyncPersistedBackupSecrets(type);
+            testState.IsTesting = false;
             StateHasChanged();
         }
     }
 
     private async Task ResetSftpHostKey()
     {
+        if (await RequireEffectiveAdminAsync() == null) return;
         Profile.Backup.Sftp.TrustedHostKeyFingerprint = string.Empty;
         Db.CompanyProfile.Save(Profile);
-        await OnProfileChanged.InvokeAsync();
-        _sftpTestMessage = null;
+        GetTestState(BackupDestinationType.Sftp).Message = null;
         Snackbar.Add(Loc["Pinned SSH host key cleared. The next SFTP connection will trust and pin the host key."].Value, Severity.Info);
         if (Profile != null)
         {
@@ -1282,6 +622,9 @@
 
     private async Task ConnectGoogleDrive()
     {
+        var adminEmp = await RequireEffectiveAdminAsync();
+        if (adminEmp == null) return;
+
         var gDriveLicense = LicenseValidationService.ValidateLicense(Profile.LicensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
         if (!LicenseValidationService.IsLicenseActive(gDriveLicense.Status))
         {
@@ -1289,8 +632,16 @@
             return;
         }
 
+        var sessionId = await UserService.GetSessionIdAsync();
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            Snackbar.Add(Loc["An active authenticated session is required to connect Google Drive."].Value, Severity.Error);
+            return;
+        }
+
+        var nonce = OAuthStateNonce.IssueNonce(adminEmp.Id, sessionId, "gdrive");
         Db.CompanyProfile.Save(Profile);
-        var callbackUrl = Nav.ToAbsoluteUri("/admin/settings?tab=backups").ToString();
+        var callbackUrl = Nav.ToAbsoluteUri($"/admin/settings?tab=backups&gdrive_state={Uri.EscapeDataString(nonce)}").ToString();
         var authUrl = await DestinationCoordinator.GetGoogleDriveAuthUrlAsync(callbackUrl);
         if (!string.IsNullOrEmpty(authUrl))
         {
@@ -1302,26 +653,29 @@
         }
     }
 
-    private void DisconnectGoogleDrive()
+    private async Task DisconnectGoogleDrive()
     {
+        if (await RequireEffectiveAdminAsync() == null) return;
         Profile.Backup.GoogleDrive.RefreshToken = string.Empty;
         Profile.Backup.GoogleDrive.IsEnabled = false;
         _expanded[BackupDestinationType.GoogleDrive] = false;
         Db.CompanyProfile.Save(Profile);
-        _gdriveTestMessage = null;
+        GetTestState(BackupDestinationType.GoogleDrive).Message = null;
         Snackbar.Add(Loc["Disconnected from Google Drive."].Value, Severity.Info);
         StateHasChanged();
     }
 
     private async Task ConnectGitHub()
     {
+        if (await RequireEffectiveAdminAsync() == null) return;
         if (string.IsNullOrWhiteSpace(_githubTokenInput))
         {
             return;
         }
 
+        var githubTest = GetTestState(BackupDestinationType.GitHub);
         _isConnectingGitHub = true;
-        _githubTestMessage = null;
+        githubTest.Message = null;
         StateHasChanged();
 
         try
@@ -1330,8 +684,8 @@
             var verify = await DestinationCoordinator.VerifyGitHubTokenAsync(token);
             if (!verify.Success)
             {
-                _githubTestSuccess = false;
-                _githubTestMessage = verify.ErrorMessage ?? Loc["GitHub authentication failed."].Value;
+                githubTest.Success = false;
+                githubTest.Message = verify.ErrorMessage ?? Loc["GitHub authentication failed."].Value;
                 return;
             }
 
@@ -1341,7 +695,6 @@
             Profile.Backup.GitHub.AccountUsername = verify.Username;
             _githubTokenInput = string.Empty;
             Db.CompanyProfile.Save(Profile);
-            await OnProfileChanged.InvokeAsync();
 
             Snackbar.Add(Loc["GitHub connected successfully!"].Value, Severity.Success);
             await RefreshGitHubRepositoriesAsync();
@@ -1353,15 +706,16 @@
         }
     }
 
-    private void DisconnectGitHub()
+    private async Task DisconnectGitHub()
     {
+        if (await RequireEffectiveAdminAsync() == null) return;
         Profile.Backup.GitHub.PersonalAccessToken = string.Empty;
         Profile.Backup.GitHub.AccountUsername = null;
         Profile.Backup.GitHub.IsEnabled = false;
         _githubRepos.Clear();
         _githubFolders.Clear();
         _githubReposLoaded = false;
-        _githubTestMessage = null;
+        GetTestState(BackupDestinationType.GitHub).Message = null;
         _expanded[BackupDestinationType.GitHub] = false;
         Db.CompanyProfile.Save(Profile);
         Snackbar.Add(Loc["Disconnected from GitHub."].Value, Severity.Info);
@@ -1429,6 +783,7 @@
 
     private async Task OnGitHubRepositoryChanged(string value)
     {
+        if (await RequireEffectiveAdminAsync() == null) return;
         var newRepo = value ?? string.Empty;
         bool repoChanged = !string.Equals(Profile.Backup.GitHub.Repository, newRepo, StringComparison.Ordinal);
 
@@ -1444,7 +799,6 @@
         }
 
         Db.CompanyProfile.Save(Profile);
-        await OnProfileChanged.InvokeAsync();
 
         if (!string.IsNullOrWhiteSpace(Profile.Backup.GitHub.Repository))
         {
@@ -1458,9 +812,9 @@
 
     private async Task OnGitHubFolderChanged(string value)
     {
+        if (await RequireEffectiveAdminAsync() == null) return;
         Profile.Backup.GitHub.TargetFolder = value ?? string.Empty;
         Db.CompanyProfile.Save(Profile);
-        await OnProfileChanged.InvokeAsync();
     }
 
     private Task<IEnumerable<string>> SearchGitHubRepositories(string value, CancellationToken token)
@@ -1516,25 +870,5 @@
         }
 
         return Task.FromResult<IEnumerable<string>>(filtered);
-    }
-
-    private async Task TestGitHubConnection()
-    {
-        _isTestingGitHub = true;
-        _githubTestMessage = Loc["Testing connection..."].Value;
-        Db.CompanyProfile.Save(Profile);
-        StateHasChanged();
-
-        try
-        {
-            var res = await DestinationCoordinator.TestConnectionAsync(BackupDestinationType.GitHub);
-            _githubTestSuccess = res.Success;
-            _githubTestMessage = res.Message;
-        }
-        finally
-        {
-            _isTestingGitHub = false;
-            StateHasChanged();
-        }
     }
 }

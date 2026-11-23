@@ -13,7 +13,7 @@ public static class CsvReaderHelper
     /// <summary>
     /// Parses CSV content from a <see cref="TextReader"/> into a list of rows, where each row is a list of field values.
     /// </summary>
-    public static List<List<string>> Parse(TextReader reader)
+    public static List<List<string>> Parse(TextReader reader, char delimiter = ',')
     {
         var rows = new List<List<string>>();
         var currentRow = new List<string>();
@@ -55,7 +55,7 @@ public static class CsvReaderHelper
                     inQuotes = true;
                     hasFieldContent = true;
                 }
-                else if (c == ',')
+                else if (c == delimiter)
                 {
                     currentRow.Add(currentField.ToString());
                     currentField.Clear();
@@ -103,7 +103,7 @@ public static class CsvReaderHelper
     /// <summary>
     /// Parses a CSV string into a list of rows.
     /// </summary>
-    public static List<List<string>> Parse(string csvText)
+    public static List<List<string>> Parse(string csvText, char delimiter = ',')
     {
         if (string.IsNullOrEmpty(csvText))
         {
@@ -111,6 +111,6 @@ public static class CsvReaderHelper
         }
 
         using var reader = new StringReader(csvText);
-        return Parse(reader);
+        return Parse(reader, delimiter);
     }
 }

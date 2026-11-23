@@ -28,9 +28,6 @@ public class CalendarNotificationService : IAsyncDisposable
     private readonly EmployeeRepository? _employeeRepo;
     private string? _currentUserId;
 
-    public int TotalUnreadCount => 0;
-    public event Action? OnUnreadCountChanged;
-
     public CalendarNotificationService(
         IUiNotificationPresenter presenter,
         ISoundService soundService,
@@ -65,9 +62,32 @@ public class CalendarNotificationService : IAsyncDisposable
         return _circuitContext.ShouldDisplayInAppNotification(_presenceState);
     }
 
+    private bool IsCurrentUserCalendarEligible(string? userId)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return false;
+        if (_employeeRepo == null) return true;
+
+        var employee = _employeeRepo.GetById(userId);
+        return CalendarService.HasCalendarViewAccess(employee)
+            || CalendarService.HasCalendarAdminOverride(employee);
+    }
+
     public Task InitializeAsync(string userId)
     {
-        if (_currentUserId != null) return Task.CompletedTask;
+        if (!IsCurrentUserCalendarEligible(userId))
+        {
+            _reminderState.OnReminderTriggered -= HandleReminderTriggered;
+            _currentUserId = null;
+            return Task.CompletedTask;
+        }
+
+        if (string.Equals(_currentUserId, userId, StringComparison.OrdinalIgnoreCase))
+            return Task.CompletedTask;
+
+        if (_currentUserId != null)
+        {
+            _reminderState.OnReminderTriggered -= HandleReminderTriggered;
+        }
 
         _currentUserId = userId;
         _reminderState.OnReminderTriggered += HandleReminderTriggered;
@@ -79,6 +99,13 @@ public class CalendarNotificationService : IAsyncDisposable
     {
         if (string.IsNullOrEmpty(_currentUserId) || !string.Equals(userId, _currentUserId, StringComparison.OrdinalIgnoreCase))
             return;
+
+        if (!IsCurrentUserCalendarEligible(_currentUserId))
+        {
+            _reminderState.OnReminderTriggered -= HandleReminderTriggered;
+            _currentUserId = null;
+            return;
+        }
 
         if (!ShouldDisplayInAppNotification())
             return;
@@ -105,8 +132,6 @@ public class CalendarNotificationService : IAsyncDisposable
                 evt.Id,
                 serverName,
                 serverIconUrl));
-
-            OnUnreadCountChanged?.Invoke();
         }
         catch
         {
@@ -134,6 +159,7 @@ public class CalendarNotificationService : IAsyncDisposable
     public ValueTask DisposeAsync()
     {
         _reminderState.OnReminderTriggered -= HandleReminderTriggered;
+        _currentUserId = null;
         return ValueTask.CompletedTask;
     }
 }

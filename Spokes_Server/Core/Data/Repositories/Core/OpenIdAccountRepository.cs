@@ -21,12 +21,6 @@ public class OpenIdAccountRepository : JsonRepository<OpenIdAccount>
         return _cache.Values.Where(a => a.LinkedEmployeeId == employeeId).ToList();
     }
 
-    public List<OpenIdAccount> GetUnlinked()
-    {
-        EnsureLoaded();
-        return _cache.Values.Where(a => string.IsNullOrEmpty(a.LinkedEmployeeId)).ToList();
-    }
-
     protected override string GetFilePath(OpenIdAccount item) =>
         Path.Combine(_basePath, $"{item.Id}.json");
 }

@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using Microsoft.AspNetCore.StaticFiles;
-using MudBlazor;
 
 namespace Spokes_Server.Core.Helpers;
 
@@ -14,6 +13,32 @@ public static class FileHelper
         if (string.IsNullOrEmpty(fileName)) return false;
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".bmp";
+    }
+
+    /// <summary>
+    /// Returns true if the file name or URL path has a raster image extension supported by
+    /// server-side thumbnail generation and on-demand thumbnail self-healing (.jpg, .jpeg, .png, .gif, .webp, .bmp).
+    /// </summary>
+    public static bool CanSelfHealThumbnail(string? fileNameOrPath)
+    {
+        if (string.IsNullOrWhiteSpace(fileNameOrPath)) return false;
+        var clean = fileNameOrPath.Split('?', '#')[0];
+        return IsImageFile(clean);
+    }
+
+    public static string BuildThumbnailUrl(string? filePath, bool canUseServerThumbnail)
+    {
+        if (!canUseServerThumbnail || string.IsNullOrWhiteSpace(filePath))
+            return filePath!;
+
+        if (filePath.StartsWith("/spokesapi/files/", StringComparison.Ordinal))
+            return filePath.Replace("/spokesapi/files/", "/spokesapi/files/thumb/", StringComparison.Ordinal);
+        if (filePath.StartsWith("/internal/attachments/", StringComparison.Ordinal))
+            return filePath.Replace("/internal/attachments/", "/internal/attachments/thumb/", StringComparison.Ordinal);
+        if (filePath.StartsWith("/spokesapi/attachments/", StringComparison.Ordinal))
+            return filePath.Replace("/spokesapi/attachments/", "/spokesapi/attachments/thumb/", StringComparison.Ordinal);
+
+        return filePath;
     }
 
     public static bool IsVideoFile(string fileName)
@@ -64,29 +89,6 @@ public static class FileHelper
         return fallbackContentType ?? "application/octet-stream";
     }
 
-    public static string GetFileIcon(string fileName, string? contentType = null)
-    {
-        if (!string.IsNullOrEmpty(contentType))
-        {
-            if (contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return Icons.Material.Filled.Image;
-            if (contentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase)) return Icons.Material.Filled.Videocam;
-            if (contentType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) return Icons.Material.Filled.AudioFile;
-            if (contentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase)) return Icons.Material.Filled.PictureAsPdf;
-        }
-
-        if (IsImageFile(fileName)) return Icons.Material.Filled.Image;
-        if (IsVideoFile(fileName)) return Icons.Material.Filled.Videocam;
-        if (IsAudioFile(fileName)) return Icons.Material.Filled.AudioFile;
-
-        var ext = Path.GetExtension(fileName).ToLowerInvariant();
-        if (ext == ".pdf") return Icons.Material.Filled.PictureAsPdf;
-        if (ext is ".doc" or ".docx" or ".odt" or ".rtf" or ".txt") return Icons.Material.Filled.Description;
-        if (ext is ".xls" or ".xlsx" or ".csv") return Icons.Material.Filled.TableChart;
-        if (ext is ".zip" or ".rar" or ".7z" or ".tar" or ".gz") return Icons.Material.Filled.FolderZip;
-
-        return Icons.Material.Filled.AttachFile;
-    }
-
     public static string FormatBytes(long bytes)
     {
         if (bytes <= 0) return "0 B";
@@ -99,5 +101,91 @@ public static class FileHelper
             i++;
         }
         return $"{d:0.#} {suffixes[i]}";
+    }
+
+    public static bool IsValidPathSegment(string? segment) =>
+        !string.IsNullOrWhiteSpace(segment) &&
+        !segment.Contains("..", StringComparison.Ordinal) &&
+        !segment.Contains('/') &&
+        !segment.Contains('\\') &&
+        segment.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+
+    private static bool IsUnsafeFilenameChar(char c)
+    {
+        if (c < 0x20 || c == 0x7F || char.IsControl(c))
+        {
+            return true;
+        }
+
+        // Bidi override/isolate and directional format characters (Trojan Source / extension spoofing)
+        if ((c >= '\u202A' && c <= '\u202E') ||
+            (c >= '\u2066' && c <= '\u2069') ||
+            c == '\u200E' ||
+            c == '\u200F' ||
+            c == '\u061C')
+        {
+            return true;
+        }
+
+        return c is '<' or '>' or ':' or '"' or '/' or '\\' or '|' or '?' or '*';
+    }
+
+    /// <summary>
+    /// Extracts a safe single-segment display filename without path traversal, control/bidi
+    /// characters, or OS-reserved symbols, capped at 200 characters while preserving extension.
+    /// </summary>
+    public static string SanitizeDisplayFileName(string? rawFileName, string fallback = "attachment")
+    {
+        string safeFallback = string.IsNullOrWhiteSpace(fallback) ? "attachment" : fallback.Trim();
+        if (string.IsNullOrWhiteSpace(rawFileName))
+        {
+            return safeFallback;
+        }
+
+        // Split on both POSIX and Windows separators regardless of server host OS
+        string normalizedSeparators = rawFileName.Replace('\\', '/');
+        int lastSlash = normalizedSeparators.LastIndexOf('/');
+        string segment = lastSlash >= 0
+            ? normalizedSeparators[(lastSlash + 1)..]
+            : normalizedSeparators;
+
+        var sb = new System.Text.StringBuilder(segment.Length);
+        foreach (char c in segment)
+        {
+            if (!IsUnsafeFilenameChar(c))
+            {
+                sb.Append(c);
+            }
+        }
+
+        string cleaned = sb.ToString().Trim().Trim('.');
+        while (cleaned.Contains("..", StringComparison.Ordinal))
+        {
+            cleaned = cleaned.Replace("..", "_", StringComparison.Ordinal);
+        }
+        cleaned = cleaned.Trim().Trim('.');
+
+        if (string.IsNullOrWhiteSpace(cleaned))
+        {
+            return safeFallback;
+        }
+
+        const int maxLen = 200;
+        if (cleaned.Length > maxLen)
+        {
+            string ext = Path.GetExtension(cleaned);
+            if (!string.IsNullOrEmpty(ext) && ext.Length <= 20 && ext.Length < maxLen)
+            {
+                string stem = cleaned[..(cleaned.Length - ext.Length)];
+                int maxStem = maxLen - ext.Length;
+                cleaned = stem[..Math.Min(stem.Length, maxStem)].TrimEnd('.', ' ') + ext;
+            }
+            else
+            {
+                cleaned = cleaned[..maxLen].TrimEnd('.', ' ');
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(cleaned) ? safeFallback : cleaned;
     }
 }

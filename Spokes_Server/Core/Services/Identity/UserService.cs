@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
@@ -8,6 +9,7 @@ using System.Security.Claims;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Middleware;
+using Spokes_Server.Core.Services.Communication.Voice;
 using Spokes_Server.Core.Services.Projects;
 using Spokes_Server.Core.Services.Security;
 
@@ -26,15 +28,18 @@ public class UserService
     private readonly CompanyProfileRepository? _companyProfiles;
     private readonly TeamRepository? _teams;
     private readonly SessionService? _sessionService;
+    private readonly VoiceChannelService? _voiceChannelService;
 
     // Cache the employee for the duration of the circuit/scope
     private Employee? _cachedEmployee;
+    private string? _cachedSessionId;
+    private string? _cachedAuthType;
 
     public UserService(
         AuthenticationStateProvider authStateProvider,
         EmployeeRepository employees,
         OpenIdAccountRepository openIdAccounts)
-        : this(authStateProvider, employees, openIdAccounts, null, null, null)
+        : this(authStateProvider, employees, openIdAccounts, null, null, null, null)
     {
     }
 
@@ -44,7 +49,7 @@ public class UserService
         OpenIdAccountRepository openIdAccounts,
         CompanyProfileRepository? companyProfiles,
         TeamRepository? teams)
-        : this(authStateProvider, employees, openIdAccounts, companyProfiles, teams, null)
+        : this(authStateProvider, employees, openIdAccounts, companyProfiles, teams, null, null)
     {
     }
 
@@ -55,6 +60,19 @@ public class UserService
         CompanyProfileRepository? companyProfiles,
         TeamRepository? teams,
         SessionService? sessionService)
+        : this(authStateProvider, employees, openIdAccounts, companyProfiles, teams, sessionService, null)
+    {
+    }
+
+    [ActivatorUtilitiesConstructor]
+    public UserService(
+        AuthenticationStateProvider authStateProvider,
+        EmployeeRepository employees,
+        OpenIdAccountRepository openIdAccounts,
+        CompanyProfileRepository? companyProfiles,
+        TeamRepository? teams,
+        SessionService? sessionService,
+        VoiceChannelService? voiceChannelService = null)
     {
         _authStateProvider = authStateProvider ?? throw new ArgumentNullException(nameof(authStateProvider));
         _employees = employees;
@@ -62,6 +80,7 @@ public class UserService
         _companyProfiles = companyProfiles;
         _teams = teams;
         _sessionService = sessionService;
+        _voiceChannelService = voiceChannelService;
     }
 
 
@@ -69,10 +88,16 @@ public class UserService
     {
         if (_cachedEmployee != null)
         {
-            if (_cachedEmployee.Id != "system-renderer")
+            var refreshed = _employees.GetById(_cachedEmployee.Id);
+            if (refreshed == null || !refreshed.IsActive ||
+                !IsPrincipalSessionValid(_cachedSessionId, _cachedAuthType, refreshed.Id))
             {
-                _cachedEmployee = _employees.GetById(_cachedEmployee.Id) ?? _cachedEmployee;
+                _cachedEmployee = null;
+                _cachedSessionId = null;
+                _cachedAuthType = null;
+                return null;
             }
+            _cachedEmployee = refreshed;
             return _cachedEmployee;
         }
 
@@ -81,19 +106,29 @@ public class UserService
 
         if (user.Identity == null || !user.Identity.IsAuthenticated) return null;
 
-        var sub = user.FindFirst("sub")?.Value
-                  ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-        // Provide a virtual employee for the PDF generation headless browser
-        // This prevents MainLayout from constantly redirecting it to /access-pending
-        if (sub == "headless-renderer" && user.HasClaim("Spokes_InternalRenderer", "true"))
+        _cachedEmployee = GetEmployee(user);
+        if (_cachedEmployee != null)
         {
-            _cachedEmployee = CreateSystemRendererEmployee(user);
-            return _cachedEmployee;
+            _cachedSessionId = user.FindFirst("SessionId")?.Value;
+            _cachedAuthType = user.Identity?.AuthenticationType;
+        }
+        return _cachedEmployee;
+    }
+
+    public async Task<Employee?> GetEmployeeAsync(bool allowSuspended)
+    {
+        var employee = await GetEmployeeAsync();
+        if (employee == null || !employee.IsActive || employee.IsBanned)
+        {
+            return null;
         }
 
-        _cachedEmployee = GetEmployee(user);
-        return _cachedEmployee;
+        if (!allowSuspended && employee.IsSuspended)
+        {
+            return null;
+        }
+
+        return employee;
     }
 
     public async Task<string?> GetSessionIdAsync()
@@ -109,34 +144,53 @@ public class UserService
     {
         if (user.Identity == null || !user.Identity.IsAuthenticated) return null;
 
-        if (user.HasClaim("Spokes_InternalRenderer", "true") &&
-            (user.FindFirst("EmployeeId")?.Value == "system-renderer" ||
-             user.FindFirst("sub")?.Value == "headless-renderer" ||
-             user.FindFirst(ClaimTypes.NameIdentifier)?.Value == "headless-renderer"))
-        {
-            return CreateSystemRendererEmployee(user);
-        }
+        Employee? resolved = null;
 
         var employeeIdClaim = user.FindFirst("EmployeeId")?.Value;
         if (!string.IsNullOrEmpty(employeeIdClaim))
         {
-            var emp = _employees.GetById(employeeIdClaim);
-            if (emp != null) return emp;
+            if (string.Equals(employeeIdClaim, RenderTokenMiddleware.SystemRendererId, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            resolved = _employees.GetById(employeeIdClaim);
         }
 
-        var sub = user.FindFirst("sub")?.Value
-                  ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-        if (!string.IsNullOrEmpty(sub))
+        if (resolved == null)
         {
-            var emp = GetBySub(sub);
-            if (emp != null) return emp;
+            var sub = user.FindFirst("sub")?.Value
+                      ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (!string.IsNullOrEmpty(sub))
+            {
+                if (string.Equals(sub, "headless-renderer", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                resolved = GetBySub(sub);
+            }
         }
 
-        return null;
+        if (resolved == null || !resolved.IsActive || resolved.IsSystem)
+        {
+            return null;
+        }
+
+        if (!IsPrincipalSessionValid(
+                user.FindFirst("SessionId")?.Value,
+                user.Identity?.AuthenticationType,
+                resolved.Id))
+        {
+            return null;
+        }
+
+        return resolved;
     }
 
-    public Employee? GetCurrentUser(ClaimsPrincipal user) => GetEmployee(user);
+    private bool IsPrincipalSessionValid(string? sessionId, string? authenticationType, string employeeId) =>
+        _sessionService == null || _sessionService.IsPrincipalSessionValid(sessionId, authenticationType, employeeId);
 
     /// <summary>
     /// Looks up an employee by their OIDC Subject (sub) via OpenID account linkages.
@@ -158,9 +212,8 @@ public class UserService
     /// during OIDC token validation or mobile exchange. Identity binding is strictly sub -> LinkedEmployeeId
     /// (never auto-linking to an existing Employee by email or display name).
     /// </summary>
-    public OidcProvisionResult ProvisionOrSyncOidcUser(string sub, string name, string email, bool emailVerified = true)
+    public OidcProvisionResult ProvisionOrSyncOidcUser(string sub, string name, string email)
     {
-        _ = emailVerified;
         if (string.IsNullOrEmpty(sub))
         {
             throw new ArgumentException("Subject (sub) cannot be null or empty.", nameof(sub));
@@ -168,6 +221,7 @@ public class UserService
 
         lock (_authLock)
         {
+            var resolvedName = ResolveDisplayName(name, email);
             var openIdAccount = _openIdAccounts.GetBySub(sub);
             var isFirstTimeLogin = openIdAccount == null;
 
@@ -176,7 +230,7 @@ public class UserService
                 openIdAccount = new OpenIdAccount
                 {
                     Sub = sub,
-                    Name = name,
+                    Name = resolvedName,
                     Email = email,
                     FirstSeenAt = DateTime.UtcNow,
                     LastLoginAt = DateTime.UtcNow
@@ -186,7 +240,14 @@ public class UserService
             else
             {
                 openIdAccount.LastLoginAt = DateTime.UtcNow;
-                openIdAccount.Name = name;
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    openIdAccount.Name = name.Trim();
+                }
+                else if (string.IsNullOrWhiteSpace(openIdAccount.Name))
+                {
+                    openIdAccount.Name = resolvedName;
+                }
                 if (!string.IsNullOrEmpty(email)) openIdAccount.Email = email;
                 _openIdAccounts.Save(openIdAccount);
             }
@@ -204,14 +265,14 @@ public class UserService
 
                 if (autoCreate && isFirstTimeLogin)
                 {
-                    var parts = name.Split(' ', 2);
+                    var parts = resolvedName.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
                     var newEmp = new Employee
                     {
-                        FirstName = parts.Length > 0 ? parts[0] : name,
+                        FirstName = parts.Length > 0 ? parts[0] : resolvedName,
                         LastName = parts.Length > 1 ? parts[1] : "",
                         Email = email,
                         IsActive = true,
-                        IsAdmin = !_employees.GetAll().Any(e => e.IsAdmin)
+                        IsAdmin = !_employees.GetAll().Any()
                     };
 
                     if (!newEmp.IsAdmin)
@@ -263,6 +324,7 @@ public class UserService
         if (isBanned)
         {
             _sessionService?.QuarantineUserSessionsForBan(employeeId);
+            _ = _voiceChannelService?.EvictUserFromAllVoiceChannelsAsync(employeeId);
         }
     }
 
@@ -275,37 +337,85 @@ public class UserService
         var emp = _employees.GetById(employeeId);
         if (emp == null) return;
 
+        if (!isActive && IsSoleActiveAdmin(_employees, employeeId))
+        {
+            throw new InvalidOperationException("Cannot deactivate the sole active administrator account.");
+        }
+
         emp.IsActive = isActive;
         _employees.Save(emp);
 
         if (!isActive)
         {
             _sessionService?.RevokeAllUserSessions(employeeId);
+            _ = _voiceChannelService?.EvictUserFromAllVoiceChannelsAsync(employeeId);
         }
     }
 
     /// <summary>
+    /// Returns true if <paramref name="targetEmployeeId"/> identifies the only active, non-banned,
+    /// non-system global administrator account on the server.
+    /// </summary>
+    public static bool IsSoleActiveAdmin(EmployeeRepository? employees, string? targetEmployeeId)
+    {
+        if (employees == null || string.IsNullOrWhiteSpace(targetEmployeeId))
+            return false;
+
+        var target = employees.GetById(targetEmployeeId);
+        if (target == null || !target.IsAdmin || !target.IsActive || target.IsBanned || target.IsSystem)
+            return false;
+
+        return !employees.GetAll().Any(e =>
+            !string.Equals(e.Id, target.Id, StringComparison.Ordinal) &&
+            e.IsAdmin &&
+            e.IsActive &&
+            !e.IsBanned &&
+            !e.IsSuspended &&
+            !e.IsSystem);
+    }
+
+    /// <summary>
     /// Verifies whether the caller is allowed to manage the target employee profile.
-    /// Non-admin users with ManageUsers cannot modify or deactivate Administrator accounts.
+    /// Non-admin users with ManageUsers or Hr.ManageEmployees cannot modify or deactivate Administrator accounts.
+    /// Suspended, banned, or inactive callers cannot manage any employee target.
     /// </summary>
     public static bool CanManageEmployeeTarget(Employee? caller, Employee? target)
     {
-        if (caller == null || target == null) return false;
-        if (caller.IsAdmin) return true;
-        if (!caller.HasPermission(AppPermissions.Admin.ManageUsers)) return false;
+        if (caller is not { IsActiveUnsuspended: true } || target == null) return false;
+        if (caller.IsEffectiveAdmin) return true;
+        if (!caller.HasPermission(AppPermissions.Admin.ManageUsers) &&
+            !caller.HasPermission(AppPermissions.Hr.ManageEmployees))
+            return false;
         return !target.IsAdmin;
     }
 
     /// <summary>
-    /// Updates the read-only suspension status of an employee.
+    /// Updates the read-only suspension status of an employee, evicting active voice sessions when suspended
+    /// and broadcasting the suspension transition to active circuits.
     /// </summary>
     public void SetUserSuspensionState(string employeeId, bool isSuspended)
     {
         var emp = _employees.GetById(employeeId);
         if (emp == null) return;
 
+        bool changed = emp.IsSuspended != isSuspended;
         emp.IsSuspended = isSuspended;
         _employees.Save(emp);
+
+        if (_cachedEmployee?.Id == employeeId)
+        {
+            _cachedEmployee = emp;
+        }
+
+        if (isSuspended)
+        {
+            _ = _voiceChannelService?.EvictUserFromAllVoiceChannelsAsync(employeeId);
+        }
+
+        if (changed)
+        {
+            _sessionService?.NotifyUserSuspensionChanged(employeeId, isSuspended);
+        }
     }
 
     /// <summary>
@@ -327,29 +437,17 @@ public class UserService
     }
 
     /// <summary>
-    /// Toggles the read-only suspension state of a target user on behalf of an authorized moderator/admin.
+    /// Toggles the read-only suspension state of a target user on behalf of an authorized moderator/admin,
+    /// enforcing live target and actor authorization checks before mutating state.
     /// </summary>
     public SpokesResult<bool> ToggleModerationSuspension(string actorEmployeeId, string targetEmployeeId)
     {
-        var actor = _employees.GetById(actorEmployeeId);
-        if (actor is not { IsActive: true, IsSuspended: false, IsBanned: false } ||
-            (!actor.IsAdmin && !actor.HasPermission(AppPermissions.Chat.Moderator)))
+        if (!TryValidateModerationAction(actorEmployeeId, targetEmployeeId, "suspend", out var target, out var failure))
         {
-            return SpokesResult<bool>.Failure("User is not authorized to perform moderation actions.", "ACCESS_DENIED");
+            return failure!;
         }
 
-        var target = _employees.GetById(targetEmployeeId);
-        if (target == null)
-        {
-            return SpokesResult<bool>.Failure("Target user not found.", "NOT_FOUND");
-        }
-
-        if (target.IsSystem || target.IsAdmin || target.HasPermission(AppPermissions.Chat.Moderator) || actor.Id == target.Id)
-        {
-            return SpokesResult<bool>.Failure("Cannot suspend another moderator or admin.", "FORBIDDEN_TARGET");
-        }
-
-        var newState = !target.IsSuspended;
+        var newState = !target!.IsSuspended;
         SetUserSuspensionState(target.Id, newState);
         return SpokesResult<bool>.Success(newState);
     }
@@ -360,28 +458,47 @@ public class UserService
     /// </summary>
     public SpokesResult<bool> ToggleModerationBan(string actorEmployeeId, string targetEmployeeId)
     {
+        if (!TryValidateModerationAction(actorEmployeeId, targetEmployeeId, "ban", out var target, out var failure))
+        {
+            return failure!;
+        }
+
+        var newState = !target!.IsBanned;
+        SetUserBanState(target.Id, newState);
+        return SpokesResult<bool>.Success(newState);
+    }
+
+    private bool TryValidateModerationAction(
+        string actorEmployeeId,
+        string targetEmployeeId,
+        string actionVerb,
+        out Employee? target,
+        out SpokesResult<bool>? failure)
+    {
+        target = null;
         var actor = _employees.GetById(actorEmployeeId);
         if (actor is not { IsActive: true, IsSuspended: false, IsBanned: false } ||
             (!actor.IsAdmin && !actor.HasPermission(AppPermissions.Chat.Moderator)))
         {
-            return SpokesResult<bool>.Failure("User is not authorized to perform moderation actions.", "ACCESS_DENIED");
+            failure = SpokesResult<bool>.Failure("User is not authorized to perform moderation actions.", "ACCESS_DENIED");
+            return false;
         }
 
-        var target = _employees.GetById(targetEmployeeId);
+        target = _employees.GetById(targetEmployeeId);
         if (target == null)
         {
-            return SpokesResult<bool>.Failure("Target user not found.", "NOT_FOUND");
+            failure = SpokesResult<bool>.Failure("Target user not found.", "NOT_FOUND");
+            return false;
         }
 
         if (target.IsSystem || target.IsAdmin || target.HasPermission(AppPermissions.Chat.Moderator) || actor.Id == target.Id)
         {
-            return SpokesResult<bool>.Failure("Cannot ban another moderator or admin.", "FORBIDDEN_TARGET");
+            failure = SpokesResult<bool>.Failure($"Cannot {actionVerb} another moderator or admin.", "FORBIDDEN_TARGET");
+            return false;
         }
 
-        var newState = !target.IsBanned;
-        SetUserBanState(target.Id, newState);
-        return SpokesResult<bool>.Success(newState);
-    
+        failure = null;
+        return true;
     }
 
     /// <summary>
@@ -389,19 +506,19 @@ public class UserService
     /// </summary>
     public static HashSet<string> GetCallerEffectivePermissions(Employee? caller)
     {
-        if (caller == null) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (caller.IsAdmin)
+        if (caller == null || !caller.IsActive || caller.IsBanned)
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        if (caller.IsEffectiveAdmin)
         {
             return AppPermissions.GetAll()
                 .SelectMany(g => g.Value)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
-        var source = caller.PermissionGroup != null
-            ? caller.PermissionGroup.Permissions
-            : caller.Permissions;
-
-        return new HashSet<string>(source ?? [], StringComparer.OrdinalIgnoreCase);
+        return caller.GetEffectivePermissionSet(allowSuspended: false);
     }
 
     /// <summary>
@@ -414,7 +531,7 @@ public class UserService
         IEnumerable<string>? existingTargetPermissions = null)
     {
         if (requestedPermissions == null) return [];
-        if (caller?.IsAdmin == true) return requestedPermissions.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (caller?.IsEffectiveAdmin == true) return requestedPermissions.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
         var allowed = GetCallerEffectivePermissions(caller);
         if (existingTargetPermissions != null)
@@ -436,8 +553,8 @@ public class UserService
     /// </summary>
     public static bool CanAssignPermissionGroup(Employee? caller, PermissionGroup? group, string? currentTargetGroupId = null)
     {
-        if (caller == null) return false;
-        if (caller.IsAdmin || group == null) return true;
+        if (caller is not { IsActiveUnsuspended: true }) return false;
+        if (caller.IsEffectiveAdmin || group == null) return true;
         if (!string.IsNullOrEmpty(currentTargetGroupId) && string.Equals(group.Id, currentTargetGroupId, StringComparison.OrdinalIgnoreCase))
         {
             return true;
@@ -464,45 +581,61 @@ public class UserService
     /// <summary>
     /// Evaluates whether the current user has access to view a specific project based on global permissions and project-level policies.
     /// </summary>
-    public async Task<bool> CanViewProjectAsync(Project project)
+    public async Task<bool> CanViewProjectAsync(Project project, bool allowAccountingFinancialRead = false)
     {
         var employee = await GetEmployeeAsync();
-        return ProjectAccessHelper.CanAccess(employee, project, _teams);
+        return ProjectAccessHelper.CanAccess(employee, project, _teams, allowAccountingFinancialRead);
     }
 
     /// <summary>
     /// Synchronously evaluates whether a given employee has access to view a specific project.
     /// </summary>
-    public bool CanViewProject(Employee? employee, Project project)
+    public bool CanViewProject(Employee? employee, Project project, bool allowAccountingFinancialRead = false)
     {
-        return ProjectAccessHelper.CanAccess(employee, project, _teams);
+        return ProjectAccessHelper.CanAccess(employee, project, _teams, allowAccountingFinancialRead);
     }
 
-
-    private static Employee CreateSystemRendererEmployee(ClaimsPrincipal user)
+    /// <summary>
+    /// Evaluates whether the current user is active, unsuspended, and authorized to edit a specific project.
+    /// </summary>
+    public async Task<bool> CanEditProjectAsync(Project project)
     {
-        var permissions = user.FindAll("Permission")
-            .Select(c => c.Value)
-            .Distinct()
-            .ToList();
+        var employee = await GetEmployeeAsync();
+        return ProjectAccessHelper.CanEditProject(employee, project, _teams);
+    }
 
-        if (permissions.Count == 0)
+    /// <summary>
+    /// Synchronously evaluates whether a given employee is authorized to edit a specific project.
+    /// </summary>
+    public bool CanEditProject(Employee? employee, Project project)
+    {
+        return ProjectAccessHelper.CanEditProject(employee, project, _teams);
+    }
+
+    internal static string ResolveDisplayName(string? name, string? email)
+    {
+        if (!string.IsNullOrWhiteSpace(name))
         {
-            permissions = [.. RenderTokenMiddleware.ScopedPermissions];
+            return name.Trim();
         }
 
-        return new Employee
+        if (!string.IsNullOrWhiteSpace(email))
         {
-            Id = RenderTokenMiddleware.SystemRendererId,
-            FirstName = "System",
-            LastName = "Renderer",
-            Email = "renderer@system.local",
-            IsActive = true,
-            IsAdmin = false,
-            IsSystem = true,
-            Permissions = permissions
-        };
+            var atIndex = email.IndexOf('@');
+            var localPart = (atIndex > 0 ? email[..atIndex] : email).Trim();
+            if (!string.IsNullOrWhiteSpace(localPart))
+            {
+                return localPart;
+            }
+        }
+
+        return "User";
     }
 
-    public void ClearCache() => _cachedEmployee = null;
+    public void ClearCache()
+    {
+        _cachedEmployee = null;
+        _cachedSessionId = null;
+        _cachedAuthType = null;
+    }
 }

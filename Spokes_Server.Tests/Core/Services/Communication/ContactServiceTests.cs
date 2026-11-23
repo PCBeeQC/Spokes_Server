@@ -28,6 +28,7 @@ public class ContactServiceTests : IDisposable
         var services = new ServiceCollection();
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());

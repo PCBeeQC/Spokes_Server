@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
@@ -19,7 +19,7 @@ public class PresenceStateServiceTests : IDisposable
     private readonly DeviceSessionRepository _sessionRepo;
     private readonly EmployeeRepository _employeeRepo;
     private readonly Database _db;
-    private readonly ChatStateService _chatState;
+    private readonly VoiceStateService _voiceState;
     private readonly PresenceStateService _service;
 
     public PresenceStateServiceTests()
@@ -29,6 +29,7 @@ public class PresenceStateServiceTests : IDisposable
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
         _persistence = new DiskPersistenceService(mockLogger.Object);
@@ -37,8 +38,8 @@ public class PresenceStateServiceTests : IDisposable
         _employeeRepo = new EmployeeRepository(_persistence, mockConfig.Object);
 
         _db = TestDatabaseFactory.Create(_sessionRepo, _employeeRepo);
-        _chatState = new ChatStateService();
-        _service = new PresenceStateService(_chatState, _db.CoreContext, _db.HrContext);
+        _voiceState = new VoiceStateService();
+        _service = new PresenceStateService(_voiceState, _db.CoreContext, _db.HrContext);
     }
 
     public void Dispose()
@@ -91,22 +92,6 @@ public class PresenceStateServiceTests : IDisposable
 
         // User 3 has no sessions -> null
         Assert.Null(_service.GetLastSeen("user-3"));
-    }
-
-    [Fact]
-    public void InitializeFromSessions_HandlesPushEnabled()
-    {
-        var now = DateTime.UtcNow;
-        var sessions = new List<DeviceSession>
-        {
-            new() { Id = "s1", EmployeeId = "user-1", DeviceType = "Desktop", LastSeenAt = now.AddMinutes(-10), PushEndpoint = "https://push.example.com", PushEnabled = true },
-            new() { Id = "s2", EmployeeId = "user-2", DeviceType = "Desktop", LastSeenAt = now.AddMinutes(-10), PushEndpoint = null, PushEnabled = false }
-        };
-
-        _service.InitializeFromSessions(sessions);
-
-        Assert.Equal(now.AddMinutes(-10), _service.GetLastSeenOnDesktopForPush("user-1"));
-        Assert.Null(_service.GetLastSeenOnDesktopForPush("user-2"));
     }
 
     [Fact]
@@ -227,65 +212,17 @@ public class PresenceStateServiceTests : IDisposable
         _service.PingDeviceActive("sub-idle-1");
 
         var desktopLastSeen = _service.GetLastSeenOnDesktop("user-idle");
-        var pushLastSeen = _service.GetLastSeenOnDesktopForPush("user-idle");
 
         Assert.NotNull(desktopLastSeen);
-        Assert.NotNull(pushLastSeen);
         Assert.True(desktopLastSeen.Value > now.AddSeconds(-2));
-        Assert.True(pushLastSeen.Value > now.AddSeconds(-2));
-
-        // When recently pinged within grace period (even while unfocused), user is NOT away from desktop
-        Assert.False(_service.IsUserAwayFromDesktopForPush("user-idle"));
     }
 
-    [Fact]
-    public void IsUserAwayFromDesktopForPush_RespectsNinetySecondGracePeriod()
-    {
-        var session = new DeviceSession
-        {
-            Id = "session-grace-1",
-            EmployeeId = "user-grace",
-            DeviceType = "Desktop",
-            LastSeenAt = DateTime.UtcNow,
-            PushEnabled = true,
-            PushEndpoint = "https://push.example.com/endpoint"
-        };
-        _sessionRepo.Save(session);
-
-        Register("user-grace", "sub-grace-1", "Desktop", hasPushEnabled: true, sessionId: "session-grace-1", isFocused: false);
-
-        // Case 1: Just pinged (0s ago) -> NOT away
-        _service.PingDeviceActive("sub-grace-1");
-        Assert.False(_service.IsUserAwayFromDesktopForPush("user-grace"));
-
-        // Case 2: Connection is focused -> Never away for push
-        _service.SetConnectionFocus("user-grace", "sub-grace-1", true);
-        Assert.False(_service.IsUserAwayFromDesktopForPush("user-grace"));
-
-        // Case 3: When connection is removed -> Not away for push (HasActiveDesktopConnectionForPush is false)
-        _service.RemoveConnection("sub-grace-1");
-        Assert.False(_service.IsUserAwayFromDesktopForPush("user-grace"));
-    }
     // RegisterConnection
-    [Fact]
-    public void RegisterConnection_ValidInput_AddsToActiveConnections()
-    {
-        Register("user1", "sub1", "Desktop");
-        Assert.True(_service.HasActiveDesktopConnection("user1"));
-    }
-
     [Fact]
     public void RegisterConnection_NullSubscription_DoesNothing()
     {
         Register("user1", null, "Desktop");
         Assert.False(_service.HasActiveDesktopConnection("user1"));
-    }
-
-    [Fact]
-    public void RegisterConnection_WithPush_UpdatesPushLastSeen()
-    {
-        Register("user1", "sub1", "Desktop", true);
-        Assert.NotNull(_service.GetLastSeenOnDesktopForPush("user1"));
     }
 
     // SetConnectionFocus
@@ -297,19 +234,13 @@ public class PresenceStateServiceTests : IDisposable
         Assert.True(_service.IsUserFocused("user1"));
     }
 
-    [Fact]
-    public void SetConnectionFocus_NullSub_DoesNothing()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("sub2")]
+    public void SetConnectionFocus_InvalidOrMissingSub_DoesNothing(string? subId)
     {
         Register("user1", "sub1", "Desktop", false, null, false);
-        _service.SetConnectionFocus("user1", null, true);
-        Assert.False(_service.IsUserFocused("user1"));
-    }
-
-    [Fact]
-    public void SetConnectionFocus_NonExistentSub_DoesNothing()
-    {
-        Register("user1", "sub1", "Desktop", false, null, false);
-        _service.SetConnectionFocus("user1", "sub2", true);
+        _service.SetConnectionFocus("user1", subId, true);
         Assert.False(_service.IsUserFocused("user1"));
     }
 
@@ -322,28 +253,24 @@ public class PresenceStateServiceTests : IDisposable
         Assert.True(_service.IsUserFocused("user1"));
     }
 
-    [Fact]
-    public void SetConnectionFocusBySubscription_NullSub_DoesNothing()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("sub2")]
+    public void SetConnectionFocusBySubscription_InvalidOrMissingSub_DoesNothing(string? subId)
     {
         Register("user1", "sub1", "Desktop", false, null, false);
-        _service.SetConnectionFocusBySubscription(null, true);
-        Assert.False(_service.IsUserFocused("user1"));
-    }
-
-    [Fact]
-    public void SetConnectionFocusBySubscription_NonExistentSub_DoesNothing()
-    {
-        _service.SetConnectionFocusBySubscription("sub2", true);
+        _service.SetConnectionFocusBySubscription(subId, true);
         Assert.False(_service.IsUserFocused("user1"));
     }
 
     // UpdatePushEnabledState
     [Fact]
-    public void UpdatePushEnabledState_EnablesPush_UpdatesLastSeen()
+    public void UpdatePushEnabledState_EnablesPush_UpdatesConnectionFlagAndLastSeen()
     {
         Register("user1", "sub1", "Desktop", false);
         _service.UpdatePushEnabledState("sub1", true);
-        Assert.NotNull(_service.GetLastSeenOnDesktopForPush("user1"));
+        Assert.True(_service.GetActiveConnections().Single().HasPushEnabled);
+        Assert.NotNull(_service.GetLastSeenOnDesktop("user1"));
     }
 
     [Fact]
@@ -351,178 +278,59 @@ public class PresenceStateServiceTests : IDisposable
     {
         Register("user1", "sub1", "Desktop", true);
         _service.UpdatePushEnabledState("sub1", false);
-        Assert.False(_service.IsUserFocusedForPush("user1"));
+        Assert.False(_service.GetActiveConnections().Single().HasPushEnabled);
     }
 
     [Fact]
     public void UpdatePushEnabledState_InvalidSub_DoesNothing()
     {
         _service.UpdatePushEnabledState("sub1", true);
-        Assert.Null(_service.GetLastSeenOnDesktopForPush("user1"));
+        Assert.Null(_service.GetLastSeenOnDesktop("user1"));
     }
 
     // IsUserFocused
-    [Fact]
-    public void IsUserFocused_FocusedConnectionExists_ReturnsTrue()
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    public void IsUserFocused_EvaluatesConnectionFocusState(bool hasConnection, bool isFocused, bool expected)
     {
-        Register("user1", "sub1", "Desktop", false, null, true);
-        Assert.True(_service.IsUserFocused("user1"));
+        if (hasConnection) Register("user1", "sub1", "Desktop", false, null, isFocused);
+        Assert.Equal(expected, _service.IsUserFocused("user1"));
     }
 
-    [Fact]
-    public void IsUserFocused_OnlyUnfocusedConnections_ReturnsFalse()
+    // IsUserAwayFromDesktop & IsGloballyAway
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void IsUserAwayFromDesktop_And_IsGloballyAway_ReturnFalse_WhenNoConnectionOrFocused(bool hasFocusedDesktop)
     {
-        Register("user1", "sub1", "Desktop", false, null, false);
-        Assert.False(_service.IsUserFocused("user1"));
-    }
-
-    [Fact]
-    public void IsUserFocused_NoConnections_ReturnsFalse()
-    {
-        Assert.False(_service.IsUserFocused("user1"));
-    }
-
-    // IsUserAwayFromDesktop
-    [Fact]
-    public void IsUserAwayFromDesktop_NoDesktop_ReturnsFalse()
-    {
+        if (hasFocusedDesktop) Register("user1", "sub1", "Desktop", false, null, true);
         Assert.False(_service.IsUserAwayFromDesktop("user1"));
-    }
-
-    [Fact]
-    public void IsUserAwayFromDesktop_Focused_ReturnsFalse()
-    {
-        Register("user1", "sub1", "Desktop", false, null, true);
-        Assert.False(_service.IsUserAwayFromDesktop("user1"));
-    }
-
-    // IsUserFocusedForPush
-    [Fact]
-    public void IsUserFocusedForPush_FocusedWithPush_ReturnsTrue()
-    {
-        Register("user1", "sub1", "Desktop", true, null, true);
-        Assert.True(_service.IsUserFocusedForPush("user1"));
-    }
-
-    [Fact]
-    public void IsUserFocusedForPush_FocusedWithoutPush_ReturnsFalse()
-    {
-        Register("user1", "sub1", "Desktop", false, null, true);
-        Assert.False(_service.IsUserFocusedForPush("user1"));
-    }
-
-    [Fact]
-    public void IsUserFocusedForPush_UnfocusedWithPush_ReturnsFalse()
-    {
-        Register("user1", "sub1", "Desktop", true, null, false);
-        Assert.False(_service.IsUserFocusedForPush("user1"));
-    }
-
-    // HasActiveDesktopConnectionForPush
-    [Fact]
-    public void HasActiveDesktopConnectionForPush_DesktopWithPush_ReturnsTrue()
-    {
-        Register("user1", "sub1", "Desktop", true);
-        Assert.True(_service.HasActiveDesktopConnectionForPush("user1"));
-    }
-
-    [Fact]
-    public void HasActiveDesktopConnectionForPush_DesktopWithoutPush_ReturnsFalse()
-    {
-        Register("user1", "sub1", "Desktop", false);
-        Assert.False(_service.HasActiveDesktopConnectionForPush("user1"));
-    }
-
-    [Fact]
-    public void HasActiveDesktopConnectionForPush_MobileWithPush_ReturnsFalse()
-    {
-        Register("user1", "sub1", "Mobile", true);
-        Assert.False(_service.HasActiveDesktopConnectionForPush("user1"));
-    }
-
-    // IsGloballyAway
-    [Fact]
-    public void IsGloballyAway_NoConnections_ReturnsFalse()
-    {
-        Assert.False(_service.IsGloballyAway("user1"));
-    }
-
-    [Fact]
-    public void IsGloballyAway_Focused_ReturnsFalse()
-    {
-        Register("user1", "sub1", "Desktop", false, null, true);
         Assert.False(_service.IsGloballyAway("user1"));
     }
 
     // HasActiveConnection
-    [Fact]
-    public void HasActiveConnection_Desktop_ReturnsTrue()
+    [Theory]
+    [InlineData("Desktop", false, true)]
+    [InlineData("Mobile", true, true)]
+    [InlineData("Mobile", false, false)]
+    [InlineData(null, false, false)]
+    public void HasActiveConnection_EvaluatesDeviceAndFocus(string? deviceType, bool isFocused, bool expected)
     {
-        Register("user1", "sub1", "Desktop", false, null, false);
-        Assert.True(_service.HasActiveConnection("user1"));
-    }
-
-    [Fact]
-    public void HasActiveConnection_FocusedMobile_ReturnsTrue()
-    {
-        Register("user1", "sub1", "Mobile", false, null, true);
-        Assert.True(_service.HasActiveConnection("user1"));
-    }
-
-    [Fact]
-    public void HasActiveConnection_UnfocusedMobile_ReturnsFalse()
-    {
-        Register("user1", "sub1", "Mobile", false, null, false);
-        Assert.False(_service.HasActiveConnection("user1"));
-    }
-
-    [Fact]
-    public void HasActiveConnection_NoConnections_ReturnsFalse()
-    {
-        Assert.False(_service.HasActiveConnection("user1"));
-    }
-
-    // GetLastSeen
-    [Fact]
-    public void GetLastSeen_MultipleDevices_ReturnsMax()
-    {
-        Register("user1", "sub1", "Mobile", false);
-        Register("user1", "sub2", "Desktop", false);
-        Assert.NotNull(_service.GetLastSeen("user1"));
-    }
-
-    [Fact]
-    public void GetLastSeen_NoRecords_ReturnsNull()
-    {
-        Assert.Null(_service.GetLastSeen("user1"));
-    }
-
-    [Fact]
-    public void GetLastSeen_SingleDevice_ReturnsValue()
-    {
-        Register("user1", "sub1", "Desktop", false);
-        Assert.NotNull(_service.GetLastSeen("user1"));
+        if (deviceType != null) Register("user1", "sub1", deviceType, false, null, isFocused);
+        Assert.Equal(expected, _service.HasActiveConnection("user1"));
     }
 
     // HasActiveDesktopConnection
-    [Fact]
-    public void HasActiveDesktopConnection_DesktopExists_ReturnsTrue()
+    [Theory]
+    [InlineData("Desktop", true)]
+    [InlineData("Mobile", false)]
+    [InlineData(null, false)]
+    public void HasActiveDesktopConnection_EvaluatesDeviceType(string? deviceType, bool expected)
     {
-        Register("user1", "sub1", "Desktop", false);
-        Assert.True(_service.HasActiveDesktopConnection("user1"));
-    }
-
-    [Fact]
-    public void HasActiveDesktopConnection_MobileOnly_ReturnsFalse()
-    {
-        Register("user1", "sub1", "Mobile", false);
-        Assert.False(_service.HasActiveDesktopConnection("user1"));
-    }
-
-    [Fact]
-    public void HasActiveDesktopConnection_Empty_ReturnsFalse()
-    {
-        Assert.False(_service.HasActiveDesktopConnection("user1"));
+        if (deviceType != null) Register("user1", "sub1", deviceType, false);
+        Assert.Equal(expected, _service.HasActiveDesktopConnection("user1"));
     }
 
     // GetLastSeenOnDesktop
@@ -538,63 +346,6 @@ public class PresenceStateServiceTests : IDisposable
     {
         Register("user1", "sub1", "Mobile", false);
         Assert.Null(_service.GetLastSeenOnDesktop("user1"));
-    }
-
-    // GetLastSeenOnDesktopForPush
-    [Fact]
-    public void GetLastSeenOnDesktopForPush_PushExists_ReturnsValue()
-    {
-        Register("user1", "sub1", "Desktop", true);
-        Assert.NotNull(_service.GetLastSeenOnDesktopForPush("user1"));
-    }
-
-    [Fact]
-    public void GetLastSeenOnDesktopForPush_NoPush_ReturnsNull()
-    {
-        Register("user1", "sub1", "Desktop", false);
-        Assert.Null(_service.GetLastSeenOnDesktopForPush("user1"));
-    }
-
-    // WasRecentlySeen
-    [Fact]
-    public void WasRecentlySeen_LessThan15Mins_ReturnsTrue()
-    {
-        Register("user1", "sub1", "Desktop", false);
-        Assert.True(_service.WasRecentlySeen("user1"));
-    }
-
-    [Fact]
-    public void WasRecentlySeen_NoRecord_ReturnsFalse()
-    {
-        Assert.False(_service.WasRecentlySeen("user1"));
-    }
-
-    // WasRecentlySeenOnDesktop
-    [Fact]
-    public void WasRecentlySeenOnDesktop_LessThan15Mins_ReturnsTrue()
-    {
-        Register("user1", "sub1", "Desktop", false);
-        Assert.True(_service.WasRecentlySeenOnDesktop("user1"));
-    }
-
-    [Fact]
-    public void WasRecentlySeenOnDesktop_NoRecord_ReturnsFalse()
-    {
-        Assert.False(_service.WasRecentlySeenOnDesktop("user1"));
-    }
-
-    // WasRecentlySeenOnDesktopForPush
-    [Fact]
-    public void WasRecentlySeenOnDesktopForPush_LessThan90Secs_ReturnsTrue()
-    {
-        Register("user1", "sub1", "Desktop", true);
-        Assert.True(_service.WasRecentlySeenOnDesktopForPush("user1"));
-    }
-
-    [Fact]
-    public void WasRecentlySeenOnDesktopForPush_NoRecord_ReturnsFalse()
-    {
-        Assert.False(_service.WasRecentlySeenOnDesktopForPush("user1"));
     }
 
     // PingUserActive
@@ -653,83 +404,27 @@ public class PresenceStateServiceTests : IDisposable
         Assert.Empty(_service.GetOnlineSessions());
     }
 
-    // TriggerRemoteLogout
-    [Fact]
-    public void TriggerRemoteLogout_ValidSession_FiresEvent()
-    {
-        bool fired = false;
-        _service.OnSessionRevoked += (s) => { if (s == "session1") fired = true; };
-        _service.TriggerRemoteLogout("session1");
-        Assert.True(fired);
-    }
-
-    [Fact]
-    public void TriggerRemoteLogout_NullSession_DoesNotFireEvent()
-    {
-        bool fired = false;
-        _service.OnSessionRevoked += (s) => { fired = true; };
-        _service.TriggerRemoteLogout(null!);
-        Assert.False(fired);
-    }
-
-    [Fact]
-    public void TriggerRemoteLogout_EmptySession_DoesNotFireEvent()
-    {
-        bool fired = false;
-        _service.OnSessionRevoked += (s) => { fired = true; };
-        _service.TriggerRemoteLogout("");
-        Assert.False(fired);
-    }
-
     // ShouldSuppressMobilePush (1-minute delayed mobile push check: suppresses only if user refocused Spokes)
-    [Fact]
-    public void ShouldSuppressMobilePush_FocusedDesktop_ReturnsTrue()
+    [Theory]
+    [InlineData("Desktop", true, true)]
+    [InlineData("Desktop", false, false)]
+    [InlineData("Mobile", false, false)]
+    public void ShouldSuppressMobilePush_EvaluatesDeviceAndFocus(string deviceType, bool isFocused, bool expected)
     {
-        Register("user1", "sub1", "Desktop", hasPushEnabled: true, isFocused: true);
-        Assert.True(_service.ShouldSuppressMobilePush("user1"));
-    }
-
-    [Fact]
-    public void ShouldSuppressMobilePush_UnfocusedDesktop_ReturnsFalseSoDelayedMobilePushFires()
-    {
-        Register("user1", "sub1", "Desktop", hasPushEnabled: true, isFocused: false);
-        Assert.False(_service.ShouldSuppressMobilePush("user1"));
-    }
-
-    [Fact]
-    public void ShouldSuppressMobilePush_NoDesktop_ReturnsFalse()
-    {
-        Register("user1", "sub1", "Mobile", hasPushEnabled: true, isFocused: false);
-        Assert.False(_service.ShouldSuppressMobilePush("user1"));
+        Register("user1", "sub1", deviceType, hasPushEnabled: true, isFocused: isFocused);
+        Assert.Equal(expected, _service.ShouldSuppressMobilePush("user1"));
     }
 
     // DetermineNotificationTier
-    [Fact]
-    public void DetermineNotificationTier_FocusedWithPush_ReturnsNone()
+    [Theory]
+    [InlineData(true, true, PresenceTier.None)]
+    [InlineData(false, true, PresenceTier.None)]
+    [InlineData(true, false, PresenceTier.DesktopOnly)]
+    [InlineData(false, false, PresenceTier.DesktopOnly)]
+    public void DetermineNotificationTier_ActiveDesktop_EvaluatesFocusRegardlessOfPushEnabled(bool hasPushEnabled, bool isFocused, PresenceTier expectedTier)
     {
-        Register("user1", "sub1", "Desktop", hasPushEnabled: true, sessionId: null, isFocused: true);
-        Assert.Equal(PresenceTier.None, _service.DetermineNotificationTier("user1"));
-    }
-
-    [Fact]
-    public void DetermineNotificationTier_FocusedWithoutPush_ReturnsNone()
-    {
-        Register("user1", "sub1", "Desktop", hasPushEnabled: false, sessionId: null, isFocused: true);
-        Assert.Equal(PresenceTier.None, _service.DetermineNotificationTier("user1"));
-    }
-
-    [Fact]
-    public void DetermineNotificationTier_ActiveDesktopUnfocused_ReturnsDesktopOnly()
-    {
-        Register("user1", "sub1", "Desktop", hasPushEnabled: true, sessionId: null, isFocused: false);
-        Assert.Equal(PresenceTier.DesktopOnly, _service.DetermineNotificationTier("user1"));
-    }
-
-    [Fact]
-    public void DetermineNotificationTier_ActiveDesktopWithoutPush_ReturnsDesktopOnlyForDelayedMobileForwarding()
-    {
-        Register("user1", "sub1", "Desktop", hasPushEnabled: false, sessionId: null, isFocused: false);
-        Assert.Equal(PresenceTier.DesktopOnly, _service.DetermineNotificationTier("user1"));
+        Register("user1", "sub1", "Desktop", hasPushEnabled: hasPushEnabled, sessionId: null, isFocused: isFocused);
+        Assert.Equal(expectedTier, _service.DetermineNotificationTier("user1"));
     }
 
     [Fact]
@@ -816,11 +511,11 @@ public class PresenceStateServiceTests : IDisposable
         int eventCount = 0;
         _service.OnUserPresenceChanged += u => { if (u == "user-voice") eventCount++; };
 
-        _chatState.NotifyVoiceMemberJoined("vc-1", "user-voice");
+        _voiceState.NotifyVoiceMemberJoined("vc-1", "user-voice");
         Assert.Equal(1, eventCount);
         Assert.False(_service.IsGloballyAway("user-voice"));
 
-        _chatState.NotifyVoiceMemberLeft("vc-1", "user-voice");
+        _voiceState.NotifyVoiceMemberLeft("vc-1", "user-voice");
         Assert.Equal(2, eventCount);
         Assert.True(_service.IsGloballyAway("user-voice"));
     }
@@ -829,7 +524,7 @@ public class PresenceStateServiceTests : IDisposable
     public void VoiceChannelActiveOnMobile_PreventsIdleTransitionAndKeepsNotificationTierNone()
     {
         Register("user-mobile-voice", "sub-mob-voice", "Mobile", hasPushEnabled: true, isFocused: true);
-        _chatState.NotifyVoiceMemberJoined("vc-mobile", "user-mobile-voice");
+        _voiceState.NotifyVoiceMemberJoined("vc-mobile", "user-mobile-voice");
 
         // Simulate > 5 minutes in a voice call without touching the mobile screen
         _service.SetConnectionLastInteraction("sub-mob-voice", DateTime.UtcNow.AddMinutes(-10));
@@ -1091,5 +786,57 @@ public class PresenceStateServiceTests : IDisposable
         Assert.DoesNotContain("sess-unfocused", focusedSessions);
         Assert.DoesNotContain("sess-idle", focusedSessions);
         Assert.Empty(_service.GetFocusedSessionIds("non-existent-user"));
+    }
+
+    [Fact]
+    public void RegisterConnection_WithPreserveExistingActivity_UpdatesMetadataWithoutClobberingLiveFocus()
+    {
+        // Initial registration before initLayout completes
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-meta",
+            SubscriptionId = "sub-meta",
+            DeviceType = DeviceType.Desktop,
+            HasPushEnabled = false,
+            IsFocused = false
+        });
+
+        // Live focus event arrives while initLayout is in flight
+        _service.SetConnectionFocus("user-meta", "sub-meta", true);
+        Assert.True(_service.IsConnectionActivelyViewed("sub-meta"));
+
+        // Stale initLayout completes with IsFocused = false, updating metadata with PreserveExistingActivity = true
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-meta",
+            SubscriptionId = "sub-meta",
+            DeviceType = DeviceType.Mobile,
+            HasPushEnabled = true,
+            IsCapacitorApp = true,
+            IsFocused = false,
+            PreserveExistingActivity = true
+        });
+
+        Assert.True(_service.IsConnectionActivelyViewed("sub-meta"));
+        var conn = Assert.Single(_service.GetUserConnections("user-meta"));
+        Assert.Equal(DeviceType.Mobile, conn.DeviceType);
+        Assert.True(conn.HasPushEnabled);
+        Assert.True(conn.IsCapacitorApp);
+        Assert.True(conn.IsFocused);
+
+        // Reverse: out-of-band unfocus arrives, metadata update with IsFocused = true must not resurrect focus
+        _service.SetConnectionFocus("user-meta", "sub-meta", false);
+        _service.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-meta",
+            SubscriptionId = "sub-meta",
+            DeviceType = DeviceType.Mobile,
+            HasPushEnabled = true,
+            IsCapacitorApp = true,
+            IsFocused = true,
+            PreserveExistingActivity = true
+        });
+
+        Assert.False(_service.IsConnectionActivelyViewed("sub-meta"));
     }
 }

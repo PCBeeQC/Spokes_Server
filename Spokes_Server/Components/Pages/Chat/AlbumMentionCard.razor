@@ -1,55 +1,66 @@
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Core.Services.Communication.Chat
 @using Spokes_Server.Core.Services.Communication.Presence
+@using Spokes_Server.Core.Services.UI
 @inject Database Db
 @inject NavigationManager NavManager
 @inject FileTokenService FileTokenService
 @inject UserCircuitContext CircuitContext
 @inject ScopedKeystoreService ScopedKeystoreService
 @inject AlbumService AlbumService
+@inject IUserPrivacyService PrivacyService
+@inject AppLabelService AppLabels
 @implements IDisposable
 
 @if (_album == null || !_isAvailableInContext)
 {
-    <MudCard Class="pa-3" Style="width: 100%; max-width: 350px; border-radius: 8px; border: 1px dashed var(--mud-palette-divider); box-shadow: none; background: transparent;">
+    <MudCard Class="pa-3 chat-card-unavailable">
         <div class="d-flex align-center gap-3">
             <MudIcon Icon="@Icons.Material.Filled.BrokenImage" Color="Color.Secondary" />
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-style: italic;">@Loc["This album is no longer available."]</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="chat-card-italic">@Loc["This album is no longer available."]</MudText>
         </div>
     </MudCard>
 }
 else
 {
-    <MudCard Class="pa-3 cursor-pointer" Style="width: 100%; max-width: 350px; border-radius: 8px; border: 1px solid var(--mud-palette-divider); box-shadow: none;" @onclick="NavigateToAlbum">
+    <MudCard Class="pa-3 cursor-pointer chat-album-card" @onclick="NavigateToAlbum">
         <div class="d-flex align-center justify-space-between gap-2 mb-2">
-            <div class="d-flex align-center gap-3" style="overflow: hidden;">
-                <MudAvatar Size="Size.Medium" Style="background: color-mix(in srgb, var(--mud-palette-success) 15%, transparent); color: var(--mud-palette-success);">
+            <div class="d-flex align-center gap-3 chat-overflow-hidden">
+                <MudAvatar Size="Size.Medium" Class="chat-album-avatar">
                     <MudIcon Icon="@(_isLocked ? Icons.Material.Filled.Lock : Icons.Material.Filled.PhotoAlbum)" Size="Size.Small" />
                 </MudAvatar>
-                <div style="overflow: hidden;">
-                    <MudText Typo="Typo.subtitle2" Style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@_album.Title</MudText>
+                <div class="chat-overflow-hidden">
+                    <MudText Typo="Typo.subtitle2" Class="chat-album-title">@_album.Title</MudText>
                     <MudText Typo="Typo.caption" Color="Color.Secondary">
-                        @(Employees.FirstOrDefault(e => e.Id == _album.OwnerId)?.FullName ?? Loc["Unknown"].Value)
+                        @GetOwnerDisplayName()
                     </MudText>
                 </div>
             </div>
-            <MudButton OnClick="NavigateToAlbum" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" Class="flex-shrink-0 py-1 px-2" Style="text-transform: none; border-radius: 6px; font-size: 0.75rem; font-weight: 600;">@Loc["Go to album"]</MudButton>
+            <MudButton OnClick="NavigateToAlbum" Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" Class="flex-shrink-0 py-1 px-2 chat-album-cta">@Loc["Go to album"]</MudButton>
         </div>
         @if (_album.Media.Any() && !_isLocked)
         {
-            <div class="mt-2" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; border-radius: 4px; overflow: hidden;">
-                @foreach (var media in _album.Media.Take(9))
+            var previewMedia = _album.Media.TakeLast(9).Reverse().ToList();
+            <div class="mt-2 chat-album-grid">
+                @for (int idx = 0; idx < previewMedia.Count; idx++)
                 {
-                    <div style="aspect-ratio: 1 / 1;">
+                    var media = previewMedia[idx];
+                    <div class="media-tile chat-album-tile">
                         @if (media.ContentType.StartsWith("image/"))
                         {
-                            <MudImage Src="@GetTokenizedUrl(media, true)" 
-                                      ObjectFit="ObjectFit.Cover" 
-                                      Style="width: 100%; height: 100%; object-fit: cover;" />
+                            <div class="media-tile-skeleton"></div>
+                            <img data-media-src="@GetTokenizedUrl(media, smallThumb: true)"
+                                 data-media-priority="album-preview"
+                                 data-media-order="@(MessageIndex * 100 + idx)"
+                                 data-media-encrypted="@(_album.IsEncrypted ? "true" : null)"
+                                 alt="@media.FileName"
+                                 decoding="async"
+                                 class="needs-fade chat-album-tile-img" />
                         }
                         else if (media.ContentType.StartsWith("video/"))
                         {
-                            <div class="d-flex align-center justify-center" style="width: 100%; height: 100%; background: #000;">
+                            <div class="d-flex align-center justify-center chat-album-tile-video">
                                 <MudIcon Icon="@Icons.Material.Filled.PlayCircle" Color="Color.Surface" Size="Size.Large" />
                             </div>
                         }
@@ -76,10 +87,17 @@ else
     [Parameter, EditorRequired]
     public List<Employee> Employees { get; set; } = [];
 
+    [Parameter]
+    public int MessageIndex { get; set; }
+
     private Album? _album;
+    private bool _canViewAlbums;
     private bool _isAvailableInContext;
     private bool _isLocked;
     private string? _cachedPlainAlbumKey;
+    private string? _lastStateKey;
+    private string? _lastRenderKey;
+    private bool _forceRender = true;
 
     protected override void OnInitialized()
     {
@@ -89,13 +107,41 @@ else
 
     protected override void OnParametersSet()
     {
-        RefreshAlbumState();
+        var stateKey = $"{AlbumId}|{CurrentUserId}|{EffectiveSessionId}|{ChannelId}|{ScopedKeystoreService.IsUnlocked}";
+        if (!string.Equals(_lastStateKey, stateKey, StringComparison.Ordinal) || _album == null)
+        {
+            _lastStateKey = stateKey;
+            RefreshAlbumState();
+        }
+    }
+
+    protected override bool ShouldRender()
+    {
+        var renderKey = $"{_lastStateKey}|{_canViewAlbums}|{_isAvailableInContext}|{_isLocked}|{_album?.Title}|{_album?.Media.Count}|{_album?.Media.LastOrDefault()?.Id}|{MessageIndex}";
+        if (_forceRender)
+        {
+            _forceRender = false;
+            _lastRenderKey = renderKey;
+            return true;
+        }
+        if (string.Equals(_lastRenderKey, renderKey, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        _lastRenderKey = renderKey;
+        return true;
     }
 
     private void RefreshAlbumState()
     {
         _album = Db.Albums.GetById(AlbumId);
-        if (_album != null)
+        var currentUser = !string.IsNullOrEmpty(CurrentUserId) ? Db.Employees.GetById(CurrentUserId) : null;
+        _canViewAlbums = _album != null &&
+                         currentUser != null &&
+                         currentUser.HasEffectivePermission(AppPermissions.Albums.View, allowSuspended: true) &&
+                         AlbumService.CanUserViewAlbum(_album, CurrentUserId);
+
+        if (_album != null && _canViewAlbums)
         {
             if (!string.IsNullOrEmpty(ChannelId))
             {
@@ -108,17 +154,36 @@ else
 
             if (_isAvailableInContext)
             {
-                _isLocked = AlbumService.IsAlbumLocked(_album, CurrentUserId, ScopedKeystoreService.GetPrivateKey(), out _cachedPlainAlbumKey);
+                if (!_album.IsEncrypted)
+                {
+                    _isLocked = false;
+                    _cachedPlainAlbumKey = null;
+                }
+                else
+                {
+                    var cacheKey = $"alb:{_album.Id}:{CurrentUserId}";
+                    var albumRef = _album;
+                    var userId = CurrentUserId!;
+                    _cachedPlainAlbumKey = ScopedKeystoreService.GetOrDecryptKey(cacheKey, privateKey =>
+                        AlbumService.GetPlainAlbumKey(albumRef, userId, privateKey));
+                    _isLocked = string.IsNullOrEmpty(_cachedPlainAlbumKey);
+                }
             }
             else
             {
+                ScopedKeystoreService.InvalidateCachedKey($"alb:{_album.Id}:{CurrentUserId}");
                 _isLocked = true;
                 _cachedPlainAlbumKey = null;
             }
         }
         else
         {
-            _isLocked = false;
+            if (!string.IsNullOrEmpty(AlbumId) && !string.IsNullOrEmpty(CurrentUserId))
+            {
+                ScopedKeystoreService.InvalidateCachedKey($"alb:{AlbumId}:{CurrentUserId}");
+            }
+            _isAvailableInContext = false;
+            _isLocked = _album != null;
             _cachedPlainAlbumKey = null;
         }
     }
@@ -127,6 +192,8 @@ else
     {
         InvokeAsync(() =>
         {
+            _lastStateKey = null;
+            _forceRender = true;
             RefreshAlbumState();
             StateHasChanged();
         });
@@ -138,9 +205,41 @@ else
         ScopedKeystoreService.OnLocked -= HandleVaultStateChanged;
     }
 
+    private string GetOwnerDisplayName()
+    {
+        if (_album == null || string.IsNullOrEmpty(_album.OwnerId))
+        {
+            return Loc["Unknown"].Value;
+        }
+
+        var viewer = !string.IsNullOrEmpty(CurrentUserId)
+            ? (Employees.FirstOrDefault(e => e.Id == CurrentUserId) ?? Db.Employees.GetById(CurrentUserId))
+            : null;
+        var owner = Employees.FirstOrDefault(e => e.Id == _album.OwnerId) ?? Db.Employees.GetById(_album.OwnerId);
+        if (owner == null)
+        {
+            return Loc["Unknown"].Value;
+        }
+
+        if (owner.IsSystem)
+        {
+            return Loc["System"].Value;
+        }
+
+        var channel = !string.IsNullOrEmpty(ChannelId) ? Db.ChatChannels.GetById(ChannelId) : null;
+        if (PrivacyService.ShouldRestrictAlbumAudience(_album, viewer) ||
+            (channel != null && PrivacyService.ShouldHideMemberList(channel, viewer)) ||
+            !PrivacyService.CanDiscoverUser(viewer, owner))
+        {
+            return AppLabels.Employee;
+        }
+
+        return owner.FullName;
+    }
+
     private void NavigateToAlbum()
     {
-        if (_isAvailableInContext)
+        if (_canViewAlbums && _isAvailableInContext)
         {
             if (!string.IsNullOrEmpty(ChannelId))
             {
@@ -153,13 +252,31 @@ else
         }
     }
 
-    private string GetTokenizedUrl(AlbumMedia media, bool isThumbnail = true)
-    {
-        string baseUrl = isThumbnail ? media.ThumbnailUrl : media.FilePath;
-        if (_album == null || string.IsNullOrWhiteSpace(CurrentUserId) || string.IsNullOrWhiteSpace(CircuitContext?.SessionId))
-            return baseUrl;
+    private string? EffectiveSessionId => !string.IsNullOrWhiteSpace(SessionId) ? SessionId : CircuitContext?.SessionId;
 
-        string token = FileTokenService.GenerateAccessToken("albums", _album.Id, baseUrl, _cachedPlainAlbumKey, CurrentUserId, CircuitContext.SessionId);
-        return $"{baseUrl}?t={token}";
+    private string GetTokenizedUrl(AlbumMedia media, bool isThumbnail = true, bool smallThumb = false)
+    {
+        if (!_canViewAlbums || !_isAvailableInContext || _album == null ||
+            string.IsNullOrWhiteSpace(CurrentUserId) || string.IsNullOrWhiteSpace(EffectiveSessionId))
+        {
+            return string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(media.FilePath) || !media.FilePath.StartsWith("/spokesapi/files/", StringComparison.OrdinalIgnoreCase))
+        {
+            return media.FilePath;
+        }
+
+        // AlbumMentionCard only ever displays thumbnail previews and must never mint original-media tokens.
+        string thumbUrl = media.FilePath.Replace("/spokesapi/files/", "/spokesapi/files/thumb/", StringComparison.OrdinalIgnoreCase);
+        return FileTokenService.BuildTokenizedUrl(
+            "albums",
+            _album.Id,
+            thumbUrl,
+            _cachedPlainAlbumKey,
+            CurrentUserId,
+            EffectiveSessionId,
+            isThumbnail: true,
+            smallThumbnail: smallThumb);
     }
 }

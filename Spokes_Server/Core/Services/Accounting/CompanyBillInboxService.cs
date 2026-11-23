@@ -8,19 +8,21 @@ using System.Threading;
 using System.Threading.Tasks;
 using MailKit;
 using MailKit.Net.Imap;
-using MailKit.Net.Smtp;
-using MailKit.Security;
 using Microsoft.Extensions.Logging;
 using MimeKit;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Configuration;
 using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Models.Common;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Services.Accounting.InvoiceExtraction;
 using Spokes_Server.Core.Services.Communication.Email;
 using Spokes_Server.Core.Services.Identity;
+using Spokes_Server.Core.Services.Projects;
 using Spokes_Server.Core.Services.Security;
 using Spokes_Server.Core.Services.Storage;
 
@@ -34,7 +36,8 @@ public class CompanyBillInboxService
     private readonly IEmailCacheMaintenanceService? _cacheMaintenance;
     private readonly IEmailDeliveryService? _emailDeliveryService;
     private readonly ILogger<CompanyBillInboxService>? _logger;
-    private readonly UserService? _userService;
+    private readonly IImapConnectionFactory _imapFactory;
+    private readonly IAccountingService? _accountingService;
     public static event Action? OnInboxIngested;
     public static void NotifyInboxIngested() => OnInboxIngested?.Invoke();
 
@@ -47,7 +50,8 @@ public class CompanyBillInboxService
         IEmailCacheMaintenanceService? cacheMaintenance = null,
         IEmailDeliveryService? emailDeliveryService = null,
         ILogger<CompanyBillInboxService>? logger = null,
-        UserService? userService = null)
+        IImapConnectionFactory? imapFactory = null,
+        IAccountingService? accountingService = null)
     {
         _db = db;
         _fileService = fileService;
@@ -57,7 +61,8 @@ public class CompanyBillInboxService
         _cacheMaintenance = cacheMaintenance;
         _emailDeliveryService = emailDeliveryService;
         _logger = logger;
-        _userService = userService;
+        _imapFactory = imapFactory ?? new ImapConnectionFactory(_db.CompanyProfile, _encryptionService, _db.EmailAccounts);
+        _accountingService = accountingService;
     }
 
     public CompanyBillInboxSettings GetSettings()
@@ -67,175 +72,518 @@ public class CompanyBillInboxService
         {
             settings.DeletedFolderName = "SPOKES_DELETED";
         }
+        SyncDisplayMetadataFromBinding(settings);
         return settings;
     }
 
-    public void SaveSettings(CompanyBillInboxSettings settings)
+    public void SaveSettings(CompanyBillInboxSettings settings, Employee? actor = null)
     {
+        ArgumentNullException.ThrowIfNull(settings);
+        RequireInteractivePermission(actor, AppPermissions.Admin.ManageSettings, "save Company Bill Inbox settings");
+        ValidateServerManagedBinding(settings);
+        SaveSettingsInternal(settings);
+    }
+
+    private void ValidateServerManagedBinding(CompanyBillInboxSettings settings)
+    {
+        if (!string.IsNullOrWhiteSpace(settings.AccountId) &&
+            !string.Equals(settings.AccountId.Trim(), CompanyBillInboxConstants.SystemEmployeeId, StringComparison.OrdinalIgnoreCase))
+        {
+            var account = _db.EmailAccounts?.GetById(settings.AccountId.Trim());
+            if (account is not { IsServerManaged: true })
+            {
+                throw new UnauthorizedAccessException("Company Bill Inbox can only bind to a server-managed Email Account.");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.InboxId))
+        {
+            var inbox = _db.EmailInboxes?.GetById(settings.InboxId.Trim());
+            if (inbox is not { IsServerManaged: true } ||
+                (!string.IsNullOrWhiteSpace(settings.AccountId) &&
+                 !string.Equals(inbox.AccountId, settings.AccountId.Trim(), StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new UnauthorizedAccessException("Company Bill Inbox can only bind to a server-managed Virtual Inbox on the selected account.");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.SendingIdentityId))
+        {
+            var identity = _db.EmailSendingIdentities?.GetById(settings.SendingIdentityId.Trim());
+            if (identity is not { IsServerManaged: true })
+            {
+                throw new UnauthorizedAccessException("Company Bill Inbox can only use a server-managed Sending Identity.");
+            }
+        }
+    }
+
+    private void SaveSettingsInternal(CompanyBillInboxSettings settings)
+    {
+        SyncDisplayMetadataFromBinding(settings);
         var profile = _db.CompanyProfile.Get();
         profile.Accounting.BillInbox = settings;
         _db.CompanyProfile.Save(profile);
     }
 
+    private static void RequireInteractivePermission(Employee? actor, string permission, string action) =>
+        DomainActorGuard.RequireInteractivePermission(actor, permission, action);
+
+    private static void RequireInteractiveAnyPermission(Employee? actor, string action, params string[] permissions) =>
+        DomainActorGuard.RequireInteractiveAnyPermission(actor, action, permissions);
+
+    private bool IsPoItemAccessible(PoItem item, Employee? actor)
+    {
+        if (string.IsNullOrWhiteSpace(item.ProjectId))
+        {
+            return true;
+        }
+
+        if (actor == null)
+        {
+            return _db.Projects.GetById(item.ProjectId)?.AccessPolicy != ProjectAccessPolicy.Restricted;
+        }
+
+        return ProjectAccessHelper.HasAccess(_db.Projects, _db.Teams, actor, item.ProjectId);
+    }
+
+    private MatchingPoResult FilterPoMatchForAccess(MatchingPoResult poMatch, Employee? actor)
+    {
+        if (poMatch.MatchedPo == null)
+        {
+            return MatchingPoResult.None;
+        }
+
+        var po = poMatch.MatchedPo;
+        if (po.Status == PurchaseOrderStatus.Draft || po.Status == PurchaseOrderStatus.Void)
+        {
+            return MatchingPoResult.None;
+        }
+
+        if (po.LineItems == null || po.LineItems.Count == 0)
+        {
+            return poMatch;
+        }
+
+        foreach (var li in po.LineItems)
+        {
+            if (li != null && !IsPoItemAccessible(li, actor))
+            {
+                return MatchingPoResult.None;
+            }
+        }
+
+        return poMatch;
+    }
+
+    public bool IsPurchaseOrderAccessible(PurchaseOrder? po, Employee? actor)
+    {
+        if (po == null)
+        {
+            return false;
+        }
+
+        return po.LineItems.All(li => IsPoItemAccessible(li, actor));
+    }
+
+    public bool IsBillAccessible(Bill? bill, Employee? actor)
+    {
+        if (bill == null)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(bill.PurchaseOrderId))
+        {
+            var po = _db.PurchaseOrders.GetById(bill.PurchaseOrderId);
+            if (po != null && !IsPurchaseOrderAccessible(po, actor))
+            {
+                return false;
+            }
+        }
+
+        var referencedPoItemIds = bill.LineItems
+            .Where(li => !string.IsNullOrWhiteSpace(li.PoItemId))
+            .Select(li => li.PoItemId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (referencedPoItemIds.Count > 0)
+        {
+            foreach (var po in _db.PurchaseOrders.GetAll())
+            {
+                foreach (var poItem in po.LineItems)
+                {
+                    if (referencedPoItemIds.Contains(poItem.Id) && !IsPoItemAccessible(poItem, actor))
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private bool CanActorViewBillInInbox(Bill? bill, Employee? actor)
+    {
+        if (bill == null)
+        {
+            return false;
+        }
+
+        if (actor != null &&
+            !actor.HasEffectivePermission(AppPermissions.Purchases.ViewBills, allowSuspended: true) &&
+            !actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: true))
+        {
+            return false;
+        }
+
+        return IsBillAccessible(bill, actor);
+    }
+
+    public string GetEffectiveAccountId(CompanyBillInboxSettings? settings = null)
+    {
+        settings ??= GetSettings();
+        return !string.IsNullOrWhiteSpace(settings.AccountId)
+            ? settings.AccountId.Trim()
+            : CompanyBillInboxConstants.SystemEmployeeId;
+    }
+
+    public EmailAccount? GetBoundAccount(CompanyBillInboxSettings? settings = null)
+    {
+        settings ??= _db.CompanyProfile.GetAccounting().BillInbox ?? new CompanyBillInboxSettings();
+        if (string.IsNullOrWhiteSpace(settings.AccountId) || _db.EmailAccounts == null)
+            return null;
+        var account = _db.EmailAccounts.GetById(settings.AccountId.Trim());
+        return account is { IsServerManaged: true } ? account : null;
+    }
+
+    public EmailInbox? GetBoundVirtualInbox(CompanyBillInboxSettings? settings = null)
+    {
+        settings ??= _db.CompanyProfile.GetAccounting().BillInbox ?? new CompanyBillInboxSettings();
+        if (string.IsNullOrWhiteSpace(settings.InboxId) || _db.EmailInboxes == null)
+            return null;
+        var inbox = _db.EmailInboxes.GetById(settings.InboxId.Trim());
+        if (inbox is not { IsServerManaged: true })
+            return null;
+        if (!string.IsNullOrWhiteSpace(settings.AccountId) &&
+            !string.Equals(inbox.AccountId, settings.AccountId.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+        if (!string.IsNullOrWhiteSpace(inbox.AccountId) &&
+            _db.EmailAccounts?.GetById(inbox.AccountId) is { IsServerManaged: false })
+        {
+            return null;
+        }
+        return inbox;
+    }
+
+    public EmailSendingIdentity? ResolveSendingIdentity(CompanyBillInboxSettings? settings = null)
+    {
+        settings ??= _db.CompanyProfile.GetAccounting().BillInbox ?? new CompanyBillInboxSettings();
+        var identities = _db.EmailSendingIdentities;
+        if (identities == null) return null;
+
+        if (!string.IsNullOrWhiteSpace(settings.SendingIdentityId))
+        {
+            var byId = identities.GetById(settings.SendingIdentityId.Trim());
+            if (byId is { IsServerManaged: true }) return byId;
+        }
+
+        var inbox = GetBoundVirtualInbox(settings);
+        if (inbox != null)
+        {
+            if (!string.IsNullOrWhiteSpace(inbox.DefaultIdentityId))
+            {
+                var inboxDefault = identities.GetById(inbox.DefaultIdentityId);
+                if (inboxDefault is { IsServerManaged: true }) return inboxDefault;
+            }
+
+            if (inbox.LinkedIdentityIds != null)
+            {
+                foreach (var id in inbox.LinkedIdentityIds)
+                {
+                    var linked = identities.GetById(id);
+                    if (linked is { IsServerManaged: true }) return linked;
+                }
+            }
+        }
+
+        var account = GetBoundAccount(settings);
+        if (account != null)
+        {
+            if (!string.IsNullOrWhiteSpace(account.DefaultIdentityId))
+            {
+                var accDefault = identities.GetById(account.DefaultIdentityId);
+                if (accDefault is { IsServerManaged: true }) return accDefault;
+            }
+
+            if (!string.IsNullOrWhiteSpace(account.AutoCreatedIdentityId))
+            {
+                var autoCreated = identities.GetById(account.AutoCreatedIdentityId);
+                if (autoCreated is { IsServerManaged: true }) return autoCreated;
+            }
+
+            if (account.LinkedIdentityIds != null)
+            {
+                foreach (var id in account.LinkedIdentityIds)
+                {
+                    var linked = identities.GetById(id);
+                    if (linked is { IsServerManaged: true }) return linked;
+                }
+            }
+
+            var bySource = identities.GetAll().FirstOrDefault(i =>
+                i.IsServerManaged &&
+                string.Equals(i.SourceAccountId, account.Id, StringComparison.OrdinalIgnoreCase));
+            if (bySource != null) return bySource;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.EmailAddress))
+        {
+            return identities.GetAll().FirstOrDefault(i =>
+                i.IsServerManaged &&
+                string.Equals(i.EmailAddress, settings.EmailAddress.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        return null;
+    }
+
+    private void SyncDisplayMetadataFromBinding(CompanyBillInboxSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings.AccountId))
+            return;
+
+        var account = GetBoundAccount(settings);
+        var inbox = GetBoundVirtualInbox(settings);
+        var identity = ResolveSendingIdentity(settings);
+
+        var resolvedEmail = identity?.EmailAddress
+                            ?? inbox?.TargetAddresses?.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a))
+                            ?? account?.EmailAddress;
+
+        if (!string.IsNullOrWhiteSpace(resolvedEmail))
+        {
+            settings.EmailAddress = resolvedEmail.Trim();
+        }
+
+        var resolvedDisplayName = !string.IsNullOrWhiteSpace(identity?.DisplayName)
+            ? identity.DisplayName
+            : (!string.IsNullOrWhiteSpace(inbox?.Name)
+                ? inbox.Name
+                : (!string.IsNullOrWhiteSpace(account?.Name) ? account.Name : settings.DisplayName));
+
+        if (!string.IsNullOrWhiteSpace(resolvedDisplayName))
+        {
+            settings.DisplayName = resolvedDisplayName.Trim();
+        }
+    }
+
+    public List<EmailMessage> GetBillInboxMessages(CompanyBillInboxSettings? settings = null)
+    {
+        settings ??= GetSettings();
+        var accountId = GetEffectiveAccountId(settings);
+        var allMessages = _db.EmailMessages.GetAllForAccount(accountId);
+        var virtualInbox = GetBoundVirtualInbox(settings);
+        var deletedFolder = string.IsNullOrWhiteSpace(settings.DeletedFolderName) ? "SPOKES_DELETED" : settings.DeletedFolderName;
+        var monitoredFolder = string.IsNullOrWhiteSpace(settings.FolderToMonitor) ? CompanyBillInboxConstants.DefaultFolder : settings.FolderToMonitor;
+
+        return allMessages
+            .Where(m => (string.IsNullOrWhiteSpace(m.FolderPath) || string.Equals(m.FolderPath, monitoredFolder, StringComparison.OrdinalIgnoreCase)) &&
+                        !string.Equals(m.FolderPath, "LocalDrafts", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(m.FolderPath, "Trash", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(m.FolderPath, "Sent", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(m.FolderPath, deletedFolder, StringComparison.OrdinalIgnoreCase) &&
+                        IsBillInboxTrackedMessage(m) &&
+                        (virtualInbox == null || DoesMessageMatchVirtualInbox(m, virtualInbox)))
+            .OrderByDescending(m => m.Date)
+            .ToList();
+    }
+
+    public static bool IsBillInboxTrackedMessage(EmailMessage message)
+    {
+        if (string.IsNullOrWhiteSpace(message.BillingStatus))
+        {
+            return false;
+        }
+
+        // Standalone test partition ("company-bill-inbox") is never synced by EmailSyncService.
+        if (string.Equals(message.AccountId, CompanyBillInboxConstants.SystemEmployeeId, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Any explicit non-Unprocessed workflow status was set by CompanyBillInboxService or user triage.
+        if (!string.Equals(message.BillingStatus, CompanyBillInboxConstants.BillingStatus.Unprocessed, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Every real-account message ingested or evaluated by CompanyBillInboxService has a DecisionLog
+        // (or linked bill/invoice/attachment footprint), distinguishing it from legacy Webmail-synced messages.
+        return message.DecisionLog != null ||
+               message.ProcessedAt != null ||
+               !string.IsNullOrWhiteSpace(message.ProcessedByUserId) ||
+               !string.IsNullOrWhiteSpace(message.LinkedBillId) ||
+               message.LinkedBillIds.Count > 0 ||
+               !string.IsNullOrWhiteSpace(message.LinkedInvoiceId) ||
+               message.LinkedInvoiceIds.Count > 0 ||
+               !string.IsNullOrWhiteSpace(message.MatchedAttachmentPath);
+    }
+
     /// <summary>
-    /// Tests the IMAP connection with provided credentials.
+    /// Removes local-only Webmail cache files (messages never ingested by CompanyBillInboxService)
+    /// for server-managed Real Inboxes that have no Webmail consumers. Never touches remote IMAP messages.
+    /// </summary>
+    public async Task<int> PurgeUnsharedWebmailCacheAsync(string accountId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(accountId) ||
+            string.Equals(accountId, CompanyBillInboxConstants.SystemEmployeeId, StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        var account = _db.EmailAccounts.GetById(accountId);
+        if (account == null || !account.IsServerManaged || EmailInboxService.HasWebmailConsumers(account, _db.EmailInboxes))
+        {
+            return 0;
+        }
+
+        var staleMessages = _db.EmailMessages.GetAllForAccount(accountId)
+            .Where(m => !IsBillInboxTrackedMessage(m) &&
+                        !m.IsLocalOnly &&
+                        !string.Equals(m.FolderPath, "LocalDrafts", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (staleMessages.Count == 0)
+        {
+            return 0;
+        }
+
+        if (_cacheMaintenance != null)
+        {
+            foreach (var msg in staleMessages)
+            {
+                if (cancellationToken.IsCancellationRequested) break;
+                await _cacheMaintenance.DeleteLocalMessageFilesAsync(accountId, msg.Id);
+            }
+        }
+
+        var removedCount = _db.EmailMessages.DeleteMany(accountId, staleMessages.Select(m => m.Id));
+
+        foreach (var folder in _db.EmailFolders.GetByAccount(accountId))
+        {
+            var remainingInFolder = _db.EmailMessages.GetByFolder(accountId, folder.Path);
+            folder.TotalCount = remainingInFolder.Count;
+            folder.UnreadCount = remainingInFolder.Count(m => !m.IsRead);
+            _db.EmailFolders.Save(folder);
+        }
+
+        _logger?.LogInformation(
+            "Purged {Count} local Webmail-synced message(s) from unshared Bill Inbox account {AccountId} (IMAP untouched).",
+            removedCount,
+            accountId);
+
+        return removedCount;
+    }
+
+    public static bool DoesMessageMatchVirtualInbox(EmailMessage message, EmailInbox inbox)
+    {
+        if (!string.Equals(message.AccountId, inbox.AccountId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var receiving = message.ReceivingAddresses?.Count > 0
+            ? message.ReceivingAddresses
+            : (message.ToAddresses ?? []).Concat(message.CcAddresses ?? []).Select(a => a.Trim().ToLowerInvariant()).ToList();
+
+        return inbox.MatchesAddresses(receiving);
+    }
+
+    private string GetMessageAccountId(EmailMessage email)
+    {
+        if (!string.IsNullOrWhiteSpace(email.AccountId))
+            return email.AccountId;
+        return GetEffectiveAccountId();
+    }
+
+    private string? GetMimeCachePath(EmailMessage email)
+    {
+        if (_cacheMaintenance == null) return null;
+        return Path.Combine(_cacheMaintenance.EmailBodyPath, GetMessageAccountId(email), "Mime", $"{email.Id}.eml");
+    }
+
+    private string? GetAttachmentsCacheDir(EmailMessage email)
+    {
+        if (_cacheMaintenance == null) return null;
+        return Path.Combine(_cacheMaintenance.EmailBodyPath, GetMessageAccountId(email), "Attachments", email.Id);
+    }
+
+    /// <summary>
+    /// Tests the IMAP connection of the bound EmailAccount.
     /// </summary>
     public async Task<(bool Success, string Message)> TestConnectionAsync(
         CompanyBillInboxSettings settings,
-        string? plainPassword = null,
-        CancellationToken cancellationToken = default)
-    {
-        Employee? inferredCaller = null;
-        if (_userService != null)
-        {
-            try
-            {
-                inferredCaller = await _userService.GetEmployeeAsync();
-            }
-            catch (InvalidOperationException)
-            {
-                // Called outside an interactive Blazor circuit scope.
-            }
-        }
-
-        return await TestConnectionInternalAsync(settings, plainPassword, inferredCaller, explicitCallerProvided: false, cancellationToken);
-    }
-
-    public Task<(bool Success, string Message)> TestConnectionAsync(
-        CompanyBillInboxSettings settings,
-        string? plainPassword,
         Employee? caller,
         CancellationToken cancellationToken = default)
     {
-        return TestConnectionInternalAsync(settings, plainPassword, caller, explicitCallerProvided: true, cancellationToken);
-    }
-
-    private async Task<(bool Success, string Message)> TestConnectionInternalAsync(
-        CompanyBillInboxSettings settings,
-        string? plainPassword,
-        Employee? caller,
-        bool explicitCallerProvided,
-        CancellationToken cancellationToken)
-    {
-        if (explicitCallerProvided || caller != null)
+        if (caller == null || !caller.IsActive || caller.IsBanned || caller.IsSuspended ||
+            !(caller.IsAdmin ||
+              caller.HasPermission(AppPermissions.Admin.ManageSettings) ||
+              caller.HasPermission(AppPermissions.Finance.AccessAccounting) ||
+              caller.HasPermission(AppPermissions.Purchases.ManageBills)))
         {
-            if (caller == null || !caller.IsActive || caller.IsBanned || caller.IsSuspended ||
-                !(caller.IsAdmin ||
-                  caller.HasPermission(AppPermissions.Admin.ManageSettings) ||
-                  caller.HasPermission(AppPermissions.Finance.AccessAccounting) ||
-                  caller.HasPermission(AppPermissions.Purchases.ManageBills)))
-            {
-                return (false, "Not authorized to test Company Bill Inbox settings.");
-            }
+            return (false, "Not authorized to test Company Bill Inbox settings.");
         }
 
-        bool callerIsAdmin = caller == null || caller.IsAdmin || caller.HasPermission(AppPermissions.Admin.ManageSettings);
-
-        var (host, port, options) = ResolveBillInboxImapEndpoint(settings);
-        var user = !string.IsNullOrWhiteSpace(settings.ImapUsername) ? settings.ImapUsername : settings.EmailAddress;
-
-        string password;
-        try
+        var account = GetBoundAccount(settings);
+        if (account == null)
         {
-            password = !string.IsNullOrEmpty(plainPassword)
-                ? plainPassword
-                : (!string.IsNullOrEmpty(settings.EncryptedImapPassword) ? _encryptionService.Decrypt(settings.EncryptedImapPassword) : "");
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Bill inbox test connection failed to decrypt stored password");
-            return (false, MailTransportSecurityHelper.FormatConnectionError(ex, callerIsAdmin, "Failed to decrypt stored password: "));
+            return (false, "Please select a Real Inbox (Email Account) to monitor.");
         }
 
-        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(password))
+        using var conn = await _imapFactory.ConnectAsync(account, cancellationToken);
+        if (conn.IsSuccess && conn.Client != null)
         {
-            return (false, "Host, email/username, and password are required.");
-        }
-
-        try
-        {
-            using var client = new ImapClient();
-            await MailTransportSecurityHelper.ConnectMailServiceAsync(
-                client,
-                host,
-                port,
-                options,
-                requireSafeExternalHost: false,
-                cancellationToken);
-            await client.AuthenticateAsync(user, password, cancellationToken);
-            await client.DisconnectAsync(true, cancellationToken);
+            await conn.Client.DisconnectAsync(true, cancellationToken);
             return (true, "Connection successful!");
         }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Bill inbox test connection failed for {User}@{Host}", user, host);
-            return (false, MailTransportSecurityHelper.FormatConnectionError(ex, callerIsAdmin));
-        }
-    }
 
-    private (string Host, int Port, SecureSocketOptions Options) ResolveBillInboxImapEndpoint(CompanyBillInboxSettings settings)
-    {
-        var emailSettings = _db.CompanyProfile.GetEmailSettings();
-        if (!string.IsNullOrWhiteSpace(settings.ImapHost))
-        {
-            var effectivePort = MailTransportSecurityHelper.NormalizeImapPort(settings.ImapPort, settings.ImapSsl);
-            var options = MailTransportSecurityHelper.ResolveBillInboxImapTlsOptions(settings);
-            return (settings.ImapHost, effectivePort, options);
-        }
+        bool callerIsAdmin = caller.IsAdmin ||
+                             caller.HasPermission(AppPermissions.Admin.ManageSettings);
 
-        var fallback = emailSettings.IncomingServers.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Host));
-        if (fallback != null)
-        {
-            var effectivePort = MailTransportSecurityHelper.NormalizeImapPort(
-                settings.ImapPort > 0 ? settings.ImapPort : fallback.Port,
-                fallback.UseSsl);
-            var options = MailTransportSecurityHelper.ResolveImapTlsOptions(effectivePort, fallback.UseSsl, allowPlaintext: true);
-            return (fallback.Host, effectivePort, options);
-        }
-
-        return (string.Empty, MailTransportSecurityHelper.NormalizeImapPort(settings.ImapPort, settings.ImapSsl), MailTransportSecurityHelper.ResolveBillInboxImapTlsOptions(settings));
+        return callerIsAdmin
+            ? (false, $"Connection failed: {conn.ErrorMessage ?? conn.Status.ToString()}")
+            : (false, MailTransportSecurityHelper.SanitizedConnectionErrorMessage);
     }
 
     private async Task<(ImapClient? Client, string? Error)> ConnectImapClientAsync(CompanyBillInboxSettings settings, CancellationToken cancellationToken = default)
     {
-        var (host, port, options) = ResolveBillInboxImapEndpoint(settings);
-        var user = !string.IsNullOrWhiteSpace(settings.ImapUsername) ? settings.ImapUsername : settings.EmailAddress;
-
-        string password;
-        try
+        var account = GetBoundAccount(settings);
+        if (account == null)
         {
-            password = _encryptionService.Decrypt(settings.EncryptedImapPassword);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to decrypt IMAP password for bill inbox");
-            return (null, "Decryption error on stored password");
+            return (null, "No Real Inbox (Email Account) is configured for the Company Bill Inbox.");
         }
 
-        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(password))
+        var conn = await _imapFactory.ConnectAsync(account, cancellationToken);
+        if (conn.IsSuccess && conn.Client != null)
         {
-            return (null, "Missing host or credentials");
+            return (conn.Client, null);
         }
 
-        try
-        {
-            var client = new ImapClient();
-            client.Timeout = 10000;
-            await MailTransportSecurityHelper.ConnectMailServiceAsync(
-                client,
-                host,
-                port,
-                options,
-                requireSafeExternalHost: false,
-                cancellationToken);
-            await client.AuthenticateAsync(user, password, cancellationToken);
-            return (client, null);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Failed to connect to IMAP server {Host}:{Port}", host, port);
-            return (null, ex.Message);
-        }
+        var errorMsg = conn.Status == ImapConnectionStatus.DecryptionError
+            ? "Decryption error on stored password"
+            : (conn.ErrorMessage ?? conn.Status.ToString());
+        conn.Dispose();
+        return (null, errorMsg);
+    }
+
+    /// <summary>
+    /// Interactive UI wrapper enforcing live Purchases.ManageBills permission before syncing the billing mailbox.
+    /// </summary>
+    public Task<int> SyncInboxInteractiveAsync(Employee? actor, CancellationToken cancellationToken = default)
+    {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "sync Company Bill Inbox");
+        return CheckInboxAsync(cancellationToken);
     }
 
     /// <summary>
@@ -244,10 +592,21 @@ public class CompanyBillInboxService
     public async Task<int> CheckInboxAsync(CancellationToken cancellationToken = default)
     {
         var settings = GetSettings();
-        if (!settings.Enabled || string.IsNullOrWhiteSpace(settings.EmailAddress))
+        if (!settings.Enabled || string.IsNullOrWhiteSpace(settings.AccountId))
         {
             return 0;
         }
+
+        if (!string.Equals(settings.AccountId.Trim(), CompanyBillInboxConstants.SystemEmployeeId, StringComparison.OrdinalIgnoreCase) &&
+            GetBoundAccount(settings) == null)
+        {
+            return 0;
+        }
+
+        var accountId = GetEffectiveAccountId(settings);
+        var virtualInbox = GetBoundVirtualInbox(settings);
+
+        await PurgeUnsharedWebmailCacheAsync(accountId, cancellationToken);
 
         var (client, error) = await ConnectImapClientAsync(settings, cancellationToken);
         if (client == null)
@@ -256,7 +615,7 @@ public class CompanyBillInboxService
             {
                 settings.LastCheckStatus = error;
                 settings.LastCheckedAt = DateTime.UtcNow;
-                SaveSettings(settings);
+                SaveSettingsInternal(settings);
             }
             return 0;
         }
@@ -270,46 +629,48 @@ public class CompanyBillInboxService
                 var folder = await client.GetFolderAsync(folderName, cancellationToken);
                 await folder.OpenAsync(FolderAccess.ReadWrite, cancellationToken);
 
-            // Fetch unseen or recent messages
-            var uids = await folder.SearchAsync(MailKit.Search.SearchQuery.NotSeen, cancellationToken);
-            if (uids.Count == 0)
-            {
-                // If no unread, check last 15 messages to ensure no missed messages
-                var count = folder.Count;
-                if (count > 0)
+                // Strictly fetch unread messages only — never download historical read emails
+                var uids = await folder.SearchAsync(MailKit.Search.SearchQuery.NotSeen, cancellationToken);
+
+                foreach (var uid in uids)
                 {
-                    var start = Math.Max(0, count - 15);
-                    var rangeUids = await folder.SearchAsync(MailKit.Search.SearchQuery.All, cancellationToken);
-                    uids = rangeUids.Skip(start).ToList();
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    // Check if message was already synced locally (e.g., on an account shared with Webmail) while still unread on IMAP
+                    var existing = _db.EmailMessages.GetByUniqueId(accountId, uid.Id);
+                    if (existing != null)
+                    {
+                        if (!IsBillInboxTrackedMessage(existing) &&
+                            (virtualInbox == null || DoesMessageMatchVirtualInbox(existing, virtualInbox)))
+                        {
+                            await ReprocessEmailCoreAsync(existing.Id, "system", forceEvenIfApproved: false, actor: null, isSystemCall: true, cancellationToken);
+                            var updated = _db.EmailMessages.GetById(accountId, existing.Id);
+                            if (updated != null && !updated.IsRead)
+                            {
+                                updated.IsRead = true;
+                                _db.EmailMessages.Save(updated);
+                            }
+                            await folder.AddFlagsAsync(uid, MessageFlags.Seen, true, cancellationToken);
+                            processedCount++;
+                        }
+                        continue;
+                    }
+
+                    var mimeMessage = await folder.GetMessageAsync(uid, cancellationToken);
+                    var email = await ProcessMimeMessageAsync(mimeMessage, uid.Id, cancellationToken);
+                    if (email != null)
+                    {
+                        processedCount++;
+                        await folder.AddFlagsAsync(uid, MessageFlags.Seen, true, cancellationToken);
+                    }
                 }
-            }
 
-            foreach (var uid in uids)
-            {
-                if (cancellationToken.IsCancellationRequested) break;
-
-                // Check if message already recorded in Spokes
-                var existing = _db.EmailMessages.GetByUniqueId(CompanyBillInboxConstants.SystemEmployeeId, uid.Id);
-
-                if (existing != null) continue;
-
-                var mimeMessage = await folder.GetMessageAsync(uid, cancellationToken);
-                var email = await ProcessMimeMessageAsync(mimeMessage, uid.Id, cancellationToken);
-                if (email != null)
-                {
-                    processedCount++;
-                }
-
-                // Mark seen
-                await folder.AddFlagsAsync(uid, MessageFlags.Seen, true, cancellationToken);
-            }
-
-            await client.DisconnectAsync(true, cancellationToken);
+                await client.DisconnectAsync(true, cancellationToken);
 
                 settings.LastCheckedAt = DateTime.UtcNow;
                 settings.LastCheckStatus = "Success";
                 settings.LastIngestedCount = processedCount;
-                SaveSettings(settings);
+                SaveSettingsInternal(settings);
             }
         }
         catch (Exception ex)
@@ -317,7 +678,7 @@ public class CompanyBillInboxService
             _logger?.LogError(ex, "Failed to sync company bill inbox");
             settings.LastCheckedAt = DateTime.UtcNow;
             settings.LastCheckStatus = $"Error: {ex.Message}";
-            SaveSettings(settings);
+            SaveSettingsInternal(settings);
         }
 
         return processedCount;
@@ -326,38 +687,58 @@ public class CompanyBillInboxService
     private InvoiceExtractionContext BuildExtractionContext(CompanyBillInboxSettings? settings = null)
     {
         settings ??= GetSettings();
-        var profile = _db.CompanyProfile.Get();
-        var ctx = new InvoiceExtractionContext
-        {
-            DefaultCurrency = !string.IsNullOrWhiteSpace(settings.DefaultCurrency) ? settings.DefaultCurrency : "CAD"
-        };
+        return InvoiceExtractionContext.FromCompanyProfile(_db.CompanyProfile.Get(), settings);
+    }
 
-        if (!string.IsNullOrWhiteSpace(profile.CompanyName))
+    private static string ExtractReadableEmailBodyText(MimeMessage? mimeMessage)
+    {
+        if (mimeMessage == null) return string.Empty;
+        var text = mimeMessage.TextBody;
+        if (string.IsNullOrWhiteSpace(text) && !string.IsNullOrWhiteSpace(mimeMessage.HtmlBody))
         {
-            ctx.BuyerCompanyName = profile.CompanyName.Trim();
-            if (!ctx.BuyerAliases.Contains(ctx.BuyerCompanyName, StringComparer.OrdinalIgnoreCase))
-            {
-                ctx.BuyerAliases.Add(ctx.BuyerCompanyName);
-            }
+            text = System.Text.RegularExpressions.Regex.Replace(mimeMessage.HtmlBody, @"<(?:style|script)[^>]*>[\s\S]*?</(?:style|script)>", " ", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"<[^>]+>", " ");
+            text = System.Net.WebUtility.HtmlDecode(text);
+        }
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+        return text.Length > 8000 ? text[..8000] : text;
+    }
+
+    private string ResolveFullEmailBodyText(EmailMessage email, string? bodyTextOverride = null)
+    {
+        if (!string.IsNullOrWhiteSpace(bodyTextOverride))
+        {
+            return bodyTextOverride;
         }
 
-        if (!string.IsNullOrWhiteSpace(settings.EmailAddress) && settings.EmailAddress.Contains('@'))
+        try
         {
-            var domain = settings.EmailAddress[(settings.EmailAddress.IndexOf('@') + 1)..].Trim();
-            if (!string.IsNullOrWhiteSpace(domain) && !IsCommonEmailDomain(domain) &&
-                !ctx.BuyerEmailDomains.Contains(domain, StringComparer.OrdinalIgnoreCase))
+            var mimePath = GetMimeCachePath(email);
+            if (!string.IsNullOrEmpty(mimePath) && File.Exists(mimePath))
             {
-                ctx.BuyerEmailDomains.Add(domain);
+                using var stream = File.OpenRead(mimePath);
+                var mime = MimeMessage.Load(stream);
+                var extracted = ExtractReadableEmailBodyText(mime);
+                if (!string.IsNullOrWhiteSpace(extracted))
+                {
+                    return extracted;
+                }
             }
         }
+        catch
+        {
+            // Fall back cleanly to Snippet
+        }
 
-        return ctx;
+        return email.Snippet ?? string.Empty;
     }
 
     private bool IsAccountStatement(
         EmailMessage email,
         List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)> extractedInvoices,
-        CompanyBillInboxSettings settings)
+        CompanyBillInboxSettings settings,
+        string? emailBodyText = null)
     {
         // 1. Any extracted document explicitly flagged as a statement by UniversalDocumentClassifier or PdfInvoiceInspectionService
         if (extractedInvoices.Any(x => x.Extraction.IsAccountStatement ||
@@ -366,15 +747,10 @@ public class CompanyBillInboxService
             return true;
         }
 
-        string[] defaultStatementTerms =
-        [
-            "statement", "releve", "relevé", "etat_de_compte", "etat-de-compte", "kontoauszug", "extracto", "sommaire"
-        ];
-
         // 2. Attachment filenames containing statement terms
         foreach (var (_, _, fileName) in extractedInvoices)
         {
-            if (ContainsAnyKeyword(fileName, defaultStatementTerms) ||
+            if (UniversalDocumentClassifier.TryMatchStatementFileName(fileName, out _) ||
                 ContainsAnyKeyword(fileName, settings.StatementKeywords))
             {
                 return true;
@@ -383,7 +759,7 @@ public class CompanyBillInboxService
 
         foreach (var att in email.Attachments)
         {
-            if (ContainsAnyKeyword(att.FileName, defaultStatementTerms) ||
+            if (UniversalDocumentClassifier.TryMatchStatementFileName(att.FileName, out _) ||
                 ContainsAnyKeyword(att.FileName, settings.StatementKeywords))
             {
                 return true;
@@ -391,22 +767,24 @@ public class CompanyBillInboxService
         }
 
         // 3. If all extracted attachments are confident actionable invoices, do not suppress them based on email subject/body phrasing
-        if (extractedInvoices.Any(x => x.Extraction.IsConfident && !x.Extraction.IsStatement && !x.Extraction.IsPaymentReceipt))
+        if (extractedInvoices.Any(x => x.Extraction.IsConfident && !x.Extraction.IsAccountStatement && !x.Extraction.IsPaymentReceipt))
         {
             return false;
         }
 
+        var bodyText = ResolveFullEmailBodyText(email, emailBodyText);
+
         // 4. Automatic multilingual classification on email subject/body when no confident invoice PDF was extracted
         var (isStatement, _, _) = UniversalDocumentClassifier.ClassifyEmail(
             email.Subject,
-            email.Snippet,
+            bodyText,
             extractedInvoices.Select(x => x.Extraction).ToList());
         if (isStatement)
         {
             return true;
         }
 
-        var combinedText = $"{email.Subject} {email.Snippet}";
+        var combinedText = $"{email.Subject} {bodyText}";
         if (ContainsAnyKeyword(combinedText, settings.StatementKeywords))
         {
             return true;
@@ -418,10 +796,23 @@ public class CompanyBillInboxService
     private bool IsPaymentReceiptEmail(
         EmailMessage email,
         List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)> extractedInvoices,
-        CompanyBillInboxSettings settings)
+        CompanyBillInboxSettings settings,
+        string? emailBodyText = null)
     {
+        var bodyText = ResolveFullEmailBodyText(email, emailBodyText);
+
+        // Run ClassifyEmail first so explicit incoming payment / Interac / EFT remittance notifications win even if a reference invoice PDF was attached
+        var (_, isReceipt, _) = UniversalDocumentClassifier.ClassifyEmail(
+            email.Subject,
+            bodyText,
+            extractedInvoices.Select(x => x.Extraction).ToList());
+        if (isReceipt)
+        {
+            return true;
+        }
+
         // Never suppress actionable invoices that have a real invoice number and balance/terms
-        if (extractedInvoices.Any(x => x.Extraction.IsConfident && !x.Extraction.IsPaymentReceipt && !x.Extraction.IsStatement))
+        if (extractedInvoices.Any(x => x.Extraction.IsConfident && !x.Extraction.IsPaymentReceipt && !x.Extraction.IsAccountStatement))
         {
             return false;
         }
@@ -431,16 +822,7 @@ public class CompanyBillInboxService
             return true;
         }
 
-        var (_, isReceipt, _) = UniversalDocumentClassifier.ClassifyEmail(
-            email.Subject,
-            email.Snippet,
-            extractedInvoices.Select(x => x.Extraction).ToList());
-        if (isReceipt)
-        {
-            return true;
-        }
-
-        var combinedText = $"{email.Subject} {email.Snippet}";
+        var combinedText = $"{email.Subject} {bodyText}";
         // Strip payment-terms phrases like "Due upon receipt" / "Payable à réception" before checking keywords
         var cleanedText = System.Text.RegularExpressions.Regex.Replace(
             combinedText,
@@ -451,31 +833,55 @@ public class CompanyBillInboxService
         return ContainsAnyKeyword(cleanedText, settings.ReceiptKeywords);
     }
 
+    private sealed record EmailInspectionOutcome(
+        List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)> ExtractedInvoices,
+        List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)> AllInspectedDocs,
+        string BodyText);
+
+    private static bool IsIgnoredSender(EmailMessage email, CompanyBillInboxSettings settings) =>
+        settings.IgnoredSenderDomains.Any(d =>
+            !string.IsNullOrWhiteSpace(d) &&
+            (email.FromAddress.Contains(d, StringComparison.OrdinalIgnoreCase) ||
+             email.FromName.Contains(d, StringComparison.OrdinalIgnoreCase)));
+
     internal async Task<EmailMessage?> ProcessMimeMessageAsync(MimeMessage mimeMessage, uint uid = 1, CancellationToken cancellationToken = default)
     {
+        var settings = GetSettings();
+        var accountId = GetEffectiveAccountId(settings);
+        var toList = mimeMessage.To.Mailboxes.Select(m => m.Address).Where(a => !string.IsNullOrWhiteSpace(a)).ToList();
+        var ccList = mimeMessage.Cc.Mailboxes.Select(m => m.Address).Where(a => !string.IsNullOrWhiteSpace(a)).ToList();
+
         var email = new EmailMessage
         {
-            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
-            FolderPath = CompanyBillInboxConstants.DefaultFolder,
+            AccountId = accountId,
+            FolderPath = string.IsNullOrWhiteSpace(settings.FolderToMonitor) ? CompanyBillInboxConstants.DefaultFolder : settings.FolderToMonitor,
             UniqueId = uid,
             GlobalMessageId = mimeMessage.MessageId ?? Guid.NewGuid().ToString(),
             Subject = mimeMessage.Subject ?? "No Subject",
             FromAddress = mimeMessage.From.Mailboxes.FirstOrDefault()?.Address ?? "",
             FromName = mimeMessage.From.Mailboxes.FirstOrDefault()?.Name ?? "",
+            ToAddresses = toList,
+            CcAddresses = ccList,
+            ReceivingAddresses = EmailSyncService.ExtractReceivingAddresses(mimeMessage),
             Date = mimeMessage.Date,
+            IsRead = true,
             Snippet = mimeMessage.TextBody?.Length > 100 ? mimeMessage.TextBody[..100] : (mimeMessage.TextBody ?? "")
         };
-        var settings = GetSettings();
-        var extractionContext = BuildExtractionContext(settings);
+
+        var virtualInbox = GetBoundVirtualInbox(settings);
+        if (virtualInbox != null && !DoesMessageMatchVirtualInbox(email, virtualInbox))
+        {
+            return null;
+        }
 
         // Cache raw MIME message so full HTML body with styling and inline attachments is viewable in email viewer
-        if (_cacheMaintenance != null)
+        var mimePath = GetMimeCachePath(email);
+        if (!string.IsNullOrEmpty(mimePath))
         {
             try
             {
-                var mimeFolder = Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Mime");
-                Directory.CreateDirectory(mimeFolder);
-                var mimePath = Path.Combine(mimeFolder, $"{email.Id}.eml");
+                var mimeFolder = Path.GetDirectoryName(mimePath);
+                if (!string.IsNullOrEmpty(mimeFolder)) Directory.CreateDirectory(mimeFolder);
                 await using var mimeStream = File.Create(mimePath);
                 await mimeMessage.WriteToAsync(mimeStream, cancellationToken);
             }
@@ -485,9 +891,8 @@ public class CompanyBillInboxService
             }
         }
 
-        // Check if sender matches ignored domains / spammers
-        if (settings.IgnoredSenderDomains.Any(d => !string.IsNullOrWhiteSpace(d) &&
-            (email.FromAddress.Contains(d, StringComparison.OrdinalIgnoreCase) || email.FromName.Contains(d, StringComparison.OrdinalIgnoreCase))))
+        // Skip attachment extraction & storage for ignored sender domains
+        if (IsIgnoredSender(email, settings))
         {
             email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Dismissed;
             _db.EmailMessages.Save(email);
@@ -495,109 +900,180 @@ public class CompanyBillInboxService
             return email;
         }
 
-        // Extract attachments
-        var attachments = mimeMessage.Attachments.OfType<MimePart>().ToList();
+        var inspection = await ExtractAndInspectAttachmentsAsync(
+            email,
+            mimeMessage,
+            settings,
+            clearExistingAttachments: false,
+            cancellationToken);
+
+        await ApplyBillingDecisionPipelineAsync(email, settings, inspection);
+        return email;
+    }
+
+    private async Task<EmailInspectionOutcome> ExtractAndInspectAttachmentsAsync(
+        EmailMessage email,
+        MimeMessage? mimeMessage,
+        CompanyBillInboxSettings settings,
+        bool clearExistingAttachments,
+        CancellationToken cancellationToken)
+    {
+        var extractionContext = BuildExtractionContext(settings);
         var extractedInvoices = new List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)>();
-        var scannedAttachments = new List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)>();
+        var allInspectedDocs = new List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)>();
         string? fallbackAttachmentPath = null;
         string? fallbackAttachmentName = null;
 
-        var attachmentFolder = _cacheMaintenance != null
-            ? Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Attachments", email.Id)
-            : null;
-        if (!string.IsNullOrEmpty(attachmentFolder) && attachments.Any())
+        if (mimeMessage != null)
         {
-            try
-            {
-                Directory.CreateDirectory(attachmentFolder);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "Failed to create attachment directory {Dir}", attachmentFolder);
-            }
-        }
-
-        foreach (var part in attachments)
-        {
-            var fileName = part.FileName ?? "attachment";
-            var ext = Path.GetExtension(fileName).ToLowerInvariant();
-
-            using var mem = new MemoryStream();
-            if (part.Content != null)
-            {
-                await part.Content.DecodeToAsync(mem, cancellationToken);
-                mem.Position = 0;
-            }
-
-            // Save attachment file to Spokes storage
-            var uploadBillId = Guid.NewGuid().ToString();
-            var savedPath = await _fileService.UploadStreamAsync("bills", uploadBillId, mem, fileName);
-
-            var attachmentId = Guid.NewGuid().ToString();
-
-            // Also cache attachment in standard email cache for instant preview and download via EmailReader
-            if (!string.IsNullOrEmpty(attachmentFolder))
+            var attachments = mimeMessage.Attachments.OfType<MimePart>().ToList();
+            var attachmentFolder = GetAttachmentsCacheDir(email);
+            if (!string.IsNullOrEmpty(attachmentFolder) && attachments.Count > 0)
             {
                 try
                 {
-                    var cachedFilePath = Path.Combine(attachmentFolder, attachmentId);
-                    mem.Position = 0;
-                    await using var fileStream = File.Create(cachedFilePath);
-                    await mem.CopyToAsync(fileStream, cancellationToken);
+                    Directory.CreateDirectory(attachmentFolder);
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogWarning(ex, "Failed to cache email attachment {AttachmentId} to email body path", attachmentId);
+                    _logger?.LogWarning(ex, "Failed to create attachment directory {Dir}", attachmentFolder);
                 }
             }
 
-            email.Attachments.Add(new EmailAttachmentMeta
+            if (clearExistingAttachments)
             {
-                Id = attachmentId,
-                FileName = fileName,
-                ContentType = part.ContentType?.MimeType ?? "application/octet-stream",
-                Size = mem.Length
-            });
-            email.HasAttachments = true;
+                email.Attachments.Clear();
+            }
 
-            // Try extracting invoice details if PDF or XML
-            if (ext == ".pdf" || ext == ".xml")
+            foreach (var part in attachments)
             {
-                mem.Position = 0;
-                var extracted = _pdfInspectionService.Inspect(mem, fileName, extractionContext);
-                if (extracted != null)
+                var fileName = part.FileName ?? "attachment";
+                var ext = Path.GetExtension(fileName).ToLowerInvariant();
+
+                using var mem = new MemoryStream();
+                if (part.Content != null)
                 {
-                    if (extracted.TotalAmount != 0)
+                    await part.Content.DecodeToAsync(mem, cancellationToken);
+                    mem.Position = 0;
+                }
+
+                // Save attachment file to Spokes storage
+                var uploadBillId = Guid.NewGuid().ToString();
+                var savedPath = await _fileService.UploadStreamAsync("bills", uploadBillId, mem, fileName);
+                var attachmentId = Guid.NewGuid().ToString();
+
+                // Also cache attachment in standard email cache for instant preview and download via EmailReader
+                if (!string.IsNullOrEmpty(attachmentFolder))
+                {
+                    try
                     {
-                        extractedInvoices.Add((extracted, savedPath, fileName));
+                        var cachedFilePath = Path.Combine(attachmentFolder, attachmentId);
+                        mem.Position = 0;
+                        await using var fileStream = File.Create(cachedFilePath);
+                        await mem.CopyToAsync(fileStream, cancellationToken);
                     }
-                    else if (extracted.IsScannedImagePdf || extracted.IsStatement || extracted.IsPaymentReceipt)
+                    catch (Exception ex)
                     {
-                        scannedAttachments.Add((extracted, savedPath, fileName));
+                        _logger?.LogWarning(ex, "Failed to cache email attachment {AttachmentId} to email body path", attachmentId);
+                    }
+                }
+
+                email.Attachments.Add(new EmailAttachmentMeta
+                {
+                    Id = attachmentId,
+                    FileName = fileName,
+                    ContentType = part.ContentType?.MimeType ?? "application/octet-stream",
+                    Size = mem.Length
+                });
+                email.HasAttachments = true;
+
+                if (ext == ".pdf" || ext == ".xml")
+                {
+                    mem.Position = 0;
+                    var extracted = _pdfInspectionService.Inspect(mem, fileName, extractionContext);
+                    if (extracted != null)
+                    {
+                        allInspectedDocs.Add((extracted, savedPath, fileName));
+                        if (extracted.TotalAmount != 0 && !extracted.IsAccountStatement && !extracted.IsPaymentReceipt)
+                        {
+                            extractedInvoices.Add((extracted, savedPath, fileName));
+                        }
+                    }
+                }
+
+                if (fallbackAttachmentPath == null && (ext == ".pdf" || ext == ".png" || ext == ".jpg" || ext == ".jpeg"))
+                {
+                    fallbackAttachmentPath = savedPath;
+                    fallbackAttachmentName = fileName;
+                }
+            }
+        }
+        else if (!string.IsNullOrEmpty(email.MatchedAttachmentPath))
+        {
+            try
+            {
+                var parts = email.MatchedAttachmentPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 5)
+                {
+                    var category = parts[2];
+                    var contextId = parts[3];
+                    var fileName = parts[4];
+                    using var stream = _fileService.OpenRead(category, contextId, fileName);
+                    if (stream != null)
+                    {
+                        using var mem = new MemoryStream();
+                        await stream.CopyToAsync(mem, cancellationToken);
+                        mem.Position = 0;
+                        var extracted = _pdfInspectionService.Inspect(mem, email.MatchedAttachmentName ?? fileName, extractionContext);
+                        if (extracted != null)
+                        {
+                            allInspectedDocs.Add((extracted, email.MatchedAttachmentPath, email.MatchedAttachmentName ?? fileName));
+                            if (extracted.TotalAmount != 0 && !extracted.IsAccountStatement && !extracted.IsPaymentReceipt)
+                            {
+                                extractedInvoices.Add((extracted, email.MatchedAttachmentPath, email.MatchedAttachmentName ?? fileName));
+                            }
+                        }
                     }
                 }
             }
-
-            if (fallbackAttachmentPath == null && (ext == ".pdf" || ext == ".png" || ext == ".jpg" || ext == ".jpeg"))
+            catch (Exception ex)
             {
-                fallbackAttachmentPath = savedPath;
-                fallbackAttachmentName = fileName;
+                _logger?.LogWarning(ex, "Failed to re-inspect existing attachment {Path}", email.MatchedAttachmentPath);
             }
         }
 
-        email.MatchedAttachmentPath = extractedInvoices.Count > 0 ? extractedInvoices[0].SavedPath : fallbackAttachmentPath;
-        email.MatchedAttachmentName = extractedInvoices.Count > 0 ? extractedInvoices[0].FileName : fallbackAttachmentName;
+        email.MatchedAttachmentPath = extractedInvoices.Count > 0
+            ? extractedInvoices[0].SavedPath
+            : (fallbackAttachmentPath ?? email.MatchedAttachmentPath);
+        email.MatchedAttachmentName = extractedInvoices.Count > 0
+            ? extractedInvoices[0].FileName
+            : (fallbackAttachmentName ?? email.MatchedAttachmentName);
+
+        var bodyText = ExtractReadableEmailBodyText(mimeMessage);
+        if (string.IsNullOrWhiteSpace(bodyText))
+        {
+            bodyText = email.Snippet;
+        }
 
         if (extractedInvoices.Count > 0)
         {
-            email.DetectedAmount = extractedInvoices[0].Extraction.TotalAmount;
-            email.DetectedCurrency = extractedInvoices[0].Extraction.Currency;
-            email.DetectedPaidAmount = extractedInvoices[0].Extraction.PaidAmount;
-            email.DetectedBalanceDue = extractedInvoices[0].Extraction.BalanceDue;
+            var primary = extractedInvoices[0].Extraction;
+            email.DetectedAmount = primary.TotalAmount;
+            email.DetectedCurrency = primary.Currency;
+            email.DetectedPaidAmount = primary.PaidAmount;
+            email.DetectedBalanceDue = primary.BalanceDue;
+        }
+        else if (allInspectedDocs.Any(d => d.Extraction.TotalAmount != 0))
+        {
+            var firstDoc = allInspectedDocs.First(d => d.Extraction.TotalAmount != 0).Extraction;
+            email.DetectedAmount = firstDoc.TotalAmount;
+            email.DetectedCurrency = firstDoc.Currency;
+            email.DetectedPaidAmount = firstDoc.PaidAmount > 0 ? firstDoc.PaidAmount : null;
+            email.DetectedBalanceDue = firstDoc.BalanceDue > 0 ? firstDoc.BalanceDue : null;
         }
         else
         {
-            var textAmount = ExtractAmountFromText($"{email.Subject} {email.Snippet}");
+            var textAmount = ExtractAmountFromText($"{email.Subject} {bodyText}");
             if (textAmount > 0)
             {
                 email.DetectedAmount = textAmount;
@@ -605,170 +1081,199 @@ public class CompanyBillInboxService
             }
         }
 
-        var allInspectedDocs = extractedInvoices.Concat(scannedAttachments).ToList();
+        return new EmailInspectionOutcome(extractedInvoices, allInspectedDocs, bodyText);
+    }
 
-        // Check for periodic statements or payment receipts before drafting
-        if (IsAccountStatement(email, allInspectedDocs, settings))
+    private async Task ApplyBillingDecisionPipelineAsync(
+        EmailMessage email,
+        CompanyBillInboxSettings settings,
+        EmailInspectionOutcome inspection,
+        Employee? actor = null,
+        string? processedByUserId = null)
+    {
+        if (IsIgnoredSender(email, settings))
+        {
+            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Dismissed;
+        }
+        else if (IsAccountStatement(email, inspection.AllInspectedDocs, settings, inspection.BodyText))
         {
             email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Statement;
-            _db.EmailMessages.Save(email);
-            await GenerateDecisionLogAsync(email, allInspectedDocs);
-            return email;
         }
-
-        if (IsPaymentReceiptEmail(email, allInspectedDocs, settings))
+        else if (IsPaymentReceiptEmail(email, inspection.AllInspectedDocs, settings, inspection.BodyText))
         {
             email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Receipt;
-            _db.EmailMessages.Save(email);
-            await GenerateDecisionLogAsync(email, allInspectedDocs);
-            return email;
-        }
-
-        // Supplier matching
-        var primaryExt = extractedInvoices.FirstOrDefault().Extraction;
-        var supplier = FindSupplier(email.FromAddress, email.FromName, primaryExt?.SupplierName, primaryExt?.SupplierEmail, primaryExt?.SupplierTaxId);
-
-        if (extractedInvoices.Count > 0)
-        {
-            var createdBills = new List<Bill>();
-            bool hasDuplicate = false;
-            var batchEvaluations = EvaluateExtractedInvoicesBatch(email, extractedInvoices, supplier, settings);
-
-            foreach (var (extraction, path, fileName, itemSupplier, poMatch, existingMatch) in batchEvaluations)
-            {
-                if (existingMatch != null)
-                {
-                    hasDuplicate = true;
-                    if (!email.LinkedBillIds.Contains(existingMatch.Bill.Id))
-                    {
-                        email.LinkedBillIds.Add(existingMatch.Bill.Id);
-                    }
-                    continue; // Skip creating a duplicate draft
-                }
-
-                var draftBill = BuildDraftBillFromExtraction(
-                    email,
-                    extraction,
-                    itemSupplier,
-                    poMatch,
-                    path,
-                    fileName,
-                    settings,
-                    autoIngested: true);
-
-                _db.Bills.Save(draftBill);
-                createdBills.Add(draftBill);
-                if (!email.LinkedBillIds.Contains(draftBill.Id))
-                {
-                    email.LinkedBillIds.Add(draftBill.Id);
-                }
-            }
-
-            if (createdBills.Count > 0)
-            {
-                email.BillingStatus = CompanyBillInboxConstants.BillingStatus.AutoDrafted;
-                email.LinkedBillId = createdBills[0].Id;
-                email.LinkedPoId = createdBills[0].PurchaseOrderId;
-            }
-            else if (hasDuplicate)
-            {
-                email.BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected;
-                email.LinkedBillId = email.LinkedBillIds.FirstOrDefault();
-            }
         }
         else
         {
-            bool handledByRecurring = false;
-            if (settings.AutoMatchRecurringExpenses && settings.AllowDraftWithoutPdfForRecurring)
+            var primaryExt = inspection.ExtractedInvoices.FirstOrDefault().Extraction;
+            var supplier = FindSupplier(email.FromAddress, email.FromName, primaryExt?.SupplierName, primaryExt?.SupplierEmail, primaryExt?.SupplierTaxId);
+
+            if (inspection.ExtractedInvoices.Count > 0)
             {
-                // Portal notification / recurring bill check without PDF
-                var recurring = FindMatchingRecurringExpense(supplier?.Name ?? email.FromName);
-                if (recurring != null)
+                ApplyExtractedInvoiceBatchDecisions(email, inspection.ExtractedInvoices, supplier, settings, actor);
+            }
+            else
+            {
+                ApplyNoAttachmentDecisions(email, supplier, settings);
+            }
+        }
+
+        if (processedByUserId != null)
+        {
+            email.ProcessedByUserId = processedByUserId;
+        }
+
+        _db.EmailMessages.Save(email);
+        await GenerateDecisionLogAsync(email, inspection.AllInspectedDocs, actor);
+    }
+
+    private void ApplyExtractedInvoiceBatchDecisions(
+        EmailMessage email,
+        List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)> extractedInvoices,
+        Supplier? supplier,
+        CompanyBillInboxSettings settings,
+        Employee? actor)
+    {
+        var createdBills = new List<Bill>();
+        bool hasDuplicate = false;
+        var batchEvaluations = EvaluateExtractedInvoicesBatch(email, extractedInvoices, supplier, settings, actor);
+
+        foreach (var (extraction, path, fileName, itemSupplier, poMatch, existingMatch) in batchEvaluations)
+        {
+            if (existingMatch != null)
+            {
+                hasDuplicate = true;
+                if (!email.LinkedBillIds.Contains(existingMatch.Bill.Id))
                 {
-                    var parsedAmount = ExtractAmountFromText($"{email.Subject} {email.Snippet}");
-                    if (parsedAmount > 0)
-                    {
-                        handledByRecurring = true;
-                        // Check if bill already exists for this recurring expense / supplier in this period
-                        var existingRecurringMatch = FindExistingBillMatch(
-                            extraction: null,
-                            supplierId: supplier?.Id,
-                            supplierName: recurring.Supplier,
-                            emailSubject: email.Subject,
-                            emailSnippet: email.Snippet,
-                            matchedPoId: null,
-                            currentEmailId: email.Id,
-                            duplicateWindowDays: settings.DuplicateDateWindowDays,
-                            textDetectedAmount: parsedAmount);
-
-                        if (existingRecurringMatch != null)
-                        {
-                            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected;
-                            email.LinkedBillId = existingRecurringMatch.Bill.Id;
-                            email.LinkedBillIds = [existingRecurringMatch.Bill.Id];
-                        }
-                        else
-                        {
-                            var draftBill = new Bill
-                            {
-                                Id = Guid.NewGuid().ToString(),
-                                SupplierId = supplier?.Id ?? string.Empty,
-                                SupplierName = recurring.Supplier,
-                                Description = $"Recurring: {recurring.Name} (Amount from email)",
-                                Date = email.Date.DateTime,
-                                DueDate = email.Date.DateTime.AddDays(30),
-                                Amount = parsedAmount,
-                                Currency = settings.DefaultCurrency,
-                                LinkedRecurringExpenseId = recurring.Id,
-                                Status = BillStatus.AwaitingApproval,
-                                AttachmentPath = "",
-                                AttachmentName = "",
-                                AutoIngested = true,
-                                SourceEmailId = email.Id,
-                                SourceEmailSubject = email.Subject,
-                                SourceSenderEmail = email.FromAddress,
-                                AutoMatchReason = $"Matched to recurring expense template '{recurring.Name}'"
-                            };
-
-                            _db.Bills.Save(draftBill);
-                            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.AutoDrafted;
-                            email.LinkedBillId = draftBill.Id;
-                            email.LinkedBillIds = [draftBill.Id];
-                        }
-                    }
+                    email.LinkedBillIds.Add(existingMatch.Bill.Id);
                 }
+                continue; // Skip creating a duplicate draft
             }
 
-            if (!handledByRecurring)
-            {
-                // Fallback for emails without extractable PDF/XML: check if email subject/amount matches an existing bill
-                var existingFallbackMatch = FindExistingBillMatch(
-                    extraction: null,
-                    supplierId: supplier?.Id,
-                    supplierName: supplier?.Name ?? email.FromName,
-                    emailSubject: email.Subject,
-                    emailSnippet: email.Snippet,
-                    matchedPoId: null,
-                    currentEmailId: email.Id,
-                    duplicateWindowDays: settings.DuplicateDateWindowDays,
-                    textDetectedAmount: email.DetectedAmount);
+            var draftBill = BuildDraftBillFromExtraction(
+                email,
+                extraction,
+                itemSupplier,
+                poMatch,
+                path,
+                fileName,
+                settings,
+                autoIngested: true,
+                actor: actor);
 
-                if (existingFallbackMatch != null)
+            _db.Bills.Save(draftBill);
+            createdBills.Add(draftBill);
+            if (!email.LinkedBillIds.Contains(draftBill.Id))
+            {
+                email.LinkedBillIds.Add(draftBill.Id);
+            }
+        }
+
+        if (createdBills.Count > 0)
+        {
+            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.AutoDrafted;
+            email.LinkedBillId = createdBills[0].Id;
+            email.LinkedPoId = createdBills[0].PurchaseOrderId;
+        }
+        else if (hasDuplicate)
+        {
+            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected;
+            email.LinkedBillId = email.LinkedBillIds.FirstOrDefault();
+        }
+        else
+        {
+            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Unprocessed;
+        }
+    }
+
+    private void ApplyNoAttachmentDecisions(
+        EmailMessage email,
+        Supplier? supplier,
+        CompanyBillInboxSettings settings)
+    {
+        if (settings.AutoMatchRecurringExpenses && settings.AllowDraftWithoutPdfForRecurring)
+        {
+            // Portal notification / recurring bill check without PDF
+            var recurring = FindMatchingRecurringExpense(supplier?.Name ?? email.FromName);
+            if (recurring != null)
+            {
+                var parsedAmount = ExtractAmountFromText($"{email.Subject} {email.Snippet}");
+                if (parsedAmount > 0)
                 {
-                    email.BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected;
-                    email.LinkedBillId = existingFallbackMatch.Bill.Id;
-                    email.LinkedBillIds = [existingFallbackMatch.Bill.Id];
-                }
-                else
-                {
-                    email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Unprocessed;
+                    var existingRecurringMatch = FindExistingBillMatch(
+                        extraction: null,
+                        supplierId: supplier?.Id,
+                        supplierName: recurring.Supplier,
+                        emailSubject: email.Subject,
+                        emailSnippet: email.Snippet,
+                        matchedPoId: null,
+                        currentEmailId: email.Id,
+                        duplicateWindowDays: settings.DuplicateDateWindowDays,
+                        textDetectedAmount: parsedAmount,
+                        referenceDate: email.Date.DateTime);
+
+                    if (existingRecurringMatch != null)
+                    {
+                        email.BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected;
+                        email.LinkedBillId = existingRecurringMatch.Bill.Id;
+                        email.LinkedBillIds = [existingRecurringMatch.Bill.Id];
+                    }
+                    else
+                    {
+                        var draftBill = new Bill
+                        {
+                            Id = Guid.NewGuid().ToString(),
+                            SupplierId = supplier?.Id ?? string.Empty,
+                            SupplierName = recurring.Supplier,
+                            Description = $"Recurring: {recurring.Name} (Amount from email)",
+                            Date = email.Date.DateTime,
+                            DueDate = email.Date.DateTime.AddDays(30),
+                            Amount = parsedAmount,
+                            Currency = settings.DefaultCurrency,
+                            LinkedRecurringExpenseId = recurring.Id,
+                            Status = BillStatus.AwaitingApproval,
+                            AttachmentPath = "",
+                            AttachmentName = "",
+                            AutoIngested = true,
+                            SourceEmailId = email.Id,
+                            SourceEmailSubject = email.Subject,
+                            SourceSenderEmail = email.FromAddress,
+                            AutoMatchReason = $"Matched to recurring expense template '{recurring.Name}'"
+                        };
+
+                        _db.Bills.Save(draftBill);
+                        email.BillingStatus = CompanyBillInboxConstants.BillingStatus.AutoDrafted;
+                        email.LinkedBillId = draftBill.Id;
+                        email.LinkedBillIds = [draftBill.Id];
+                    }
+                    return;
                 }
             }
         }
 
-        _db.EmailMessages.Save(email);
-        await GenerateDecisionLogAsync(email, allInspectedDocs);
-        return email;
+        // Fallback for emails without extractable PDF/XML: check if email subject/amount matches an existing bill
+        var existingFallbackMatch = FindExistingBillMatch(
+            extraction: null,
+            supplierId: supplier?.Id,
+            supplierName: supplier?.Name ?? email.FromName,
+            emailSubject: email.Subject,
+            emailSnippet: email.Snippet,
+            matchedPoId: null,
+            currentEmailId: email.Id,
+            duplicateWindowDays: settings.DuplicateDateWindowDays,
+            textDetectedAmount: email.DetectedAmount,
+            referenceDate: email.Date.DateTime);
+
+        if (existingFallbackMatch != null)
+        {
+            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected;
+            email.LinkedBillId = existingFallbackMatch.Bill.Id;
+            email.LinkedBillIds = [existingFallbackMatch.Bill.Id];
+        }
+        else
+        {
+            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Unprocessed;
+        }
     }
 
     private Bill BuildDraftBillFromExtraction(
@@ -779,8 +1284,11 @@ public class CompanyBillInboxService
         string attachmentPath,
         string attachmentName,
         CompanyBillInboxSettings settings,
-        bool autoIngested = true)
+        bool autoIngested = true,
+        Employee? actor = null)
     {
+        poMatch = FilterPoMatchForAccess(poMatch, actor);
+
         bool isCredit = extraction != null &&
                         (extraction.IsCreditNote ||
                          extraction.TotalAmount < 0 ||
@@ -885,6 +1393,7 @@ public class CompanyBillInboxService
         {
             foreach (var poItem in poMatch.MatchedPo.LineItems)
             {
+                if (poItem == null || !IsPoItemAccessible(poItem, actor)) continue;
                 draftBill.LineItems.Add(new BillLineItem
                 {
                     PoItemId = poItem.Id,
@@ -1014,16 +1523,15 @@ public class CompanyBillInboxService
 
         // 3. Match by sender email (unless sender is internal company address)
         var settings = GetSettings();
-        var companyEmail = settings.EmailAddress ?? "";
-        var companyDomain = companyEmail.Contains('@') ? companyEmail[(companyEmail.IndexOf('@') + 1)..] : "";
+        var profile = _db.CompanyProfile.Get();
+        var extractionContext = InvoiceExtractionContext.FromCompanyProfile(profile, settings);
 
         if (!string.IsNullOrWhiteSpace(senderEmail))
         {
-            var atIndex = senderEmail.IndexOf('@');
-            var senderDomain = atIndex > 0 ? senderEmail[(atIndex + 1)..] : "";
+            var senderDomain = CompanyProfile.ExtractDomainFromEmail(senderEmail) ?? string.Empty;
             bool isInternalSender = !string.IsNullOrEmpty(senderDomain) &&
-                                    (senderDomain.Equals(companyDomain, StringComparison.OrdinalIgnoreCase) ||
-                                     senderDomain.Contains("poly-robotics", StringComparison.OrdinalIgnoreCase));
+                                    (profile.IsInternalDomain(senderDomain, settings.EmailAddress) ||
+                                     UniversalPartyExtractor.IsInternalBuyerEmail(senderEmail, extractionContext));
 
             if (!isInternalSender)
             {
@@ -1064,10 +1572,8 @@ public class CompanyBillInboxService
         return (null, "No match found");
     }
 
-    private static bool IsCommonEmailDomain(string domain)
-    {
-        return domain.Contains("gmail") || domain.Contains("outlook") || domain.Contains("hotmail") || domain.Contains("yahoo") || domain.Contains("icloud");
-    }
+    private static bool IsCommonEmailDomain(string domain) =>
+        EmailProviderPresets.IsPublicMailboxDomain(domain);
 
     private Supplier? FindSupplier(string senderEmail, string senderName, string? extractedSupplierName, string? extractedSupplierEmail = null, string? extractedSupplierTaxId = null)
     {
@@ -1080,7 +1586,8 @@ public class CompanyBillInboxService
     /// </summary>
     public async Task<BillInboxDecisionLog> GenerateDecisionLogAsync(
         EmailMessage email,
-        List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)>? preExtractedInvoices = null)
+        List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)>? preExtractedInvoices = null,
+        Employee? actor = null)
     {
         var settings = GetSettings();
         var extractionContext = BuildExtractionContext(settings);
@@ -1158,18 +1665,15 @@ public class CompanyBillInboxService
         {
             // Check if raw MIME is cached
             MimeMessage? cachedMime = null;
-            if (_cacheMaintenance != null)
+            var mimePath = GetMimeCachePath(email);
+            if (!string.IsNullOrEmpty(mimePath) && File.Exists(mimePath))
             {
-                var mimePath = Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Mime", $"{email.Id}.eml");
-                if (File.Exists(mimePath))
+                try
                 {
-                    try
-                    {
-                        using var stream = File.OpenRead(mimePath);
-                        cachedMime = await MimeMessage.LoadAsync(stream);
-                    }
-                    catch { }
+                    using var stream = File.OpenRead(mimePath);
+                    cachedMime = await MimeMessage.LoadAsync(stream);
                 }
+                catch { }
             }
 
             if (cachedMime != null)
@@ -1257,7 +1761,7 @@ public class CompanyBillInboxService
             if (allInspectedDocs.Count == 0 && !string.IsNullOrEmpty(email.LinkedBillId))
             {
                 var linkedBill = _db.Bills.GetById(email.LinkedBillId);
-                if (linkedBill != null && linkedBill.Amount != 0)
+                if (linkedBill != null && linkedBill.Amount != 0 && CanActorViewBillInInbox(linkedBill, actor))
                 {
                     var reconstructed = new ExtractedInvoiceData
                     {
@@ -1342,13 +1846,14 @@ public class CompanyBillInboxService
         }
 
         // Step 3: Automatic Document Classification
+        var bodyText = ResolveFullEmailBodyText(email);
         var (emailIsStatement, emailIsReceipt, emailClassReason) = UniversalDocumentClassifier.ClassifyEmail(
             email.Subject,
-            email.Snippet,
+            bodyText,
             allInspectedDocs.Select(x => x.Extraction).ToList());
 
-        var isStatement = emailIsStatement || IsAccountStatement(email, allInspectedDocs, settings);
-        var isReceipt = !isStatement && (emailIsReceipt || IsPaymentReceiptEmail(email, allInspectedDocs, settings));
+        var isStatement = emailIsStatement || IsAccountStatement(email, allInspectedDocs, settings, bodyText);
+        var isReceipt = !isStatement && (emailIsReceipt || IsPaymentReceiptEmail(email, allInspectedDocs, settings, bodyText));
 
         if (isStatement)
         {
@@ -1458,7 +1963,10 @@ public class CompanyBillInboxService
 
         // Step 5: Purchase Order Matching
         var primaryExtraction = extractedInvoices.FirstOrDefault().Extraction;
-        var poMatch = _poMatchingEngine.FindMatch(primaryExtraction, supplier?.Id);
+        var rawPoMatch = primaryExtraction != null
+            ? _poMatchingEngine.FindMatch(primaryExtraction, supplier?.Id, actor: actor, isSystemExtraction: actor == null)
+            : MatchingPoResult.None;
+        var poMatch = FilterPoMatchForAccess(rawPoMatch, actor);
         if (poMatch.MatchedPo != null)
         {
             log.Steps.Add(new DecisionLogStep
@@ -1500,9 +2008,12 @@ public class CompanyBillInboxService
 
         if (extractedInvoices.Count > 0)
         {
-            var batchEvaluations = EvaluateExtractedInvoicesBatch(email, extractedInvoices, supplier, settings);
-            foreach (var (ext, path, file, _, _, match) in batchEvaluations)
+            var batchEvaluations = EvaluateExtractedInvoicesBatch(email, extractedInvoices, supplier, settings, actor);
+            foreach (var (ext, path, file, _, _, rawMatch) in batchEvaluations)
             {
+                var match = rawMatch != null && CanActorViewBillInInbox(rawMatch.Bill, actor)
+                    ? rawMatch
+                    : null;
                 if (match != null)
                 {
                     duplicateMatches.Add((ext, file, match.Bill, match.MatchReason));
@@ -1540,7 +2051,7 @@ public class CompanyBillInboxService
         }
         else
         {
-            var textMatch = FindExistingBillMatch(
+            var rawTextMatch = FindExistingBillMatch(
                 extraction: null,
                 supplierId: supplier?.Id,
                 supplierName: supplier?.Name ?? email.FromName,
@@ -1549,7 +2060,11 @@ public class CompanyBillInboxService
                 matchedPoId: poMatch.MatchedPo?.Id,
                 currentEmailId: email.Id,
                 duplicateWindowDays: settings.DuplicateDateWindowDays,
-                textDetectedAmount: textAmount);
+                textDetectedAmount: textAmount,
+                referenceDate: email.Date.DateTime);
+            var textMatch = rawTextMatch != null && CanActorViewBillInInbox(rawTextMatch.Bill, actor)
+                ? rawTextMatch
+                : null;
 
             if (textMatch != null)
             {
@@ -1572,7 +2087,9 @@ public class CompanyBillInboxService
         if (duplicateMatches.Count > 0)
         {
             var hasUnapprovedDrafts = nonDuplicateExtractions.Count > 0 ||
-                email.LinkedBillIds.Select(id => _db.Bills.GetById(id)).Any(b => b != null && b.Status == BillStatus.AwaitingApproval && b.SourceEmailId == email.Id);
+                email.LinkedBillIds
+                    .Select(id => _db.Bills.GetById(id))
+                    .Any(b => b != null && CanActorViewBillInInbox(b, actor) && b.Status == BillStatus.AwaitingApproval && b.SourceEmailId == email.Id);
 
             log.Steps.Add(new DecisionLogStep
             {
@@ -1796,8 +2313,9 @@ public class CompanyBillInboxService
     /// <summary>
     /// Approves an auto-drafted bill and marks the source email as dealt with.
     /// </summary>
-    public void ApproveBillFromEmail(string emailMessageId, string billId, string userId)
+    public void ApproveBillFromEmail(string emailMessageId, string billId, string userId, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ApproveBills, "approve bill from inbox");
         var bill = _db.Bills.GetById(billId);
         if (bill != null)
         {
@@ -1841,8 +2359,9 @@ public class CompanyBillInboxService
     /// If marked as a duplicate of an existing bill, links the email to that bill and sets status to DuplicateDetected.
     /// If no other drafts remain and not a duplicate, marks the email as Dismissed.
     /// </summary>
-    public void RejectDraftBillFromEmail(string emailMessageId, string billId, string userId, RejectDraftBillOptions? options = null)
+    public void RejectDraftBillFromEmail(string emailMessageId, string billId, string userId, RejectDraftBillOptions? options = null, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "reject draft bill from inbox");
         options ??= new RejectDraftBillOptions();
 
         var bill = _db.Bills.GetById(billId);
@@ -1971,9 +2490,14 @@ public class CompanyBillInboxService
     /// Records a detected prior payment on an existing bill (e.g. from an incoming reminder or statement)
     /// and marks the email as approved/dealt with.
     /// </summary>
-    public void RecordPaymentOnExistingBill(string emailMessageId, string billId, decimal paymentAmount, string userId)
+    public void RecordPaymentOnExistingBill(string emailMessageId, string billId, decimal paymentAmount, string userId, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "record bill payment from inbox");
         var bill = _db.Bills.GetById(billId);
+        if (bill != null && bill.Status == BillStatus.AwaitingApproval)
+        {
+            RequireInteractivePermission(actor, AppPermissions.Purchases.ApproveBills, "approve bill via payment");
+        }
         var email = _db.EmailMessages.GetById(emailMessageId);
 
         if (bill != null && paymentAmount > 0)
@@ -2025,8 +2549,9 @@ public class CompanyBillInboxService
     /// Reverts the bill to Unpaid, clears DatePaid, removes/voids the failed payment so BalanceDue accurately reflects
     /// the remaining liability, optionally attaches the reminder PDF, and marks the email as dealt with.
     /// </summary>
-    public void ReopenBillForFailedPayment(string emailMessageId, string billId, string userId)
+    public void ReopenBillForFailedPayment(string emailMessageId, string billId, string userId, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "reopen bill for failed payment");
         var bill = _db.Bills.GetById(billId);
         var email = _db.EmailMessages.GetById(emailMessageId);
 
@@ -2073,8 +2598,9 @@ public class CompanyBillInboxService
     /// <summary>
     /// Manually updates an email's billing status (e.g. marked as processed or dismissed).
     /// </summary>
-    public void UpdateEmailBillingStatus(string emailMessageId, string status, string userId, string? linkedBillId = null)
+    public void UpdateEmailBillingStatus(string emailMessageId, string status, string userId, string? linkedBillId = null, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "update email billing status");
         var email = _db.EmailMessages.GetById(emailMessageId);
         if (email != null)
         {
@@ -2096,8 +2622,9 @@ public class CompanyBillInboxService
     /// <summary>
     /// Explicitly confirms that an email is a statement of account, recording the human review decision.
     /// </summary>
-    public void ConfirmStatement(string emailMessageId, string userId, string? linkedBillId = null)
+    public void ConfirmStatement(string emailMessageId, string userId, string? linkedBillId = null, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "confirm statement");
         var email = _db.EmailMessages.GetById(emailMessageId);
         if (email != null)
         {
@@ -2135,8 +2662,14 @@ public class CompanyBillInboxService
     /// <summary>
     /// Explicitly confirms that an email is a payment receipt, recording the human review decision.
     /// </summary>
-    public void ConfirmReceipt(string emailMessageId, string userId, string? linkedBillId = null)
+    public void ConfirmReceipt(string emailMessageId, string userId, string? linkedBillId = null, string? linkedInvoiceId = null, Employee? actor = null)
     {
+        RequireInteractiveAnyPermission(
+            actor,
+            "confirm payment receipt",
+            AppPermissions.Purchases.ManageBills,
+            AppPermissions.Finance.AccessAccounting,
+            AppPermissions.Finance.ApproveInvoices);
         var email = _db.EmailMessages.GetById(emailMessageId);
         if (email != null)
         {
@@ -2149,6 +2682,14 @@ public class CompanyBillInboxService
                 if (!email.LinkedBillIds.Contains(linkedBillId))
                 {
                     email.LinkedBillIds.Add(linkedBillId);
+                }
+            }
+            if (!string.IsNullOrEmpty(linkedInvoiceId))
+            {
+                email.LinkedInvoiceId = linkedInvoiceId;
+                if (!email.LinkedInvoiceIds.Contains(linkedInvoiceId))
+                {
+                    email.LinkedInvoiceIds.Add(linkedInvoiceId);
                 }
             }
 
@@ -2172,109 +2713,153 @@ public class CompanyBillInboxService
     }
 
     /// <summary>
-    /// Sends an outgoing email from the company billing address via SMTP.
+    /// Links the incoming payment receipt email to an existing client invoice, optionally records a payment, and marks the email as dealt with.
     /// </summary>
-    public async Task SendEmailAsync(string to, string subject, string bodyHtml, List<string>? attachmentPaths = null, CancellationToken cancellationToken = default)
+    public void LinkReceiptToInvoice(
+        string emailMessageId,
+        string invoiceId,
+        string userId,
+        PaymentRecord? paymentToRecord = null,
+        Employee? actor = null)
     {
-        if (_emailDeliveryService != null)
+        RequireInteractiveAnyPermission(
+            actor,
+            "link payment receipt to invoice",
+            AppPermissions.Finance.AccessAccounting,
+            AppPermissions.Finance.ApproveInvoices);
+
+        var email = _db.EmailMessages.GetById(emailMessageId);
+        var invoice = _db.Invoices.GetById(invoiceId);
+
+        if (email != null && invoice != null)
         {
-            await _emailDeliveryService.SendSystemBillInboxEmailAsync(new SendEmailRequest
+            EnsureInvoiceAccessForReceiptLinking(invoice, actor!);
+
+            if (paymentToRecord != null)
             {
-                AccountId = CompanyBillInboxConstants.SystemEmployeeId,
-                To = to,
-                Subject = subject,
-                Body = bodyHtml,
-                FileAttachmentPaths = attachmentPaths?.Where(File.Exists).Select(p => (p, Path.GetFileName(p))).ToList(),
-                IsSystemAutomatedSend = true
-            }, cancellationToken);
-            return;
-        }
-
-        var settings = GetSettings();
-        var emailSettings = _db.CompanyProfile.GetEmailSettings();
-        string host;
-        int port;
-        SecureSocketOptions options;
-
-        if (!string.IsNullOrWhiteSpace(settings.SmtpHost))
-        {
-            host = settings.SmtpHost;
-            port = MailTransportSecurityHelper.NormalizeSmtpPort(settings.SmtpPort, settings.SmtpSsl);
-            options = MailTransportSecurityHelper.ResolveBillInboxSmtpTlsOptions(settings);
-        }
-        else if (emailSettings.SendingServers.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.Host)) is { } fallbackServer)
-        {
-            host = fallbackServer.Host;
-            port = MailTransportSecurityHelper.NormalizeSmtpPort(fallbackServer.Port, fallbackServer.UseSsl);
-            options = MailTransportSecurityHelper.ResolveSmtpTlsOptions(port, fallbackServer.UseSsl, allowPlaintext: true);
-        }
-        else
-        {
-            host = string.Empty;
-            port = 587;
-            options = SecureSocketOptions.StartTls;
-        }
-
-        var user = !string.IsNullOrWhiteSpace(settings.SmtpUsername) ? settings.SmtpUsername : settings.EmailAddress;
-
-        string password;
-        if (!string.IsNullOrEmpty(settings.EncryptedSmtpPassword))
-        {
-            password = _encryptionService.Decrypt(settings.EncryptedSmtpPassword);
-        }
-        else
-        {
-            password = _encryptionService.Decrypt(settings.EncryptedImapPassword);
-        }
-
-        var message = new MimeMessage();
-        message.From.Add(new MailboxAddress(settings.DisplayName, settings.EmailAddress));
-        message.To.Add(MailboxAddress.Parse(to));
-        message.Subject = subject;
-
-        var builder = new BodyBuilder { HtmlBody = bodyHtml };
-        if (attachmentPaths != null)
-        {
-            foreach (var path in attachmentPaths)
-            {
-                if (File.Exists(path))
+                if (_accountingService != null)
                 {
-                    builder.Attachments.Add(path);
+                    _accountingService.RecordInvoicePayment(invoice, paymentToRecord, userId, actor);
+                }
+                else
+                {
+                    var oldStatus = invoice.Status;
+                    invoice.Payments.Add(paymentToRecord);
+                    if (Math.Round(invoice.BalanceDue, 2, MidpointRounding.AwayFromZero) <= 0m)
+                    {
+                        invoice.Status = InvoiceStatus.Paid;
+                        invoice.DatePaid = invoice.Payments.MaxBy(p => p.Date)?.Date ?? paymentToRecord.Date;
+                    }
+                    else
+                    {
+                        invoice.Status = InvoiceStatus.Partial;
+                    }
+
+                    invoice.History.Add(new DocumentHistoryEntry
+                    {
+                        Timestamp = DateTime.UtcNow,
+                        Action = DocumentHistoryActions.PaymentRecorded,
+                        OldStatus = oldStatus,
+                        NewStatus = invoice.Status,
+                        ChangedBy = string.IsNullOrWhiteSpace(userId) ? "System" : userId,
+                        Summary = $"Recorded payment of {paymentToRecord.Amount:C2} ({paymentToRecord.Method})"
+                    });
+                    _db.Invoices.Save(invoice);
+                }
+            }
+            else
+            {
+                invoice.History.Add(new DocumentHistoryEntry
+                {
+                    Timestamp = DateTime.UtcNow,
+                    Action = "Receipt Linked",
+                    OldStatus = invoice.Status,
+                    NewStatus = invoice.Status,
+                    ChangedBy = string.IsNullOrWhiteSpace(userId) ? "System" : userId,
+                    Summary = $"Linked payment receipt email: {email.Subject}"
+                });
+                _db.Invoices.Save(invoice);
+            }
+
+            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.ReceiptConfirmed;
+            email.LinkedInvoiceId = invoice.Id;
+            if (!email.LinkedInvoiceIds.Contains(invoice.Id))
+            {
+                email.LinkedInvoiceIds.Add(invoice.Id);
+            }
+            email.ProcessedByUserId = userId;
+            email.ProcessedAt = DateTime.UtcNow;
+
+            email.DecisionLog ??= new BillInboxDecisionLog();
+            email.DecisionLog.Steps.Add(new DecisionLogStep
+            {
+                StepNumber = (email.DecisionLog.Steps.Count + 1).ToString(),
+                StepName = "Human Review — Receipt Linked to Invoice",
+                Status = DecisionStepStatus.Success,
+                Outcome = $"Linked to Invoice #{invoice.InvoiceNumber} by reviewer.",
+                Details = [
+                    $"Confirmed by user: {userId}",
+                    $"Confirmed at: {DateTime.UtcNow:u}",
+                    $"Invoice ID: {invoice.Id}",
+                    $"Invoice Number: {invoice.InvoiceNumber}",
+                    paymentToRecord != null ? $"Recorded payment of {paymentToRecord.Amount:C2} ({paymentToRecord.Method})" : "Linked receipt to invoice."
+                ]
+            });
+            email.DecisionLog.FinalStatus = CompanyBillInboxConstants.BillingStatus.ReceiptConfirmed;
+
+            _db.EmailMessages.Save(email);
+        }
+    }
+
+    private void EnsureInvoiceAccessForReceiptLinking(Invoice invoice, Employee actor)
+    {
+        if (!string.IsNullOrWhiteSpace(invoice.ProjectId) &&
+            !ProjectAccessHelper.HasAccess(_db.Projects, _db.Teams, actor, invoice.ProjectId, allowAccountingFinancialRead: true))
+        {
+            throw new UnauthorizedAccessException($"Actor '{actor.Id}' is not authorized to link receipts to project '{invoice.ProjectId}'.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(invoice.ProjectGroupId))
+        {
+            var group = _db.ProjectGroups.GetById(invoice.ProjectGroupId);
+            if (group == null || group.ProjectIds == null || group.ProjectIds.Count == 0)
+            {
+                throw new UnauthorizedAccessException($"Invoice references missing or empty project group '{invoice.ProjectGroupId}'.");
+            }
+
+            foreach (var pid in group.ProjectIds)
+            {
+                if (string.IsNullOrWhiteSpace(pid) ||
+                    !ProjectAccessHelper.HasAccess(_db.Projects, _db.Teams, actor, pid, allowAccountingFinancialRead: true))
+                {
+                    throw new UnauthorizedAccessException($"Actor '{actor.Id}' is not authorized to access project '{pid}' in invoice group '{invoice.ProjectGroupId}'.");
                 }
             }
         }
-        message.Body = builder.ToMessageBody();
+    }
 
-        using var client = new SmtpClient();
-        await MailTransportSecurityHelper.ConnectMailServiceAsync(
-            client,
-            host,
-            port,
-            options,
-            requireSafeExternalHost: false,
-            cancellationToken);
-        if (!string.IsNullOrEmpty(user) && !string.IsNullOrEmpty(password))
+    /// <summary>
+    /// Sends an outgoing email from the company billing address via the core EmailDeliveryService.
+    /// </summary>
+    public async Task SendEmailAsync(string to, string subject, string bodyHtml, List<string>? attachmentPaths = null, CancellationToken cancellationToken = default)
+    {
+        if (_emailDeliveryService == null)
         {
-            await client.AuthenticateAsync(user, password, cancellationToken);
+            throw new InvalidOperationException("EmailDeliveryService is required to send emails from the Company Bill Inbox.");
         }
-        await client.SendAsync(message, cancellationToken);
-        await client.DisconnectAsync(true, cancellationToken);
 
-        // Record in sent items
-        var sentEmail = new EmailMessage
+        var settings = GetSettings();
+        var identity = ResolveSendingIdentity(settings);
+
+        await _emailDeliveryService.SendSystemBillInboxEmailAsync(new SendEmailRequest
         {
-            AccountId = CompanyBillInboxConstants.SystemEmployeeId,
-            FolderPath = "Sent",
+            AccountId = GetEffectiveAccountId(settings),
+            SendingIdentityId = identity?.Id,
+            To = to,
             Subject = subject,
-            FromAddress = settings.EmailAddress,
-            FromName = settings.DisplayName,
-            ToAddresses = [to],
-            Date = DateTimeOffset.UtcNow,
-            Snippet = subject,
-            IsRead = true,
-            BillingStatus = CompanyBillInboxConstants.BillingStatus.Approved
-        };
-        _db.EmailMessages.Save(sentEmail);
+            Body = bodyHtml,
+            FileAttachmentPaths = attachmentPaths?.Where(File.Exists).Select(p => (p, Path.GetFileName(p))).ToList()
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -2287,13 +2872,15 @@ public class CompanyBillInboxService
         EmailMessage email,
         List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)> extractedInvoices,
         Supplier? primarySupplier,
-        CompanyBillInboxSettings settings)
+        CompanyBillInboxSettings settings,
+        Employee? actor = null)
     {
         var items = new List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName, Supplier? Supplier, MatchingPoResult PoMatch, ExistingBillMatch? ExistingMatch)>(extractedInvoices.Count);
         foreach (var (extraction, path, fileName) in extractedInvoices)
         {
             var itemSupplier = primarySupplier ?? FindSupplier(email.FromAddress, email.FromName, extraction.SupplierName, extraction.SupplierEmail, extraction.SupplierTaxId);
-            var poMatch = _poMatchingEngine.FindMatch(extraction, itemSupplier?.Id);
+            var rawPoMatch = _poMatchingEngine.FindMatch(extraction, itemSupplier?.Id, actor: actor, isSystemExtraction: actor == null);
+            var poMatch = FilterPoMatchForAccess(rawPoMatch, actor);
             items.Add((extraction, path, fileName, itemSupplier, poMatch, null));
         }
 
@@ -2354,9 +2941,17 @@ public class CompanyBillInboxService
     /// Returns any other active bills in Spokes from the same supplier with the same total amount (±$0.05).
     /// Used to display a possible-duplicate warning on draft bill cards during user review.
     /// </summary>
-    public List<Bill> GetSameSupplierSameAmountBills(Bill draftBill)
+    public List<Bill> GetSameSupplierSameAmountBills(Bill draftBill, Employee? actor = null)
     {
         if (draftBill == null || draftBill.Amount == 0) return [];
+        if (actor != null &&
+            (actor.IsSystem || actor.IsSuspended ||
+             (!actor.HasEffectivePermission(AppPermissions.Purchases.ViewBills) &&
+              !actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills) &&
+              !actor.HasEffectivePermission(AppPermissions.Purchases.ApproveBills))))
+        {
+            return [];
+        }
 
         return _db.Bills.GetAll()
             .Where(b => b.Id != draftBill.Id &&
@@ -2364,6 +2959,7 @@ public class CompanyBillInboxService
                         Math.Abs(b.Amount - draftBill.Amount) <= 0.05m &&
                         ((!string.IsNullOrEmpty(draftBill.SupplierId) && !string.IsNullOrEmpty(b.SupplierId) && b.SupplierId == draftBill.SupplierId) ||
                          SupplierNamesMatch(b.SupplierName, draftBill.SupplierName)))
+            .Where(b => IsBillAccessible(b, actor))
             .OrderBy(b => b.AutoIngested ? 1 : 0)
             .ThenByDescending(b => b.Date)
             .ToList();
@@ -2383,7 +2979,8 @@ public class CompanyBillInboxService
         int duplicateWindowDays = 20,
         decimal? textDetectedAmount = null,
         IEnumerable<string>? excludeBillIds = null,
-        bool includePossibleAmountFallback = true)
+        bool includePossibleAmountFallback = true,
+        DateTime? referenceDate = null)
     {
         var excludedSet = excludeBillIds != null ? new HashSet<string>(excludeBillIds) : null;
         var activeBills = _db.Bills.GetAll()
@@ -2560,7 +3157,7 @@ public class CompanyBillInboxService
         // 5. Universal Possible Duplicate Fallback: Same Supplier + Same Total Amount (regardless of date window)
         if (includePossibleAmountFallback && docAmount != 0)
         {
-            var refDate = extraction?.InvoiceDate;
+            var refDate = extraction?.InvoiceDate ?? referenceDate;
             ExistingBillMatch? bestCandidate = null;
             int bestRank = int.MaxValue;
             double bestDaysDiff = double.MaxValue;
@@ -2577,19 +3174,25 @@ public class CompanyBillInboxService
 
                 if (!amountMatches) continue;
 
+                // If both sides have explicit, non-empty invoice numbers and they differ, they are distinct invoices — NEVER a duplicate
                 bool invoiceNumbersConflict = extraction != null &&
                                               !string.IsNullOrWhiteSpace(b.InvoiceNumber) &&
                                               !string.IsNullOrWhiteSpace(extraction.InvoiceNumber) &&
                                               !InvoiceNumbersMatch(b.InvoiceNumber, extraction.InvoiceNumber) &&
                                               !InvoiceNumberMatchesDescription(b.Description, extraction.InvoiceNumber);
 
-                int rank = (invoiceNumbersConflict ? 2 : 0) + (b.AutoIngested ? 1 : 0);
-                double daysDiff = refDate.HasValue ? Math.Abs((b.Date - refDate.Value).TotalDays) : 0;
+                if (invoiceNumbersConflict)
+                {
+                    continue; // Distinct explicit invoice numbers cannot be matched as duplicates
+                }
 
-                if (rank < bestRank || (rank == bestRank && daysDiff < bestDaysDiff))
+                int rank = b.AutoIngested ? 1 : 0;
+                double calcDaysDiff = refDate.HasValue ? Math.Abs((b.Date - refDate.Value).TotalDays) : 0;
+
+                if (rank < bestRank || (rank == bestRank && calcDaysDiff < bestDaysDiff))
                 {
                     bestRank = rank;
-                    bestDaysDiff = daysDiff;
+                    bestDaysDiff = calcDaysDiff;
 
                     var method = extraction == null
                         ? ExistingBillMatchMethod.SupplierAndTextAmount
@@ -2622,28 +3225,30 @@ public class CompanyBillInboxService
         return null;
     }
 
-    /// <summary>
-    /// Checks whether an incoming bill has already been entered into Spokes (e.g. manually entered from postal mail).
-    /// </summary>
-    public Bill? FindExistingBill(
-        ExtractedInvoiceData? extraction,
-        string? supplierId,
-        string? supplierName,
-        string? emailSubject = null,
-        string? emailSnippet = null,
-        string? matchedPoId = null,
-        string? currentEmailId = null,
-        int duplicateWindowDays = 20)
+    private static (string? Path, string Name) ResolveEmailAttachment(
+        EmailMessage email,
+        string targetEntityId,
+        string? attachmentPath,
+        string? attachmentName)
     {
-        return FindExistingBillMatch(
-            extraction,
-            supplierId,
-            supplierName,
-            emailSubject,
-            emailSnippet,
-            matchedPoId,
-            currentEmailId,
-            duplicateWindowDays)?.Bill;
+        var matchSummary = email.DecisionLog?.DuplicateMatches.FirstOrDefault(m => m.ExistingBillId == targetEntityId);
+        var firstAtt = email.Attachments.FirstOrDefault();
+        var fallbackPath = firstAtt != null ? $"/spokesapi/files/emails/{email.Id}/{firstAtt.FileName}" : null;
+        var fallbackName = firstAtt?.FileName;
+
+        var resolvedPath = !string.IsNullOrEmpty(attachmentPath)
+            ? attachmentPath
+            : (!string.IsNullOrEmpty(matchSummary?.AttachmentPath)
+                ? matchSummary.AttachmentPath
+                : (!string.IsNullOrEmpty(email.MatchedAttachmentPath) ? email.MatchedAttachmentPath : fallbackPath));
+
+        var resolvedName = !string.IsNullOrEmpty(attachmentName)
+            ? attachmentName
+            : (!string.IsNullOrEmpty(matchSummary?.AttachmentFileName)
+                ? matchSummary.AttachmentFileName
+                : (!string.IsNullOrEmpty(email.MatchedAttachmentName) ? email.MatchedAttachmentName : fallbackName));
+
+        return (resolvedPath, !string.IsNullOrEmpty(resolvedName) ? resolvedName : "Invoice.pdf");
     }
 
     /// <summary>
@@ -2654,35 +3259,20 @@ public class CompanyBillInboxService
         string billId,
         string userId,
         string? attachmentPath = null,
-        string? attachmentName = null)
+        string? attachmentName = null,
+        Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "attach document to existing bill");
         var bill = _db.Bills.GetById(billId);
         var email = _db.EmailMessages.GetById(emailMessageId);
 
         if (bill != null && email != null)
         {
-            var matchSummary = email.DecisionLog?.DuplicateMatches.FirstOrDefault(m => m.ExistingBillId == billId);
-            var firstAtt = email.Attachments.FirstOrDefault();
-            var fallbackPath = firstAtt != null ? $"/spokesapi/files/emails/{email.Id}/{firstAtt.FileName}" : null;
-            var fallbackName = firstAtt?.FileName;
-
-            var resolvedPath = !string.IsNullOrEmpty(attachmentPath)
-                ? attachmentPath
-                : (!string.IsNullOrEmpty(matchSummary?.AttachmentPath)
-                    ? matchSummary.AttachmentPath
-                    : (!string.IsNullOrEmpty(email.MatchedAttachmentPath) ? email.MatchedAttachmentPath : fallbackPath));
-            var resolvedName = !string.IsNullOrEmpty(attachmentName)
-                ? attachmentName
-                : (!string.IsNullOrEmpty(matchSummary?.AttachmentFileName)
-                    ? matchSummary.AttachmentFileName
-                    : (!string.IsNullOrEmpty(email.MatchedAttachmentName) ? email.MatchedAttachmentName : fallbackName));
-
+            var (resolvedPath, resolvedName) = ResolveEmailAttachment(email, billId, attachmentPath, attachmentName);
             if (!string.IsNullOrEmpty(resolvedPath))
             {
                 bill.AttachmentPath = resolvedPath;
-                bill.AttachmentName = !string.IsNullOrEmpty(resolvedName)
-                    ? resolvedName
-                    : "Invoice.pdf";
+                bill.AttachmentName = resolvedName;
                 _db.Bills.Save(bill);
             }
 
@@ -2710,8 +3300,10 @@ public class CompanyBillInboxService
         string recordId,
         string userId,
         string? attachmentPath = null,
-        string? attachmentName = null)
+        string? attachmentName = null,
+        Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "attach document to existing recurring bill");
         var expense = _db.RecurringExpenses.GetById(recurringExpenseId);
         var email = _db.EmailMessages.GetById(emailMessageId);
 
@@ -2720,27 +3312,11 @@ public class CompanyBillInboxService
             var record = expense.History.FirstOrDefault(r => r.Id == recordId);
             if (record != null)
             {
-                var firstAtt = email.Attachments.FirstOrDefault();
-                var fallbackPath = firstAtt != null ? $"/spokesapi/files/emails/{email.Id}/{firstAtt.FileName}" : null;
-                var fallbackName = firstAtt?.FileName;
-
-                var matchSummary = email.DecisionLog?.DuplicateMatches.FirstOrDefault(m => m.ExistingBillId == recordId);
-                var resolvedPath = !string.IsNullOrEmpty(attachmentPath)
-                    ? attachmentPath
-                    : (!string.IsNullOrEmpty(matchSummary?.AttachmentPath)
-                        ? matchSummary.AttachmentPath
-                        : (!string.IsNullOrEmpty(email.MatchedAttachmentPath) ? email.MatchedAttachmentPath : fallbackPath));
-
-                var resolvedName = !string.IsNullOrEmpty(attachmentName)
-                    ? attachmentName
-                    : (!string.IsNullOrEmpty(matchSummary?.AttachmentFileName)
-                        ? matchSummary.AttachmentFileName
-                        : (!string.IsNullOrEmpty(email.MatchedAttachmentName) ? email.MatchedAttachmentName : fallbackName));
-
+                var (resolvedPath, resolvedName) = ResolveEmailAttachment(email, recordId, attachmentPath, attachmentName);
                 if (!string.IsNullOrEmpty(resolvedPath))
                 {
                     record.AttachmentPath = resolvedPath;
-                    record.AttachmentName = !string.IsNullOrEmpty(resolvedName) ? resolvedName : "Invoice.pdf";
+                    record.AttachmentName = resolvedName;
                     _db.RecurringExpenses.Save(expense);
                 }
 
@@ -2761,8 +3337,10 @@ public class CompanyBillInboxService
         string emailMessageId,
         string recurringExpenseId,
         string recordId,
-        string userId)
+        string userId,
+        Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "link email to recurring expense");
         var email = _db.EmailMessages.GetById(emailMessageId);
         if (email != null)
         {
@@ -2782,11 +3360,12 @@ public class CompanyBillInboxService
     /// </summary>
     public async Task<Bill?> CreateDraftAnywayAsync(
         string emailMessageId,
-        string userId,
         string? replaceDuplicateBillId = null,
         string? specificAttachmentPath = null,
-        string? specificAttachmentName = null)
+        string? specificAttachmentName = null,
+        Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "create draft bill from email");
         var email = _db.EmailMessages.GetById(emailMessageId);
         if (email == null) return null;
 
@@ -2856,7 +3435,10 @@ public class CompanyBillInboxService
             supplier = FindSupplier(email.FromAddress, email.FromName, extraction.SupplierName, extraction.SupplierEmail, extraction.SupplierTaxId);
         }
 
-        var poMatch = extraction != null ? _poMatchingEngine.FindMatch(extraction, supplier?.Id) : MatchingPoResult.None;
+        var rawPoMatch = extraction != null
+            ? _poMatchingEngine.FindMatch(extraction, supplier?.Id, actor: actor, isSystemExtraction: false)
+            : MatchingPoResult.None;
+        var poMatch = FilterPoMatchForAccess(rawPoMatch, actor);
 
         var draftBill = BuildDraftBillFromExtraction(
             email,
@@ -2866,7 +3448,8 @@ public class CompanyBillInboxService
             targetAttachmentPath ?? string.Empty,
             targetAttachmentName ?? "Invoice.pdf",
             settings,
-            autoIngested: true);
+            autoIngested: true,
+            actor: actor);
 
         _db.Bills.Save(draftBill);
 
@@ -2942,8 +3525,9 @@ public class CompanyBillInboxService
         // 3. Try reading attachment from local email attachments folder
         byte[]? fileBytes = null;
 
-        var cachedAttachmentPath = _cacheMaintenance != null
-            ? Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Attachments", email.Id, targetAtt.Id)
+        var attachmentDir = GetAttachmentsCacheDir(email);
+        var cachedAttachmentPath = !string.IsNullOrEmpty(attachmentDir)
+            ? Path.Combine(attachmentDir, targetAtt.Id)
             : null;
 
         if (!string.IsNullOrEmpty(cachedAttachmentPath) && File.Exists(cachedAttachmentPath))
@@ -2961,9 +3545,7 @@ public class CompanyBillInboxService
         // 4. If not found in cache, try extracting from MIME message
         if (fileBytes == null)
         {
-            var mimePath = _cacheMaintenance != null
-                ? Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Mime", $"{email.Id}.eml")
-                : null;
+            var mimePath = GetMimeCachePath(email);
 
             if (!string.IsNullOrEmpty(mimePath) && File.Exists(mimePath))
             {
@@ -3020,8 +3602,9 @@ public class CompanyBillInboxService
     /// Used by interactive UI flows (such as "Create Bill from Email") so the user can inspect and edit the bill
     /// before explicitly saving.
     /// </summary>
-    public async Task<Bill?> PrepareBillFromEmailAsync(string emailMessageId, CancellationToken cancellationToken = default)
+    public async Task<Bill?> PrepareBillFromEmailAsync(string emailMessageId, CancellationToken cancellationToken = default, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "prepare bill from email");
         var email = _db.EmailMessages.GetById(emailMessageId);
         if (email == null) return null;
 
@@ -3072,7 +3655,10 @@ public class CompanyBillInboxService
         }
 
         var supplier = FindSupplier(email.FromAddress, email.FromName, extraction?.SupplierName, extraction?.SupplierEmail, extraction?.SupplierTaxId);
-        var poMatch = extraction != null ? _poMatchingEngine.FindMatch(extraction, supplier?.Id) : MatchingPoResult.None;
+        var rawPoMatch = extraction != null
+            ? _poMatchingEngine.FindMatch(extraction, supplier?.Id, actor: actor, isSystemExtraction: false)
+            : MatchingPoResult.None;
+        var poMatch = FilterPoMatchForAccess(rawPoMatch, actor);
 
         var bill = BuildDraftBillFromExtraction(
             email,
@@ -3082,7 +3668,8 @@ public class CompanyBillInboxService
             attachmentPath ?? string.Empty,
             !string.IsNullOrEmpty(attachmentPath) ? (attachmentName ?? "Invoice.pdf") : string.Empty,
             settings,
-            autoIngested: false);
+            autoIngested: false,
+            actor: actor);
 
         return bill;
     }
@@ -3289,8 +3876,9 @@ public class CompanyBillInboxService
     /// <summary>
     /// Moves an email on the IMAP server from its current folder to the processed folder (e.g. Processed_Bills) upon reviewer action.
     /// </summary>
-    public async Task<bool> MoveEmailToProcessedFolderAsync(string emailMessageId, string userId, CancellationToken cancellationToken = default)
+    public async Task<bool> MoveEmailToProcessedFolderAsync(string emailMessageId, string userId, CancellationToken cancellationToken = default, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "move email to processed folder");
         var email = _db.EmailMessages.GetById(emailMessageId);
         if (email == null) return false;
 
@@ -3299,43 +3887,7 @@ public class CompanyBillInboxService
 
         try
         {
-            var (host, port, options) = ResolveBillInboxImapEndpoint(settings);
-            var user = !string.IsNullOrWhiteSpace(settings.ImapUsername) ? settings.ImapUsername : settings.EmailAddress;
-            var password = _encryptionService.Decrypt(settings.EncryptedImapPassword);
-
-            if (!string.IsNullOrWhiteSpace(host) && !string.IsNullOrWhiteSpace(user) && !string.IsNullOrWhiteSpace(password))
-            {
-                using var client = new ImapClient();
-                await MailTransportSecurityHelper.ConnectMailServiceAsync(
-                    client,
-                    host,
-                    port,
-                    options,
-                    requireSafeExternalHost: false,
-                    cancellationToken);
-                await client.AuthenticateAsync(user, password, cancellationToken);
-
-                var sourceFolder = await client.GetFolderAsync(string.IsNullOrWhiteSpace(email.FolderPath) ? "INBOX" : email.FolderPath, cancellationToken);
-                await sourceFolder.OpenAsync(FolderAccess.ReadWrite, cancellationToken);
-
-                var personalFolder = client.GetFolder(client.PersonalNamespaces[0]);
-                IMailFolder? targetFolder = null;
-                try
-                {
-                    targetFolder = await client.GetFolderAsync(targetFolderName, cancellationToken);
-                }
-                catch
-                {
-                    targetFolder = await personalFolder.CreateAsync(targetFolderName, true, cancellationToken);
-                }
-
-                if (email.UniqueId > 0 && targetFolder != null)
-                {
-                    await sourceFolder.MoveToAsync(new UniqueId(email.UniqueId), targetFolder, cancellationToken);
-                }
-
-                await client.DisconnectAsync(true, cancellationToken);
-            }
+            await MoveImapMessageToFolderAsync(settings, email, targetFolderName, timeout: null, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -3353,62 +3905,33 @@ public class CompanyBillInboxService
     /// Moves an email on the IMAP server to the deleted folder (e.g. SPOKES_DELETED),
     /// cleans up any unapproved draft bills, and removes local message records and cache.
     /// </summary>
-    public async Task<(bool Success, string Message)> DeleteEmailAsync(
+    public Task<(bool Success, string Message)> DeleteEmailAsync(
         string emailMessageId,
-        string userId,
+        bool deleteLinkedDrafts = true,
+        CancellationToken cancellationToken = default,
+        Employee? actor = null)
+    {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "delete billing email");
+        return DeleteEmailCoreAsync(emailMessageId, deleteLinkedDrafts, cancellationToken);
+    }
+
+    private async Task<(bool Success, string Message)> DeleteEmailCoreAsync(
+        string emailMessageId,
         bool deleteLinkedDrafts = true,
         CancellationToken cancellationToken = default)
     {
-        var email = _db.EmailMessages.GetById(CompanyBillInboxConstants.SystemEmployeeId, emailMessageId)
+        var settings = GetSettings();
+        var effectiveAccountId = GetEffectiveAccountId(settings);
+        var email = _db.EmailMessages.GetById(effectiveAccountId, emailMessageId)
+                 ?? _db.EmailMessages.GetById(CompanyBillInboxConstants.SystemEmployeeId, emailMessageId)
                  ?? _db.EmailMessages.GetById(emailMessageId);
         if (email == null) return (false, "Email not found.");
 
-        var settings = GetSettings();
         var targetFolderName = string.IsNullOrWhiteSpace(settings.DeletedFolderName) ? "SPOKES_DELETED" : settings.DeletedFolderName;
 
         try
         {
-            var (host, port, options) = ResolveBillInboxImapEndpoint(settings);
-            var user = !string.IsNullOrWhiteSpace(settings.ImapUsername) ? settings.ImapUsername : settings.EmailAddress;
-            var password = _encryptionService.Decrypt(settings.EncryptedImapPassword);
-
-            if (!string.IsNullOrWhiteSpace(host) && !string.IsNullOrWhiteSpace(user) && !string.IsNullOrWhiteSpace(password))
-            {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
-
-                using var client = new ImapClient();
-                client.Timeout = 5000;
-                await MailTransportSecurityHelper.ConnectMailServiceAsync(
-                    client,
-                    host,
-                    port,
-                    options,
-                    requireSafeExternalHost: false,
-                    timeoutCts.Token);
-                await client.AuthenticateAsync(user, password, timeoutCts.Token);
-
-                var sourceFolder = await client.GetFolderAsync(string.IsNullOrWhiteSpace(email.FolderPath) ? "INBOX" : email.FolderPath, timeoutCts.Token);
-                await sourceFolder.OpenAsync(FolderAccess.ReadWrite, timeoutCts.Token);
-
-                var personalFolder = client.GetFolder(client.PersonalNamespaces[0]);
-                IMailFolder? targetFolder = null;
-                try
-                {
-                    targetFolder = await client.GetFolderAsync(targetFolderName, timeoutCts.Token);
-                }
-                catch
-                {
-                    targetFolder = await personalFolder.CreateAsync(targetFolderName, true, timeoutCts.Token);
-                }
-
-                if (email.UniqueId > 0 && targetFolder != null)
-                {
-                    await sourceFolder.MoveToAsync(new UniqueId(email.UniqueId), targetFolder, timeoutCts.Token);
-                }
-
-                await client.DisconnectAsync(true, timeoutCts.Token);
-            }
+            await MoveImapMessageToFolderAsync(settings, email, targetFolderName, TimeSpan.FromSeconds(5), cancellationToken);
         }
         catch (Exception ex)
         {
@@ -3443,12 +3966,14 @@ public class CompanyBillInboxService
             }
         }
 
+        var messageAccountId = GetMessageAccountId(email);
+
         // Purge local cached message files and remove message from DB
         if (_cacheMaintenance != null)
         {
-            await _cacheMaintenance.DeleteLocalMessageFilesAsync(CompanyBillInboxConstants.SystemEmployeeId, email.Id);
+            await _cacheMaintenance.DeleteLocalMessageFilesAsync(messageAccountId, email.Id);
         }
-        _db.EmailMessages.Delete(CompanyBillInboxConstants.SystemEmployeeId, email.Id);
+        _db.EmailMessages.Delete(messageAccountId, email.Id);
 
         return (true, $"Email moved to '{targetFolderName}' and cleaned up successfully.");
     }
@@ -3459,9 +3984,11 @@ public class CompanyBillInboxService
     public async Task<(bool Success, string Message)> BlockSenderDomainAsync(
         string emailAddress,
         string? emailMessageId,
-        string userId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Admin.ManageSettings, "block sender domain in Company Bill Inbox");
+
         if (string.IsNullOrWhiteSpace(emailAddress) || !emailAddress.Contains('@'))
         {
             return (false, "Invalid sender email address.");
@@ -3473,12 +4000,12 @@ public class CompanyBillInboxService
         if (!settings.IgnoredSenderDomains.Any(d => d.Equals(domain, StringComparison.OrdinalIgnoreCase)))
         {
             settings.IgnoredSenderDomains.Add(domain);
-            SaveSettings(settings);
+            SaveSettingsInternal(settings);
         }
 
         if (!string.IsNullOrEmpty(emailMessageId))
         {
-            await DeleteEmailAsync(emailMessageId, userId, deleteLinkedDrafts: true, cancellationToken);
+            await DeleteEmailCoreAsync(emailMessageId, deleteLinkedDrafts: true, cancellationToken);
         }
 
         return (true, $"Domain '@{domain}' added to ignored senders and email moved to '{settings.DeletedFolderName}'.");
@@ -3487,8 +4014,9 @@ public class CompanyBillInboxService
     /// <summary>
     /// Attaches an uploaded PDF/image to an email (e.g. portal invoice downloaded by accountant) and runs extraction.
     /// </summary>
-    public async Task<Bill?> UploadAttachmentToEmailAsync(string emailMessageId, Stream stream, string fileName, string userId, CancellationToken cancellationToken = default)
+    public async Task<Bill?> UploadAttachmentToEmailAsync(string emailMessageId, Stream stream, string fileName, string userId, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "upload bill attachment to email");
         var email = _db.EmailMessages.GetById(emailMessageId);
         if (email == null) return null;
 
@@ -3509,7 +4037,10 @@ public class CompanyBillInboxService
         stream.Position = 0;
         var extraction = _pdfInspectionService.Inspect(stream, fileName);
         var supplier = FindSupplier(email.FromAddress, email.FromName, extraction?.SupplierName);
-        var poMatch = extraction != null ? _poMatchingEngine.FindMatch(extraction, supplier?.Id) : MatchingPoResult.None;
+        var rawPoMatch = extraction != null
+            ? _poMatchingEngine.FindMatch(extraction, supplier?.Id, actor: actor, isSystemExtraction: false)
+            : MatchingPoResult.None;
+        var poMatch = FilterPoMatchForAccess(rawPoMatch, actor);
         var settings = GetSettings();
 
         Bill? draftBill = null;
@@ -3630,8 +4161,9 @@ public class CompanyBillInboxService
     /// <summary>
     /// Updates an existing bill's amount and attaches the incoming invoice PDF when a discrepancy is resolved.
     /// </summary>
-    public void UpdateExistingBillAmount(string emailMessageId, string billId, decimal newAmount, string userId)
+    public void UpdateExistingBillAmount(string emailMessageId, string billId, decimal newAmount, string userId, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "update bill amount from inbox");
         var bill = _db.Bills.GetById(billId);
         var email = _db.EmailMessages.GetById(emailMessageId);
 
@@ -3653,6 +4185,109 @@ public class CompanyBillInboxService
         }
     }
 
+    private async Task MoveImapMessageToFolderAsync(
+        CompanyBillInboxSettings settings,
+        EmailMessage email,
+        string targetFolderName,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutCts = timeout.HasValue ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken) : null;
+        if (timeout.HasValue) timeoutCts!.CancelAfter(timeout.Value);
+        var ct = timeoutCts?.Token ?? cancellationToken;
+
+        var (client, _) = await ConnectImapClientAsync(settings, ct);
+        if (client == null) return;
+
+        using (client)
+        {
+            if (timeout.HasValue) client.Timeout = (int)timeout.Value.TotalMilliseconds;
+            var sourceFolder = await client.GetFolderAsync(string.IsNullOrWhiteSpace(email.FolderPath) ? "INBOX" : email.FolderPath, ct);
+            await sourceFolder.OpenAsync(FolderAccess.ReadWrite, ct);
+
+            var personalFolder = client.GetFolder(client.PersonalNamespaces[0]);
+            IMailFolder? targetFolder;
+            try
+            {
+                targetFolder = await client.GetFolderAsync(targetFolderName, ct);
+            }
+            catch
+            {
+                targetFolder = await personalFolder.CreateAsync(targetFolderName, true, ct);
+            }
+
+            if (email.UniqueId > 0 && targetFolder != null)
+            {
+                await sourceFolder.MoveToAsync(new UniqueId(email.UniqueId), targetFolder, ct);
+            }
+
+            await client.DisconnectAsync(true, ct);
+        }
+    }
+
+    private async Task<MimeMessage?> FetchAndCacheMimeFromImapAsync(
+        CompanyBillInboxSettings settings,
+        EmailMessage email,
+        string? mimePath,
+        bool cacheAttachments,
+        string errorLogContext,
+        CancellationToken cancellationToken)
+    {
+        var (client, _) = await ConnectImapClientAsync(settings, cancellationToken);
+        if (client == null) return null;
+
+        try
+        {
+            using (client)
+            {
+                var folderName = string.IsNullOrWhiteSpace(settings.FolderToMonitor) ? "INBOX" : settings.FolderToMonitor;
+                var folder = await client.GetFolderAsync(folderName, cancellationToken);
+                await folder.OpenAsync(FolderAccess.ReadOnly, cancellationToken);
+
+                var mimeMessage = await folder.GetMessageAsync(new UniqueId(email.UniqueId), cancellationToken);
+                if (mimeMessage != null)
+                {
+                    if (!string.IsNullOrEmpty(mimePath))
+                    {
+                        var dir = Path.GetDirectoryName(mimePath);
+                        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                        await using var fs = File.Create(mimePath);
+                        await mimeMessage.WriteToAsync(fs, cancellationToken);
+                    }
+
+                    if (cacheAttachments)
+                    {
+                        var attachmentFolder = GetAttachmentsCacheDir(email);
+                        if (!string.IsNullOrEmpty(attachmentFolder))
+                        {
+                            Directory.CreateDirectory(attachmentFolder);
+                            foreach (var part in mimeMessage.Attachments.OfType<MimePart>())
+                            {
+                                var fileName = part.FileName ?? "attachment";
+                                var existingAtt = email.Attachments.FirstOrDefault(a => a.FileName == fileName);
+                                var attId = existingAtt?.Id ?? Guid.NewGuid().ToString();
+                                var attPath = Path.Combine(attachmentFolder, attId);
+                                if (part.Content != null)
+                                {
+                                    await using var afs = File.Create(attPath);
+                                    await part.Content.DecodeToAsync(afs, cancellationToken);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                await client.DisconnectAsync(true, cancellationToken);
+                return mimeMessage;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "{ErrorContext} for billing email {EmailId} (UID: {Uid})", errorLogContext, email.Id, email.UniqueId);
+            return null;
+        }
+    }
+
     /// <summary>
     /// Gets the full email body HTML for a billing email.
     /// If the local raw MIME cache is missing (e.g. historical ingest), attempts on-demand retrieval from IMAP.
@@ -3661,9 +4296,7 @@ public class CompanyBillInboxService
     {
         if (email == null) return string.Empty;
 
-        var mimePath = _cacheMaintenance != null
-            ? Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Mime", $"{email.Id}.eml")
-            : null;
+        var mimePath = GetMimeCachePath(email);
 
         // 1. If local MIME file exists, extract and return
         if (!string.IsNullOrEmpty(mimePath) && File.Exists(mimePath))
@@ -3679,81 +4312,20 @@ public class CompanyBillInboxService
             }
         }
 
-        // 1b. If legacy body file exists, read and return
-        if (_cacheMaintenance != null)
-        {
-            var legacyHtmlPath = Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Bodies", $"{email.Id}.html");
-            if (File.Exists(legacyHtmlPath))
-            {
-                try
-                {
-                    var body = await EmailCacheMaintenanceService.ReadHtmlWithEncodingDetectionAsync(legacyHtmlPath, _logger, cancellationToken);
-                    if (!string.IsNullOrWhiteSpace(body)) return body;
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogWarning(ex, "Failed to read legacy body for {EmailId}", email.Id);
-                }
-            }
-        }
-
         // 2. Local MIME missing or empty - attempt on-demand retrieval from IMAP if credentials configured
         var settings = GetSettings();
-        if (settings.Enabled && !string.IsNullOrWhiteSpace(settings.EmailAddress) && email.UniqueId > 0)
+        if (settings.Enabled && !string.IsNullOrWhiteSpace(settings.AccountId) && email.UniqueId > 0)
         {
-            var (client, error) = await ConnectImapClientAsync(settings, cancellationToken);
-            if (client != null)
+            var fetched = await FetchAndCacheMimeFromImapAsync(
+                settings,
+                email,
+                mimePath,
+                cacheAttachments: true,
+                "On-demand IMAP body fetch failed",
+                cancellationToken);
+            if (fetched != null && !string.IsNullOrEmpty(mimePath) && File.Exists(mimePath))
             {
-                try
-                {
-                    using (client)
-                    {
-                        var folderName = string.IsNullOrWhiteSpace(settings.FolderToMonitor) ? "INBOX" : settings.FolderToMonitor;
-                        var folder = await client.GetFolderAsync(folderName, cancellationToken);
-                        await folder.OpenAsync(FolderAccess.ReadOnly, cancellationToken);
-
-                        var mimeMessage = await folder.GetMessageAsync(new UniqueId(email.UniqueId), cancellationToken);
-                        if (mimeMessage != null)
-                        {
-                            if (!string.IsNullOrEmpty(mimePath))
-                            {
-                                var dir = Path.GetDirectoryName(mimePath);
-                                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                                await using var fs = File.Create(mimePath);
-                                await mimeMessage.WriteToAsync(fs, cancellationToken);
-                            }
-
-                            if (_cacheMaintenance != null)
-                            {
-                                var attachmentFolder = Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Attachments", email.Id);
-                                Directory.CreateDirectory(attachmentFolder);
-                                foreach (var part in mimeMessage.Attachments.OfType<MimePart>())
-                                {
-                                    var fileName = part.FileName ?? "attachment";
-                                    var existingAtt = email.Attachments.FirstOrDefault(a => a.FileName == fileName);
-                                    var attId = existingAtt?.Id ?? Guid.NewGuid().ToString();
-                                    var attPath = Path.Combine(attachmentFolder, attId);
-                                    if (part.Content != null)
-                                    {
-                                        await using var afs = File.Create(attPath);
-                                        await part.Content.DecodeToAsync(afs, cancellationToken);
-                                    }
-                                }
-                            }
-
-                            await client.DisconnectAsync(true, cancellationToken);
-
-                            if (!string.IsNullOrEmpty(mimePath) && File.Exists(mimePath))
-                            {
-                                return await EmailCacheMaintenanceService.ExtractBodyFromMimeAsync(mimePath, cancellationToken);
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogWarning(ex, "On-demand IMAP body fetch failed for billing email {EmailId} (UID: {Uid})", email.Id, email.UniqueId);
-                }
+                return await EmailCacheMaintenanceService.ExtractBodyFromMimeAsync(mimePath, cancellationToken);
             }
         }
 
@@ -3771,7 +4343,13 @@ public class CompanyBillInboxService
     /// Erases any existing draft bills associated with the email to prevent duplicates.
     /// If an existing linked bill is already approved, returns RequiresConfirmation=true unless forceEvenIfApproved is true.
     /// </summary>
-    public async Task<ReprocessEmailResult> ReprocessEmailAsync(string emailMessageId, string userId, bool forceEvenIfApproved = false, CancellationToken cancellationToken = default)
+    public Task<ReprocessEmailResult> ReprocessEmailAsync(string emailMessageId, string userId, bool forceEvenIfApproved = false, CancellationToken cancellationToken = default, Employee? actor = null)
+    {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "reprocess billing email");
+        return ReprocessEmailCoreAsync(emailMessageId, userId, forceEvenIfApproved, actor, isSystemCall: false, cancellationToken);
+    }
+
+    private async Task<ReprocessEmailResult> ReprocessEmailCoreAsync(string emailMessageId, string userId, bool forceEvenIfApproved, Employee? actor, bool isSystemCall, CancellationToken cancellationToken = default)
     {
         var email = _db.EmailMessages.GetById(emailMessageId);
         if (email == null)
@@ -3810,6 +4388,11 @@ public class CompanyBillInboxService
             };
         }
 
+        if (approvedBills.Count > 0 && forceEvenIfApproved && !isSystemCall)
+        {
+            RequireInteractivePermission(actor, AppPermissions.Purchases.ApproveBills, "overwrite approved bills via reprocess");
+        }
+
         // 2. Erase bills created by this email (both draft and approved if force-confirmed), keeping pre-existing bills intact
         foreach (var bill in billsFromThisEmail)
         {
@@ -3827,9 +4410,7 @@ public class CompanyBillInboxService
 
         // 3. Ensure local MIME cache exists (fetching on-demand from IMAP if missing)
         MimeMessage? mimeMessage = null;
-        var mimePath = _cacheMaintenance != null
-            ? Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Mime", $"{email.Id}.eml")
-            : null;
+        var mimePath = GetMimeCachePath(email);
 
         if (!string.IsNullOrEmpty(mimePath) && File.Exists(mimePath))
         {
@@ -3846,327 +4427,40 @@ public class CompanyBillInboxService
 
         if (mimeMessage == null && email.UniqueId > 0)
         {
-            var settings = GetSettings();
-            var (client, _) = await ConnectImapClientAsync(settings, cancellationToken);
-            if (client != null)
-            {
-                try
-                {
-                    using (client)
-                    {
-                        var folderName = string.IsNullOrWhiteSpace(settings.FolderToMonitor) ? "INBOX" : settings.FolderToMonitor;
-                        var folder = await client.GetFolderAsync(folderName, cancellationToken);
-                        await folder.OpenAsync(FolderAccess.ReadOnly, cancellationToken);
-                        mimeMessage = await folder.GetMessageAsync(new UniqueId(email.UniqueId), cancellationToken);
-                        if (mimeMessage != null && !string.IsNullOrEmpty(mimePath))
-                        {
-                            var dir = Path.GetDirectoryName(mimePath);
-                            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                            await using var fs = File.Create(mimePath);
-                            await mimeMessage.WriteToAsync(fs, cancellationToken);
-                        }
-                        await client.DisconnectAsync(true, cancellationToken);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogWarning(ex, "Failed to fetch MIME on-demand for reprocess {EmailId}", email.Id);
-                }
-            }
+            mimeMessage = await FetchAndCacheMimeFromImapAsync(
+                GetSettings(),
+                email,
+                mimePath,
+                cacheAttachments: false,
+                "Failed to fetch MIME on-demand for reprocess",
+                cancellationToken);
         }
 
-        // 4. Extract attachments and inspect with PDF/XML invoice extractor
+        // 4-5. Extract attachments (if not ignored), classify, draft/link bills, and persist decision log
         var settingsForPipeline = GetSettings();
-        var extractionContext = BuildExtractionContext(settingsForPipeline);
-        var extractedInvoices = new List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)>();
-        var allInspectedDocs = new List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)>();
-        string? fallbackAttachmentPath = null;
-        string? fallbackAttachmentName = null;
+        var pipelineActor = isSystemCall ? null : actor;
 
-        if (mimeMessage != null)
+        EmailInspectionOutcome inspection;
+        if (IsIgnoredSender(email, settingsForPipeline))
         {
-            var attachmentFolder = _cacheMaintenance != null
-                ? Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Attachments", email.Id)
-                : null;
-            if (!string.IsNullOrEmpty(attachmentFolder)) Directory.CreateDirectory(attachmentFolder);
-
-            var attachments = mimeMessage.Attachments.OfType<MimePart>().ToList();
-            email.Attachments.Clear();
-
-            foreach (var part in attachments)
-            {
-                var fileName = part.FileName ?? "attachment";
-                var ext = Path.GetExtension(fileName).ToLowerInvariant();
-
-                using var mem = new MemoryStream();
-                if (part.Content != null)
-                {
-                    await part.Content.DecodeToAsync(mem, cancellationToken);
-                    mem.Position = 0;
-                }
-
-                var uploadBillId = Guid.NewGuid().ToString();
-                var savedPath = await _fileService.UploadStreamAsync("bills", uploadBillId, mem, fileName);
-                var attachmentId = Guid.NewGuid().ToString();
-
-                if (!string.IsNullOrEmpty(attachmentFolder))
-                {
-                    try
-                    {
-                        var cachedFilePath = Path.Combine(attachmentFolder, attachmentId);
-                        mem.Position = 0;
-                        await using var fileStream = File.Create(cachedFilePath);
-                        await mem.CopyToAsync(fileStream, cancellationToken);
-                    }
-                    catch { }
-                }
-
-                email.Attachments.Add(new EmailAttachmentMeta
-                {
-                    Id = attachmentId,
-                    FileName = fileName,
-                    ContentType = part.ContentType?.MimeType ?? "application/octet-stream",
-                    Size = mem.Length
-                });
-                email.HasAttachments = true;
-
-                if (ext == ".pdf" || ext == ".xml")
-                {
-                    mem.Position = 0;
-                    var extracted = _pdfInspectionService.Inspect(mem, fileName, extractionContext);
-                    if (extracted != null)
-                    {
-                        allInspectedDocs.Add((extracted, savedPath, fileName));
-                        if (extracted.TotalAmount != 0 && !extracted.IsAccountStatement && !extracted.IsPaymentReceipt)
-                        {
-                            extractedInvoices.Add((extracted, savedPath, fileName));
-                        }
-                    }
-                }
-
-                if (fallbackAttachmentPath == null && (ext == ".pdf" || ext == ".png" || ext == ".jpg" || ext == ".jpeg"))
-                {
-                    fallbackAttachmentPath = savedPath;
-                    fallbackAttachmentName = fileName;
-                }
-            }
-        }
-        else if (!string.IsNullOrEmpty(email.MatchedAttachmentPath))
-        {
-            try
-            {
-                var parts = email.MatchedAttachmentPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length >= 5)
-                {
-                    var category = parts[2];
-                    var contextId = parts[3];
-                    var fileName = parts[4];
-                    using var stream = _fileService.OpenRead(category, contextId, fileName);
-                    if (stream != null)
-                    {
-                        using var mem = new MemoryStream();
-                        await stream.CopyToAsync(mem);
-                        mem.Position = 0;
-                        var extracted = _pdfInspectionService.Inspect(mem, email.MatchedAttachmentName ?? fileName, extractionContext);
-                        if (extracted != null)
-                        {
-                            allInspectedDocs.Add((extracted, email.MatchedAttachmentPath, email.MatchedAttachmentName ?? fileName));
-                            if (extracted.TotalAmount != 0 && !extracted.IsAccountStatement && !extracted.IsPaymentReceipt)
-                            {
-                                extractedInvoices.Add((extracted, email.MatchedAttachmentPath, email.MatchedAttachmentName ?? fileName));
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "Failed to re-inspect existing attachment {Path}", email.MatchedAttachmentPath);
-            }
-        }
-
-        email.MatchedAttachmentPath = extractedInvoices.Count > 0 ? extractedInvoices[0].SavedPath : (fallbackAttachmentPath ?? email.MatchedAttachmentPath);
-        email.MatchedAttachmentName = extractedInvoices.Count > 0 ? extractedInvoices[0].FileName : (fallbackAttachmentName ?? email.MatchedAttachmentName);
-
-        if (extractedInvoices.Count > 0)
-        {
-            email.DetectedAmount = extractedInvoices[0].Extraction.TotalAmount;
-            email.DetectedPaidAmount = extractedInvoices[0].Extraction.PaidAmount > 0 ? extractedInvoices[0].Extraction.PaidAmount : null;
-            email.DetectedBalanceDue = extractedInvoices[0].Extraction.BalanceDue > 0 ? extractedInvoices[0].Extraction.BalanceDue : null;
-            email.DetectedCurrency = extractedInvoices[0].Extraction.Currency;
+            inspection = new EmailInspectionOutcome([], [], ExtractReadableEmailBodyText(mimeMessage));
         }
         else
         {
-            var textAmount = ExtractAmountFromText($"{email.Subject} {email.Snippet}");
-            if (textAmount > 0)
-            {
-                email.DetectedAmount = textAmount;
-                email.DetectedCurrency = settingsForPipeline.DefaultCurrency;
-            }
+            inspection = await ExtractAndInspectAttachmentsAsync(
+                email,
+                mimeMessage,
+                settingsForPipeline,
+                clearExistingAttachments: true,
+                cancellationToken);
         }
 
-        // 5. Decision pipeline
-        var createdBills = new List<Bill>();
-
-        // Check spam
-        if (settingsForPipeline.IgnoredSenderDomains.Any(d => !string.IsNullOrWhiteSpace(d) &&
-            (email.FromAddress.Contains(d, StringComparison.OrdinalIgnoreCase) || email.FromName.Contains(d, StringComparison.OrdinalIgnoreCase))))
-        {
-            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Dismissed;
-        }
-        else
-        {
-            if (IsAccountStatement(email, allInspectedDocs, settingsForPipeline))
-            {
-                email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Statement;
-            }
-            else if (IsPaymentReceiptEmail(email, allInspectedDocs, settingsForPipeline))
-            {
-                email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Receipt;
-            }
-            else
-            {
-                var primaryExt = extractedInvoices.FirstOrDefault().Extraction;
-                var supplier = FindSupplier(email.FromAddress, email.FromName, primaryExt?.SupplierName, primaryExt?.SupplierEmail, primaryExt?.SupplierTaxId);
-
-                if (extractedInvoices.Count > 0)
-                {
-                    bool hasDuplicate = false;
-                    var batchEvaluations = EvaluateExtractedInvoicesBatch(email, extractedInvoices, supplier, settingsForPipeline);
-
-                    foreach (var (extraction, path, fileName, itemSupplier, poMatch, existingMatch) in batchEvaluations)
-                    {
-                        if (existingMatch != null)
-                        {
-                            hasDuplicate = true;
-                            if (!email.LinkedBillIds.Contains(existingMatch.Bill.Id)) email.LinkedBillIds.Add(existingMatch.Bill.Id);
-                            continue;
-                        }
-
-                        var draftBill = BuildDraftBillFromExtraction(
-                            email,
-                            extraction,
-                            itemSupplier,
-                            poMatch,
-                            path,
-                            fileName,
-                            settingsForPipeline,
-                            autoIngested: true);
-
-                        _db.Bills.Save(draftBill);
-                        createdBills.Add(draftBill);
-                        if (!email.LinkedBillIds.Contains(draftBill.Id)) email.LinkedBillIds.Add(draftBill.Id);
-                    }
-
-                    if (createdBills.Count > 0)
-                    {
-                        email.BillingStatus = CompanyBillInboxConstants.BillingStatus.AutoDrafted;
-                        email.LinkedBillId = createdBills[0].Id;
-                        email.LinkedPoId = createdBills[0].PurchaseOrderId;
-                    }
-                    else if (hasDuplicate)
-                    {
-                        email.BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected;
-                        email.LinkedBillId = email.LinkedBillIds.FirstOrDefault();
-                    }
-                }
-                else
-                {
-                    bool handledByRecurring = false;
-                    if (settingsForPipeline.AutoMatchRecurringExpenses && settingsForPipeline.AllowDraftWithoutPdfForRecurring)
-                    {
-                        var recurring = FindMatchingRecurringExpense(supplier?.Name ?? email.FromName);
-                        if (recurring != null)
-                        {
-                            var parsedAmount = ExtractAmountFromText($"{email.Subject} {email.Snippet}");
-                            if (parsedAmount > 0)
-                            {
-                                handledByRecurring = true;
-                                var existingRecurringMatch = FindExistingBillMatch(
-                                    extraction: null,
-                                    supplierId: supplier?.Id,
-                                    supplierName: recurring.Supplier,
-                                    emailSubject: email.Subject,
-                                    emailSnippet: email.Snippet,
-                                    matchedPoId: null,
-                                    currentEmailId: email.Id,
-                                    duplicateWindowDays: settingsForPipeline.DuplicateDateWindowDays,
-                                    textDetectedAmount: parsedAmount);
-
-                                if (existingRecurringMatch != null)
-                                {
-                                    email.BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected;
-                                    email.LinkedBillId = existingRecurringMatch.Bill.Id;
-                                    email.LinkedBillIds = [existingRecurringMatch.Bill.Id];
-                                }
-                                else
-                                {
-                                    var draftBill = new Bill
-                                    {
-                                        Id = Guid.NewGuid().ToString(),
-                                        SupplierId = supplier?.Id ?? string.Empty,
-                                        SupplierName = recurring.Supplier,
-                                        Description = $"Recurring: {recurring.Name} (Amount from email)",
-                                        Date = email.Date.DateTime,
-                                        DueDate = email.Date.DateTime.AddDays(30),
-                                        Amount = parsedAmount,
-                                        Currency = settingsForPipeline.DefaultCurrency,
-                                        LinkedRecurringExpenseId = recurring.Id,
-                                        Status = BillStatus.AwaitingApproval,
-                                        AttachmentPath = "",
-                                        AttachmentName = "",
-                                        AutoIngested = true,
-                                        SourceEmailId = email.Id,
-                                        SourceEmailSubject = email.Subject,
-                                        SourceSenderEmail = email.FromAddress,
-                                        AutoMatchReason = $"Matched to recurring expense template '{recurring.Name}'"
-                                    };
-
-                                    _db.Bills.Save(draftBill);
-                                    createdBills.Add(draftBill);
-                                    email.BillingStatus = CompanyBillInboxConstants.BillingStatus.AutoDrafted;
-                                    email.LinkedBillId = draftBill.Id;
-                                    email.LinkedBillIds = [draftBill.Id];
-                                }
-                            }
-                        }
-                    }
-
-                    if (!handledByRecurring)
-                    {
-                        var existingFallbackMatch = FindExistingBillMatch(
-                            extraction: null,
-                            supplierId: supplier?.Id,
-                            supplierName: supplier?.Name ?? email.FromName,
-                            emailSubject: email.Subject,
-                            emailSnippet: email.Snippet,
-                            matchedPoId: null,
-                            currentEmailId: email.Id,
-                            duplicateWindowDays: settingsForPipeline.DuplicateDateWindowDays,
-                            textDetectedAmount: email.DetectedAmount);
-
-                        if (existingFallbackMatch != null)
-                        {
-                            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.DuplicateDetected;
-                            email.LinkedBillId = existingFallbackMatch.Bill.Id;
-                            email.LinkedBillIds = [existingFallbackMatch.Bill.Id];
-                        }
-                        else
-                        {
-                            email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Unprocessed;
-                        }
-                    }
-                }
-            }
-        }
-
-        email.ProcessedByUserId = userId;
-        _db.EmailMessages.Save(email);
-
-        // Generate matching DecisionLog
-        var log = await GenerateDecisionLogAsync(email, allInspectedDocs);
-        email.DecisionLog = log;
-        _db.EmailMessages.Save(email);
+        await ApplyBillingDecisionPipelineAsync(
+            email,
+            settingsForPipeline,
+            inspection,
+            actor: pipelineActor,
+            processedByUserId: userId);
 
         var allLinkedBills = email.LinkedBillIds
             .Select(id => _db.Bills.GetById(id))
@@ -4186,13 +4480,22 @@ public class CompanyBillInboxService
     /// Force re-downloads messages from the IMAP server.
     /// Repairs missing .eml body caches and attachments for existing emails, and ingests any newly discovered messages.
     /// </summary>
-    public async Task<(int RefreshedCount, int NewCount)> ForceRedownloadAsync(int maxMessages = 50, CancellationToken cancellationToken = default)
+    public async Task<(int RefreshedCount, int NewCount)> ForceRedownloadAsync(int maxMessages = 50, CancellationToken cancellationToken = default, Employee? actor = null)
     {
+        RequireInteractiveAnyPermission(actor, "force redownload bill inbox", AppPermissions.Purchases.ManageBills, AppPermissions.Admin.ManageSettings);
         var settings = GetSettings();
-        if (!settings.Enabled || string.IsNullOrWhiteSpace(settings.EmailAddress))
+        if (!settings.Enabled || string.IsNullOrWhiteSpace(settings.AccountId))
         {
             return (0, 0);
         }
+
+        if (!string.Equals(settings.AccountId.Trim(), CompanyBillInboxConstants.SystemEmployeeId, StringComparison.OrdinalIgnoreCase) &&
+            GetBoundAccount(settings) == null)
+        {
+            return (0, 0);
+        }
+
+        var accountId = GetEffectiveAccountId(settings);
 
         var (client, error) = await ConnectImapClientAsync(settings, cancellationToken);
         if (client == null)
@@ -4211,58 +4514,96 @@ public class CompanyBillInboxService
                 var folder = await client.GetFolderAsync(folderName, cancellationToken);
                 await folder.OpenAsync(FolderAccess.ReadWrite, cancellationToken);
 
-                var uids = await folder.SearchAsync(MailKit.Search.SearchQuery.All, cancellationToken);
-                var recentUids = uids.OrderByDescending(u => u.Id).Take(maxMessages).ToList();
+                var virtualInbox = GetBoundVirtualInbox(settings);
 
-                foreach (var uid in recentUids)
+                // 1. Refresh already-tracked Bill Inbox messages (never pull historical read non-bill emails)
+                var trackedMessages = GetBillInboxMessages(settings)
+                    .Where(m => m.UniqueId > 0 && !m.IsLocalOnly)
+                    .OrderByDescending(m => m.UniqueId)
+                    .Take(maxMessages)
+                    .ToList();
+
+                foreach (var existing in trackedMessages)
                 {
                     if (cancellationToken.IsCancellationRequested) break;
 
-                    var existing = _db.EmailMessages.GetByUniqueId(CompanyBillInboxConstants.SystemEmployeeId, uid.Id);
+                    var uid = new UniqueId(existing.UniqueId);
+                    MimeMessage? mimeMessage = null;
+                    try
+                    {
+                        mimeMessage = await folder.GetMessageAsync(uid, cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogDebug(ex, "Skipping IMAP refresh for UID {Uid} (not found on server)", existing.UniqueId);
+                    }
+                    if (mimeMessage == null) continue;
+
+                    var mimePath = GetMimeCachePath(existing);
+                    if (!string.IsNullOrEmpty(mimePath))
+                    {
+                        var mimeFolder = Path.GetDirectoryName(mimePath);
+                        if (!string.IsNullOrEmpty(mimeFolder)) Directory.CreateDirectory(mimeFolder);
+                        await using var mimeStream = File.Create(mimePath);
+                        await mimeMessage.WriteToAsync(mimeStream, cancellationToken);
+                    }
+
+                    existing.Subject = mimeMessage.Subject ?? existing.Subject;
+                    existing.Date = mimeMessage.Date;
+                    existing.FromName = mimeMessage.From.Mailboxes.FirstOrDefault()?.Name ?? existing.FromName;
+                    existing.FromAddress = mimeMessage.From.Mailboxes.FirstOrDefault()?.Address ?? existing.FromAddress;
+
+                    var textPreview = mimeMessage.TextBody;
+                    if (string.IsNullOrWhiteSpace(textPreview) && !string.IsNullOrWhiteSpace(mimeMessage.HtmlBody))
+                    {
+                        textPreview = System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(mimeMessage.HtmlBody, "<.*?>", " "));
+                    }
+                    textPreview = (textPreview ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+                    existing.Snippet = textPreview.Length > 100 ? textPreview[..100] : textPreview;
+
+                    _db.EmailMessages.Save(existing);
+
+                    if (existing.BillingStatus == CompanyBillInboxConstants.BillingStatus.Unprocessed || string.IsNullOrEmpty(existing.BillingStatus))
+                    {
+                        await ReprocessEmailCoreAsync(existing.Id, "system", forceEvenIfApproved: false, actor: null, isSystemCall: true, cancellationToken);
+                    }
+
+                    refreshedCount++;
+                }
+
+                // 2. Ingest any currently unread messages on IMAP
+                var unreadUids = await folder.SearchAsync(MailKit.Search.SearchQuery.NotSeen, cancellationToken);
+                foreach (var uid in unreadUids.OrderByDescending(u => u.Id).Take(maxMessages))
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    var existing = _db.EmailMessages.GetByUniqueId(accountId, uid.Id);
+                    if (existing != null)
+                    {
+                        if (!IsBillInboxTrackedMessage(existing) &&
+                            (virtualInbox == null || DoesMessageMatchVirtualInbox(existing, virtualInbox)))
+                        {
+                            await ReprocessEmailCoreAsync(existing.Id, "system", forceEvenIfApproved: false, actor: null, isSystemCall: true, cancellationToken);
+                            var updated = _db.EmailMessages.GetById(accountId, existing.Id);
+                            if (updated != null && !updated.IsRead)
+                            {
+                                updated.IsRead = true;
+                                _db.EmailMessages.Save(updated);
+                            }
+                            await folder.AddFlagsAsync(uid, MessageFlags.Seen, true, cancellationToken);
+                            newCount++;
+                        }
+                        continue;
+                    }
 
                     var mimeMessage = await folder.GetMessageAsync(uid, cancellationToken);
                     if (mimeMessage == null) continue;
 
-                    if (existing != null)
+                    var newEmail = await ProcessMimeMessageAsync(mimeMessage, uid.Id, cancellationToken);
+                    if (newEmail != null)
                     {
-                        // Cache MIME message
-                        if (_cacheMaintenance != null)
-                        {
-                            var mimeFolder = Path.Combine(_cacheMaintenance.EmailBodyPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Mime");
-                            Directory.CreateDirectory(mimeFolder);
-                            var mimePath = Path.Combine(mimeFolder, $"{existing.Id}.eml");
-                            await using var mimeStream = File.Create(mimePath);
-                            await mimeMessage.WriteToAsync(mimeStream, cancellationToken);
-                        }
-
-                        // Update metadata
-                        existing.Subject = mimeMessage.Subject ?? existing.Subject;
-                        existing.Date = mimeMessage.Date;
-                        existing.FromName = mimeMessage.From.Mailboxes.FirstOrDefault()?.Name ?? existing.FromName;
-                        existing.FromAddress = mimeMessage.From.Mailboxes.FirstOrDefault()?.Address ?? existing.FromAddress;
-
-                        var textPreview = mimeMessage.TextBody;
-                        if (string.IsNullOrWhiteSpace(textPreview) && !string.IsNullOrWhiteSpace(mimeMessage.HtmlBody))
-                        {
-                            textPreview = System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(mimeMessage.HtmlBody, "<.*?>", " "));
-                        }
-                        textPreview = (textPreview ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
-                        existing.Snippet = textPreview.Length > 100 ? textPreview[..100] : textPreview;
-
-                        _db.EmailMessages.Save(existing);
-
-                        // If still Unprocessed, reprocess with newly cached content
-                        if (existing.BillingStatus == CompanyBillInboxConstants.BillingStatus.Unprocessed || string.IsNullOrEmpty(existing.BillingStatus))
-                        {
-                            await ReprocessEmailAsync(existing.Id, "system", forceEvenIfApproved: false, cancellationToken);
-                        }
-
-                        refreshedCount++;
-                    }
-                    else
-                    {
-                        var newEmail = await ProcessMimeMessageAsync(mimeMessage, uid.Id, cancellationToken);
-                        if (newEmail != null) newCount++;
+                        newCount++;
+                        await folder.AddFlagsAsync(uid, MessageFlags.Seen, true, cancellationToken);
                     }
                 }
 
@@ -4270,7 +4611,7 @@ public class CompanyBillInboxService
 
                 settings.LastCheckedAt = DateTime.UtcNow;
                 settings.LastCheckStatus = "Success";
-                SaveSettings(settings);
+                SaveSettingsInternal(settings);
             }
         }
         catch (Exception ex)
@@ -4322,14 +4663,16 @@ public class CompanyBillInboxService
     /// entered manually into Spokes (e.g. before the mailbox was enabled). Links them to existing bills,
     /// sets status to DuplicateDetected, and cleans up unapproved redundant drafts.
     /// </summary>
-    public async Task<DuplicateScanResult> ScanForDuplicateBillsAsync(CancellationToken cancellationToken = default)
+    public async Task<DuplicateScanResult> ScanForDuplicateBillsAsync(CancellationToken cancellationToken = default, Employee? actor = null)
     {
+        RequireInteractivePermission(actor, AppPermissions.Purchases.ManageBills, "scan for duplicate bills");
         var settings = GetSettings();
         var result = new DuplicateScanResult();
 
         // Get candidate emails in the Bill Inbox
-        var candidateEmails = _db.EmailMessages.GetAllForAccount(CompanyBillInboxConstants.SystemEmployeeId)
-            .Where(e => e.BillingStatus == CompanyBillInboxConstants.BillingStatus.Unprocessed ||
+        var candidateEmails = GetBillInboxMessages(settings)
+            .Where(e => string.IsNullOrEmpty(e.BillingStatus) ||
+                        e.BillingStatus == CompanyBillInboxConstants.BillingStatus.Unprocessed ||
                         e.BillingStatus == CompanyBillInboxConstants.BillingStatus.AutoDrafted)
             .ToList();
 
@@ -4374,9 +4717,10 @@ public class CompanyBillInboxService
                         currentEmailId: email.Id,
                         duplicateWindowDays: settings.DuplicateDateWindowDays,
                         textDetectedAmount: draftBill.Amount,
-                        excludeBillIds: excludedIds);
+                        excludeBillIds: excludedIds,
+                        referenceDate: draftBill.Date);
 
-                    if (draftMatch != null)
+                    if (draftMatch != null && !draftMatch.IsPossibleDuplicate)
                     {
                         result.DuplicatesFoundCount++;
                         result.DraftsCleanedUpCount++;
@@ -4414,7 +4758,7 @@ public class CompanyBillInboxService
 
                     try
                     {
-                        var log = await GenerateDecisionLogAsync(email);
+                        var log = await GenerateDecisionLogAsync(email, actor: actor);
                         email.DecisionLog = log;
                     }
                     catch { }
@@ -4453,7 +4797,10 @@ public class CompanyBillInboxService
                 }
 
                 var supplier = FindSupplier(email.FromAddress, email.FromName, extraction?.SupplierName, extraction?.SupplierEmail, extraction?.SupplierTaxId);
-                var poMatch = extraction != null ? _poMatchingEngine.FindMatch(extraction, supplier?.Id) : MatchingPoResult.None;
+                var rawPoMatch = extraction != null
+                    ? _poMatchingEngine.FindMatch(extraction, supplier?.Id, actor: actor, isSystemExtraction: false)
+                    : MatchingPoResult.None;
+                var poMatch = FilterPoMatchForAccess(rawPoMatch, actor);
 
                 var match = FindExistingBillMatch(
                     extraction,
@@ -4476,7 +4823,7 @@ public class CompanyBillInboxService
 
                     try
                     {
-                        var log = await GenerateDecisionLogAsync(email);
+                        var log = await GenerateDecisionLogAsync(email, actor: actor);
                         email.DecisionLog = log;
                     }
                     catch { }

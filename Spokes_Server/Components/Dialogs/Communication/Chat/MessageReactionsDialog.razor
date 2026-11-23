@@ -104,11 +104,8 @@
     [Parameter] public List<string> AttendeeUserIds { get; set; } = [];
     [Parameter] public bool IsPollVotesMode { get; set; }
     [Parameter] public Dictionary<string, List<Employee>>? CustomEmployeeGroups { get; set; }
-    [Parameter] public string? CustomUnitSingular { get; set; }
-    [Parameter] public string? CustomUnitPlural { get; set; }
     [Parameter] public string? CustomTitle { get; set; }
     [Parameter] public string? CustomIcon { get; set; }
-    [Parameter] public string? GroupNameOverride { get; set; }
 
     private Dictionary<string, List<Employee>> _reactionGroups = [];
 
@@ -137,7 +134,7 @@
             }
             if (attendees.Any())
             {
-                groups[GroupNameOverride ?? "Attending"] = attendees.OrderBy(e => e.FullName).ToList();
+                groups["Attending"] = attendees.OrderBy(e => e.FullName).ToList();
             }
         }
         else if (IsReadReceiptMode)
@@ -197,15 +194,13 @@
     {
         if (count == 1)
         {
-            if (!string.IsNullOrEmpty(CustomUnitSingular)) return CustomUnitSingular;
             if (IsPollVotesMode) return Loc["vote"].Value;
             if (IsReadReceiptMode || IsAttendeesMode) return Loc["person"].Value;
             return Loc["reaction"].Value;
         }
 
-        if (!string.IsNullOrEmpty(CustomUnitPlural)) return CustomUnitPlural;
         if (IsPollVotesMode) return Loc["votes"].Value;
-        if (IsReadReceiptMode || IsAttendeesMode) return Loc["people"].Value;
-        return Loc["reactions"].Value;
+        if (IsReadReceiptMode || IsAttendeesMode) return Loc["People"].Value.ToLower();
+        return Loc["Reactions"].Value.ToLower();
     }
 }

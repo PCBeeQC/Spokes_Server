@@ -75,7 +75,6 @@ public class TimesheetReportModelsTests
         };
 
         Assert.Equal(15.5m, row.TotalHours);
-        Assert.Equal(13.5m, row.TotalBillableHours);
         Assert.Equal(1350m, row.TotalBillableAmount);
     }
 
@@ -104,7 +103,6 @@ public class TimesheetReportModelsTests
         };
 
         Assert.Equal(30m, matrix.GrandTotalHours);
-        Assert.Equal(23m, matrix.GrandTotalBillableHours);
         Assert.Equal(2300m, matrix.GrandTotalBillableAmount);
     }
 }

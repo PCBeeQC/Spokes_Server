@@ -61,6 +61,9 @@ public class CasdoorProvisioningService
     public async Task<(string BuiltInPassword, string SpokesPassword, string ClientId, string ClientSecret)> ProvisionAsync(
         string publicUrl, string builtInUsername, string builtInPassword, string spokesUsername, string spokesPassword)
     {
+        if (_systemConfigs.Get().IsSetupComplete)
+            throw new InvalidOperationException("Initial IDP provisioning is disabled after server setup is complete.");
+
         // Casdoor lowercases usernames on insert (isUsernameLowered=true in app.conf).
         // We must match that in init_data.json to avoid UNIQUE constraint crashes on restart.
         builtInUsername = builtInUsername.ToLowerInvariant();
@@ -70,17 +73,10 @@ public class CasdoorProvisioningService
         var hashedSpokesPassword = BCrypt.Net.BCrypt.HashPassword(spokesPassword);
 
         var persistentCasdoorDir = Path.Combine(_dataPath, "casdoor");
-        var persistentConfDir = Path.Combine(persistentCasdoorDir, "conf");
-        if (!Directory.Exists(persistentConfDir)) Directory.CreateDirectory(persistentConfDir);
-
         var ephemeralCasdoorDir = "/app/casdoor";
-        var ephemeralConfDir = Path.Combine(ephemeralCasdoorDir, "conf");
-        if (!Directory.Exists(ephemeralConfDir)) Directory.CreateDirectory(ephemeralConfDir);
 
         // 1. Generate app.conf
-        var appConf = _templateGenerator.GenerateAppConf(publicUrl, _dataPath, "prod");
-        await File.WriteAllTextAsync(Path.Combine(persistentConfDir, "app.conf"), appConf);
-        await File.WriteAllTextAsync(Path.Combine(ephemeralConfDir, "app.conf"), appConf);
+        await SyncAppConfOriginAsync(publicUrl);
 
         // 2. Generate Application Credentials
         var clientId = GenerateRandomString(20);
@@ -88,11 +84,7 @@ public class CasdoorProvisioningService
 
         var profile = _companyProfiles.Get();
         var sysConfig = _systemConfigs.Get();
-        var companyName = string.IsNullOrWhiteSpace(profile?.CompanyName) ? "Spokes" : profile.CompanyName;
-        var logoUrl = $"{publicUrl.TrimEnd('/')}/branding/{sysConfig.PublicBrandingToken}/logo.png";
-        var faviconUrl = $"{publicUrl.TrimEnd('/')}/branding/{sysConfig.PublicBrandingToken}/icon.png";
-        var fixedLogoUrl = $"{publicUrl.TrimEnd('/')}/spokes-org-logo.png";
-        var fixedFaviconUrl = $"{publicUrl.TrimEnd('/')}/spokes-org-icon.png";
+        var (companyName, logoUrl, faviconUrl, fixedLogoUrl, fixedFaviconUrl) = BuildBrandingUrls(profile, sysConfig, publicUrl);
 
         // 3. Generate init_data.json
         var initParams = new CasdoorInitDataParameters(
@@ -224,6 +216,20 @@ public class CasdoorProvisioningService
             .Select(s => s[Random.Shared.Next(s.Length)]).ToArray());
     }
 
+    private static (string CompanyName, string LogoUrl, string FaviconUrl, string FixedLogoUrl, string FixedFaviconUrl) BuildBrandingUrls(
+        CompanyProfile? profile,
+        SystemConfig sysConfig,
+        string baseUrl)
+    {
+        var trimmedBase = baseUrl.TrimEnd('/');
+        var companyName = string.IsNullOrWhiteSpace(profile?.CompanyName) ? "Spokes" : profile.CompanyName;
+        var logoUrl = $"{trimmedBase}/branding/{sysConfig.PublicBrandingToken}/logo.png";
+        var faviconUrl = $"{trimmedBase}/branding/{sysConfig.PublicBrandingToken}/icon.png";
+        var fixedLogoUrl = $"{trimmedBase}/spokes-org-logo.png";
+        var fixedFaviconUrl = $"{trimmedBase}/spokes-org-icon.png";
+        return (companyName, logoUrl, faviconUrl, fixedLogoUrl, fixedFaviconUrl);
+    }
+
     private async Task SyncAppConfOriginAsync(string newPublicUrl)
     {
         var persistentConfDir = Path.Combine(_dataPath, "casdoor", "conf");
@@ -232,7 +238,7 @@ public class CasdoorProvisioningService
         var ephemeralConfDir = "/app/casdoor/conf";
         if (!Directory.Exists(ephemeralConfDir)) Directory.CreateDirectory(ephemeralConfDir);
 
-        var appConf = _templateGenerator.GenerateAppConf(newPublicUrl, _dataPath, "dev");
+        var appConf = _templateGenerator.GenerateAppConf(newPublicUrl, _dataPath, "prod");
         await File.WriteAllTextAsync(Path.Combine(persistentConfDir, "app.conf"), appConf);
 
         try
@@ -263,12 +269,7 @@ public class CasdoorProvisioningService
             await SyncAppConfOriginAsync(sysConfig.ServerPublicUrl.TrimEnd('/'));
         }
 
-        var companyName = string.IsNullOrWhiteSpace(profile?.CompanyName) ? "Spokes" : profile.CompanyName;
-        var logoUrl = $"{sysConfig.ServerPublicUrl.TrimEnd('/')}/branding/{sysConfig.PublicBrandingToken}/logo.png";
-        var faviconUrl = $"{sysConfig.ServerPublicUrl.TrimEnd('/')}/branding/{sysConfig.PublicBrandingToken}/icon.png";
-
-        var fixedLogoUrl = $"{sysConfig.ServerPublicUrl.TrimEnd('/')}/spokes-org-logo.png";
-        var fixedFaviconUrl = $"{sysConfig.ServerPublicUrl.TrimEnd('/')}/spokes-org-icon.png";
+        var (companyName, logoUrl, faviconUrl, fixedLogoUrl, fixedFaviconUrl) = BuildBrandingUrls(profile, sysConfig, sysConfig.ServerPublicUrl);
 
         var clientId = sysConfig.ClientId;
         var clientSecret = sysConfig.ClientSecret;

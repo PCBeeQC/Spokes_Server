@@ -29,7 +29,7 @@ public class TimesheetTimerServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_TimesheetTimer_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        Dictionary<string, string?> configDict = new() { { "DataPath", _testDataDir } };
+        Dictionary<string, string?> configDict = new() { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);

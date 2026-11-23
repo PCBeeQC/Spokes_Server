@@ -318,7 +318,7 @@ public class UniversalInvoiceExtractorTests
         var context = new InvoiceExtractionContext
         {
             BuyerCompanyName = "Poly-Robotics Inc.",
-            BuyerEmailDomain = "poly-robotics.com"
+            BuyerEmailDomains = ["poly-robotics.com"]
         };
 
         var data = new ExtractedInvoiceData();
@@ -407,61 +407,6 @@ public class UniversalInvoiceExtractorTests
     }
 
     [Fact]
-    public void TestInspectUserSherwinWilliamsFiles_WhenPresentOnDisk()
-    {
-        var file1 = @"C:\Users\MatsDallaire\Downloads\793938382_42629_07152026.pdf";
-        var file2 = @"C:\Users\MatsDallaire\Downloads\793938382_42470_07142026.pdf";
-        var file3 = @"C:\Users\MatsDallaire\Downloads\793938382_39742_07132026.pdf";
-
-        var inspector = new PdfInvoiceInspectionService();
-
-        if (File.Exists(file1))
-        {
-            var data1 = inspector.InspectFile(file1);
-            Assert.NotNull(data1);
-            Assert.Equal("SHERWIN-WILLIAMS", data1.SupplierName);
-            Assert.StartsWith("42629", data1.InvoiceNumber);
-            Assert.DoesNotContain("SHERWIN", data1.InvoiceNumber);
-            Assert.Equal(99.20m, data1.SubTotal);
-            Assert.Equal(4.96m, data1.TpsAmount);
-            Assert.Equal(9.90m, data1.TvqAmount);
-            Assert.Equal(14.86m, data1.TaxAmount);
-            Assert.Equal(114.06m, data1.TotalAmount);
-            using var doc = UglyToad.PdfPig.PdfDocument.Open(file1);
-            var sp = SpatialTextDocument.FromPdf(doc);
-            var items = UniversalLineItemTableParser.ExtractLineItems(sp);
-            Assert.True(items.Count >= 1, $"Line items was {items.Count}. Lines: {string.Join(" | ", sp.Pages[0].Lines.Select(l => l.Text))}");
-        }
-
-        if (File.Exists(file2))
-        {
-            var data2 = inspector.InspectFile(file2);
-            Assert.NotNull(data2);
-            Assert.Equal("SHERWIN-WILLIAMS", data2.SupplierName);
-            Assert.StartsWith("42470", data2.InvoiceNumber);
-            Assert.DoesNotContain("SHERWIN", data2.InvoiceNumber);
-            Assert.Equal(99.20m, data2.SubTotal);
-            Assert.Equal(4.96m, data2.TpsAmount);
-            Assert.Equal(9.90m, data2.TvqAmount);
-            Assert.Equal(14.86m, data2.TaxAmount);
-            Assert.Equal(114.06m, data2.TotalAmount);
-            Assert.True(data2.LineItems.Count >= 1);
-        }
-
-        if (File.Exists(file3))
-        {
-            var data3 = inspector.InspectFile(file3);
-            Assert.NotNull(data3);
-            Assert.Equal("SHERWIN-WILLIAMS", data3.SupplierName);
-            Assert.StartsWith("39742", data3.InvoiceNumber);
-            Assert.DoesNotContain("SHERWIN", data3.InvoiceNumber);
-            Assert.Equal(344.91m, data3.SubTotal);
-            Assert.Equal(396.56m, data3.TotalAmount);
-            Assert.True(data3.LineItems.Count >= 1, $"data3.LineItems.Count was {data3.LineItems.Count}");
-        }
-    }
-
-    [Fact]
     public void TestZeroBalancePaidInvoice_TwoColumnBuyerTaxExclusion_AndSubscriptionTable()
     {
         var sb = new StringBuilder();
@@ -510,30 +455,224 @@ public class UniversalInvoiceExtractorTests
     }
 
     [Fact]
-    public void TestInspectAutoEntryFile_WhenPresentOnDisk()
+    public void TestClassifyIncomingPaymentAndRemittanceToCompany_RecognizedAsPaymentReceipt()
     {
-        var file = @"C:\Users\Mats\Downloads\AutoEntry-Facture-1661502.pdf";
-        if (!File.Exists(file)) return;
+        // 1. Customer Interac e-Transfer / deposit email longer than 100 chars before payment phrase
+        var (_, isReceiptInterac, reasonInterac) = UniversalDocumentClassifier.ClassifyEmail(
+            "Deposit notification for your business account",
+            "Hello Valued Business Customer, please be advised that Client ABC Corp has sent you an Interac e-Transfer of $1,250.00 which has been automatically deposited into your account.",
+            []);
+        Assert.True(isReceiptInterac, $"Expected receipt classification, got reason: {reasonInterac}");
 
-        var inspector = new PdfInvoiceInspectionService();
-        var data = inspector.InspectFile(file, new InvoiceExtractionContext
+        // 2. Customer EFT Remittance Advice PDF that also lists Net 30 / Balance Due 0.00
+        var remSb = new StringBuilder();
+        remSb.AppendLine("EFT PAYMENT ADVICE / REMITTANCE ADVICE");
+        remSb.AppendLine("Invoice # INV-2026-042 | Net 30 | Paid: $575.00 | Balance Due: $0.00");
+        remSb.AppendLine("Payment received and deposited into your account.");
+        var remData = new ExtractedInvoiceData
         {
-            BuyerCompanyName = "Poly-Robotics Inc"
-        });
+            InvoiceNumber = "INV-2026-042",
+            TotalAmount = 575.00m,
+            PaidAmount = 575.00m,
+            BalanceDue = 0.00m,
+            PaymentTerms = "Net 30"
+        };
+        UniversalDocumentClassifier.ClassifyDocument(remData, SpatialTextDocumentTestHelper.Create(remSb.ToString()));
+        Assert.True(remData.IsPaymentReceipt);
 
-        Assert.NotNull(data);
-        Assert.Equal("Ocrex Limited t/a AutoEntry", data.SupplierName);
-        Assert.Equal("IE9501858N", data.SupplierTaxId);
-        Assert.Equal("INV-411476-1661502", data.InvoiceNumber);
-        Assert.Equal(new DateTime(2026, 10, 6), data.InvoiceDate);
-        Assert.Null(data.DueDate);
-        Assert.Equal(37.00m, data.SubTotal);
-        Assert.Equal(0.00m, data.TaxAmount);
-        Assert.Equal(37.00m, data.TotalAmount);
-        Assert.Equal(37.00m, data.PaidAmount);
-        Assert.Equal(0.00m, data.BalanceDue);
-        Assert.Single(data.LineItems);
-        Assert.Equal(37.00m, data.LineItems[0].Total);
+        // 3. Even if an invoice PDF was attached alongside a clear remittance advice email, ClassifyEmail marks Receipt
+        var attachedInv = new ExtractedInvoiceData
+        {
+            InvoiceNumber = "INV-2026-042",
+            TotalAmount = 575.00m
+        };
+        var (_, isReceiptWithPdf, _) = UniversalDocumentClassifier.ClassifyEmail(
+            "EFT Remittance Advice - Payment for INV-2026-042",
+            "Attached is the remittance confirmation for the payment sent today.",
+            [attachedInv]);
+        Assert.True(isReceiptWithPdf);
+    }
+
+    [Theory]
+    [InlineData("monthly_statement_nov2026.pdf")]
+    [InlineData("releve_fournisseur.pdf")]
+    [InlineData("relevé-compte.pdf")]
+    [InlineData("etat_de_compte_2026.pdf")]
+    [InlineData("etat-de-compte-oct.pdf")]
+    [InlineData("kontoauszug_10.pdf")]
+    [InlineData("extracto_bancario.pdf")]
+    [InlineData("sommaire_client.pdf")]
+    public void TestUniversalDocumentClassifier_StatementFileNameTokens_PrecedesCreditNote(string fileName)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Acme Distribution Inc.");
+        sb.AppendLine("INV-1001  $250.00");
+        sb.AppendLine("Credit Note CN-2026-04 -$50.00");
+        sb.AppendLine("Total Due: $200.00");
+
+        var data = new ExtractedInvoiceData
+        {
+            SubTotal = 200.00m,
+            TotalAmount = 200.00m
+        };
+
+        UniversalDocumentClassifier.ClassifyDocument(data, SpatialTextDocumentTestHelper.Create(sb.ToString()), fileName);
+
+        Assert.True(data.IsAccountStatement);
+        Assert.False(data.IsCreditNote);
+        Assert.False(data.IsPaymentReceipt);
+        Assert.Equal(200.00m, data.TotalAmount);
+        Assert.Contains("filename matched", data.ClassificationReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("Account Summary")]
+    [InlineData("Statement Summary")]
+    [InlineData("Statement Date: 2026-11-01")]
+    [InlineData("Statement Period: Oct 1 - Oct 31")]
+    [InlineData("Aging Summary")]
+    [InlineData("Current 30 60 90")]
+    [InlineData("Balance Forward: $150.00")]
+    [InlineData("Previous Balance: $150.00")]
+    [InlineData("Sommaire de compte")]
+    [InlineData("Rapport de compte")]
+    [InlineData("Date de relevé : 2026-11-01")]
+    [InlineData("Rechnungsauszug")]
+    [InlineData("Offene Posten")]
+    [InlineData("Resumen de cuenta")]
+    public void TestUniversalDocumentClassifier_FoldedStatementPhrases_PrecedesCreditNote(string statementPhrase)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Global Industrial Supply");
+        sb.AppendLine(statementPhrase);
+        sb.AppendLine("Ref Credit Note CN-19  -$25.00");
+        sb.AppendLine("Amount Due: $300.00");
+
+        var data = new ExtractedInvoiceData
+        {
+            SubTotal = 300.00m,
+            TotalAmount = 300.00m
+        };
+
+        UniversalDocumentClassifier.ClassifyDocument(data, SpatialTextDocumentTestHelper.Create(sb.ToString()), "doc.pdf");
+
+        Assert.True(data.IsAccountStatement);
+        Assert.False(data.IsCreditNote);
+        Assert.False(data.IsPaymentReceipt);
+        Assert.Equal(300.00m, data.TotalAmount);
+    }
+
+    [Fact]
+    public void TestPdfInvoiceInspectionService_EndToEndGeneratedPdfs_StatementsInvoicesAndCreditNotes()
+    {
+        var inspector = new PdfInvoiceInspectionService();
+
+        // 1. Standard invoice PDF
+        var invoiceBytes = PdfTestBuilderHelper.BuildTextPdf(
+            "FACTURE",
+            "Acier Quebec Inc.",
+            "Facture No: INV-2026-500",
+            "Date: 2026-11-01",
+            "Sous-total: 100.00 $",
+            "TPS: 5.00 $",
+            "TVQ: 9.98 $",
+            "Total: 114.98 $");
+        using (var invStream = new MemoryStream(invoiceBytes))
+        {
+            var invData = inspector.Inspect(invStream, "INV-2026-500.pdf");
+            Assert.NotNull(invData);
+            Assert.Equal("PDF-Text", invData.RawDocumentType);
+            Assert.False(invData.IsAccountStatement);
+            Assert.False(invData.IsCreditNote);
+            Assert.Equal(114.98m, invData.TotalAmount);
+        }
+
+        // 2. Statement identified by filename even with Credit Note line in transaction table
+        var stmtByFilenameBytes = PdfTestBuilderHelper.BuildTextPdf(
+            "Acier Quebec Inc.",
+            "INV-2026-100   200.00",
+            "Credit Note CN-10   -50.00",
+            "Total Due: 150.00");
+        using (var stmtFnStream = new MemoryStream(stmtByFilenameBytes))
+        {
+            var stmtData = inspector.Inspect(stmtFnStream, "etat-de-compte-nov2026.pdf");
+            Assert.NotNull(stmtData);
+            Assert.True(stmtData.IsAccountStatement);
+            Assert.False(stmtData.IsCreditNote);
+            Assert.Equal("Statement", stmtData.RawDocumentType);
+            Assert.True(stmtData.TotalAmount >= 0);
+        }
+
+        // 3. Statement identified by folded body keyword ("Account Summary") before Credit Note pass
+        var stmtByBodyBytes = PdfTestBuilderHelper.BuildTextPdf(
+            "Acier Quebec Inc.",
+            "Account Summary",
+            "INV-2026-100   200.00",
+            "Credit Note CN-10   -50.00",
+            "Balance: 150.00");
+        using (var stmtBodyStream = new MemoryStream(stmtByBodyBytes))
+        {
+            var stmtData = inspector.Inspect(stmtBodyStream, "supplier_doc.pdf");
+            Assert.NotNull(stmtData);
+            Assert.True(stmtData.IsAccountStatement);
+            Assert.False(stmtData.IsCreditNote);
+            Assert.Equal("Statement", stmtData.RawDocumentType);
+        }
+
+        // 4. Genuine Credit Note PDF
+        var cnBytes = PdfTestBuilderHelper.BuildTextPdf(
+            "CREDIT NOTE",
+            "Acier Quebec Inc.",
+            "Credit Note No: CN-2026-12",
+            "Subtotal: 100.00",
+            "Tax: 14.98",
+            "Total: 114.98");
+        using (var cnStream = new MemoryStream(cnBytes))
+        {
+            var cnData = inspector.Inspect(cnStream, "cn-2026-12.pdf");
+            Assert.NotNull(cnData);
+            Assert.True(cnData.IsCreditNote);
+            Assert.False(cnData.IsAccountStatement);
+            Assert.Equal("CreditNote", cnData.RawDocumentType);
+            Assert.Equal(-114.98m, cnData.TotalAmount);
+        }
+
+        // 5. Scanned PDF (page with no selectable text) even when filename contains statement token
+        var scannedBytes = PdfTestBuilderHelper.BuildBlankPdf();
+        using (var scannedStream = new MemoryStream(scannedBytes))
+        {
+            var scannedData = inspector.Inspect(scannedStream, "statement_scan.pdf");
+            Assert.NotNull(scannedData);
+            Assert.True(scannedData.IsScannedImagePdf);
+            Assert.False(scannedData.IsAccountStatement);
+            Assert.Equal("Scanned-PDF", scannedData.RawDocumentType);
+        }
+    }
+}
+
+internal static class PdfTestBuilderHelper
+{
+    public static byte[] BuildTextPdf(params string[] lines)
+    {
+        using var builder = new UglyToad.PdfPig.Writer.PdfDocumentBuilder();
+        var page = builder.AddPage(UglyToad.PdfPig.Content.PageSize.Letter);
+        var font = builder.AddStandard14Font(UglyToad.PdfPig.Fonts.Standard14Fonts.Standard14Font.Helvetica);
+
+        double y = 740;
+        foreach (var line in lines)
+        {
+            page.AddText(line, 11, new UglyToad.PdfPig.Core.PdfPoint(50, y), font);
+            y -= 18;
+        }
+
+        return builder.Build();
+    }
+
+    public static byte[] BuildBlankPdf()
+    {
+        using var builder = new UglyToad.PdfPig.Writer.PdfDocumentBuilder();
+        builder.AddPage(UglyToad.PdfPig.Content.PageSize.Letter);
+        return builder.Build();
     }
 }
 

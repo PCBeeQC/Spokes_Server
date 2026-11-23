@@ -1,7 +1,6 @@
 namespace Spokes_Server.Core.Models.HR;
 
 using MudBlazor;
-using Spokes_Server.Core.Models.Core;
 
 public record CalendarViewingContext(
     string CurrentUserId,
@@ -9,14 +8,6 @@ public record CalendarViewingContext(
     IReadOnlyDictionary<string, string>? EmployeeNames = null,
     IReadOnlyDictionary<string, string>? TeamNames = null,
     IReadOnlyDictionary<string, CalendarCategory>? UserCategories = null);
-
-public record CalendarCategoryResolutionContext(
-    string CurrentUserId,
-    IReadOnlySet<string>? CurrentUserTeamIds = null,
-    IReadOnlyDictionary<string, string>? EmployeeNames = null,
-    IReadOnlyDictionary<string, string>? TeamNames = null,
-    IReadOnlyDictionary<string, CalendarCategory>? UserCategories = null)
-    : CalendarViewingContext(CurrentUserId, CurrentUserTeamIds, EmployeeNames, TeamNames, UserCategories);
 
 public class CalendarEffectiveCategory
 {

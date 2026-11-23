@@ -7,10 +7,6 @@ namespace Spokes_Server.Core.Services.Communication.Notifications.Routing;
 /// </summary>
 public interface IPushDecisionService
 {
-    bool IsUserFocusedForPush(string userId);
-    bool HasActiveDesktopConnectionForPush(string userId);
-    bool IsUserAwayFromDesktopForPush(string userId);
-    bool WasRecentlySeenOnDesktopForPush(string userId);
     bool ShouldSuppressMobilePush(string userId);
     PresenceTier DetermineNotificationTier(string userId);
     bool IsUserInVoiceCall(string userId) => false;

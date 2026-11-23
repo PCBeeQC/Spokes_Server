@@ -18,7 +18,7 @@ namespace Spokes_Server.Core.Services.Migrations;
 public class PushDeviceSessionMigrationStep : IMigrationStep
 {
     private readonly DeviceSessionRepository _deviceSessions;
-    private readonly string _pushSubDir;
+    private readonly string _dataPath;
     private readonly ILogger? _logger;
 
     public string MigrationKey => "20260102_PushDeviceSessionUnified";
@@ -31,7 +31,7 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
         ILogger<PushDeviceSessionMigrationStep>? logger = null)
     {
         _deviceSessions = deviceSessions ?? throw new ArgumentNullException(nameof(deviceSessions));
-        _pushSubDir = Path.Combine(config["DataPath"] ?? "Data", "PushSubscriptions");
+        _dataPath = config["DataPath"] ?? "Data";
         _logger = logger;
     }
 
@@ -41,7 +41,7 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
         ILogger? logger = null)
     {
         _deviceSessions = deviceSessions ?? throw new ArgumentNullException(nameof(deviceSessions));
-        _pushSubDir = Path.Combine(dataPath, "PushSubscriptions");
+        _dataPath = dataPath;
         _logger = logger;
     }
 
@@ -52,11 +52,34 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
         return Task.CompletedTask;
     }
 
-    public virtual void MigratePushSubscriptionsToDeviceSessions()
-    {
-        if (string.IsNullOrEmpty(_pushSubDir) || !Directory.Exists(_pushSubDir)) return;
+    public virtual void MigratePushSubscriptionsToDeviceSessions() =>
+        MigratePushSubscriptionDirectories(_deviceSessions, _dataPath, _logger);
 
-        var files = Directory.GetFiles(_pushSubDir, "*.json", SearchOption.AllDirectories)
+    internal static void MigratePushSubscriptionDirectories(
+        DeviceSessionRepository deviceSessions,
+        string dataPath,
+        ILogger? logger = null)
+    {
+        if (string.IsNullOrEmpty(dataPath) || !Directory.Exists(dataPath)) return;
+
+        var pushDirs = Directory.EnumerateDirectories(dataPath)
+            .Where(d => string.Equals(Path.GetFileName(d), "PushSubscriptions", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        foreach (var pushSubDir in pushDirs)
+        {
+            MigrateSinglePushSubscriptionDirectory(deviceSessions, pushSubDir, logger);
+        }
+    }
+
+    private static void MigrateSinglePushSubscriptionDirectory(
+        DeviceSessionRepository deviceSessions,
+        string pushSubDir,
+        ILogger? logger)
+    {
+        if (string.IsNullOrEmpty(pushSubDir) || !Directory.Exists(pushSubDir)) return;
+
+        var files = Directory.GetFiles(pushSubDir, "*.json", SearchOption.AllDirectories)
             .Where(f => !f.Contains(".corrupted"))
             .ToArray();
 
@@ -64,19 +87,19 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
         {
             try
             {
-                if (!Directory.Exists(Path.Combine(_pushSubDir, ".corrupted")))
+                if (!Directory.Exists(Path.Combine(pushSubDir, ".corrupted")))
                 {
-                    Directory.Delete(_pushSubDir, true);
+                    Directory.Delete(pushSubDir, true);
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                _logger?.LogWarning(ex, "[Migration] Failed to delete empty push subscriptions directory {Dir}: {Error}", _pushSubDir, ex.Message);
+                logger?.LogWarning(ex, "[Migration] Failed to delete empty push subscriptions directory {Dir}: {Error}", pushSubDir, ex.Message);
             }
             return;
         }
 
-        _logger?.LogInformation("[Migration] Merging {Count} PushSubscriptions from disk into DeviceSessions...", files.Length);
+        logger?.LogInformation("[Migration] Merging {Count} PushSubscriptions from disk into DeviceSessions...", files.Length);
         int merged = 0, orphaned = 0;
 
         foreach (var file in files)
@@ -88,7 +111,7 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                _logger?.LogWarning(ex, "[Migration] Failed to read legacy push file {File}: {Error}", file, ex.Message);
+                logger?.LogWarning(ex, "[Migration] Failed to read legacy push file {File}: {Error}", file, ex.Message);
                 continue;
             }
 
@@ -99,22 +122,22 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "[Migration] Failed to deserialize legacy push file {File}: {Error}", file, ex.Message);
+                logger?.LogWarning(ex, "[Migration] Failed to deserialize legacy push file {File}: {Error}", file, ex.Message);
             }
 
             if (sub == null)
             {
                 try
                 {
-                    var corruptedDir = Path.Combine(_pushSubDir, ".corrupted");
+                    var corruptedDir = Path.Combine(pushSubDir, ".corrupted");
                     Directory.CreateDirectory(corruptedDir);
                     var destFile = Path.Combine(corruptedDir, Path.GetFileName(file));
                     File.Move(file, destFile, overwrite: true);
-                    _logger?.LogWarning("[Migration] Quarantined corrupted legacy push file {File} to {DestFile}", file, destFile);
+                    logger?.LogWarning("[Migration] Quarantined corrupted legacy push file {File} to {DestFile}", file, destFile);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    _logger?.LogWarning(ex, "[Migration] Failed to quarantine corrupted legacy push file {File}: {Error}", file, ex.Message);
+                    logger?.LogWarning(ex, "[Migration] Failed to quarantine corrupted legacy push file {File}: {Error}", file, ex.Message);
                 }
                 continue;
             }
@@ -123,17 +146,17 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
 
             // Try strict match: SessionId
             if (!string.IsNullOrEmpty(sub.SessionId))
-                session = _deviceSessions.GetById(sub.SessionId);
+                session = deviceSessions.GetById(sub.SessionId);
 
             // Fallback: DeviceId + UserId
             if (session == null && !string.IsNullOrEmpty(sub.DeviceId))
-                session = _deviceSessions.GetByEmployeeId(sub.UserId)
+                session = deviceSessions.GetByEmployeeId(sub.UserId)
                     .FirstOrDefault(s => s.DeviceId == sub.DeviceId && s.RevokedAt == null);
 
             // Fallback: Fuzzy match on UserAgent (for legacy subscriptions without SessionId/DeviceId)
             if (session == null && !string.IsNullOrEmpty(sub.UserAgent))
             {
-                var userSessions = _deviceSessions.GetAll()
+                var userSessions = deviceSessions.GetAll()
                     .Where(s => s.EmployeeId == sub.UserId && s.RevokedAt == null && !s.HasPush)
                     .ToList();
                 var ua = sub.UserAgent;
@@ -158,14 +181,14 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
                     session.DeviceType = sub.DeviceType ?? global::Spokes_Server.Core.Models.Core.DeviceType.Desktop;
                     if (!string.IsNullOrEmpty(sub.DeviceName))
                         session.DeviceName = sub.DeviceName;
-                    _deviceSessions.Save(session);
+                    deviceSessions.Save(session);
                 }
                 merged++;
             }
             else
             {
                 var endpointPreview = sub.Endpoint.Length > 30 ? sub.Endpoint[..30] + "..." : sub.Endpoint;
-                _logger?.LogWarning("[Migration] Orphaned PushSubscription {SubId} (user={UserId}, endpoint={Endpoint})", sub.Id, sub.UserId, endpointPreview);
+                logger?.LogWarning("[Migration] Orphaned PushSubscription {SubId} (user={UserId}, endpoint={Endpoint})", sub.Id, sub.UserId, endpointPreview);
                 orphaned++;
             }
 
@@ -175,23 +198,23 @@ public class PushDeviceSessionMigrationStep : IMigrationStep
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                _logger?.LogWarning(ex, "[Migration] Failed to delete migrated legacy push file {File}: {Error}", file, ex.Message);
+                logger?.LogWarning(ex, "[Migration] Failed to delete migrated legacy push file {File}: {Error}", file, ex.Message);
             }
         }
 
         try
         {
-            if (Directory.Exists(_pushSubDir) && !Directory.EnumerateFileSystemEntries(_pushSubDir).Any())
+            if (Directory.Exists(pushSubDir) && !Directory.EnumerateFileSystemEntries(pushSubDir).Any())
             {
-                Directory.Delete(_pushSubDir, true);
+                Directory.Delete(pushSubDir, true);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            _logger?.LogWarning(ex, "[Migration] Failed to clean up empty push subscriptions directory {Dir}: {Error}", _pushSubDir, ex.Message);
+            logger?.LogWarning(ex, "[Migration] Failed to clean up empty push subscriptions directory {Dir}: {Error}", pushSubDir, ex.Message);
         }
 
-        _logger?.LogInformation("[Migration] Complete: {Merged} merged, {Orphaned} orphaned.", merged, orphaned);
+        logger?.LogInformation("[Migration] Complete: {Merged} merged, {Orphaned} orphaned.", merged, orphaned);
     }
 
     public virtual void CleanupStaleDeviceSessions()

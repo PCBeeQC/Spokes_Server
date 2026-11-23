@@ -8,4 +8,5 @@ public interface ITimelineEventService
     void SyncQuoteStatusTimelineEvent(Quote quote, string oldStatus, string newStatus, string? user = null);
     void SyncInvoiceStatusTimelineEvent(Invoice invoice, string oldStatus, string newStatus, string? user = null);
     void SyncDocumentStatusTimelineEvent(ProjectDocument doc, string oldStatus, string newStatus, string? user = null);
+    void SyncProjectReportStatusTimelineEvent(ProjectReport report, string oldStatus, string newStatus, string? user = null);
 }

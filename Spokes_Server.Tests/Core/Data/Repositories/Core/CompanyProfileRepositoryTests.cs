@@ -155,7 +155,7 @@ public class CompanyProfileRepositoryTests : RepositoryTestFixture<CompanyProfil
         Assert.NotNull(hrCtx.HRConfig);
         Assert.NotNull(hrCtx.TimesheetConfig);
 
-        var commCtx = new CommunicationContext(null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, _repo);
+        var commCtx = new CommunicationContext(null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, _repo);
         Assert.Equal(500, commCtx.ChatConfig.MaxChatCacheSizeMb);
         Assert.NotNull(commCtx.PushConfig);
         Assert.NotNull(commCtx.EmailSettings);

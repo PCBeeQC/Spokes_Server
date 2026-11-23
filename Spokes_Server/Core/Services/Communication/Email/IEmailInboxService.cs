@@ -9,6 +9,7 @@ namespace Spokes_Server.Core.Services.Communication.Email;
 public interface IEmailInboxService
 {
     HashSet<string> GetUserTeamIds(string employeeId);
+    List<EmailInbox> GetManageableInboxesForSettings(string employeeId);
     List<EmailInbox> GetAccessibleInboxes(string employeeId);
     List<EmailInbox> GetAccessibleInboxes(Employee employee);
     List<EmailAccount> GetAccessibleRealInboxes(string employeeId, bool includeArchived = false);
@@ -17,11 +18,13 @@ public interface IEmailInboxService
     List<EmailAccount> GetAccessibleArchivedRealInboxes(Employee employee);
     List<EmailAccount> GetAccessibleAccounts(string employeeId, bool includeArchived = false);
     List<EmailAccount> GetAccessibleAccounts(Employee employee, bool includeArchived = false);
-    void SetRealInboxArchived(string accountId, bool isArchived);
-    void DeleteRealInbox(string accountId);
-    void DeleteVirtualInbox(string inboxId);
-    void DeleteSendingIdentity(string identityId);
+    bool HasWebmailConsumers(EmailAccount account);
+    void SetRealInboxArchived(string accountId, bool isArchived, string? callerEmployeeId = null);
+    void DeleteRealInbox(string accountId, string? callerEmployeeId = null);
+    void DeleteVirtualInbox(string inboxId, string? callerEmployeeId = null);
+    void DeleteSendingIdentity(string identityId, string? callerEmployeeId = null);
     Func<MessageMetadata, bool>? GetMetadataFilterForInbox(EmailInbox inbox);
+    bool IsPrimaryRootInboxMessage(EmailMessage message);
     bool DoesMessageMatchInbox(EmailMessage message, EmailInbox inbox);
     List<string> GetUnmatchedAddressesForMessage(EmailMessage message);
     List<string> GetDetectedAddressesForAccount(string accountId);
@@ -35,7 +38,6 @@ public interface IEmailInboxService
     List<EmailMessage> GetRealInboxMessages(string accountId, int count = 50, DateTime? beforeDateUtc = null);
     List<EmailMessage> GetAllInboxesMessages(Employee employee, int count = 50, DateTime? beforeDateUtc = null);
     EmailSendingIdentity EnsureRealInboxSendingIdentity(EmailAccount account, string? displayName = null);
-    EmailSendingIdentity EnsureVirtualInboxSendingIdentity(EmailInbox inbox, string outgoingServerConfigId, string? displayName = null);
     List<EmailSendingIdentity> GetPermittedIdentities(string employeeId, EmailInbox? inbox = null, IEnumerable<string>? replyReceivingAddresses = null, EmailAccount? realInbox = null);
     List<EmailSendingIdentity> GetPermittedIdentities(Employee employee, EmailInbox? inbox = null, IEnumerable<string>? replyReceivingAddresses = null, EmailAccount? realInbox = null);
     bool IsIdentityPermittedForUser(string employeeId, string identityId, string? inboxId = null);
@@ -45,4 +47,5 @@ public interface IEmailInboxService
     List<string> GetAuthorizedEmployeeIdsForMessage(EmailMessage message);
     bool CanUserAccessEmailMessage(string employeeId, string accountId, string messageId, bool isAdmin = false);
     bool CanUserAccessEmailMessage(Employee user, string accountId, string messageId);
+    bool CanEmployeeAccessLocalDraft(EmailMessage draft, string employeeId);
 }

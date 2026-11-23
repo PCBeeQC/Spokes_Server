@@ -100,10 +100,51 @@ public static class NotificationSoundCatalog
 
     public static IReadOnlyList<NotificationSoundDefinition> GetAllSounds() => _sounds;
 
-    public static IReadOnlyList<NotificationSoundDefinition> GetSoundsForCategory(string categoryId)
+    private static (NotificationCategoryDefinition? Category, NotificationSoundDefinition? DefaultSound) ResolveCategoryDefault(string categoryId)
     {
         var category = NotificationCategoryRegistry.GetCategory(categoryId);
         var defaultSound = _sounds.FirstOrDefault(s => !s.IsSpecial && s.FileName != null && s.FileName.Equals(category?.DefaultSoundFileName, StringComparison.OrdinalIgnoreCase));
+        return (category, defaultSound);
+    }
+
+    public static string NormalizeSoundIdForCategory(string categoryId, string? soundId)
+    {
+        var (_, defaultSound) = ResolveCategoryDefault(categoryId);
+        if (string.IsNullOrEmpty(soundId) || soundId == NotificationSoundIds.SpokesDefault || soundId == defaultSound?.Id)
+        {
+            return NotificationSoundIds.SpokesDefault;
+        }
+        return soundId;
+    }
+
+    private static string ResolveSoundFileOrCategoryDefault(string categoryId, string? soundId)
+    {
+        if (!string.IsNullOrEmpty(soundId) && !string.Equals(soundId, NotificationSoundIds.SpokesDefault, StringComparison.OrdinalIgnoreCase))
+        {
+            var normalizedId = soundId.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)
+                ? soundId[..^4]
+                : soundId;
+            var sound = GetSoundById(normalizedId);
+            if (!string.IsNullOrEmpty(sound?.FileName))
+            {
+                return sound.FileName;
+            }
+        }
+
+        return NotificationCategoryRegistry.GetCategory(categoryId)?.DefaultSoundFileName ?? "spokesnotif1.wav";
+    }
+
+    /// <summary>
+    /// Resolves the call ringtone .wav file name for in-call caller ringback playback.
+    /// When the user has selected System Default or Spokes Default, falls back to the Call category default
+    /// ("mixkit_marimba_ringtone_1359.wav") so the calling user always hears an audible ringback tone.
+    /// </summary>
+    public static string ResolveCallRingbackFileName(string? soundId) =>
+        ResolveSoundFileOrCategoryDefault(NotificationCategories.Call, soundId);
+
+    public static IReadOnlyList<NotificationSoundDefinition> GetSoundsForCategory(string categoryId)
+    {
+        var (category, defaultSound) = ResolveCategoryDefault(categoryId);
         var defaultDisplayName = defaultSound != null ? $"{defaultSound.DisplayName} (Default)" : "Spokes Default";
 
         var result = new List<NotificationSoundDefinition>
@@ -140,8 +181,7 @@ public static class NotificationSoundCatalog
     {
         if (string.IsNullOrEmpty(soundId) || string.Equals(soundId, NotificationSoundIds.SpokesDefault, StringComparison.OrdinalIgnoreCase))
         {
-            var category = NotificationCategoryRegistry.GetCategory(categoryId);
-            var defaultSound = _sounds.FirstOrDefault(s => !s.IsSpecial && s.FileName != null && s.FileName.Equals(category?.DefaultSoundFileName, StringComparison.OrdinalIgnoreCase));
+            var (_, defaultSound) = ResolveCategoryDefault(categoryId);
             return defaultSound != null ? $"{defaultSound.DisplayName} (Default)" : "Spokes Default";
         }
 
@@ -161,53 +201,17 @@ public static class NotificationSoundCatalog
     /// Resolves the sound file name for desktop playback.
     /// Returns null if System Default (which stays silent on desktop to let the OS handle it).
     /// </summary>
-    public static string? ResolveEffectiveSoundFileName(string categoryId, string? soundId)
-    {
-        if (string.Equals(soundId, NotificationSoundIds.SystemDefault, StringComparison.OrdinalIgnoreCase))
-        {
-            return null; // Desktop stays silent
-        }
-
-        if (string.IsNullOrEmpty(soundId) || string.Equals(soundId, NotificationSoundIds.SpokesDefault, StringComparison.OrdinalIgnoreCase))
-        {
-            var category = NotificationCategoryRegistry.GetCategory(categoryId);
-            return category?.DefaultSoundFileName ?? "spokesnotif1.wav";
-        }
-
-        var sound = GetSoundById(soundId);
-        if (sound?.FileName != null)
-        {
-            return sound.FileName;
-        }
-
-        var fallbackCategory = NotificationCategoryRegistry.GetCategory(categoryId);
-        return fallbackCategory?.DefaultSoundFileName ?? "spokesnotif1.wav";
-    }
+    public static string? ResolveEffectiveSoundFileName(string categoryId, string? soundId) =>
+        string.Equals(soundId, NotificationSoundIds.SystemDefault, StringComparison.OrdinalIgnoreCase)
+            ? null // Desktop stays silent
+            : ResolveSoundFileOrCategoryDefault(categoryId, soundId);
 
     /// <summary>
     /// Resolves the sound string for APNs and Android FCM push payloads.
     /// Returns "default" for System Default, or the exact .wav file name for bundled sounds.
     /// </summary>
-    public static string GetEffectivePushSound(string categoryId, string? soundId)
-    {
-        if (string.Equals(soundId, NotificationSoundIds.SystemDefault, StringComparison.OrdinalIgnoreCase))
-        {
-            return "default";
-        }
-
-        if (string.IsNullOrEmpty(soundId) || string.Equals(soundId, NotificationSoundIds.SpokesDefault, StringComparison.OrdinalIgnoreCase))
-        {
-            var category = NotificationCategoryRegistry.GetCategory(categoryId);
-            return category?.DefaultSoundFileName ?? "spokesnotif1.wav";
-        }
-
-        var sound = GetSoundById(soundId);
-        if (!string.IsNullOrEmpty(sound?.FileName))
-        {
-            return sound.FileName;
-        }
-
-        var fallbackCategory = NotificationCategoryRegistry.GetCategory(categoryId);
-        return fallbackCategory?.DefaultSoundFileName ?? "spokesnotif1.wav";
-    }
+    public static string GetEffectivePushSound(string categoryId, string? soundId) =>
+        string.Equals(soundId, NotificationSoundIds.SystemDefault, StringComparison.OrdinalIgnoreCase)
+            ? "default"
+            : ResolveSoundFileOrCategoryDefault(categoryId, soundId);
 }

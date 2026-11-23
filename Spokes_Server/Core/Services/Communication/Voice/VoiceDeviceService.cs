@@ -30,14 +30,18 @@ public class VoiceDeviceService : IVoiceDeviceService
         _logger = logger ?? NullLogger.Instance;
     }
 
-    public async Task SwitchCameraAsync(string deviceId, bool isVideoOn)
+    public async Task SwitchCameraAsync(string? deviceId, bool isVideoOn)
     {
         try
         {
             if (_jsInterop != null && _jsInterop.IsModuleLoaded && isVideoOn)
             {
-                await _jsInterop.SwitchActiveCameraAsync(deviceId);
-                OnActiveCameraChanged?.Invoke(deviceId);
+                var resolvedId = await _jsInterop.SwitchActiveCameraAsync(deviceId);
+                var effectiveId = !string.IsNullOrWhiteSpace(resolvedId) ? resolvedId : (deviceId ?? "");
+                if (!string.IsNullOrWhiteSpace(effectiveId))
+                {
+                    OnActiveCameraChanged?.Invoke(effectiveId);
+                }
             }
         }
         catch (Exception ex)
@@ -165,11 +169,40 @@ public class VoiceDeviceService : IVoiceDeviceService
         }
     }
 
+    private Task? _inFlightReattachTask;
+
     public async Task ReattachTracksAsync()
     {
-        if (_jsInterop != null && _jsInterop.IsModuleLoaded)
+        if (_jsInterop == null || !_jsInterop.IsModuleLoaded)
         {
-            await _jsInterop.ReattachAllTracksAsync();
+            return;
+        }
+
+        var existing = _inFlightReattachTask;
+        if (existing is { IsCompleted: false })
+        {
+            await existing;
+            return;
+        }
+
+        var task = ReattachTracksCoreAsync();
+        _inFlightReattachTask = task;
+        await task;
+    }
+
+    private async Task ReattachTracksCoreAsync()
+    {
+        try
+        {
+            await Task.Yield();
+            if (_jsInterop != null && _jsInterop.IsModuleLoaded)
+            {
+                await _jsInterop.ReattachAllTracksAsync();
+            }
+        }
+        finally
+        {
+            _inFlightReattachTask = null;
         }
     }
 
@@ -191,20 +224,49 @@ public class VoiceDeviceService : IVoiceDeviceService
         OnCamerasUpdated?.Invoke(cameras, activeCameraId);
     }
 
-    public void HandleParticipantVideoDimensions(string participantId, int height, int fps)
+    private int _lastLocalVideoMaxEdge;
+    private int _lastLocalVideoFps;
+    private int _lastLocalScreenMaxEdge;
+    private int _lastLocalScreenFps;
+
+    public bool HandleParticipantVideoDimensions(string participantId, int height, int fps)
     {
+        bool heightUnchanged = RemoteVideoHeights.TryGetValue(participantId, out var prevH) && prevH == height;
+        bool fpsUnchanged = RemoteVideoFps.TryGetValue(participantId, out var prevFps) && prevFps == fps;
+        if (heightUnchanged && fpsUnchanged)
+        {
+            return false;
+        }
+
         RemoteVideoHeights[participantId] = height;
         RemoteVideoFps[participantId] = fps;
+        return true;
     }
 
-    public void HandleLocalVideoDimensions(int maxEdge, int fps)
+    public bool HandleLocalVideoDimensions(int maxEdge, int fps)
     {
+        if (_lastLocalVideoMaxEdge == maxEdge && _lastLocalVideoFps == fps)
+        {
+            return false;
+        }
+
+        _lastLocalVideoMaxEdge = maxEdge;
+        _lastLocalVideoFps = fps;
         OnLocalVideoDimensionsChanged?.Invoke(maxEdge, fps);
+        return true;
     }
 
-    public void HandleLocalScreenDimensions(int maxEdge, int fps)
+    public bool HandleLocalScreenDimensions(int maxEdge, int fps)
     {
+        if (_lastLocalScreenMaxEdge == maxEdge && _lastLocalScreenFps == fps)
+        {
+            return false;
+        }
+
+        _lastLocalScreenMaxEdge = maxEdge;
+        _lastLocalScreenFps = fps;
         OnLocalScreenDimensionsChanged?.Invoke(maxEdge, fps);
+        return true;
     }
 
     public void RemoveParticipantVideo(string participantId)
@@ -217,6 +279,10 @@ public class VoiceDeviceService : IVoiceDeviceService
     {
         RemoteVideoHeights.Clear();
         RemoteVideoFps.Clear();
+        _lastLocalVideoMaxEdge = 0;
+        _lastLocalVideoFps = 0;
+        _lastLocalScreenMaxEdge = 0;
+        _lastLocalScreenFps = 0;
         OnIosMicrophoneModeChanged?.Invoke("unsupported");
     }
 }

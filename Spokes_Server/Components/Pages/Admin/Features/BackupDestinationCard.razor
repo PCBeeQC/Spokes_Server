@@ -1,0 +1,164 @@
+@namespace Spokes_Server.Components.Pages.Admin.Features
+@using Spokes_Server.Core.Services.Maintenance.Destinations
+
+<MudPaper Elevation="0" Outlined="true" Class="pa-4 rounded-lg">
+    <div class="d-flex align-center justify-space-between gap-3 cursor-pointer" @onclick="OnToggleExpanded">
+        <div class="d-flex align-center gap-3">
+            <MudIcon Icon="@Icon" Color="@(IsEnabled ? Color.Primary : Color.Default)" />
+            <div>
+                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Title</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-none d-sm-block">
+                    @Subtitle
+                </MudText>
+            </div>
+        </div>
+        <div class="d-flex align-center gap-2" @onclick:stopPropagation="true">
+            @if (Status.State == RemoteUploadState.Uploading)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                    @($"{Status.Percent:F0}%")
+                </MudChip>
+            }
+            else if (Status.State == RemoteUploadState.Success)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Check">
+                    @Loc["Uploaded"]
+                </MudChip>
+            }
+            else if (Status.State == RemoteUploadState.Failed)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Error">
+                    @Loc["Upload failed"]
+                </MudChip>
+            }
+            else if (IsEnabled)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">
+                    @Loc["Enabled"]
+                </MudChip>
+            }
+            else if (ShowConnectedDisabledBadge)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
+                    @Loc["Connected (Disabled)"]
+                </MudChip>
+            }
+
+            <MudSwitch T="bool" Value="@IsEnabled"
+                       ValueChanged="IsEnabledChanged"
+                       Disabled="@SwitchDisabled"
+                       Color="Color.Primary" Class="ma-0" />
+            <MudIconButton Icon="@(IsExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                           Size="Size.Small"
+                           OnClick="OnToggleExpanded" />
+        </div>
+    </div>
+
+    @if (Status.State == RemoteUploadState.Uploading)
+    {
+        <div class="mt-3">
+            <div class="d-flex justify-space-between mb-1">
+                <MudText Typo="Typo.caption" Color="Color.Primary">
+                    @(string.IsNullOrEmpty(UploadingText) ? Loc["Uploading backup to remote destination..."].Value : UploadingText)
+                </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @Status.FormattedProgress
+                </MudText>
+            </div>
+            <MudProgressLinear Color="Color.Primary" Value="@Status.Percent" Rounded="true" Size="Size.Medium" />
+        </div>
+    }
+    else if (Status.State == RemoteUploadState.Success)
+    {
+        <div class="mt-3">
+            <div class="d-flex justify-space-between align-center mb-1">
+                <div class="d-flex align-center gap-1">
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
+                    <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
+                        @Loc["Upload complete"]
+                    </MudText>
+                </div>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @Status.FormattedProgress
+                </MudText>
+            </div>
+            <MudProgressLinear Color="Color.Success" Value="100" Rounded="true" Size="Size.Medium" />
+        </div>
+    }
+    else if (Status.State == RemoteUploadState.Failed && !string.IsNullOrEmpty(Status.ErrorMessage))
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
+            @Loc["Upload failed:"] @Status.ErrorMessage
+        </MudAlert>
+    }
+
+    <MudCollapse Expanded="@IsExpanded">
+        <MudDivider Class="my-3" />
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
+            @ExpandedDescription
+        </MudText>
+
+        @ChildContent
+
+        @if (ShowFooter)
+        {
+            <div class="d-flex flex-wrap align-center gap-3 mt-3 pt-2">
+                @ExtraFooterActions
+
+                @if (ShowTestButton)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.CheckCircle"
+                               Disabled="@IsTesting"
+                               OnClick="OnTestConnection">
+                        @if (IsTesting)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                            <span>@Loc["Testing..."]</span>
+                        }
+                        else
+                        {
+                            <span>@TestButtonLabel</span>
+                        }
+                    </MudButton>
+                }
+
+                @if (!string.IsNullOrEmpty(TestMessage))
+                {
+                    <MudText Typo="Typo.caption" Color="@(TestSuccess ? Color.Success : Color.Error)">
+                        @TestMessage
+                    </MudText>
+                }
+            </div>
+        }
+    </MudCollapse>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Subtitle { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string ExpandedDescription { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Icon { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public DestinationUploadStatus Status { get; set; } = default!;
+
+    [Parameter] public bool IsEnabled { get; set; }
+    [Parameter] public EventCallback<bool> IsEnabledChanged { get; set; }
+    [Parameter] public bool SwitchDisabled { get; set; }
+
+    [Parameter] public bool IsExpanded { get; set; }
+    [Parameter] public EventCallback OnToggleExpanded { get; set; }
+
+    [Parameter] public string? UploadingText { get; set; }
+    [Parameter] public bool ShowConnectedDisabledBadge { get; set; }
+
+    [Parameter] public bool ShowFooter { get; set; } = true;
+    [Parameter] public bool ShowTestButton { get; set; } = true;
+    [Parameter] public string TestButtonLabel { get; set; } = string.Empty;
+    [Parameter] public bool IsTesting { get; set; }
+    [Parameter] public string? TestMessage { get; set; }
+    [Parameter] public bool TestSuccess { get; set; }
+    [Parameter] public EventCallback OnTestConnection { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? ExtraFooterActions { get; set; }
+}

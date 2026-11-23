@@ -1,10 +1,13 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
-using System.Text.Json.Serialization;
+using System.Collections.Generic;
+using System.Linq;
+using Spokes_Server.Core.Models.Common;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Services.Accounting;
 
-public class PurchaseOrder : IDataEntity
+public class PurchaseOrder : IDataEntity, IHasDocumentHistory, IHasAssociatedFiles
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -38,23 +41,6 @@ public class PurchaseOrder : IDataEntity
     // The Content
     public List<PoItem> LineItems { get; set; } = [];
 
-    // Backward compatibility for legacy JSON files and existing call sites
-    [JsonPropertyName("Items")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<PoItem>? LegacyItems
-    {
-        get => null;
-        set { if (value != null && LineItems.Count == 0) LineItems = value; }
-    }
-
-    [Obsolete("Prefer LineItems for consistency across accounting models.")]
-    [JsonIgnore]
-    public List<PoItem> Items
-    {
-        get => LineItems;
-        set => LineItems = value;
-    }
-
     // Custom Columns Definitions (e.g. ["Color", "Size"])
     // We store the HEADERS here so we know what keys to look for in the items
     public List<string> CustomHeaders { get; set; } = [];
@@ -67,13 +53,19 @@ public class PurchaseOrder : IDataEntity
     public string Currency { get; set; } = string.Empty;
 
     // Totals
-    public decimal SubTotal => LineItems.Sum(i => i.Total);
-    public decimal TaxAmount => ApplyTax ? SubTotal * TaxRate : 0;
+    public decimal SubTotal => FinancialCalculationEngine.RoundCurrency(LineItems.Sum(i => i.Total));
+    public decimal TaxAmount => ApplyTax ? FinancialCalculationEngine.CalculateTax(SubTotal, TaxRate) : 0;
     public decimal GrandTotal => SubTotal + TaxAmount;
     
     // Billing
     public decimal TotalBilled { get; set; } = 0; // Updated when bills are saved
     public decimal RemainingBalance => GrandTotal - TotalBilled;
+    public List<DocumentHistoryEntry> History { get; set; } = [];
+
+    public IEnumerable<string> GetAssociatedFilePaths()
+    {
+        if (!string.IsNullOrWhiteSpace(PdfPath)) yield return PdfPath;
+    }
 }
 
 public class PoItem
@@ -97,8 +89,23 @@ public class PoItem
     public decimal Quantity { get; set; } = 1;
     public decimal UnitPrice { get; set; } = 0;
 
-    public decimal Total => Quantity * UnitPrice;
+    public decimal Total => FinancialCalculationEngine.RoundCurrency(Quantity * UnitPrice);
 
     // Custom Data (Key = Header Name, Value = Cell Content)
     public Dictionary<string, string> CustomData { get; set; } = [];
+}
+
+/// <summary>
+/// Flattened purchase order line-item projection for project procurement tabs.
+/// </summary>
+public class ProjectPurchaseRow
+{
+    public string Id { get; set; } = string.Empty;
+    public DateTime Date { get; set; }
+    public string PoNumber { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string PartNumber { get; set; } = string.Empty;
+    public decimal NetTotal { get; set; }
+    public decimal TaxAmount { get; set; }
+    public decimal GrandTotal => NetTotal + TaxAmount;
 }

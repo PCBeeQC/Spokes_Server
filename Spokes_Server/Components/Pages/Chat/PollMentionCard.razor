@@ -6,14 +6,16 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject TimeProvider TimeProvider
+@inject Database Db
+@inject IUserPrivacyService PrivacyService
 @implements IDisposable
 
 @if (_poll == null)
 {
-    <MudCard Class="pa-3" Style="width: 100%; max-width: 420px; border-radius: 8px; border: 1px dashed var(--mud-palette-divider); box-shadow: none; background: transparent;">
+    <MudCard Class="pa-3 chat-card-unavailable chat-card-unavailable-lg">
         <div class="d-flex align-center gap-3">
             <MudIcon Icon="@Icons.Material.Filled.Poll" Color="Color.Secondary" />
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-style: italic;">@Loc["This poll is no longer available."]</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="chat-card-italic">@Loc["This poll is no longer available."]</MudText>
         </div>
     </MudCard>
 }
@@ -25,15 +27,15 @@ else
     var maxVotes = _poll.Options.Any() ? _poll.Options.Max(o => o.VoteCount) : 0;
     var canModify = CanCurrentUserModifyPoll();
 
-    <MudCard Class="pa-3 poll-card" Style="width: 100%; max-width: 420px; border-radius: 10px; border: 1px solid var(--mud-palette-divider); box-shadow: none;">
+    <MudCard Class="pa-3 poll-card chat-poll-card">
         @* Header: Icon + Question + Subtitle + Creator/Mod Menu *@
         <div class="d-flex align-start justify-space-between gap-2 mb-3">
-            <div class="d-flex align-start gap-3" style="min-width: 0; flex: 1;">
-                <MudAvatar Size="Size.Medium" Class="flex-shrink-0" Style="background: color-mix(in srgb, var(--mud-palette-primary) 15%, transparent); color: var(--mud-palette-primary);">
+            <div class="d-flex align-start gap-3 chat-flex-min0">
+                <MudAvatar Size="Size.Medium" Class="flex-shrink-0 chat-poll-avatar">
                     <MudIcon Icon="@Icons.Material.Filled.Poll" Size="Size.Small" />
                 </MudAvatar>
-                <div style="min-width: 0; flex: 1;">
-                    <MudText Typo="Typo.subtitle1" Style="font-weight: 700; line-height: 1.3; word-break: break-word;">@_displayPoll.Question</MudText>
+                <div class="chat-flex-min0">
+                    <MudText Typo="Typo.subtitle1" Class="chat-poll-question">@_displayPoll.Question</MudText>
                     <div class="d-flex flex-wrap align-center gap-1 mt-1">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">
                             @(_poll.AllowMultipleAnswers ? Loc["Select one or more options"] : Loc["Select one option"])
@@ -41,7 +43,7 @@ else
                         @if (_poll.IsAnonymous)
                         {
                             <MudText Typo="Typo.caption" Color="Color.Secondary">•</MudText>
-                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary" Icon="@Icons.Material.Filled.VisibilityOff" Style="height: 18px; font-size: 0.68rem;" Class="ma-0 px-1">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary" Icon="@Icons.Material.Filled.VisibilityOff" Class="ma-0 px-1 chat-poll-anon-chip">
                                 @Loc["Anonymous"]
                             </MudChip>
                         }
@@ -51,38 +53,38 @@ else
 
             @if (canModify)
             {
-                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" IconColor="Color.Secondary" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
-                    <MudMenuItem OnClick="OpenEditPollDialog">
+                <LazyMudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" Color="Color.Secondary" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" ContentVersion="@(isExpired ? 1 : 0)" Context="closeMenu">
+                    <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { closeMenu(); await OpenEditPollDialog(); })">
                         <div class="d-flex align-center gap-2">
                             <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" />
                             <span>@Loc["Edit Poll"]</span>
                         </div>
-                    </MudMenuItem>
+                    </MudListItem>
                     @if (!isExpired)
                     {
-                        <MudMenuItem OnClick="@(() => SetPollClosed(true))">
+                        <MudListItem T="string" Class="mud-menu-item" OnClick="@(() => { closeMenu(); SetPollClosed(true); })">
                             <div class="d-flex align-center gap-2">
                                 <MudIcon Icon="@Icons.Material.Filled.LockClock" Size="Size.Small" Color="Color.Warning" />
                                 <span>@Loc["End Poll Now"]</span>
                             </div>
-                        </MudMenuItem>
+                        </MudListItem>
                     }
                     else
                     {
-                        <MudMenuItem OnClick="@(() => SetPollClosed(false))">
+                        <MudListItem T="string" Class="mud-menu-item" OnClick="@(() => { closeMenu(); SetPollClosed(false); })">
                             <div class="d-flex align-center gap-2">
                                 <MudIcon Icon="@Icons.Material.Filled.Replay" Size="Size.Small" Color="Color.Success" />
                                 <span>@Loc["Reopen Poll"]</span>
                             </div>
-                        </MudMenuItem>
+                        </MudListItem>
                     }
-                    <MudMenuItem OnClick="DeletePoll">
+                    <MudListItem T="string" Class="mud-menu-item" OnClick="@(() => { closeMenu(); DeletePoll(); })">
                         <div class="d-flex align-center gap-2">
                             <MudIcon Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" />
                             <MudText Typo="Typo.body2" Color="Color.Error">@Loc["Delete Poll"]</MudText>
                         </div>
-                    </MudMenuItem>
-                </MudMenu>
+                    </MudListItem>
+                </LazyMudMenu>
             }
         </div>
 
@@ -92,16 +94,15 @@ else
             {
                 var voteCount = opt.VoteCount;
                 var percentage = totalVotes > 0 ? Math.Round((double)voteCount * 100.0 / totalVotes) : 0;
-                var hasVoted = !_poll.IsAnonymous && !string.IsNullOrEmpty(CurrentUserId) && opt.VoterIds.Contains(CurrentUserId);
+                var hasVoted = _myVotedOptionIds.Contains(opt.Id);
                 var isWinner = isExpired && maxVotes > 0 && voteCount == maxVotes;
                 var canVote = !isExpired && !IsCurrentUserSuspended && !string.IsNullOrEmpty(CurrentUserId);
 
                 <MudPaper Outlined="true"
-                          Class="@($"pa-2 poll-option-paper {(canVote ? "interactive cursor-pointer" : "")} {(hasVoted ? "selected" : "")} {(isWinner ? "winner" : "")}")"
-                          Style="border-radius: 8px;"
+                          Class="@($"pa-2 poll-option-paper chat-poll-option-paper {(canVote ? "interactive cursor-pointer" : "")} {(hasVoted ? "selected" : "")} {(isWinner ? "winner" : "")}")"
                           @onclick="@(() => { if (canVote) ToggleVote(opt.Id); })">
                     <div class="d-flex align-center justify-space-between gap-2 mb-1">
-                        <div class="d-flex align-center gap-2" style="min-width: 0; flex: 1;">
+                        <div class="d-flex align-center gap-2 chat-flex-min0">
                             @if (isWinner)
                             {
                                 <MudIcon Icon="@Icons.Material.Filled.EmojiEvents" Size="Size.Small" Color="Color.Success" />
@@ -114,36 +115,40 @@ else
                             }
                             @if (!string.IsNullOrWhiteSpace(opt.Emoji))
                             {
-                                <span style="font-size: 1.1rem; line-height: 1;">@opt.Emoji</span>
+                                <span class="chat-poll-option-emoji">@opt.Emoji</span>
                             }
-                            <MudText Typo="Typo.body2" Style="@($"font-weight: {(hasVoted || isWinner ? "700" : "500")}; word-break: break-word;")">
+                            <MudText Typo="Typo.body2" Class="@($"chat-poll-option-text {(hasVoted || isWinner ? "is-bold" : "")}")">
                                 @opt.Text
                             </MudText>
                         </div>
 
                         <div class="d-flex align-center gap-2 flex-shrink-0">
-                            @if (!_poll.IsAnonymous && voteCount > 0)
+                            @if (!ShouldHideVoterIdentities() && voteCount > 0)
                             {
-                                <div class="d-flex align-center gap-1" @onclick:stopPropagation="true" @onclick="OpenVotesDialog" style="cursor: pointer;" title="@Loc["View Votes"]">
+                                <div class="d-flex align-center gap-1 cursor-pointer" @onclick:stopPropagation="true" @onclick="OpenVotesDialog" title="@Loc["View Votes"]">
                                     @foreach (var voterId in opt.VoterIds.Take(4))
                                     {
                                         var voter = Employees.FirstOrDefault(e => e.Id == voterId);
-                                        if (voter != null)
+                                        if (voter != null && CanDiscoverEmployee(voter))
                                         {
-                                            <MudTooltip Text="@voter.FullName" Placement="Placement.Top" RootStyle="display: inline-flex; align-items: center;">
-                                                <EmployeeAvatar Employee="voter" Size="Size.Small" ShowPresence="false" Style="width: 18px; height: 18px; min-width: 18px; min-height: 18px; font-size: 0.55rem;" />
-                                            </MudTooltip>
+                                            <span title="@voter.FullName" class="chat-mini-avatar-wrap">
+                                                <EmployeeAvatar Employee="voter" Size="Size.Small" ShowPresence="false" Class="chat-mini-avatar-18" />
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <EmployeeAvatar Employee="@null" Size="Size.Small" ShowPresence="false" Class="chat-mini-avatar-18" />
                                         }
                                     }
                                     @if (voteCount > 4)
                                     {
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.7rem; font-weight: 600;">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="chat-poll-more-voters">
                                             +@(voteCount - 4)
                                         </MudText>
                                     }
                                 </div>
                             }
-                            <MudText Typo="Typo.caption" Color="@(hasVoted ? Color.Primary : Color.Secondary)" Style="font-weight: 700; min-width: 58px; text-align: right;">
+                            <MudText Typo="Typo.caption" Color="@(hasVoted ? Color.Primary : Color.Secondary)" Class="chat-poll-vote-count">
                                 @voteCount (@($"{percentage:0}%"))
                             </MudText>
                         </div>
@@ -278,6 +283,7 @@ else
 
     private ChatPoll? _poll;
     private ChatPoll _displayPoll = new();
+    private HashSet<string> _myVotedOptionIds = new(StringComparer.Ordinal);
     private string? _lastChannelKey;
     private string? _lastChannelId;
     private string? _lastCurrentUserId;
@@ -286,11 +292,71 @@ else
     private string _newOptionText = string.Empty;
     private string? _newOptionEmoji;
     private bool _showNewOptionEmojiPicker;
+    private int _lastRenderFingerprint;
+    private bool _hasRenderedOnce;
+
+    private int ComputePollRenderFingerprint()
+    {
+        var hash = new HashCode();
+        hash.Add(PollId, StringComparer.Ordinal);
+        hash.Add(CurrentUserId, StringComparer.Ordinal);
+        hash.Add(ChannelId, StringComparer.Ordinal);
+        hash.Add(ChannelKey, StringComparer.Ordinal);
+        hash.Add(_isAddingOption);
+        hash.Add(_newOptionText, StringComparer.Ordinal);
+        hash.Add(_newOptionEmoji, StringComparer.Ordinal);
+        hash.Add(_showNewOptionEmojiPicker);
+        hash.Add(_poll != null);
+        if (_poll != null)
+        {
+            hash.Add(_displayPoll.Question, StringComparer.Ordinal);
+            hash.Add(_poll.IsClosed);
+            hash.Add(_poll.IsAnonymous);
+            hash.Add(_poll.AllowMultipleAnswers);
+            hash.Add(_poll.AllowAddOptions);
+            hash.Add(_poll.ExpiresAt?.Ticks ?? 0L);
+            hash.Add(_poll.TotalVotes);
+            hash.Add(_poll.Options.Count);
+            foreach (var opt in _displayPoll.Options)
+            {
+                hash.Add(opt.Id, StringComparer.Ordinal);
+                hash.Add(opt.Text, StringComparer.Ordinal);
+                hash.Add(opt.VoteCount);
+            }
+        }
+        return hash.ToHashCode();
+    }
+
+    protected override bool ShouldRender()
+    {
+        var fp = ComputePollRenderFingerprint();
+        if (!_hasRenderedOnce || fp != _lastRenderFingerprint)
+        {
+            _hasRenderedOnce = true;
+            _lastRenderFingerprint = fp;
+            return true;
+        }
+        return false;
+    }
 
     private Employee? CurrentEmployee =>
-        !string.IsNullOrEmpty(CurrentUserId) ? Employees.FirstOrDefault(e => e.Id == CurrentUserId) : null;
+        !string.IsNullOrEmpty(CurrentUserId)
+            ? (Db.Employees.GetById(CurrentUserId) ?? Employees.FirstOrDefault(e => e.Id == CurrentUserId))
+            : null;
 
     private bool IsCurrentUserSuspended => CurrentEmployee?.IsSuspended == true;
+
+    private bool CanDiscoverEmployee(Employee? target)
+        => target != null && PrivacyService.CanDiscoverUser(CurrentEmployee, target);
+
+    private bool ShouldHideVoterIdentities()
+    {
+        if (_poll?.IsAnonymous == true) return true;
+        var channelId = !string.IsNullOrEmpty(ChannelId) ? ChannelId : _poll?.ChannelId;
+        if (string.IsNullOrEmpty(channelId)) return false;
+        var channel = Db.ChatChannels.GetById(channelId);
+        return channel != null && PrivacyService.ShouldHideMemberList(channel, CurrentEmployee);
+    }
 
     protected override void OnInitialized()
     {
@@ -319,6 +385,14 @@ else
         {
             _displayPoll = PollService.DecryptPollForDisplay(_poll, ChannelKey);
         }
+        RefreshMyVotedOptions();
+    }
+
+    private void RefreshMyVotedOptions()
+    {
+        _myVotedOptionIds = _poll != null && !string.IsNullOrEmpty(CurrentUserId)
+            ? PollService.GetUserVotedOptionIds(PollId, CurrentUserId)
+            : new HashSet<string>(StringComparer.Ordinal);
     }
 
     private void HandlePollUpdated(ChatPoll updatedPoll)
@@ -329,6 +403,7 @@ else
         {
             _poll = updatedPoll;
             _displayPoll = PollService.DecryptPollForDisplay(_poll, ChannelKey);
+            RefreshMyVotedOptions();
             InvokeAsync(StateHasChanged);
         }
     }
@@ -395,7 +470,11 @@ else
     {
         if (string.IsNullOrEmpty(CurrentUserId)) return;
         var result = PollService.ToggleVote(PollId, optionId, CurrentUserId);
-        if (!result.IsSuccess)
+        if (result.IsSuccess)
+        {
+            RefreshMyVotedOptions();
+        }
+        else
         {
             Snackbar.Add(result.ErrorMessage ?? Loc["Failed to record vote."].Value, Severity.Warning);
         }
@@ -420,6 +499,7 @@ else
         var result = PollService.AddParticipantOption(PollId, CurrentUserId, _newOptionText, _newOptionEmoji, ChannelKey);
         if (result.IsSuccess)
         {
+            RefreshMyVotedOptions();
             CancelAddOption();
         }
         else
@@ -476,6 +556,7 @@ else
     {
         if (_poll == null || _poll.IsAnonymous) return;
 
+        bool anonymizeVoters = _poll.IsAnonymous || ShouldHideVoterIdentities();
         var groups = new Dictionary<string, List<Employee>>();
         foreach (var opt in _displayPoll.Options)
         {
@@ -489,9 +570,13 @@ else
             foreach (var voterId in opt.VoterIds)
             {
                 var emp = Employees.FirstOrDefault(e => e.Id == voterId);
-                if (emp != null)
+                if (!anonymizeVoters && emp != null && CanDiscoverEmployee(emp))
                 {
                     voters.Add(emp);
+                }
+                else
+                {
+                    voters.Add(new Employee { Id = string.Empty, FirstName = Loc["Unknown User"].Value, LastName = string.Empty });
                 }
             }
             groups[label] = voters;
@@ -501,8 +586,8 @@ else
         {
             { x => x.IsPollVotesMode, true },
             { x => x.CustomEmployeeGroups, groups },
-            { x => x.Employees, Employees },
-            { x => x.AnonymizeUsers, _poll.IsAnonymous },
+            { x => x.Employees, Employees.Where(CanDiscoverEmployee).ToList() },
+            { x => x.AnonymizeUsers, anonymizeVoters },
             { x => x.CustomTitle, _displayPoll.Question },
             { x => x.CustomIcon, Icons.Material.Filled.Poll }
         };

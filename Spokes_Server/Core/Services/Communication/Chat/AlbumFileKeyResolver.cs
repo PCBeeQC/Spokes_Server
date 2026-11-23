@@ -11,20 +11,17 @@ public class AlbumFileKeyResolver : IFileKeyResolver
     private readonly AlbumRepository _albums;
     private readonly AlbumService _albumService;
     private readonly ScopedKeystoreService _keystore;
-    private readonly ICryptoService _crypto;
 
     public string Category => "albums";
 
     public AlbumFileKeyResolver(
         AlbumRepository albums,
         AlbumService albumService,
-        ScopedKeystoreService keystore,
-        ICryptoService crypto)
+        ScopedKeystoreService keystore)
     {
         _albums = albums;
         _albumService = albumService;
         _keystore = keystore;
-        _crypto = crypto;
     }
 
     public FileKeyResolutionResult ResolveUploadKey(

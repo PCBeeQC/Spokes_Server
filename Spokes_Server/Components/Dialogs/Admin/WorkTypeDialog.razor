@@ -4,7 +4,7 @@
 <MudDialog>
     <DialogContent>
         <MudForm @ref="form" @bind-IsValid="@success">
-            <MudTabs @key="tabsKey" Elevation="0" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pt-4">
+            <MudTabs @key="tabsKey" Elevation="0" Outlined="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pt-4">
                 <MudTabPanel Text="MAIN">
                     <MudTextField @bind-Value="WorkType.Name" Label="Task Name" Required="true" Immediate="true" />
 
@@ -30,7 +30,7 @@
                         </MudItem>
                         <MudItem xs="12">
                             <MudText Typo="Typo.subtitle2" Class="mb-2">Sub-Tasks (Reporting Categories)</MudText>
-                            <MudTable Items="@WorkType.SubTasks" Dense="true" Hover="true" FixedHeader="true" Height="250px">
+                            <MudTable Elevation="0" Outlined="true" Items="@WorkType.SubTasks" Dense="true" Hover="true" FixedHeader="true" Height="250px">
                                 <HeaderContent>
                                     <MudTh>Sub-Task Name</MudTh>
                                     <MudTh Style="width: 50px;"></MudTh>
@@ -73,7 +73,7 @@
                             <MudTextField Value="@GetTranslatedTaskName(lang)" ValueChanged="@( (string v) => SetTranslatedTaskName(lang, v) )" Label="Translated Task Name" Immediate="true" />
                             
                             <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Sub-Tasks Translations</MudText>
-                            <MudTable Items="@WorkType.SubTasks" Dense="true" Hover="true" FixedHeader="true" Height="250px">
+                            <MudTable Elevation="0" Outlined="true" Items="@WorkType.SubTasks" Dense="true" Hover="true" FixedHeader="true" Height="250px">
                                 <HeaderContent>
                                     <MudTh>Original Name</MudTh>
                                     <MudTh>Translated Name</MudTh>

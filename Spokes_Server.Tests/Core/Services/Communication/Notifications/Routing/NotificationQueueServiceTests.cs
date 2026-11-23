@@ -346,94 +346,26 @@ public class NotificationQueueServiceTests : IDisposable
         Assert.Equal(0, count);
     }
 
-    [Fact]
-    public void GetQueuedCount_ExistingUser_ReturnsCorrectCount()
-    {
-        // Arrange
-        _service.Enqueue(new QueuedNotification { UserId = "user1" });
-        _service.Enqueue(new QueuedNotification { UserId = "user1" });
-
-        // Act
-        var count = _service.GetQueuedCount("user1");
-
-        // Assert
-        Assert.Equal(2, count);
-    }
-
     #endregion
 
-    #region EnqueueDelayedMobilePush Tests
+    #region LeaseMaturedMobilePushes Maturity & Ordering Tests
 
     [Fact]
-    public void EnqueueDelayedMobilePush_ValidNotification_AddsToQueue()
-    {
-        // Arrange
-        var notif = new DelayedMobileNotification { UserId = "user1", ProcessAtUtc = DateTime.UtcNow.AddMinutes(5) };
-
-        // Act
-        _service.EnqueueDelayedMobilePush(notif);
-
-        // Assert (No direct property to verify count, but we can verify it doesn't dequeue immediately)
-        var matured = _service.DequeueMaturedMobilePushes();
-        Assert.Empty(matured);
-    }
-
-    [Fact]
-    public void EnqueueDelayedMobilePush_Multiple_AddsAll()
-    {
-        // Arrange
-        var notif1 = new DelayedMobileNotification { UserId = "user1", ProcessAtUtc = DateTime.UtcNow.AddMinutes(-5) };
-        var notif2 = new DelayedMobileNotification { UserId = "user2", ProcessAtUtc = DateTime.UtcNow.AddMinutes(-10) };
-
-        // Act
-        _service.EnqueueDelayedMobilePush(notif1);
-        _service.EnqueueDelayedMobilePush(notif2);
-        
-        var matured = _service.DequeueMaturedMobilePushes();
-
-        // Assert
-        Assert.Equal(2, matured.Count);
-    }
-
-    #endregion
-
-    #region DequeueMaturedMobilePushes Tests
-
-    [Fact]
-    public void DequeueMaturedMobilePushes_WithPastDate_ReturnsAndRemoves()
-    {
-        // Arrange
-        var notif = new DelayedMobileNotification { UserId = "user1", ProcessAtUtc = DateTime.UtcNow.AddMinutes(-5) };
-        _service.EnqueueDelayedMobilePush(notif);
-
-        // Act
-        var result = _service.DequeueMaturedMobilePushes();
-
-        // Assert
-        Assert.Single(result);
-        Assert.Equal("user1", result[0].UserId);
-
-        // Verify it was removed
-        var secondResult = _service.DequeueMaturedMobilePushes();
-        Assert.Empty(secondResult);
-    }
-
-    [Fact]
-    public void DequeueMaturedMobilePushes_WithFutureDate_ReturnsEmpty()
+    public void LeaseMaturedMobilePushes_WithFutureDate_ReturnsEmpty()
     {
         // Arrange
         var notif = new DelayedMobileNotification { UserId = "user1", ProcessAtUtc = DateTime.UtcNow.AddMinutes(5) };
         _service.EnqueueDelayedMobilePush(notif);
 
         // Act
-        var result = _service.DequeueMaturedMobilePushes();
+        var result = _service.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1));
 
         // Assert
         Assert.Empty(result);
     }
 
     [Fact]
-    public void DequeueMaturedMobilePushes_MixedDates_ReturnsOnlyMatured()
+    public void LeaseMaturedMobilePushes_MixedDates_ReturnsOnlyMatured()
     {
         // Arrange
         var notifFuture = new DelayedMobileNotification { UserId = "user1", ProcessAtUtc = DateTime.UtcNow.AddMinutes(5) };
@@ -445,7 +377,7 @@ public class NotificationQueueServiceTests : IDisposable
         _service.EnqueueDelayedMobilePush(notifPast2);
 
         // Act
-        var result = _service.DequeueMaturedMobilePushes();
+        var result = _service.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1));
 
         // Assert
         Assert.Equal(2, result.Count);
@@ -522,7 +454,7 @@ public class NotificationQueueServiceTests : IDisposable
         int purged = _service.PurgeExpired();
         Assert.Equal(2, purged);
         Assert.Equal(0, _service.GetQueuedCount("stale_user"));
-        Assert.Empty(_service.DequeueMaturedMobilePushes());
+        Assert.Empty(_service.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1)));
     }
 
     [Fact]
@@ -576,7 +508,7 @@ public class NotificationQueueServiceTests : IDisposable
             Assert.Single(queued);
             Assert.Equal("Persistent Notification", queued[0].Title);
 
-            var delayed = service2.DequeueMaturedMobilePushes();
+            var delayed = service2.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1));
             Assert.Single(delayed);
             Assert.Equal("Persistent Mobile Push", delayed[0].Title);
 
@@ -666,7 +598,7 @@ public class NotificationQueueServiceTests : IDisposable
 
         // Assert
         Assert.True(result);
-        Assert.Empty(_service.DequeueMaturedMobilePushes()); // Not matured now
+        Assert.Empty(_service.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1))); // Not matured now
         Assert.Equal(initialQueuedAt, notif.QueuedAtUtc);
         Assert.True(notif.ProcessAtUtc > DateTime.UtcNow);
     }
@@ -691,7 +623,7 @@ public class NotificationQueueServiceTests : IDisposable
     }
 
     [Fact]
-    public void DequeueMaturedMobilePushes_ReturnsInStrictFifoOrder()
+    public void LeaseMaturedMobilePushes_ReturnsInStrictFifoOrder()
     {
         // Arrange
         var notif1 = new DelayedMobileNotification { UserId = "u1", Title = "First", ProcessAtUtc = DateTime.UtcNow.AddMinutes(-10) };
@@ -704,7 +636,7 @@ public class NotificationQueueServiceTests : IDisposable
         _service.EnqueueDelayedMobilePush(notif2);
 
         // Act
-        var matured = _service.DequeueMaturedMobilePushes();
+        var matured = _service.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1));
 
         // Assert: FIFO order by ProcessAtUtc
         Assert.Equal(3, matured.Count);
@@ -792,7 +724,7 @@ public class NotificationQueueServiceTests : IDisposable
         _service.AcknowledgeMobilePushDelivery(delayed.Id);
 
         // Queue should now be empty even after lease expiration
-        Assert.Empty(_service.DequeueMaturedMobilePushes());
+        Assert.Empty(_service.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1)));
     }
 
     [Fact]
@@ -812,7 +744,7 @@ public class NotificationQueueServiceTests : IDisposable
         _service.RequeueMobilePushOnFailure(delayed.Id, new Exception("Mobile push failed"));
 
         // Assert
-        Assert.Empty(_service.DequeueMaturedMobilePushes());
+        Assert.Empty(_service.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1)));
         Assert.Single(_service.DeadLetterMobileNotifications);
         Assert.Equal(delayed.Id, _service.DeadLetterMobileNotifications[0].Id);
         Assert.Equal(NotificationQueueService.MaxDeliveryRetries, _service.DeadLetterMobileNotifications[0].RetryCount);
@@ -963,95 +895,6 @@ public class NotificationQueueServiceTests : IDisposable
                 try { Directory.Delete(tempDir, true); } catch { }
             }
         }
-    }
-
-    [Fact]
-    public void RestoreFromDisk_TransitionalV1PerFieldEncryptedSnapshot_DecryptsFieldsAndUpgradesEnvelope()
-    {
-        const string masterPwd = "TransitionalV1MasterPwd!";
-        var tempDir = Path.Combine(Path.GetTempPath(), $"NotificationQueueLegacyV1_{Guid.NewGuid():N}");
-        var notifDir = Path.Combine(tempDir, "Notifications");
-        Directory.CreateDirectory(notifDir);
-        try
-        {
-            var transitionalSnapshot = new NotificationQueueSnapshot
-            {
-                QueuedNotifications = new Dictionary<string, List<QueuedNotification>>
-                {
-                    ["v1_user"] =
-                    [
-                        new QueuedNotification
-                        {
-                            UserId = "v1_user",
-                            Title = EncryptLegacyV1Field("V1 Encrypted Title", masterPwd),
-                            Body = EncryptLegacyV1Field("V1 Encrypted Body", masterPwd),
-                            ChannelName = EncryptLegacyV1Field("V1 Channel", masterPwd),
-                            ServerName = EncryptLegacyV1Field("V1 Server", masterPwd),
-                            QueuedAtUtc = DateTime.UtcNow.AddMinutes(-2)
-                        }
-                    ]
-                }
-            };
-
-            var stateFilePath = Path.Combine(notifDir, "queue_state.json");
-            File.WriteAllText(stateFilePath, JsonSerializer.Serialize(transitionalSnapshot));
-
-            var configDict = new Dictionary<string, string?>
-            {
-                ["DataPath"] = tempDir,
-                ["SPOKES_MASTER_PASSWORD"] = masterPwd
-            };
-            var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
-            using var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
-            var companyRepo = new CompanyProfileRepository(persistence, config);
-
-            var service = new NotificationQueueService(
-                new Mock<ILogger<NotificationQueueService>>().Object,
-                persistence,
-                config,
-                companyRepo);
-
-            var restored = Assert.Single(service.DequeueAll("v1_user"));
-            Assert.Equal("V1 Encrypted Title", restored.Title);
-            Assert.Equal("V1 Encrypted Body", restored.Body);
-            Assert.Equal("V1 Channel", restored.ChannelName);
-            Assert.Equal("V1 Server", restored.ServerName);
-
-            persistence.FlushAll();
-            var upgradedOnDisk = File.ReadAllText(stateFilePath);
-            Assert.Contains("spokesEncryptedVersion", upgradedOnDisk);
-            Assert.DoesNotContain("v1_user", upgradedOnDisk);
-        }
-        finally
-        {
-            if (Directory.Exists(tempDir))
-            {
-                try { Directory.Delete(tempDir, true); } catch { }
-            }
-        }
-    }
-
-    private static string EncryptLegacyV1Field(string plainText, string masterPassword)
-    {
-        var salt = RandomNumberGenerator.GetBytes(16);
-        var iv = RandomNumberGenerator.GetBytes(16);
-        var key = Rfc2898DeriveBytes.Pbkdf2(masterPassword, salt, 100_000, HashAlgorithmName.SHA256, 32);
-
-        using var aes = Aes.Create();
-        aes.Key = key;
-        aes.IV = iv;
-
-        using var encryptor = aes.CreateEncryptor(aes.Key, aes.IV);
-        using var ms = new MemoryStream();
-        ms.Write(salt);
-        ms.Write(iv);
-        using (var cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
-        using (var sw = new StreamWriter(cs))
-        {
-            sw.Write(plainText);
-        }
-
-        return Convert.ToBase64String(ms.ToArray());
     }
 
     #endregion

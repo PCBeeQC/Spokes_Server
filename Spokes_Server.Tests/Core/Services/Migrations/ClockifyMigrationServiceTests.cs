@@ -32,6 +32,7 @@ public class ClockifyMigrationServiceTests : TestDataTestBase
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging();
@@ -58,7 +59,7 @@ public class ClockifyMigrationServiceTests : TestDataTestBase
         var authorizeAttributes = pageType.GetCustomAttributes<AuthorizeAttribute>().ToList();
 
         Assert.NotEmpty(authorizeAttributes);
-        Assert.Contains(authorizeAttributes, attr => attr.Policy == AppPermissions.Admin.ManageSettings);
+        Assert.Contains(authorizeAttributes, attr => attr.Policy == AppPermissions.Admin.PolicyName);
     }
 
     [Fact]
@@ -157,7 +158,7 @@ public class ClockifyMigrationServiceTests : TestDataTestBase
     }
 
     [Fact]
-    public async Task ExecuteMigrationAsync_EmployeeWithManageSettings_SucceedsAndSetsApprovedBy()
+    public async Task ExecuteMigrationAsync_EmployeeWithManageSettings_ThrowsUnauthorizedAccessException()
     {
         var managerUser = new Employee
         {
@@ -204,13 +205,10 @@ public class ClockifyMigrationServiceTests : TestDataTestBase
             }
         };
 
-        await _migrationService.ExecuteMigrationAsync(records, userMaps, projectMaps, managerUser);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _migrationService.ExecuteMigrationAsync(records, userMaps, projectMaps, managerUser));
 
-        var timesheets = _db.Timesheets.GetAll();
-        Assert.NotEmpty(timesheets);
-        var timesheet = timesheets.First();
-        Assert.Equal("Approved", timesheet.Status);
-        Assert.Equal(managerUser.Id, timesheet.ApprovedBy);
+        Assert.Empty(_db.Timesheets.GetAll());
     }
 
     [Fact]

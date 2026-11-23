@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Bunit;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -40,13 +41,20 @@ public class ModerationPageTests : BunitContext
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         Services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         Services.AddSingleton<EncryptionService>();
         Services.AddSpokesDatabase();
+        Services.AddSingleton<IChatAuthorizationService>(sp =>
+        {
+            var db = sp.GetRequiredService<Database>();
+            return new ChatAuthorizationService(db.ChatChannels, db.Projects, db.Teams, db.Employees);
+        });
         Services.AddSingleton<ChatStateService>();
+        Services.AddSingleton<VoiceStateService>();
         Services.AddSingleton<PresenceStateService>(sp =>
-            new PresenceStateService(sp.GetRequiredService<ChatStateService>()));
+            new PresenceStateService(sp.GetRequiredService<VoiceStateService>()));
 
         var mockChatService = new Mock<IChatService>();
         Services.AddSingleton<IChatService>(mockChatService.Object);
@@ -58,7 +66,8 @@ public class ModerationPageTests : BunitContext
         var identity = new ClaimsIdentity(
             [
                 new Claim(ClaimTypes.NameIdentifier, moderatorId),
-                new Claim("EmployeeId", moderatorId)
+                new Claim("EmployeeId", moderatorId),
+                new Claim("SessionId", "sess-moderator-1")
             ],
             authenticationType: "TestAuth");
         var authState = new AuthenticationState(new ClaimsPrincipal(identity));
@@ -68,6 +77,11 @@ public class ModerationPageTests : BunitContext
             .ReturnsAsync(authState);
 
         Services.AddSingleton<AuthenticationStateProvider>(mockAuthProvider.Object);
+        Services.AddMemoryCache();
+        Services.AddDataProtection().UseEphemeralDataProtectionProvider();
+        Services.AddSingleton<FileTokenService>();
+        Services.AddScoped<UserCircuitContext>();
+        Services.AddScoped<FileUrlSigner>();
         Services.AddScoped<UserService>();
 
         _db = Services.GetRequiredService<Database>();
@@ -77,7 +91,13 @@ public class ModerationPageTests : BunitContext
             FirstName = "Morgan",
             LastName = "Mod",
             IsActive = true,
-            Permissions = [AppPermissions.Chat.Moderator]
+            Permissions = [AppPermissions.Chat.Moderator, AppPermissions.Chat.Use]
+        });
+        _db.ChatChannels.Save(new ChatChannel
+        {
+            Id = "chan-general",
+            Name = "General",
+            ChannelType = ChatChannelType.General
         });
     }
 
@@ -110,6 +130,7 @@ public class ModerationPageTests : BunitContext
         {
             Id = "rep-1",
             MessageId = "msg-1",
+            ChannelId = "chan-general",
             ReporterId = alice.Id,
             ReportedUserId = victor.Id,
             Reason = "Spam or Scams",
@@ -122,6 +143,7 @@ public class ModerationPageTests : BunitContext
         {
             Id = "rep-2",
             MessageId = "msg-2",
+            ChannelId = "chan-general",
             ReporterId = charlie.Id,
             ReportedUserId = bob.Id,
             Reason = "Harassment or Bullying",
@@ -198,6 +220,7 @@ public class ModerationPageTests : BunitContext
         {
             Id = "rep-deleted",
             MessageId = "msg-deleted",
+            ChannelId = "chan-general",
             ReporterId = "emp-alice",
             ReportedUserId = deletedUser.Id,
             Reason = "Other",

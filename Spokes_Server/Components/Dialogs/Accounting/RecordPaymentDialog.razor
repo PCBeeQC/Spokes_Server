@@ -1,4 +1,12 @@
-﻿<MudDialog>
+﻿@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@inject Database Db
+@inject IFinancialAccountService FinancialAccountService
+@inject UserService UserService
+
+<MudDialog>
     <DialogContent>
         <MudText Typo="Typo.body1" Class="mb-4">@Message</MudText>
 
@@ -31,11 +39,22 @@
         <MudDatePicker @bind-Date="Date" Label="@BizLoc["Payment Date"]" ShowToolbar="false" Class="mt-3" />
         
         <MudTextField @bind-Value="Payment.Reference" Label="@BizLoc["Reference (Check #, Wire ID)"]" Class="mt-3" />
-        
-        <MudSelect @bind-Value="Payment.Method" Label="@BizLoc["Payment Method"]" Class="mt-3">
+
+        @if (_canReadAccounting)
+        {
+            <div class="mt-3">
+                <FinancialAccountSelect Value="@Payment.BankGlAccountCode"
+                                        ValueChanged="OnBankAccountChanged"
+                                        Label="@BizLoc["Account"]"
+                                        Variant="Variant.Text"
+                                        Margin="Margin.None" />
+            </div>
+        }
+
+        <MudSelect T="string" @bind-Value="Payment.Method" Label="@BizLoc["Payment Method"]" Class="mt-3">
+            <MudSelectItem Value="@("Wire Transfer")">Wire Transfer</MudSelectItem>
             <MudSelectItem Value="@("Check")">Check</MudSelectItem>
             <MudSelectItem Value="@("Credit Card")">Credit Card</MudSelectItem>
-            <MudSelectItem Value="@("Wire Transfer")">Wire Transfer</MudSelectItem>
             <MudSelectItem Value="@("ACH")">ACH</MudSelectItem>
             <MudSelectItem Value="@("Cash")">Cash</MudSelectItem>
             <MudSelectItem Value="@("Other")">Other</MudSelectItem>
@@ -60,6 +79,7 @@
     [Parameter] public List<PaymentRecord>? ExistingPayments { get; set; }
     
     private PaymentRecord Payment = new();
+    private bool _canReadAccounting;
     
     private DateTime? Date
     {
@@ -67,8 +87,11 @@
         set { if (value.HasValue) Payment.Date = value.Value; }
     }
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        var emp = await UserService.GetEmployeeAsync();
+        _canReadAccounting = emp?.IsEffectiveAdmin == true ||
+                             emp?.HasPermission(AppPermissions.Finance.AccessAccounting) == true;
         if (PaymentToEdit != null)
         {
             Payment = new PaymentRecord
@@ -78,8 +101,14 @@
                 Date = PaymentToEdit.Date,
                 Method = PaymentToEdit.Method,
                 Reference = PaymentToEdit.Reference,
-                Notes = PaymentToEdit.Notes
+                Notes = PaymentToEdit.Notes,
+                BankGlAccountCode = PaymentToEdit.BankGlAccountCode
             };
+
+            if (string.IsNullOrWhiteSpace(Payment.BankGlAccountCode))
+            {
+                Payment.BankGlAccountCode = FinancialAccountService.ResolveDefaultGlCodeForMethod(Payment.Method);
+            }
 
             if (string.Equals(Message, "Record a new payment.", StringComparison.OrdinalIgnoreCase))
             {
@@ -95,7 +124,15 @@
         {
             Payment.Amount = Math.Max(0, MaxAmount);
             Payment.Date = DateTime.Today;
+            Payment.BankGlAccountCode = FinancialAccountService.ResolveDefaultGlCodeForMethod(null);
+            Payment.Method = FinancialAccountService.ResolveDefaultPaymentMethodForAccount(Payment.BankGlAccountCode, "Wire Transfer");
         }
+    }
+
+    private void OnBankAccountChanged(string? newCode)
+    {
+        Payment.BankGlAccountCode = newCode;
+        Payment.Method = FinancialAccountService.ResolveDefaultPaymentMethodForAccount(newCode, "Wire Transfer");
     }
 
     private void Close() => MudDialog.Cancel();

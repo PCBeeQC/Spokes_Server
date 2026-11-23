@@ -6,6 +6,7 @@ using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
@@ -19,7 +20,9 @@ public class ModerationReportServiceTests : IDisposable
     private readonly string _testDataDir;
     private readonly DiskPersistenceService _persistence;
     private readonly ReportedMessageRepository _reportedMessages;
+    private readonly ChatChannelRepository _channels;
     private readonly EmployeeRepository _employees;
+    private readonly IChatAuthorizationService _chatAuth;
     private readonly Mock<IChatService> _mockChatService;
     private readonly Mock<INotificationRoutingService> _mockNotificationRouting;
     private readonly ChatStateService _chatState;
@@ -32,12 +35,19 @@ public class ModerationReportServiceTests : IDisposable
         Directory.CreateDirectory(_testDataDir);
 
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { { "DataPath", _testDataDir } })
+            .AddInMemoryCollection(new Dictionary<string, string?> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } })
             .Build();
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
 
         _reportedMessages = new ReportedMessageRepository(_persistence, config);
+        _channels = new ChatChannelRepository(_persistence, config);
+        _channels.Save(new ChatChannel { Id = "chan-general", Name = "General", ChannelType = ChatChannelType.General });
         _employees = new EmployeeRepository(_persistence, config);
+        _chatAuth = new ChatAuthorizationService(
+            _channels,
+            new ProjectRepository(_persistence, config),
+            new TeamRepository(_persistence, config),
+            _employees);
         _mockChatService = new Mock<IChatService>();
         _mockNotificationRouting = new Mock<INotificationRoutingService>();
         _chatState = new ChatStateService();
@@ -45,6 +55,7 @@ public class ModerationReportServiceTests : IDisposable
 
         var commContext = new Mock<CommunicationContext>();
         commContext.Setup(c => c.ReportedMessages).Returns(_reportedMessages);
+        commContext.Setup(c => c.ChatChannels).Returns(_channels);
 
         var hrContext = new Mock<HrContext>();
         hrContext.Setup(h => h.Employees).Returns(_employees);
@@ -55,7 +66,8 @@ public class ModerationReportServiceTests : IDisposable
             _mockChatService.Object,
             _chatState,
             _mockNotificationRouting.Object,
-            _clock);
+            _clock,
+            chatAuth: _chatAuth);
     }
 
     public void Dispose()
@@ -76,21 +88,23 @@ public class ModerationReportServiceTests : IDisposable
             FirstName = "Morgan",
             LastName = "Mod",
             IsActive = true,
-            Permissions = [AppPermissions.Chat.Moderator]
+            Permissions = [AppPermissions.Chat.Moderator, AppPermissions.Chat.Use]
         };
         var reporter = new Employee
         {
             Id = "emp-alice",
             FirstName = "Alice",
             LastName = "Reporter",
-            IsActive = true
+            IsActive = true,
+            Permissions = [AppPermissions.Chat.Use]
         };
         var offender = new Employee
         {
             Id = "emp-victor",
             FirstName = "Victor",
             LastName = "Offender",
-            IsActive = true
+            IsActive = true,
+            Permissions = [AppPermissions.Chat.Use]
         };
 
         _employees.Save(moderator);
@@ -110,6 +124,7 @@ public class ModerationReportServiceTests : IDisposable
         var draft = new ReportedMessage
         {
             MessageId = "msg-100",
+            ChannelId = "chan-general",
             ReportedUserId = offender.Id,
             Reason = "Spam or Scams",
             SnapshotContent = "Buy free crypto!"
@@ -157,6 +172,7 @@ public class ModerationReportServiceTests : IDisposable
         {
             Id = "rep-1",
             MessageId = "msg-1",
+            ChannelId = "chan-general",
             ReportedUserId = offender.Id,
             Reason = "Spam or Scams",
             SnapshotContent = "Spam link"
@@ -168,15 +184,16 @@ public class ModerationReportServiceTests : IDisposable
         {
             Id = "rep-2",
             MessageId = "msg-2",
+            ChannelId = "chan-general",
             ReportedUserId = offender.Id,
             Reason = "Harassment or Bullying",
             SnapshotContent = "Rude text",
             Attachments = [new ChatAttachment { Id = "att-1", FileName = "bad.jpg", FilePath = "/media/bad.jpg" }]
         }, reporter.Id)).Value!;
 
-        Assert.Equal(2, _service.GetCounts().Open);
-        Assert.Equal(0, _service.GetCounts().History);
-        Assert.Equal(2, _service.GetReports(ModerationQueueTab.Open).Count);
+        Assert.Equal(2, _service.GetCounts(moderator.Id).Open);
+        Assert.Equal(0, _service.GetCounts(moderator.Id).History);
+        Assert.Equal(2, _service.GetReportItems(ModerationQueueTab.Open, viewerEmployeeId: moderator.Id).Count);
 
         _clock.Advance(TimeSpan.FromMinutes(5));
         var dismissResult = _service.DismissReport(r1.Id, moderator.Id);
@@ -188,15 +205,15 @@ public class ModerationReportServiceTests : IDisposable
         Assert.Equal(1, resolveResult.Value);
 
         // Open queue is now completely empty -> Moderation Dashboard displays 'All Clear!'
-        var counts = _service.GetCounts();
+        var counts = _service.GetCounts(moderator.Id);
         Assert.Equal(0, counts.Open);
         Assert.Equal(1, counts.Resolved);
         Assert.Equal(1, counts.Dismissed);
         Assert.Equal(2, counts.History);
-        Assert.Empty(_service.GetReports(ModerationQueueTab.Open));
+        Assert.Empty(_service.GetReportItems(ModerationQueueTab.Open, viewerEmployeeId: moderator.Id));
 
         // History contains both items ordered by ResolvedAt descending (rep-2 first, then rep-1)
-        var allHistory = _service.GetReports(ModerationQueueTab.History, "all");
+        var allHistory = _service.GetReportItems(ModerationQueueTab.History, "all", viewerEmployeeId: moderator.Id).Select(i => i.Report).ToList();
         Assert.Equal(2, allHistory.Count);
         Assert.Equal("rep-2", allHistory[0].Id);
         Assert.Equal(ReportedMessageStatus.Resolved, allHistory[0].Status);
@@ -211,12 +228,12 @@ public class ModerationReportServiceTests : IDisposable
         Assert.NotNull(allHistory[1].ResolvedAt);
 
         // Sub-status filtering inside History
-        Assert.Single(_service.GetReports(ModerationQueueTab.History, ReportedMessageStatus.Resolved));
-        Assert.Single(_service.GetReports(ModerationQueueTab.History, ReportedMessageStatus.Dismissed));
+        Assert.Single(_service.GetReportItems(ModerationQueueTab.History, ReportedMessageStatus.Resolved, viewerEmployeeId: moderator.Id));
+        Assert.Single(_service.GetReportItems(ModerationQueueTab.History, ReportedMessageStatus.Dismissed, viewerEmployeeId: moderator.Id));
     }
 
     [Fact]
-    public async Task GetReports_SearchMatchesReporter_ReportedUser_Reason_Snapshot_AndModerator()
+    public async Task GetReportItems_SearchMatchesReporter_ReportedUser_Reason_Snapshot_AndModerator()
     {
         var (moderator, reporter, offender) = SeedUsers();
 
@@ -224,32 +241,33 @@ public class ModerationReportServiceTests : IDisposable
         {
             Id = "rep-search",
             MessageId = "msg-search",
+            ChannelId = "chan-general",
             ReportedUserId = offender.Id,
             Reason = "Harassment or Bullying",
             SnapshotContent = "UniquePayloadToken42"
         }, reporter.Id);
 
         // Match by reporter name ("Alice")
-        Assert.Single(_service.GetReports(ModerationQueueTab.Open, searchQuery: "Alice"));
+        Assert.Single(_service.GetReportItems(ModerationQueueTab.Open, searchQuery: "Alice", viewerEmployeeId: moderator.Id));
         // Match by reported user name ("Victor")
-        Assert.Single(_service.GetReports(ModerationQueueTab.Open, searchQuery: "victor"));
+        Assert.Single(_service.GetReportItems(ModerationQueueTab.Open, searchQuery: "victor", viewerEmployeeId: moderator.Id));
         // Match by reason
-        Assert.Single(_service.GetReports(ModerationQueueTab.Open, searchQuery: "Bullying"));
+        Assert.Single(_service.GetReportItems(ModerationQueueTab.Open, searchQuery: "Bullying", viewerEmployeeId: moderator.Id));
         // Match by snapshot content
-        Assert.Single(_service.GetReports(ModerationQueueTab.Open, searchQuery: "UniquePayloadToken42"));
+        Assert.Single(_service.GetReportItems(ModerationQueueTab.Open, searchQuery: "UniquePayloadToken42", viewerEmployeeId: moderator.Id));
         // Non-matching query returns empty list
-        Assert.Empty(_service.GetReports(ModerationQueueTab.Open, searchQuery: "NonExistentQuery999"));
+        Assert.Empty(_service.GetReportItems(ModerationQueueTab.Open, searchQuery: "NonExistentQuery999", viewerEmployeeId: moderator.Id));
 
         // Dismiss and search history by moderator name ("Morgan")
         _service.DismissReport("rep-search", moderator.Id);
-        Assert.Single(_service.GetReports(ModerationQueueTab.History, searchQuery: "Morgan"));
+        Assert.Single(_service.GetReportItems(ModerationQueueTab.History, searchQuery: "Morgan", viewerEmployeeId: moderator.Id));
     }
 
     [Fact]
     public async Task ResolveAndDeleteMessageAsync_CascadesAcrossDuplicateReportsForSameMessageId()
     {
         var (moderator, reporter, offender) = SeedUsers();
-        var secondReporter = new Employee { Id = "emp-bob", FirstName = "Bob", LastName = "Second", IsActive = true };
+        var secondReporter = new Employee { Id = "emp-bob", FirstName = "Bob", LastName = "Second", IsActive = true, Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(secondReporter);
 
         _mockChatService
@@ -260,6 +278,7 @@ public class ModerationReportServiceTests : IDisposable
         {
             Id = "rep-dup-1",
             MessageId = "msg-shared",
+            ChannelId = "chan-general",
             ReportedUserId = offender.Id,
             Reason = "Hate Speech",
             SnapshotContent = "Offending content",
@@ -270,6 +289,7 @@ public class ModerationReportServiceTests : IDisposable
         {
             Id = "rep-dup-2",
             MessageId = "msg-shared",
+            ChannelId = "chan-general",
             ReportedUserId = offender.Id,
             Reason = "Harassment or Bullying",
             SnapshotContent = "Offending content",
@@ -280,8 +300,8 @@ public class ModerationReportServiceTests : IDisposable
 
         Assert.True(result.IsSuccess);
         Assert.Equal(2, result.Value);
-        Assert.Equal(0, _service.GetCounts().Open);
-        Assert.Equal(2, _service.GetCounts().Resolved);
+        Assert.Equal(0, _service.GetCounts(moderator.Id).Open);
+        Assert.Equal(2, _service.GetCounts(moderator.Id).Resolved);
 
         var dup2 = _reportedMessages.GetById("rep-dup-2")!;
         Assert.Equal(ReportedMessageStatus.Resolved, dup2.Status);
@@ -302,6 +322,7 @@ public class ModerationReportServiceTests : IDisposable
         {
             Id = "rep-gone",
             MessageId = "msg-already-gone",
+            ChannelId = "chan-general",
             ReportedUserId = offender.Id,
             Reason = "Inappropriate Content",
             SnapshotContent = "Deleted by user before mod arrived"
@@ -310,7 +331,7 @@ public class ModerationReportServiceTests : IDisposable
         var result = await _service.ResolveAndDeleteMessageAsync("rep-gone", moderator.Id);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal(0, _service.GetCounts().Open);
+        Assert.Equal(0, _service.GetCounts(moderator.Id).Open);
         var updated = _reportedMessages.GetById("rep-gone")!;
         Assert.Equal(ReportedMessageStatus.Resolved, updated.Status);
         Assert.Equal(ReportedMessageResolution.DeletedContentPlaceholder, updated.SnapshotContent);
@@ -321,9 +342,9 @@ public class ModerationReportServiceTests : IDisposable
     {
         var (moderator, reporter, offender) = SeedUsers();
 
-        await _service.SubmitReportAsync(new ReportedMessage { Id = "rep-open", MessageId = "m1", ReportedUserId = offender.Id, Reason = "Spam" }, reporter.Id);
-        await _service.SubmitReportAsync(new ReportedMessage { Id = "rep-hist-1", MessageId = "m2", ReportedUserId = offender.Id, Reason = "Spam" }, reporter.Id);
-        await _service.SubmitReportAsync(new ReportedMessage { Id = "rep-hist-2", MessageId = "m3", ReportedUserId = offender.Id, Reason = "Spam" }, reporter.Id);
+        await _service.SubmitReportAsync(new ReportedMessage { Id = "rep-open", MessageId = "m1", ChannelId = "chan-general", ReportedUserId = offender.Id, Reason = "Spam" }, reporter.Id);
+        await _service.SubmitReportAsync(new ReportedMessage { Id = "rep-hist-1", MessageId = "m2", ChannelId = "chan-general", ReportedUserId = offender.Id, Reason = "Spam" }, reporter.Id);
+        await _service.SubmitReportAsync(new ReportedMessage { Id = "rep-hist-2", MessageId = "m3", ChannelId = "chan-general", ReportedUserId = offender.Id, Reason = "Spam" }, reporter.Id);
 
         _service.DismissReport("rep-hist-1", moderator.Id);
         _service.DismissReport("rep-hist-2", moderator.Id);
@@ -346,15 +367,15 @@ public class ModerationReportServiceTests : IDisposable
         Assert.Equal(1, clearResult.Value);
         Assert.Null(_reportedMessages.GetById("rep-hist-2"));
         Assert.NotNull(_reportedMessages.GetById("rep-open"));
-        Assert.Equal(1, _service.GetCounts().Open);
-        Assert.Equal(0, _service.GetCounts().History);
+        Assert.Equal(1, _service.GetCounts(moderator.Id).Open);
+        Assert.Equal(0, _service.GetCounts(moderator.Id).History);
     }
 
     [Fact]
     public async Task NonModerator_CannotDismiss_Resolve_OrClearReports()
     {
         var (_, reporter, offender) = SeedUsers();
-        await _service.SubmitReportAsync(new ReportedMessage { Id = "rep-sec", MessageId = "m-sec", ReportedUserId = offender.Id }, reporter.Id);
+        await _service.SubmitReportAsync(new ReportedMessage { Id = "rep-sec", MessageId = "m-sec", ChannelId = "chan-general", ReportedUserId = offender.Id }, reporter.Id);
 
         Assert.False(_service.DismissReport("rep-sec", reporter.Id).IsSuccess);
         Assert.False((await _service.ResolveAndDeleteMessageAsync("rep-sec", reporter.Id)).IsSuccess);

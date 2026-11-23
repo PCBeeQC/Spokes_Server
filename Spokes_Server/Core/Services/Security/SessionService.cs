@@ -42,7 +42,6 @@ public class SessionService
     private readonly SystemConfigRepository? _systemConfigs;
     private readonly IOptionsMonitor<OpenIdConnectOptions>? _oidcOptionsMonitor;
     private readonly IMemoryCache? _cache;
-    private readonly IConfigurationManager<OpenIdConnectConfiguration>? _injectedConfigManager;
     private readonly IOpenIdConfigurationProvider? _openIdConfigurationProvider;
     private readonly ILogger<SessionService>? _logger;
     private readonly GlobalKeystoreService? _globalKeystore;
@@ -50,6 +49,8 @@ public class SessionService
 
     public event Action<string>? OnSessionRevoked;
     public event Action<string>? OnSessionBanned;
+    public event Action<string>? OnSessionVaultRevoked;
+    public event Action<string, bool>? OnUserSuspensionChanged;
 
     [ActivatorUtilitiesConstructor]
     public SessionService(
@@ -91,7 +92,6 @@ public class SessionService
         _oidcOptionsMonitor = oidcOptionsMonitor;
         _cache = cache;
         _logger = logger;
-        _injectedConfigManager = injectedConfigManager;
         _globalKeystore = globalKeystore;
         _fileTokenService = fileTokenService;
         _openIdConfigurationProvider = openIdConfigurationProvider
@@ -123,13 +123,9 @@ public class SessionService
                 identity.AddClaim(new Claim(ClaimTypes.Role, AppPermissions.Admin.RoleName));
             }
 
-            var effectivePermissions = employee.PermissionGroup?.Permissions ?? employee.Permissions;
-            if (effectivePermissions != null)
+            foreach (var perm in employee.GetEffectivePermissionSet(allowSuspended: true))
             {
-                foreach (var perm in effectivePermissions)
-                {
-                    identity.AddClaim(new Claim("Permission", perm));
-                }
+                identity.AddClaim(new Claim("Permission", perm));
             }
         }
         else
@@ -207,14 +203,19 @@ public class SessionService
             if (matchingSessions.Count > 0)
             {
                 deviceSession = matchingSessions[0];
+                var effectiveIsCapacitor = isCapacitor || deviceSession.IsCapacitorApp;
+                var effectiveIsMobile = isMobileDevice || effectiveIsCapacitor || string.Equals(deviceSession.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase);
+
                 deviceSession.TokenHash = tokenHash;
-                deviceSession.DeviceInfo = deviceInfo;
+                deviceSession.DeviceInfo = effectiveIsCapacitor && !deviceInfo.Contains("(App)", StringComparison.OrdinalIgnoreCase)
+                    ? $"{deviceInfo} (App)"
+                    : deviceInfo;
                 deviceSession.DeviceId = deviceId; // Ensure adopted session receives the modernized device ID
-                if (isMobileDevice)
+                if (effectiveIsMobile)
                 {
                     deviceSession.DeviceType = DeviceType.Mobile;
                 }
-                if (isCapacitor)
+                if (effectiveIsCapacitor)
                 {
                     deviceSession.IsCapacitor = true;
                 }
@@ -268,6 +269,55 @@ public class SessionService
     }
 
     /// <summary>
+    /// Returns true if the referenced <see cref="DeviceSession"/> exists, is neither revoked nor expired,
+    /// and (when <paramref name="employeeId"/> is provided) belongs to that employee.
+    /// </summary>
+    public bool IsSessionActive(string? sessionId, string? employeeId = null)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId)) return false;
+
+        var session = _deviceSessions.GetById(sessionId);
+        if (session == null || session.RevokedAt != null || session.ExpiresAt <= DateTime.UtcNow)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(employeeId) &&
+            !string.Equals(session.EmployeeId, employeeId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Validates whether a claims principal's bound session is still active. When a <c>SessionId</c>
+    /// claim is present, it must resolve to an active, unrevoked, unexpired <see cref="DeviceSession"/>.
+    /// Production authentication schemes (<c>Cookies</c>, <c>DeviceToken</c>) fail closed if
+    /// <c>SessionId</c> is missing.
+    /// </summary>
+    public bool IsPrincipalSessionValid(ClaimsPrincipal? user, string employeeId) =>
+        IsPrincipalSessionValid(
+            user?.FindFirst("SessionId")?.Value,
+            user?.Identity?.AuthenticationType,
+            employeeId);
+
+    /// <summary>
+    /// Validates whether the captured session ID and authentication scheme represent an active session.
+    /// </summary>
+    public bool IsPrincipalSessionValid(string? sessionId, string? authenticationType, string employeeId)
+    {
+        if (!string.IsNullOrEmpty(sessionId))
+        {
+            return IsSessionActive(sessionId, employeeId);
+        }
+
+        return !string.Equals(authenticationType, Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme, StringComparison.OrdinalIgnoreCase) &&
+               !string.Equals(authenticationType, "DeviceToken", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Resolves the currently active DeviceSession from the HttpContext, checking
     /// authenticated session claims first, then falling back to the refresh cookie.
     /// </summary>
@@ -281,7 +331,8 @@ public class SessionService
             if (!string.IsNullOrEmpty(sessionId))
             {
                 var session = _deviceSessions.GetById(sessionId);
-                if (session != null && (allowRevoked || session.RevokedAt == null)) return session;
+                if (session != null && (allowRevoked || (session.RevokedAt == null && session.ExpiresAt > DateTime.UtcNow)))
+                    return session;
             }
         }
 
@@ -386,12 +437,50 @@ public class SessionService
     }
 
     /// <summary>
+    /// Atomically assigns and persists a fresh <see cref="DeviceSession.VaultNonce"/> for an un-migrated
+    /// legacy (server-v2026.11.0) session during its one-time v1 -> v2 vault token upgrade.
+    /// Returns null if the session was revoked, expired, logged out of the vault, or already upgraded concurrently.
+    /// </summary>
+    public string? TryAssignLegacyVaultNonce(DeviceSession session) =>
+        TryAssignLegacyVaultNonce(_deviceSessions, session);
+
+    internal static string? TryAssignLegacyVaultNonce(DeviceSessionRepository deviceSessions, DeviceSession session)
+    {
+        if (deviceSessions == null || session == null || string.IsNullOrWhiteSpace(session.Id) || string.IsNullOrWhiteSpace(session.EmployeeId))
+        {
+            return null;
+        }
+
+        var empLock = _employeeSessionLocks.GetOrAdd(session.EmployeeId, _ => new object());
+        lock (empLock)
+        {
+            var live = deviceSessions.GetById(session.Id);
+            if (live == null ||
+                live.RevokedAt != null ||
+                live.ExpiresAt <= DateTime.UtcNow ||
+                !live.HasVaultCookie ||
+                !string.IsNullOrEmpty(live.VaultNonce))
+            {
+                return null;
+            }
+
+            live.VaultNonce = Guid.NewGuid().ToString("N");
+            deviceSessions.Save(live);
+            session.VaultNonce = live.VaultNonce;
+            return live.VaultNonce;
+        }
+    }
+
+    /// <summary>
     /// Evicts the user's decrypted private key from <see cref="GlobalKeystoreService"/>
     /// when no remaining active, unrevoked, unexpired <see cref="DeviceSession"/> has <c>HasVaultCookie == true</c>.
     /// </summary>
-    public void EvictGlobalKeystoreIfNoUnlockedSessions(string? employeeId)
+    public void EvictGlobalKeystoreIfNoUnlockedSessions(string? employeeId, GlobalKeystoreService? fallbackKeystore = null)
     {
         if (string.IsNullOrWhiteSpace(employeeId)) return;
+
+        var keystore = _globalKeystore ?? fallbackKeystore;
+        if (keystore == null) return;
 
         var now = DateTime.UtcNow;
         bool hasRemainingUnlockedSession = _deviceSessions
@@ -400,7 +489,7 @@ public class SessionService
 
         if (!hasRemainingUnlockedSession)
         {
-            _globalKeystore?.LockVault(employeeId);
+            keystore.LockVault(employeeId);
         }
     }
 
@@ -421,10 +510,15 @@ public class SessionService
         {
             session.RevokedAt = now;
             session.HasVaultCookie = false;
-            _deviceSessions.Save(session);
+            session.VaultNonce = Guid.NewGuid().ToString("N");
+            session.PushExplicitlyDisabled = false;
             if (session.HasPush)
             {
                 _deviceSessions.ClearPushFields(session);
+            }
+            else
+            {
+                _deviceSessions.Save(session);
             }
             TriggerRemoteLogout(session.Id);
         }
@@ -450,7 +544,9 @@ public class SessionService
         foreach (var session in activeSessions)
         {
             session.HasVaultCookie = false;
+            session.VaultNonce = Guid.NewGuid().ToString("N");
             session.TokenHash = string.Empty;
+            session.PushExplicitlyDisabled = false;
             if (session.HasPush)
             {
                 _deviceSessions.ClearPushFields(session);
@@ -535,6 +631,49 @@ public class SessionService
     }
 
     /// <summary>
+    /// Triggers a global broadcast to lock the vault and purge persisted encrypted media cache
+    /// on all active circuits for the specified SessionId (e.g., after a vault password change).
+    /// </summary>
+    public void TriggerRemoteVaultLock(string sessionId)
+    {
+        if (!string.IsNullOrEmpty(sessionId))
+        {
+            OnSessionVaultRevoked?.Invoke(sessionId);
+        }
+    }
+
+    /// <summary>
+    /// Triggers a global broadcast to notify active circuits when an employee's read-only suspension state changes.
+    /// </summary>
+    public void NotifyUserSuspensionChanged(string employeeId, bool isSuspended)
+    {
+        if (string.IsNullOrWhiteSpace(employeeId))
+        {
+            return;
+        }
+
+        if (isSuspended)
+        {
+            foreach (var session in _deviceSessions.GetByEmployeeId(employeeId))
+            {
+                if (session.RevokedAt != null)
+                {
+                    continue;
+                }
+
+                session.HasVaultCookie = false;
+                session.VaultNonce = Guid.NewGuid().ToString("N");
+                _deviceSessions.Save(session);
+            }
+
+            _globalKeystore?.LockVault(employeeId);
+            _fileTokenService?.InvalidateUserEncryptedTokens(employeeId);
+        }
+
+        OnUserSuspensionChanged?.Invoke(employeeId, isSuspended);
+    }
+
+    /// <summary>
     /// Signs in the user with cookie auth and extends the session expiry by 90 days.
     /// Used by all session refresh/renewal paths.
     /// </summary>
@@ -593,7 +732,7 @@ public class SessionService
     /// Resolves the OIDC EndSessionEndpoint from the configured authority or fallback.
     /// Delegated to <see cref="IOpenIdConfigurationProvider"/>.
     /// </summary>
-    public Task<string> ResolveEndSessionEndpointAsync(HttpContext context, CancellationToken cancellationToken = default)
+    public Task<string> ResolveEndSessionEndpointAsync(CancellationToken cancellationToken = default)
     {
         var oidcOptions = _oidcOptionsMonitor?.Get(OpenIdConnectDefaults.AuthenticationScheme);
 
@@ -625,32 +764,23 @@ public class SessionService
         {
             session.RevokedAt ??= DateTime.UtcNow;
             session.HasVaultCookie = false;
-            _deviceSessions.Save(session);
-
+            session.VaultNonce = Guid.NewGuid().ToString("N");
+            session.PushExplicitlyDisabled = false;
             if (session.HasPush)
             {
                 _deviceSessions.ClearPushFields(session);
+            }
+            else
+            {
+                _deviceSessions.Save(session);
             }
 
             if (!string.IsNullOrEmpty(session.EmployeeId))
             {
                 (_fileTokenService ?? context.RequestServices?.GetService<FileTokenService>())?.InvalidateUserEncryptedTokens(session.EmployeeId);
-                EvictGlobalKeystoreIfNoUnlockedSessions(session.EmployeeId);
-                if (_globalKeystore == null)
-                {
-                    var resolvedKeystore = context.RequestServices?.GetService<GlobalKeystoreService>();
-                    if (resolvedKeystore != null)
-                    {
-                        var now = DateTime.UtcNow;
-                        bool hasRemainingUnlocked = _deviceSessions
-                            .GetByEmployeeId(session.EmployeeId)
-                            .Any(s => s.RevokedAt == null && s.ExpiresAt > now && s.HasVaultCookie);
-                        if (!hasRemainingUnlocked)
-                        {
-                            resolvedKeystore.LockVault(session.EmployeeId);
-                        }
-                    }
-                }
+                EvictGlobalKeystoreIfNoUnlockedSessions(
+                    session.EmployeeId,
+                    _globalKeystore == null ? context.RequestServices?.GetService<GlobalKeystoreService>() : null);
             }
         }
         else if (session != null && !string.IsNullOrEmpty(session.EmployeeId))
@@ -661,24 +791,16 @@ public class SessionService
         // 3. Clear session and security cookies
         context.Response.Cookies.Delete("Spokes_SSO_Attempt");
 
-        if (context.Request.Cookies.ContainsKey("Spokes_Refresh"))
+        if (context.Request.Cookies.ContainsKey(VaultCookieProtector.RefreshCookieName))
         {
-            context.Response.Cookies.Delete("Spokes_Refresh", new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = context.Request.IsHttps,
-                SameSite = SameSiteMode.Lax,
-                Path = "/"
-            });
+            VaultCookieProtector.DeleteRefreshCookie(context);
         }
 
-        context.Response.Cookies.Delete("chat_vault_key", new CookieOptions
+        VaultCookieProtector.DeleteVaultCookie(context.Response);
+        if (!context.Response.HasStarted)
         {
-            Path = "/",
-            HttpOnly = true,
-            Secure = true,
-            SameSite = SameSiteMode.Lax
-        });
+            context.Response.Headers["Clear-Site-Data"] = "\"cache\"";
+        }
 
         // 4. Resolve id_token for IdP logout
         var hasAuthService = context.RequestServices?.GetService<IAuthenticationService>() != null;
@@ -728,7 +850,7 @@ public class SessionService
                 await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
             }
 
-            var endSessionUrl = await ResolveEndSessionEndpointAsync(context);
+            var endSessionUrl = await ResolveEndSessionEndpointAsync();
 
             var reqId = Guid.NewGuid().ToString("N");
             _cache?.Set($"logout_{reqId}", new Tuple<string, string>(idToken, endSessionUrl), TimeSpan.FromMinutes(5));

@@ -1,7 +1,6 @@
 @page "/albums"
 @page "/albums/{Id}"
 @attribute [Authorize(Policy = AppPermissions.Albums.View)]
-@implements IDisposable
 @implements IAsyncDisposable
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.Security
@@ -21,9 +20,11 @@
 @inject ScopedKeystoreService ScopedKeystoreService
 @inject ShareTargetStateService ShareTargetStateService
 @inject IChatChannelAccessService ChatAccess
+@inject IChatAuthorizationService ChatAuth
 @inject FileTokenService FileTokenService
 @inject UserCircuitContext CircuitContext
 @inject IUserPrivacyService PrivacyService
+@inject AppLabelService AppLabels
 @inject ISlideshowSessionService SessionService
 @inject IServiceProvider ServiceProvider
 @inject ILogger<Albums> Logger
@@ -64,13 +65,13 @@ else if (_selectedAlbum != null)
         
         <div class="mb-6">
             <div class="d-flex flex-wrap align-center justify-space-between gap-4">
-                <div class="d-flex align-center gap-3">
-                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="CloseAlbum" Color="Color.Default" Size="Size.Medium" title="@Loc["Back to Albums"]" />
-                    <div class="d-flex align-center gap-2">
+                <div class="d-flex align-center gap-3" style="min-width: 0; max-width: 100%;">
+                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="CloseAlbum" Color="Color.Default" Size="Size.Medium" Class="flex-shrink-0" title="@Loc["Back to Albums"]" />
+                    <div class="d-flex align-center gap-2" style="min-width: 0; max-width: 100%;">
                         @if (_isEditingTitle && _selectedAlbum.OwnerId == _currentUser?.Id)
                         {
                             <MudTextField @bind-Value="_editingTitle" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                Placeholder="@Loc["Album title"]" Immediate="true" Class="ma-0"
+                                Placeholder="@Loc["Album Title"]" Immediate="true" Class="ma-0"
                                 Style="font-size: calc(1.1rem + 0.4vw); font-weight: 700;"
                                 OnKeyDown="@(async (e) => { if (e.Key == "Enter" || e.Key == "NumpadEnter") await SaveTitle(); else if (e.Key == "Escape") CancelEditingTitle(); })"
                                 Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Check"
@@ -79,17 +80,17 @@ else if (_selectedAlbum != null)
                         }
                         else if (_selectedAlbum.OwnerId == _currentUser?.Id)
                         {
-                            <div class="d-flex align-center gap-2" style="cursor: pointer;" @onclick="StartEditingTitle">
-                                <MudText Typo="Typo.h4" Style="font-weight: 700; font-size: calc(1.3rem + 0.6vw);">@_selectedAlbum.Title</MudText>
+                            <div class="d-flex align-center gap-2" style="cursor: pointer; min-width: 0; max-width: 100%;" @onclick="StartEditingTitle">
+                                <MudText Typo="Typo.h4" Style="font-weight: 700; font-size: calc(1.3rem + 0.6vw); overflow-wrap: anywhere;">@_selectedAlbum.Title</MudText>
                                 <MudTooltip Text="@Loc["Edit title"]">
-                                    <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Style="opacity: 0.4; font-size: 1.2rem;" />
+                                    <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Class="flex-shrink-0" Style="opacity: 0.4; font-size: 1.2rem;" />
                                 </MudTooltip>
                             </div>
                         }
                         else
                         {
-                            <MudText Typo="Typo.h4" Style="font-weight: 700; font-size: calc(1.3rem + 0.6vw);">@_selectedAlbum.Title</MudText>
-                            <MudChip T="string" Color="Color.Info" Size="Size.Small" Variant="Variant.Outlined">@Loc["Shared with you"]</MudChip>
+                            <MudText Typo="Typo.h4" Style="font-weight: 700; font-size: calc(1.3rem + 0.6vw); overflow-wrap: anywhere;">@_selectedAlbum.Title</MudText>
+                            <MudChip T="string" Color="Color.Info" Size="Size.Small" Variant="Variant.Outlined" Class="flex-shrink-0">@Loc["Shared with you"]</MudChip>
                         }
                     </div>
                 </div>
@@ -97,7 +98,7 @@ else if (_selectedAlbum != null)
                 <div class="d-flex align-center gap-2 flex-wrap">
                     @if (_isAlbumLocked)
                     {
-                        @if (_selectedAlbum.OwnerId == _currentUser?.Id)
+                        @if (_currentUser?.IsActiveUnsuspended == true && _selectedAlbum.OwnerId == _currentUser.Id)
                         {
                             <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" OnClick="DeleteAlbumAction" Class="rounded-lg">@Loc["Delete Album"]</MudButton>
                         }
@@ -113,7 +114,7 @@ else if (_selectedAlbum != null)
                         {
                             <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Tv" OnClick="OpenSlideshowPairDialog" Class="rounded-lg">@Loc["Present to TV"]</MudButton>
                         }
-                        @if (CanContribute(_selectedAlbum) && _selectedAlbum.Media.Any())
+                        @if (HasDeletableMedia(_selectedAlbum))
                         {
                             <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.Checklist" OnClick="ToggleSelectionMode" Class="rounded-lg">@Loc["Select"]</MudButton>
                         }
@@ -132,11 +133,11 @@ else if (_selectedAlbum != null)
                                 </CustomContent>
                             </ApiFileUpload>
                         }
-                        @if (IsOwner(_selectedAlbum))
+                        @if (IsOwner(_selectedAlbum) && _currentUser?.IsActiveUnsuspended == true && _currentUser.HasPermission(AppPermissions.Chat.Use))
                         {
                             <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Chat" OnClick="OpenShareDialog" Class="rounded-lg">@Loc["Share"]</MudButton>
                         }
-                        @if (_selectedAlbum.OwnerId == _currentUser?.Id)
+                        @if (_currentUser?.IsActiveUnsuspended == true && _selectedAlbum.OwnerId == _currentUser.Id)
                         {
                             <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" OnClick="DeleteAlbumAction" Class="rounded-lg">@Loc["Delete Album"]</MudButton>
                         }
@@ -154,68 +155,61 @@ else if (_selectedAlbum != null)
                 <MudText Typo="Typo.body2" Color="Color.Secondary">@string.Format(Loc["{0} items"].Value, _selectedAlbum.Media.Count)</MudText>
                 
                 @{
-                    var dynamicSharedUserIds = GetDynamicSharedUserIds(_selectedAlbum);
+                    var sharedEmployees = GetDynamicSharedEmployees(_selectedAlbum);
+                    var visibleContributors = GetVisibleContributors(_selectedAlbum);
                     bool isAudienceRestricted = PrivacyService.ShouldRestrictAlbumAudience(_selectedAlbum, _currentUser);
-                    bool hasPublicAudience = isAudienceRestricted && _selectedAlbum.SharedWithChannelIds.Any(cId => {
+                    bool hasPublicAudience = _currentUser != null && _selectedAlbum.SharedWithChannelIds.Any(cId => {
                         var ch = Db.ChatChannels.GetById(cId);
-                        return ch != null && (ch.IsPublicChannel || ch.IsAnnouncementOnly);
+                        return ch != null &&
+                               ChatAuth.CanUserAccessChannel(ch, _currentUser) &&
+                               ((isAudienceRestricted && (ch.IsPublicChannel || ch.IsAnnouncementOnly)) ||
+                                PrivacyService.ShouldHideMemberList(ch, _currentUser));
                     });
                 }
-                @* album-sharing-row: wraps as a unit on mobile (flex-nowrap) so Shared with and Contributors stay on one line *@
                 <div class="album-sharing-row">
                     @* Always visible — every viewer benefits from seeing who has access *@
-                    @if (true)
+                    <MudDivider Vertical="true" FlexItem="true" Class="mx-1 d-none d-sm-flex" Style="height: 16px; align-self: center;" />
+                    <div class="d-flex align-center gap-2 album-sharing-trigger" @onclick="OpenSharedWithDialog" style="cursor: pointer;" title="@Loc["View shared users"]">
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Shared With"]</MudText>
+                        @if (hasPublicAudience)
+                        {
+                            <MudChip T="string" Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" Class="ma-0">
+                                @Loc["Public Audience"]
+                            </MudChip>
+                        }
+                        else
+                        {
+                            <EmployeeAvatarGroup Employees="@sharedEmployees"
+                                                 Max="3"
+                                                 Size="Size.Small"
+                                                 OverflowStyle="AvatarOverflowStyle.Ellipsis"
+                                                 OverflowColor="Color.Primary"
+                                                 OverflowTitle="@Loc["View shared users"]"
+                                                 Class="spokes-avatar-group-responsive">
+                                <EmptyContent>
+                                    <div class="mud-avatar mud-avatar-filled mud-avatar-filled-primary mud-avatar-small">
+                                        <div class="spokes-avatar-inner">
+                                            <MudIcon Icon="@Icons.Material.Filled.Forum" Class="spokes-avatar-icon" />
+                                        </div>
+                                    </div>
+                                </EmptyContent>
+                            </EmployeeAvatarGroup>
+                        }
+                    </div>
+                    @if (visibleContributors.Any() || IsOwner(_selectedAlbum))
                     {
                         <MudDivider Vertical="true" FlexItem="true" Class="mx-1 d-none d-sm-flex" Style="height: 16px; align-self: center;" />
-                        <div class="d-flex align-center gap-2" @onclick="OpenSharedWithDialog" style="cursor: pointer;" title="@Loc["View shared users"]">
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Shared with"]</MudText>
-                            @if (hasPublicAudience)
-                            {
-                                <MudChip T="string" Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" Class="ma-0">
-                                    @Loc["Public Audience"]
-                                </MudChip>
-                            }
-                            else
-                            {
-                                <MudAvatarGroup Max="3" Spacing="3" MaxColor="Color.Primary" Class="avatar-group-small avatar-group-xs">
-                                    @if (dynamicSharedUserIds.Any())
-                                    {
-                                        @foreach(var userId in dynamicSharedUserIds)
-                                        {
-                                            var emp = _employees.FirstOrDefault(e => e.Id == userId);
-                                            if (emp != null)
-                                            {
-                                                <EmployeeAvatar Employee="@emp" Size="Size.Small" />
-                                            }
-                                        }
-                                    }
-                                    else
-                                    {
-                                        <MudAvatar Size="Size.Small" Color="Color.Primary">
-                                            <MudIcon Icon="@Icons.Material.Filled.Forum" Size="Size.Small" />
-                                        </MudAvatar>
-                                    }
-                                </MudAvatarGroup>
-                            }
-                        </div>
-                    }
-                    @if (_selectedAlbum.ContributorUserIds.Any() || IsOwner(_selectedAlbum))
-                    {
-                        <MudDivider Vertical="true" FlexItem="true" Class="mx-1" Style="height: 16px; align-self: center;" />
-                        <div class="d-flex align-center gap-2" @onclick="OpenManageContributorsDialog" style="cursor: pointer;" title="@Loc["Manage contributors"]">
+                        <div class="d-flex align-center gap-2 album-sharing-trigger" @onclick="OpenContributorsDialog" style="cursor: pointer;" title="@(IsOwner(_selectedAlbum) ? Loc["Manage Contributors"] : Loc["View contributors"])">
                             <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Contributors"]</MudText>
-                            @if (_selectedAlbum.ContributorUserIds.Any())
+                            @if (visibleContributors.Any())
                             {
-                                <MudAvatarGroup Max="3" Spacing="3" MaxColor="Color.Info" Class="avatar-group-small avatar-group-xs">
-                                    @foreach(var userId in _selectedAlbum.ContributorUserIds)
-                                    {
-                                        var emp = _employees.FirstOrDefault(e => e.Id == userId);
-                                        if (emp != null)
-                                        {
-                                            <EmployeeAvatar Employee="@emp" Size="Size.Small" />
-                                        }
-                                    }
-                                </MudAvatarGroup>
+                                <EmployeeAvatarGroup Employees="@visibleContributors"
+                                                     Max="3"
+                                                     Size="Size.Small"
+                                                     OverflowStyle="AvatarOverflowStyle.Ellipsis"
+                                                     OverflowColor="Color.Info"
+                                                     OverflowTitle="@(IsOwner(_selectedAlbum) ? Loc["Manage Contributors"] : Loc["View contributors"])"
+                                                     Class="spokes-avatar-group-responsive" />
                             }
                             else if (_selectedAlbum.OwnerId == _currentUser?.Id)
                             {
@@ -267,7 +261,7 @@ else if (_selectedAlbum != null)
                 && !_selectedAlbum.EncryptedAlbumKeys.ContainsKey("Escrow")
                 && !_selectedAlbum.SharedWithChannelIds.Any(cId => {
                     var ch = Db.ChatChannels.GetById(cId);
-                    return ch != null && ch.EncryptedChannelKeys.ContainsKey(_currentUser?.Id ?? "");
+                    return ch != null && ch.HasAnyEpochKey(_currentUser?.Id ?? "");
                 });
 
             <VaultLockView Title="@Loc["Secure Album"]"
@@ -288,18 +282,29 @@ else if (_selectedAlbum != null)
                 {
                     var index = i;
                     var media = _selectedAlbum.Media[i];
+                    var canDelete = CanDeleteMedia(_selectedAlbum, media);
+                    var isSelected = _isSelectionMode && canDelete && _selectedMediaIds.Contains(media.Id);
+                    var isNonSelectableInSelectionMode = _isSelectionMode && !canDelete;
                     <MudItem xs="6" sm="4" md="3" lg="2" xl="2">
-                        <MudCard Elevation="1" Class="album-media-card relative overflow-hidden cursor-pointer" Style="@($"{(_selectedMediaIds.Contains(media.Id) ? "border: 2px solid var(--mud-palette-primary); padding: 2px;" : "border: 2px solid transparent;")} height: 180px; border-radius: 12px; background: var(--mud-palette-background-grey);")" @onclick="() => HandleMediaClick(index, media)">
+                        <MudCard Elevation="1"
+                                 Class="@($"album-media-card relative overflow-hidden {(isNonSelectableInSelectionMode ? "album-media-not-deletable" : "cursor-pointer")}")"
+                                 Style="@($"{(isSelected ? "border: 2px solid var(--mud-palette-primary); padding: 2px;" : "border: 2px solid transparent;")} height: 180px; border-radius: 12px; background: var(--mud-palette-background-grey);")"
+                                 title="@(isNonSelectableInSelectionMode ? Loc["You can only delete your own media."].Value : null)"
+                                 @onclick="() => HandleMediaClick(index, media)">
                             @if (media.ContentType.StartsWith("image/"))
                             {
-                                <MudImage Src="@GetTokenizedUrl(media, true)" ObjectFit="ObjectFit.Cover" Style="width: 100%; height: 100%; object-fit: cover;" />
+                                <div class="media-tile" style="width: 100%; height: 100%;">
+                                    <div class="media-tile-skeleton"></div>
+                                    <img data-media-src="@GetTokenizedUrl(media, true, smallThumb: true)" data-media-priority="album-grid" data-media-order="@index" data-media-encrypted="@(_selectedAlbum.IsEncrypted ? "true" : null)" alt="@media.FileName" decoding="async" class="needs-fade" style="width: 100%; height: 100%; object-fit: cover; display: block;" />
+                                </div>
                             }
                             else if (media.ContentType.StartsWith("video/"))
                             {
                                 if (media.HasServerThumbnail)
                                 {
-                                    <div style="position: relative; width: 100%; height: 100%;">
-                                        <MudImage Src="@GetTokenizedUrl(media, true)" ObjectFit="ObjectFit.Cover" Style="width: 100%; height: 100%; object-fit: cover;" />
+                                    <div class="media-tile" style="position: relative; width: 100%; height: 100%;">
+                                        <div class="media-tile-skeleton"></div>
+                                        <img data-media-src="@GetTokenizedUrl(media, true, smallThumb: true)" data-media-priority="album-grid" data-media-order="@index" data-media-encrypted="@(_selectedAlbum.IsEncrypted ? "true" : null)" alt="@media.FileName" decoding="async" class="needs-fade" style="width: 100%; height: 100%; object-fit: cover; display: block;" />
                                         <div class="d-flex flex-column align-center justify-center" style="position: absolute; inset: 0; background: rgba(0,0,0,0.4);">
                                             <MudIcon Icon="@Icons.Material.Filled.PlayCircle" Size="Size.Large" Color="Color.Surface" Style="font-size: 3rem; filter: drop-shadow(0 2px 8px rgba(0,0,0,0.5));" />
                                         </div>
@@ -321,10 +326,10 @@ else if (_selectedAlbum != null)
                                 </div>
                             }
 
-                            @if (_isSelectionMode)
+                            @if (_isSelectionMode && canDelete)
                             {
-                                <div class="d-flex align-center justify-center" style="position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 50%; border: 2px solid white; background: @(_selectedMediaIds.Contains(media.Id) ? "var(--mud-palette-primary)" : "rgba(0,0,0,0.3)"); z-index: 10;">
-                                    @if (_selectedMediaIds.Contains(media.Id))
+                                <div class="album-selection-badge d-flex align-center justify-center" style="position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 50%; border: 2px solid white; background: @(isSelected ? "var(--mud-palette-primary)" : "rgba(0,0,0,0.3)"); z-index: 10;">
+                                    @if (isSelected)
                                     {
                                         <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Style="color: white; font-size: 16px;" />
                                     }
@@ -338,12 +343,14 @@ else if (_selectedAlbum != null)
                                     <MudIcon Icon="@Icons.Material.Filled.ZoomIn" Color="Color.Surface" Size="Size.Medium" />
                                 </div>
 
-                                @if (CanDeleteMedia(_selectedAlbum, media))
+                                @if (canDelete)
                                 {
-                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" 
-                                        Class="media-delete-btn desktop-only-hover"
-                                        Style="position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.6); color: white; transition: opacity 0.2s;"
-                                        OnClick="@((e) => DeleteMediaAction(media))" title="@Loc["Delete media"]" />
+                                    <span @onclick:stopPropagation="true">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" 
+                                            Class="media-delete-btn desktop-only-hover"
+                                            Style="position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.6); color: white; transition: opacity 0.2s;"
+                                            OnClick="@((e) => DeleteMediaAction(media))" title="@Loc["Delete media"]" />
+                                    </span>
                                 }
                             }
                         </MudCard>
@@ -405,9 +412,11 @@ else
         <!-- Album Cards Grid -->
         @if (FilteredAlbums.Any())
         {
+            var albumGridOrder = 0;
             <MudGrid Spacing="3">
                 @foreach (var album in FilteredAlbums)
                 {
+                    var cardOrder = albumGridOrder++;
                     var isOwner = IsOwner(album);
                     var ownerName = GetOwnerName(album.OwnerId);
                     <MudItem xs="12" sm="6" md="4" lg="3" xl="2">
@@ -426,7 +435,11 @@ else
                                     }
                                     else
                                     {
-                                        <MudImage Src="@GetTokenizedUrl(album, album.Media.First(), true)" ObjectFit="ObjectFit.Cover" Class="album-cover-img" Style="width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s ease;" />
+                                        var coverMedia = album.Media.Last();
+                                        <div class="media-tile" style="width: 100%; height: 100%;">
+                                            <div class="media-tile-skeleton"></div>
+                                            <img data-media-src="@GetTokenizedUrl(album, coverMedia, true, smallThumb: true)" data-media-priority="album-grid" data-media-order="@cardOrder" data-media-encrypted="@(album.IsEncrypted ? "true" : null)" alt="@album.Title" decoding="async" class="album-cover-img needs-fade" style="width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.3s ease, opacity 0.25s ease-in-out;" />
+                                        </div>
                                     }
                                 }
                                 else
@@ -465,11 +478,11 @@ else
                                         <MudText Typo="Typo.subtitle1" Style="font-weight: 700; line-height: 1.3;" Class="text-truncate">@album.Title</MudText>
                                         <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true" @onclick:stopPropagation="true">
                                             <MudMenuItem Icon="@Icons.Material.Filled.FolderOpen" OnClick="() => SelectAlbum(album)">@Loc["Open"]</MudMenuItem>
-                                            @if (isOwner)
+                                            @if (isOwner && _currentUser?.IsActiveUnsuspended == true && _currentUser.HasPermission(AppPermissions.Chat.Use))
                                             {
                                                 <MudMenuItem Icon="@Icons.Material.Filled.Share" OnClick="() => OpenShareDialogFor(album)">@Loc["Share to Chat"]</MudMenuItem>
                                             }
-                                            @if (isOwner)
+                                            @if (isOwner && _currentUser?.IsActiveUnsuspended == true)
                                             {
                                                 <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="() => DeleteSpecificAlbumAction(album)">@Loc["Delete"]</MudMenuItem>
                                             }
@@ -533,11 +546,6 @@ else
 </MudContainer>
 
 <style>
-    .avatar-group-small .mud-avatar {
-        width: 32px !important;
-        height: 32px !important;
-        font-size: 0.8rem !important;
-    }
     .album-card {
         transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
@@ -555,6 +563,14 @@ else
     .album-media-card:hover {
         transform: translateY(-2px);
         box-shadow: 0 6px 18px rgba(0,0,0,0.2) !important;
+    }
+    .album-media-card.album-media-not-deletable {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
+    .album-media-card.album-media-not-deletable:hover {
+        transform: none;
+        box-shadow: none !important;
     }
     .album-media-card .media-hover-overlay {
         position: absolute;
@@ -579,15 +595,22 @@ else
         }
     }
 
-    /* --- album-sharing-row: always a flex container so it can host vertical dividers and avatar groups.
-       At desktop widths it wraps freely (matching the outer flex-wrap row behaviour).
-       On mobile it is locked to a single non-breaking line so Shared-with and Contributors
-       always appear together. --- */
+    /* --- album-sharing-row: flex container that wraps cleanly at every viewport width
+       so Shared with and Contributors sit side-by-side when space allows and never cause
+       horizontal page overflow on narrow screens or longer translations. --- */
     .album-sharing-row {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
         gap: 8px;
+        max-width: 100%;
+        min-width: 0;
+    }
+
+    .album-sharing-trigger {
+        white-space: nowrap;
+        flex-shrink: 0;
+        max-width: 100%;
     }
 
     /* --- Mobile-only overrides (≤ 599 px) --- */
@@ -596,15 +619,9 @@ else
         .album-meta-row {
             margin-left: 0 !important;
         }
-        /* Keep Shared-with and Contributors on one line */
+        /* Clean horizontal & vertical spacing when Shared-with and Contributors sit side-by-side or wrap */
         .album-sharing-row {
-            flex-wrap: nowrap;
-        }
-        /* Smaller avatars to fit the narrow row */
-        .avatar-group-xs .mud-avatar {
-            width: 24px !important;
-            height: 24px !important;
-            font-size: 0.65rem !important;
+            gap: 6px 16px;
         }
         /* Fixed FAB — clears the mobile bottom navigation bar */
         .album-fab {
@@ -627,7 +644,6 @@ else
     private bool _dropZoneInitialized;
 
     private Employee? _currentUser;
-    private string? _sessionId;
     private List<Employee> _employees = [];
     
     private List<Album> _myAlbums = [];
@@ -636,7 +652,6 @@ else
     private bool _isEditingTitle;
     private string _editingTitle = "";
     private string? _cachedPlainAlbumKey;
-    private Dictionary<string, string?> _albumKeyCache = [];
     private int activeTabIndex;
     private string searchString = "";
     
@@ -654,9 +669,10 @@ else
     private Snackbar? _activeSnackbar;
     private string _originalUploadText = "";
 
-    private bool IsOwner(Album? album) => album != null && _currentUser?.Id is { } userId && album.OwnerId == userId;
-    private bool CanContribute(Album? album) => album != null && _currentUser?.Id is { } userId && (album.OwnerId == userId || album.ContributorUserIds.Contains(userId));
-    private bool CanDeleteMedia(Album? album, AlbumMedia media) => album != null && _currentUser?.Id is { } userId && (album.OwnerId == userId || (album.ContributorUserIds.Contains(userId) && media.AddedByUserId == userId));
+    private bool IsOwner(Album? album) => album != null && _currentUser?.Id is { } userId && album.OwnerId == userId && _currentUser.HasEffectivePermission(AppPermissions.Albums.View, allowSuspended: true);
+    private bool CanContribute(Album? album) => album != null && _currentUser?.IsActiveUnsuspended == true && _currentUser.HasPermission(AppPermissions.Albums.View) && (album.OwnerId == _currentUser.Id || album.ContributorUserIds.Contains(_currentUser.Id));
+    private bool CanDeleteMedia(Album? album, AlbumMedia media) => AlbumService.CanUserDeleteMedia(album, media, _currentUser);
+    private bool HasDeletableMedia(Album? album) => AlbumService.CanUserDeleteAnyMedia(album, _currentUser);
 
     protected override async Task OnInitializedAsync()
     {
@@ -665,16 +681,17 @@ else
         ScopedKeystoreService.OnLocked += HandleVaultLockedInAlbums;
 
         _currentUser = await UserService.GetEmployeeAsync();
-        _sessionId = await UserService.GetSessionIdAsync();
         if (_currentUser != null)
         {
-            _employees = Db.Employees.GetAll();
+            _employees = PrivacyService.FilterDiscoverableEmployees(_currentUser, Db.Employees.GetActiveEmployees());
             LoadAlbums();
             ResolveSelectedAlbum();
         }
     }
 
     private bool _isAlbumLocked => IsAlbumLocked(_selectedAlbum, out _cachedPlainAlbumKey);
+
+    private string GetAlbumKeyCacheKey(string albumId) => $"alb:{albumId}:{_currentUser?.Id}";
 
     private bool IsAlbumLocked(Album? album, out string? plainAlbumKey)
     {
@@ -683,15 +700,17 @@ else
         if (!album.IsEncrypted) return false;
         if (_currentUser == null) return true;
 
-        if (_albumKeyCache.TryGetValue(album.Id, out var cachedKey))
+        var userId = _currentUser.Id;
+        var cacheKey = GetAlbumKeyCacheKey(album.Id);
+        if (!AlbumService.CanUserViewAlbum(album, userId))
         {
-            plainAlbumKey = cachedKey;
-            return string.IsNullOrEmpty(plainAlbumKey);
+            ScopedKeystoreService.InvalidateCachedKey(cacheKey);
+            return true;
         }
 
-        bool isLocked = AlbumService.IsAlbumLocked(album, _currentUser.Id, ScopedKeystoreService.GetPrivateKey(), out plainAlbumKey);
-        _albumKeyCache[album.Id] = plainAlbumKey;
-        return isLocked;
+        plainAlbumKey = ScopedKeystoreService.GetOrDecryptKey(cacheKey, privateKey =>
+            AlbumService.GetPlainAlbumKey(album, userId, privateKey));
+        return string.IsNullOrEmpty(plainAlbumKey);
     }
 
     private void HandleVaultUnlockedInAlbums()
@@ -700,7 +719,7 @@ else
         {
             _currentUser = Db.Employees.GetById(_currentUser.Id);
         }
-        _albumKeyCache.Clear();
+        ScopedKeystoreService.ClearDecryptedKeyCache();
         LoadAlbums();
         ResolveSelectedAlbum();
         StateHasChanged();
@@ -712,7 +731,7 @@ else
         {
             if (_currentUser == null) return;
             _currentUser = Db.Employees.GetById(_currentUser.Id);
-            _albumKeyCache.Clear();
+            ScopedKeystoreService.ClearDecryptedKeyCache();
             LoadAlbums();
             ResolveSelectedAlbum();
             StateHasChanged();
@@ -723,7 +742,7 @@ else
     {
         await InvokeAsync(() =>
         {
-            _albumKeyCache.Clear();
+            ScopedKeystoreService.ClearDecryptedKeyCache();
             _cachedPlainAlbumKey = null;
             ResolveSelectedAlbum();
             StateHasChanged();
@@ -782,15 +801,12 @@ else
         ResolveSelectedAlbum();
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         AlbumService.OnAlbumUpdated -= HandleAlbumUpdated;
         ScopedKeystoreService.OnUnlocked -= HandleVaultUnlocked;
         ScopedKeystoreService.OnLocked -= HandleVaultLockedInAlbums;
-    }
 
-    public async ValueTask DisposeAsync()
-    {
         if (_jsModule != null)
         {
             try { await _jsModule.DisposeAsync(); } catch { }
@@ -850,18 +866,24 @@ else
     [JSInvokable]
     public async Task OnPasteUploadCompleted(string jsonResult)
     {
+        if (_selectedAlbum == null) return;
+
         var results = System.Text.Json.JsonSerializer.Deserialize<List<ApiFileUpload.UploadResult>>(
             jsonResult,
             new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }
         );
-        if (results != null)
+        if (results == null || results.Count == 0) return;
+
+        var verifier = ServiceProvider.GetRequiredService<Spokes_Server.Core.Services.Security.UploadCompletionVerifier>();
+        var verification = await verifier.VerifyAndNormalizeAsync(results, "albums", _selectedAlbum.Id, GetUploadUrl());
+        if (!verification.IsSuccess || verification.VerifiedResults.Count == 0)
         {
-            if (_selectedAlbum != null)
-            {
-                foreach (var r in results) r.ContextId = _selectedAlbum.Id;
-            }
-            HandleUploadCompleted(results);
+            Logger.LogWarning("Rejected album paste upload completion for album {AlbumId}: {Error}", _selectedAlbum.Id, verification.ErrorMessage);
+            Snackbar.Add(verification.ErrorMessage ?? "Upload verification failed.", Severity.Error);
+            return;
         }
+
+        await HandleUploadCompleted(verification.VerifiedResults);
     }
 
     [JSInvokable]
@@ -876,7 +898,7 @@ else
         {
             if (_currentUser == null) return;
             
-            _albumKeyCache.Remove(albumId);
+            ScopedKeystoreService.InvalidateCachedKey(GetAlbumKeyCacheKey(albumId));
             LoadAlbums();
             
             if (_selectedAlbum?.Id == albumId)
@@ -929,7 +951,8 @@ else
     {
         if (_currentUser != null && ownerId == _currentUser.Id) return Loc["You"].Value;
         var emp = _employees.FirstOrDefault(e => e.Id == ownerId);
-        return emp?.FullName ?? Loc["Unknown"].Value;
+        if (emp != null) return emp.FullName;
+        return Db.Employees.GetById(ownerId) != null ? AppLabels.Employee : Loc["Unknown"].Value;
     }
 
     private void ResolveSelectedAlbum()
@@ -942,16 +965,27 @@ else
         {
             if (_selectedAlbum?.Id != Id)
             {
-                _isSelectionMode = false;
+                ExitSelectionMode();
                 _isEditingTitle = false;
-                _selectedMediaIds.Clear();
             }
 
             var requestedAlbum = Db.Albums.GetById(Id);
-            if (requestedAlbum != null && (requestedAlbum.OwnerId == _currentUser.Id || requestedAlbum.ContributorUserIds.Contains(_currentUser.Id) || requestedAlbum.SharedWithChannelIds.Any(cId => ChatAccess.GetUsersForChannel(cId).Contains(_currentUser.Id))))
+            if (requestedAlbum != null && AlbumService.CanUserViewAlbum(requestedAlbum, _currentUser.Id))
             {
                 _selectedAlbum = requestedAlbum;
-                _albumKeyCache.Remove(_selectedAlbum.Id);
+                if (_isSelectionMode)
+                {
+                    var deletableIds = _selectedAlbum.Media
+                        .Where(m => CanDeleteMedia(_selectedAlbum, m))
+                        .Select(m => m.Id)
+                        .ToHashSet(StringComparer.Ordinal);
+                    _selectedMediaIds.IntersectWith(deletableIds);
+                    if (deletableIds.Count == 0)
+                    {
+                        ExitSelectionMode();
+                    }
+                }
+                ScopedKeystoreService.InvalidateCachedKey(GetAlbumKeyCacheKey(_selectedAlbum.Id));
                 if (!IsAlbumLocked(_selectedAlbum, out _cachedPlainAlbumKey))
                 {
                     var privateKey = ScopedKeystoreService.GetPrivateKey();
@@ -971,42 +1005,66 @@ else
         {
             if (_selectedAlbum != null)
             {
-                _isSelectionMode = false;
+                ExitSelectionMode();
                 _isEditingTitle = false;
-                _selectedMediaIds.Clear();
             }
             _selectedAlbum = null;
             _cachedPlainAlbumKey = null;
         }
     }
 
-    private List<string> GetDynamicSharedUserIds(Album? album)
+    private List<Employee> GetDynamicSharedEmployees(Album? album)
     {
-        if (album == null) return new List<string>();
+        if (album == null || _currentUser == null) return [];
+        bool isAudienceRestricted = PrivacyService.ShouldRestrictAlbumAudience(album, _currentUser);
         var userIds = album.SharedWithChannelIds
-            .SelectMany(cId => ChatAccess.GetUsersForChannel(cId))
-            .Distinct();
+            .Select(cId => Db.ChatChannels.GetById(cId))
+            .Where(ch => ch != null &&
+                         ChatAuth.CanUserAccessChannel(ch, _currentUser) &&
+                         (!isAudienceRestricted || (!ch.IsPublicChannel && !ch.IsAnnouncementOnly)) &&
+                         !PrivacyService.ShouldHideMemberList(ch, _currentUser))
+            .SelectMany(ch => ChatAccess.GetUsersForChannel(ch!.Id))
+            .Distinct(StringComparer.Ordinal);
 
-        if (PrivacyService.ShouldRestrictAlbumAudience(album, _currentUser))
+        var discoverableById = _employees.ToDictionary(e => e.Id, StringComparer.Ordinal);
+        List<Employee> result = [];
+        foreach (var id in userIds)
         {
-            var caller = _currentUser;
-            return userIds.Where(id =>
+            if (discoverableById.TryGetValue(id, out var emp))
             {
-                var emp = _employees.FirstOrDefault(e => e.Id == id);
-                return emp != null && PrivacyService.CanDiscoverUser(caller, emp);
-            }).ToList();
+                result.Add(emp);
+            }
         }
+        return result;
+    }
 
-        return userIds.ToList();
+    private List<Employee> GetVisibleContributors(Album? album)
+    {
+        if (album == null || album.ContributorUserIds.Count == 0) return [];
+        var discoverableById = _employees.ToDictionary(e => e.Id, StringComparer.Ordinal);
+        List<Employee> result = [];
+        foreach (var id in album.ContributorUserIds)
+        {
+            if (discoverableById.TryGetValue(id, out var emp))
+            {
+                result.Add(emp);
+            }
+        }
+        return result;
     }
 
     private void LoadAlbums()
     {
-        if (_currentUser == null) return;
+        if (_currentUser == null || !_currentUser.HasEffectivePermission(AppPermissions.Albums.View, allowSuspended: true))
+        {
+            _myAlbums = new();
+            _sharedAlbums = new();
+            return;
+        }
         
         var allAlbums = Db.Albums.GetAll();
         _myAlbums = allAlbums.Where(a => a.OwnerId == _currentUser.Id).OrderByDescending(a => a.CreatedAt).ToList();
-        _sharedAlbums = allAlbums.Where(a => a.OwnerId != _currentUser.Id && (a.ContributorUserIds.Contains(_currentUser.Id) || a.SharedWithChannelIds.Any(cId => ChatAccess.GetUsersForChannel(cId).Contains(_currentUser.Id)))).OrderByDescending(a => a.CreatedAt).ToList();
+        _sharedAlbums = allAlbums.Where(a => a.OwnerId != _currentUser.Id && AlbumService.CanUserViewAlbum(a, _currentUser.Id)).OrderByDescending(a => a.CreatedAt).ToList();
     }
 
     private void SelectAlbum(Album album)
@@ -1016,9 +1074,8 @@ else
 
     private void CloseAlbum()
     {
-        _isSelectionMode = false;
+        ExitSelectionMode();
         _isEditingTitle = false;
-        _selectedMediaIds.Clear();
         if (!string.IsNullOrEmpty(FromChannel))
         {
             NavManager.NavigateTo($"/chat/{FromChannel}", replace: false);
@@ -1072,9 +1129,26 @@ else
         }
     }
 
+    private void ExitSelectionMode()
+    {
+        _isSelectionMode = false;
+        _selectedMediaIds.Clear();
+    }
+
     private void ToggleSelectionMode()
     {
-        _isSelectionMode = !_isSelectionMode;
+        if (_isSelectionMode)
+        {
+            ExitSelectionMode();
+            return;
+        }
+
+        if (!HasDeletableMedia(_selectedAlbum))
+        {
+            return;
+        }
+
+        _isSelectionMode = true;
         _selectedMediaIds.Clear();
     }
     
@@ -1082,6 +1156,11 @@ else
     {
         if (_isSelectionMode)
         {
+            if (!CanDeleteMedia(_selectedAlbum, media))
+            {
+                return;
+            }
+
             if (_selectedMediaIds.Contains(media.Id))
             {
                 _selectedMediaIds.Remove(media.Id);
@@ -1099,22 +1178,23 @@ else
     
     private async Task DeleteSelectedMediaAction()
     {
-        if (_selectedAlbum == null || _currentUser == null || !_selectedMediaIds.Any()) return;
-        
-        bool isOwner = _selectedAlbum.OwnerId == _currentUser.Id;
-        bool isContributor = _selectedAlbum.ContributorUserIds.Contains(_currentUser.Id);
-        
-        if (!isOwner && !isContributor) return;
+        var liveUser = await UserService.GetEmployeeAsync();
+        if (_selectedAlbum == null || liveUser == null || !liveUser.IsActiveUnsuspended || !_selectedMediaIds.Any()) return;
+        _currentUser = liveUser;
 
-        var mediaToDelete = _selectedAlbum.Media.Where(m => _selectedMediaIds.Contains(m.Id)).ToList();
-        if (!isOwner)
-        {
-            mediaToDelete = mediaToDelete.Where(m => m.AddedByUserId == _currentUser.Id).ToList();
-        }
-        
+        var albumId = _selectedAlbum.Id;
+        var mediaToDelete = _selectedAlbum.Media
+            .Where(m => _selectedMediaIds.Contains(m.Id) && CanDeleteMedia(_selectedAlbum, m))
+            .ToList();
+        _selectedMediaIds.IntersectWith(mediaToDelete.Select(m => m.Id));
+
         if (!mediaToDelete.Any())
         {
             Snackbar.Add(Loc["You can only delete your own media."].Value, Severity.Warning);
+            if (!HasDeletableMedia(_selectedAlbum))
+            {
+                ExitSelectionMode();
+            }
             return;
         }
 
@@ -1125,52 +1205,71 @@ else
             
         if (result == true)
         {
+            var liveUserAfter = await UserService.GetEmployeeAsync();
+            if (_selectedAlbum == null || liveUserAfter == null || !liveUserAfter.IsActiveUnsuspended) return;
+            _currentUser = liveUserAfter;
             try
             {
-                var removeResult = AlbumService.RemoveMediaBulk(_selectedAlbum.Id, _currentUser.Id, mediaToDelete.Select(m => m.Id));
+                var removeResult = await AlbumService.RemoveMediaBulkAsync(albumId, _currentUser.Id, mediaToDelete.Select(m => m.Id));
                 if (!removeResult.IsSuccess)
                 {
                     Snackbar.Add(removeResult.ErrorMessage ?? Loc["Failed to delete media items."].Value, Severity.Error);
-                    ToggleSelectionMode();
+                    ExitSelectionMode();
                     return;
                 }
 
                 var removedMedia = removeResult.Value ?? [];
-                
-                foreach (var media in removedMedia)
+                ExitSelectionMode();
+                if (removedMedia.Count > 0)
                 {
-                    if (media.FilePath.StartsWith($"/spokesapi/files/albums/{_selectedAlbum.Id}/"))
-                    {
-                        try 
-                        {
-                            await FileService.DeleteAsync(media.FilePath);
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogWarning(ex, "Failed to delete physical file {FilePath}: {Message}", media.FilePath, ex.Message);
-                        }
-                    }
+                    Snackbar.Add(string.Format(Loc["Deleted {0} items"].Value, removedMedia.Count), Severity.Success);
                 }
-                
-                ToggleSelectionMode();
-                Snackbar.Add(string.Format(Loc["Deleted {0} items"].Value, removedMedia.Count), Severity.Success);
             }
             catch (Exception ex)
             {
                 Snackbar.Add(string.Format(Loc["Failed to process deletion: {0}"].Value, ex.Message), Severity.Error);
-                ToggleSelectionMode();
+                ExitSelectionMode();
             }
         }
     }
 
+    private async Task OpenContributorsDialog()
+    {
+        if (_selectedAlbum == null) return;
+
+        if (_currentUser is { IsActiveUnsuspended: true } && _selectedAlbum.OwnerId == _currentUser.Id)
+        {
+            await OpenManageContributorsDialog();
+            return;
+        }
+
+        var visibleContributors = GetVisibleContributors(_selectedAlbum);
+        if (visibleContributors.Count == 0) return;
+
+        var parameters = new DialogParameters<EmployeeListDialog>
+        {
+            { x => x.Title, Loc["Contributors"].Value },
+            { x => x.Icon, Icons.Material.Filled.PeopleAlt },
+            { x => x.Employees, visibleContributors }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        await DialogService.ShowAsync<EmployeeListDialog>(Loc["Contributors"].Value, parameters, options);
+    }
+
     private async Task OpenManageContributorsDialog()
     {
-        if (_selectedAlbum == null || _currentUser == null || _selectedAlbum.OwnerId != _currentUser.Id) return;
+        if (_selectedAlbum == null || _currentUser is not { IsActiveUnsuspended: true } || _selectedAlbum.OwnerId != _currentUser.Id) return;
+
+        var discoverableCandidates = _employees.Where(e => e.Id != _currentUser.Id).ToList();
+        var discoverableIds = discoverableCandidates.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+        var hiddenExistingContributors = _selectedAlbum.ContributorUserIds
+            .Where(id => !string.Equals(id, _currentUser.Id, StringComparison.Ordinal) && !discoverableIds.Contains(id))
+            .ToList();
 
         var parameters = new DialogParameters
         {
-            { "Employees", _employees.Where(e => e.Id != _currentUser.Id).ToList() },
-            { "InitialSelectedUserIds", new HashSet<string>(_selectedAlbum.ContributorUserIds) },
+            { "Employees", discoverableCandidates },
+            { "InitialSelectedUserIds", new HashSet<string>(_selectedAlbum.ContributorUserIds.Where(id => discoverableIds.Contains(id))) },
             { "IsEncrypted", _selectedAlbum.IsEncrypted }
         };
 
@@ -1180,8 +1279,13 @@ else
 
         if (result is { Canceled: false, Data: List<string> newContributors })
         {
+            var mergedContributors = newContributors
+                .Where(id => discoverableIds.Contains(id))
+                .Concat(hiddenExistingContributors)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
             var existingContributors = new HashSet<string>(_selectedAlbum.ContributorUserIds);
-            var removedContributors = existingContributors.Where(e => !newContributors.Contains(e)).ToList();
+            var removedContributors = existingContributors.Where(e => !mergedContributors.Contains(e)).ToList();
 
             if (removedContributors.Any())
             {
@@ -1197,7 +1301,7 @@ else
             }
 
             var privateKey = ScopedKeystoreService.GetPrivateKey();
-            var updateResult = AlbumService.UpdateContributors(_selectedAlbum.Id, _currentUser.Id, newContributors, privateKey);
+            var updateResult = AlbumService.UpdateContributors(_selectedAlbum.Id, _currentUser.Id, mergedContributors, privateKey);
             if (!updateResult.IsSuccess)
             {
                 Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update contributors."].Value, Severity.Error);
@@ -1241,7 +1345,7 @@ else
         var dialog = await DialogService.ShowAsync<AlbumSharedWithDialog>(Loc["Shared With"].Value, parameters, options);
         await dialog.Result;
         // Reload data after dialog closes, in case they unshared channels
-        _albumKeyCache.Remove(_selectedAlbum.Id);
+        ScopedKeystoreService.InvalidateCachedKey(GetAlbumKeyCacheKey(_selectedAlbum.Id));
         LoadAlbums();
         ResolveSelectedAlbum();
         StateHasChanged();
@@ -1269,13 +1373,12 @@ else
         var result = await dialog.Result;
         if (result is { Canceled: false, Data: string title } && !string.IsNullOrWhiteSpace(title))
         {
-            var privateKey = ScopedKeystoreService.GetPrivateKey();
             var createResult = AlbumService.CreateAlbum(new Album
             {
                 OwnerId = _currentUser!.Id,
                 Title = title,
                 CreatedAt = DateTime.UtcNow
-            }, _currentUser!.Id, privateKey);
+            }, _currentUser!.Id);
             if (createResult.IsSuccess && createResult.Value != null)
             {
                 LoadAlbums();
@@ -1338,7 +1441,7 @@ else
         StateHasChanged();
     }
 
-    private void HandleUploadCompleted(List<ApiFileUpload.UploadResult> results)
+    private async Task HandleUploadCompleted(List<ApiFileUpload.UploadResult> results)
     {
         if (_activeSnackbar != null)
         {
@@ -1348,18 +1451,32 @@ else
         _activeUploadState.IsUploading = false;
         StateHasChanged();
 
-        if (_selectedAlbum == null || _currentUser == null) return;
-        
+        var liveUser = await UserService.GetEmployeeAsync();
+        if (_selectedAlbum == null || liveUser == null || !liveUser.IsActiveUnsuspended) return;
+        _currentUser = liveUser;
+
+        if (_selectedAlbum.OwnerId != liveUser.Id && !_selectedAlbum.ContributorUserIds.Contains(liveUser.Id))
+        {
+            Snackbar.Add("You do not have permission to add media to this album.", Severity.Error);
+            return;
+        }
+
         List<AlbumMedia> newMedia = [];
         foreach (var r in results)
         {
             if (r.ContextId != _selectedAlbum.Id)
                 continue;
 
+            if (!FileService.TryResolveScopedFileName(r.FilePath, "albums", _selectedAlbum.Id, out var safeName))
+            {
+                Logger.LogWarning("Rejected unverified album media path {FilePath} for album {AlbumId}.", r.FilePath, _selectedAlbum.Id);
+                continue;
+            }
+
             newMedia.Add(new AlbumMedia
             {
                 FileName = r.FileName,
-                FilePath = r.FilePath,
+                FilePath = $"/spokesapi/files/albums/{_selectedAlbum.Id}/{safeName}",
                 FileSizeBytes = r.FileSizeBytes,
                 ContentType = r.ContentType,
                 HasServerThumbnail = r.HasThumbnail,
@@ -1367,11 +1484,17 @@ else
                 ImageHeight = r.ImageHeight,
                 DurationSeconds = r.DurationSeconds,
                 AddedAt = DateTime.UtcNow,
-                AddedByUserId = _currentUser.Id
+                AddedByUserId = liveUser.Id
             });
         }
-        
-        var addResult = AlbumService.AddMedia(_selectedAlbum.Id, _currentUser.Id, newMedia);
+
+        if (newMedia.Count == 0)
+        {
+            Snackbar.Add("No valid verified media items were uploaded.", Severity.Warning);
+            return;
+        }
+
+        var addResult = AlbumService.AddMedia(_selectedAlbum.Id, liveUser.Id, newMedia);
         if (!addResult.IsSuccess)
         {
             Snackbar.Add(addResult.ErrorMessage ?? Loc["Failed to add media to album"].Value, Severity.Error);
@@ -1393,7 +1516,8 @@ else
             ContentType = m.ContentType,
             AddedAt = m.AddedAt,
             FileSizeBytes = m.FileSizeBytes,
-            HasServerThumbnail = m.HasServerThumbnail
+            HasServerThumbnail = m.HasServerThumbnail,
+            IsEncrypted = _selectedAlbum.IsEncrypted
         }).ToList();
 
         var parameters = new DialogParameters
@@ -1437,59 +1561,46 @@ else
 
     private async Task StartExternalDisplayPresentation()
     {
-        if (_selectedAlbum == null || _currentUser == null || !_selectedAlbum.Media.Any()) return;
-        if (!_currentUser.IsActive || _currentUser.IsSuspended || _currentUser.IsBanned) return;
-        if (!AlbumService.CanUserViewAlbum(_selectedAlbum, _currentUser.Id)) return;
+        if (_selectedAlbum == null) return;
+        var liveUser = await UserService.GetEmployeeAsync();
+        var liveAlbum = Db.Albums.GetById(_selectedAlbum.Id);
+        if (liveUser is not { IsActiveUnsuspended: true } ||
+            !liveUser.HasPermission(AppPermissions.Albums.View) ||
+            liveAlbum == null ||
+            !liveAlbum.Media.Any() ||
+            !AlbumService.CanUserViewAlbum(liveAlbum, liveUser.Id))
+        {
+            return;
+        }
 
+        _currentUser = liveUser;
+        _selectedAlbum = liveAlbum;
         _isStartingPresentation = true;
         StateHasChanged();
 
         try
         {
             // Derive plain album key if encrypted
-            IsAlbumLocked(_selectedAlbum, out string? plainAlbumKey);
-
-            string hostConnectionId = $"blazor_host_{_currentUser.Id}_{Guid.NewGuid():N}";
-            var allowedMedia = _selectedAlbum.Media.ToDictionary(m => m.Id, m => System.IO.Path.GetFileName(m.FilePath));
-            var bridge = new UserScopedSlideshowBridge(ServiceProvider, _currentUser, _selectedAlbum.Id, plainAlbumKey, allowedMedia);
-
-            var session = SessionService.CreateDirectSession(_currentUser.Id, hostConnectionId, _selectedAlbum.Id, bridge);
-
-            // Prepare slideshow media items routed to dedicated SlideshowMediaController
-            var items = new List<SlideshowMediaItem>();
-            var allEmployees = Db.Employees.GetAll();
-
-            foreach (var media in _selectedAlbum.Media)
+            IsAlbumLocked(liveAlbum, out string? plainAlbumKey);
+            if (liveAlbum.IsEncrypted && string.IsNullOrEmpty(plainAlbumKey))
             {
-                string baseUrl = $"/spokesapi/slideshow/{session.SessionId}/media/{media.Id}";
-
-                var uploader = allEmployees.FirstOrDefault(e => e.Id == media.AddedByUserId);
-                string uploaderName = uploader != null ? $"{uploader.FirstName} {uploader.LastName}".Trim() : string.Empty;
-
-                items.Add(new SlideshowMediaItem
-                {
-                    Id = media.Id,
-                    FileName = media.FileName,
-                    Url = SlideshowSessionService.AppendSecretQuery(baseUrl, session.TvSecret),
-                    ThumbnailUrl = SlideshowSessionService.AppendSecretQuery($"{baseUrl}/thumb", session.TvSecret),
-                    ContentType = media.ContentType,
-                    ImageWidth = media.ImageWidth,
-                    ImageHeight = media.ImageHeight,
-                    DurationSeconds = media.DurationSeconds,
-                    AddedAt = media.AddedAt,
-                    AddedByUserName = uploaderName,
-                    FileSizeBytes = media.FileSizeBytes
-                });
+                Snackbar.Add(Loc["Unlock your security vault to present encrypted albums."].Value, Severity.Warning);
+                return;
             }
 
-            var stagePayload = new SlideshowStagePayload
-            {
-                SessionId = session.SessionId,
-                AlbumId = _selectedAlbum.Id,
-                AlbumTitle = _selectedAlbum.Title,
-                InitialIndex = 0,
-                Items = items
-            };
+            string hostConnectionId = $"blazor_host_{liveUser.Id}_{Guid.NewGuid():N}";
+            var allowedMedia = liveAlbum.Media.ToDictionary(m => m.Id, m => System.IO.Path.GetFileName(m.FilePath));
+            var bridge = new UserScopedSlideshowBridge(ServiceProvider, liveUser, liveAlbum.Id, plainAlbumKey, allowedMedia);
+
+            var session = SessionService.CreateDirectSession(liveUser.Id, hostConnectionId, liveAlbum.Id, bridge);
+
+            // Prepare slideshow media items routed to dedicated SlideshowMediaController
+            var stagePayload = SlideshowStagePayload.Create(
+                session.SessionId,
+                session.TvSecret,
+                liveAlbum,
+                0,
+                SlideshowSessionService.AppendSecretQuery);
 
             // Notify in-memory TV Stage
             SessionService.NotifySessionStarted(session.SessionId, stagePayload);
@@ -1515,40 +1626,31 @@ else
     
     private async Task DeleteMediaAction(AlbumMedia media)
     {
-        if (_selectedAlbum == null || _currentUser == null) return;
-        
-        bool isOwner = _selectedAlbum.OwnerId == _currentUser.Id;
-        bool isContributor = _selectedAlbum.ContributorUserIds.Contains(_currentUser.Id);
-        
-        if (isOwner || (isContributor && media.AddedByUserId == _currentUser.Id))
-        {
-            try
-            {
-                if (!media.FilePath.StartsWith($"/spokesapi/files/albums/{_selectedAlbum.Id}/"))
-                    throw new InvalidOperationException("Invalid file path");
+        var liveUser = await UserService.GetEmployeeAsync();
+        if (_selectedAlbum == null || liveUser == null) return;
+        _currentUser = liveUser;
 
-                var removeResult = AlbumService.RemoveMedia(_selectedAlbum.Id, _currentUser.Id, media);
-                if (!removeResult.IsSuccess)
-                {
-                    Snackbar.Add(removeResult.ErrorMessage ?? Loc["Failed to delete media"].Value, Severity.Error);
-                    return;
-                }
-                
-                try
-                {
-                    await FileService.DeleteAsync(media.FilePath);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to delete physical file {FilePath}: {Message}", media.FilePath, ex.Message);
-                }
-                
-                Snackbar.Add(Loc["Media removed"].Value, Severity.Info);
-            }
-            catch (Exception ex)
+        if (!CanDeleteMedia(_selectedAlbum, media))
+        {
+            Snackbar.Add(Loc["You can only delete your own media."].Value, Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var albumId = _selectedAlbum.Id;
+            var removeResult = await AlbumService.RemoveMediaAsync(albumId, _currentUser.Id, media.Id);
+            if (!removeResult.IsSuccess || removeResult.Value == null)
             {
-                Snackbar.Add(string.Format(Loc["Failed to delete media: {0}"].Value, ex.Message), Severity.Error);
+                Snackbar.Add(removeResult.ErrorMessage ?? Loc["Failed to delete media"].Value, Severity.Error);
+                return;
             }
+
+            Snackbar.Add(Loc["Media removed"].Value, Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(string.Format(Loc["Failed to delete media: {0}"].Value, ex.Message), Severity.Error);
         }
     }
 
@@ -1560,7 +1662,9 @@ else
 
     private async Task DeleteSpecificAlbumAction(Album album)
     {
-        if (album == null || _currentUser == null || album.OwnerId != _currentUser.Id) return;
+        var liveUser = await UserService.GetEmployeeAsync();
+        if (album == null || liveUser == null || !liveUser.IsActiveUnsuspended || album.OwnerId != liveUser.Id) return;
+        _currentUser = liveUser;
         
         bool? result = await DialogService.ShowMessageBoxAsync(
             Loc["Delete Album"].Value, 
@@ -1569,21 +1673,20 @@ else
             
         if (result == true)
         {
+            liveUser = await UserService.GetEmployeeAsync();
+            if (liveUser == null || !liveUser.IsActiveUnsuspended || album.OwnerId != liveUser.Id) return;
+            _currentUser = liveUser;
             try
             {
-                foreach (var media in album.Media)
-                {
-                    await FileService.DeleteAsync(media.FilePath);
-                }
-
                 bool wasSelected = _selectedAlbum?.Id == album.Id;
 
-                var deleteResult = AlbumService.DeleteAlbum(album.Id, _currentUser.Id);
+                var deleteResult = await AlbumService.DeleteAlbumAsync(album.Id, liveUser.Id);
                 if (!deleteResult.IsSuccess)
                 {
                     Snackbar.Add(deleteResult.ErrorMessage ?? Loc["Failed to delete album"].Value, Severity.Error);
                     return;
                 }
+
                 Snackbar.Add(Loc["Album deleted"].Value, Severity.Success);
                 
                 if (wasSelected)
@@ -1610,14 +1713,10 @@ else
 
     private async Task OpenShareDialogFor(Album album)
     {
-        if (album == null || _currentUser == null || !IsOwner(album)) return;
+        if (album == null || _currentUser == null || !IsOwner(album) || !_currentUser.IsActiveUnsuspended || !_currentUser.HasPermission(AppPermissions.Chat.Use)) return;
         
         var sharedText = $"#[{album.Title}](album:{album.Id})";
-        var parameters = new DialogParameters
-        {
-            { "SharedText", sharedText }
-        };
-        var dialog = await DialogService.ShowAsync<ShareModal>(Loc["Share Album"].Value, parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
+        var dialog = await DialogService.ShowAsync<ShareModal>(Loc["Share Album"].Value, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled && result.Data is ShareModal.ShareResult shareResult)
@@ -1634,19 +1733,26 @@ else
         }
     }
 
-    private string GetTokenizedUrl(AlbumMedia media, bool isThumbnail = true)
+    private string GetTokenizedUrl(AlbumMedia media, bool isThumbnail = true, bool smallThumb = false)
     {
-        return GetTokenizedUrl(_selectedAlbum, media, isThumbnail);
+        return GetTokenizedUrl(_selectedAlbum, media, isThumbnail, smallThumb);
     }
 
-    private string GetTokenizedUrl(Album? album, AlbumMedia media, bool isThumbnail = true)
+    private string GetTokenizedUrl(Album? album, AlbumMedia media, bool isThumbnail = true, bool smallThumb = false)
     {
         string baseUrl = isThumbnail ? media.ThumbnailUrl : media.FilePath;
-        if (album == null || string.IsNullOrWhiteSpace(_currentUser?.Id) || string.IsNullOrWhiteSpace(CircuitContext?.SessionId))
+        if (album == null)
             return baseUrl;
 
         IsAlbumLocked(album, out var albumKey);
-        string token = FileTokenService.GenerateAccessToken("albums", album.Id, baseUrl, albumKey, _currentUser.Id, CircuitContext.SessionId);
-        return $"{baseUrl}?t={token}";
+        return FileTokenService.BuildTokenizedUrl(
+            "albums",
+            album.Id,
+            baseUrl,
+            albumKey,
+            _currentUser?.Id,
+            CircuitContext?.SessionId,
+            isThumbnail: isThumbnail,
+            smallThumbnail: smallThumb);
     }
 }

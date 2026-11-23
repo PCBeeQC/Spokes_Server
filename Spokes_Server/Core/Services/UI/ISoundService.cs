@@ -4,6 +4,7 @@ namespace Spokes_Server.Core.Services.UI;
 
 public interface ISoundService
 {
+    bool IsCallRingtonePlaying => false;
     Task PlayChannelLeaveAsync();
     Task PlaySoundAsync(string soundName, bool isPreview = false);
     Task PlayNotificationSoundAsync(string category, string? explicitSoundId = null, bool isPreview = false);

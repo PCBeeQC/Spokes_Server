@@ -1,12 +1,14 @@
 @page "/admin/demo-settings"
 @using Microsoft.Extensions.Configuration
+@using SkiaSharp
 @using Spokes_Server.Core.Constants
 @inject IConfiguration Config
 @inject Database Db
 @inject BackupService BackupService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
-@attribute [Authorize(Policy = AppPermissions.Admin.ManageSettings)]
+@inject UserService UserService
+@attribute [Authorize(Policy = AppPermissions.Admin.PolicyName)]
 
 <PageTitle>Demo Settings</PageTitle>
 
@@ -123,6 +125,11 @@
 </MudContainer>
 
 @code {
+    private static readonly HashSet<string> AllowedDemoMediaExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg", ".jpeg", ".png", ".gif"
+    };
+
     private bool _isDemoSetup;
     private List<Employee> _activeEmployees = [];
     private Dictionary<string, bool> _selectedIds = [];
@@ -131,27 +138,37 @@
     private DateTime? _lastSnapshotTime;
     private string _demoMediaPath = "";
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        if (!await UserService.IsAdminAsync())
+        {
+            _isDemoSetup = false;
+            return;
+        }
+
         _isDemoSetup = Config.GetValue<bool>("Spokes_DemoSetup");
 
         if (_isDemoSetup)
         {
-            _activeEmployees = Db.Employees.GetAll().Where(e => e.IsActive && !e.IsSuspended).ToList();
+            _activeEmployees = Db.Employees.GetAll()
+                .Where(e => e.IsSelectable && !e.IsAdmin)
+                .ToList();
             var config = Db.DemoConfigs.Get();
-            
+
             foreach (var emp in _activeEmployees)
             {
                 _selectedIds[emp.Id] = config.AutoLoginEmployeeIds.Contains(emp.Id);
             }
 
             var dataPath = Config["DataPath"] ?? "Data";
-            _demoMediaPath = Path.Combine(dataPath, "DemoMedia");
+            _demoMediaPath = Path.GetFullPath(Path.Combine(dataPath, "DemoMedia"));
             if (Directory.Exists(_demoMediaPath))
             {
-                _sampleMedia = Directory.GetFiles(_demoMediaPath).ToList();
+                _sampleMedia = Directory.GetFiles(_demoMediaPath)
+                    .Where(f => AllowedDemoMediaExtensions.Contains(Path.GetExtension(f)))
+                    .ToList();
             }
-            
+
             var snapshotPath = Path.Combine(dataPath, "Backups", "demo_golden_snapshot.zip");
             if (File.Exists(snapshotPath))
             {
@@ -160,8 +177,62 @@
         }
     }
 
+    private async Task<bool> EnsureAuthorizedDemoSetupMutationAsync()
+    {
+        if (!Config.GetValue<bool>("Spokes_DemoSetup"))
+        {
+            _isDemoSetup = false;
+            Snackbar.Add("Demo Setup is not active.", Severity.Error);
+            return false;
+        }
+
+        if (!await UserService.IsAdminAsync())
+        {
+            Snackbar.Add("Global administrator privileges are required.", Severity.Error);
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryResolveSafeSampleMediaTargetPath(string? rawFileName, out string fullPath)
+    {
+        fullPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(rawFileName) || string.IsNullOrWhiteSpace(_demoMediaPath))
+        {
+            return false;
+        }
+
+        if (!string.Equals(rawFileName, Path.GetFileName(rawFileName), StringComparison.Ordinal) ||
+            rawFileName.Contains("..", StringComparison.Ordinal) ||
+            rawFileName.Contains('/') ||
+            rawFileName.Contains('\\') ||
+            rawFileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            return false;
+        }
+
+        var ext = Path.GetExtension(rawFileName);
+        if (!AllowedDemoMediaExtensions.Contains(ext))
+        {
+            return false;
+        }
+
+        var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_demoMediaPath)) + Path.DirectorySeparatorChar;
+        var candidateFull = Path.GetFullPath(Path.Combine(rootFull, rawFileName));
+        if (!candidateFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        fullPath = candidateFull;
+        return true;
+    }
+
     private async Task UploadSampleMedia(IReadOnlyList<IBrowserFile> files)
     {
+        if (!await EnsureAuthorizedDemoSetupMutationAsync()) return;
+
         try
         {
             if (!Directory.Exists(_demoMediaPath))
@@ -171,13 +242,32 @@
 
             foreach (var file in files)
             {
-                var path = Path.Combine(_demoMediaPath, file.Name);
-                await using var fs = new FileStream(path, FileMode.Create);
-                await file.OpenReadStream(1024 * 1024 * 10).CopyToAsync(fs);
-                _sampleMedia.Add(path);
+                if (!TryResolveSafeSampleMediaTargetPath(file.Name, out var path))
+                {
+                    throw new InvalidOperationException($"Invalid or disallowed sample media filename '{file.Name}'. Allowed formats: .jpg, .jpeg, .png, .gif.");
+                }
+
+                await using var readStream = file.OpenReadStream(1024 * 1024 * 10);
+                using var ms = new MemoryStream();
+                await readStream.CopyToAsync(ms);
+                var bytes = ms.ToArray();
+
+                using var codecStream = new MemoryStream(bytes, writable: false);
+                using var codec = SKCodec.Create(codecStream);
+                if (codec == null ||
+                    codec.Info.Width <= 0 ||
+                    codec.Info.Height <= 0 ||
+                    codec.EncodedFormat is not (SKEncodedImageFormat.Jpeg or SKEncodedImageFormat.Png or SKEncodedImageFormat.Gif))
+                {
+                    throw new InvalidOperationException($"File '{file.Name}' is not a valid raster image (.jpg, .png, .gif).");
+                }
+
+                await File.WriteAllBytesAsync(path, bytes);
             }
             Snackbar.Add("Media uploaded successfully.", Severity.Success);
-            _sampleMedia = Directory.GetFiles(_demoMediaPath).ToList();
+            _sampleMedia = Directory.GetFiles(_demoMediaPath)
+                .Where(f => AllowedDemoMediaExtensions.Contains(Path.GetExtension(f)))
+                .ToList();
         }
         catch (Exception ex)
         {
@@ -187,14 +277,23 @@
 
     private async Task SaveSnapshot()
     {
+        if (!await EnsureAuthorizedDemoSetupMutationAsync()) return;
+
         _isSaving = true;
         StateHasChanged();
 
         try
         {
-            // 1. Save Config
+            // 1. Save Config (never allow IsAdmin or non-selectable accounts in demo auto-login pool)
+            var eligibleIds = Db.Employees.GetAll()
+                .Where(e => e.IsSelectable && !e.IsAdmin)
+                .Select(e => e.Id)
+                .ToHashSet(StringComparer.Ordinal);
             var config = Db.DemoConfigs.GetOrCreate();
-            config.AutoLoginEmployeeIds = _selectedIds.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
+            config.AutoLoginEmployeeIds = _selectedIds
+                .Where(kv => kv.Value && eligibleIds.Contains(kv.Key))
+                .Select(kv => kv.Key)
+                .ToList();
             Db.DemoConfigs.Save(config);
 
             // 2. Run Backup
@@ -210,7 +309,7 @@
             // 3. Rename to Golden Snapshot
             var dataPath = Config["DataPath"] ?? "Data";
             var goldenPath = Path.Combine(dataPath, "Backups", "demo_golden_snapshot.zip");
-            
+
             if (File.Exists(goldenPath))
             {
                 File.Delete(goldenPath);
@@ -231,12 +330,23 @@
         }
     }
 
-    private void DeleteMedia(string filePath)
+    private async Task DeleteMedia(string filePath)
     {
+        if (!await EnsureAuthorizedDemoSetupMutationAsync()) return;
+
         try
         {
-            if (File.Exists(filePath)) File.Delete(filePath);
-            _sampleMedia.Remove(filePath);
+            var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_demoMediaPath)) + Path.DirectorySeparatorChar;
+            var candidateFull = Path.GetFullPath(filePath);
+            if (!candidateFull.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase) ||
+                !AllowedDemoMediaExtensions.Contains(Path.GetExtension(candidateFull)))
+            {
+                Snackbar.Add("Invalid sample media path.", Severity.Error);
+                return;
+            }
+
+            if (File.Exists(candidateFull)) File.Delete(candidateFull);
+            _sampleMedia.RemoveAll(p => string.Equals(Path.GetFullPath(p), candidateFull, StringComparison.OrdinalIgnoreCase));
             Snackbar.Add("Media deleted", Severity.Success);
             StateHasChanged();
         }
@@ -248,6 +358,8 @@
 
     private async Task RestoreSnapshot()
     {
+        if (!await EnsureAuthorizedDemoSetupMutationAsync()) return;
+
         var dataPath = Config["DataPath"] ?? "Data";
         var goldenPath = Path.Combine(dataPath, "Backups", "demo_golden_snapshot.zip");
         if (File.Exists(goldenPath))

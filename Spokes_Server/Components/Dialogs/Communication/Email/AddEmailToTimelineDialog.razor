@@ -1,6 +1,12 @@
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Services.Communication.Email
+@using Spokes_Server.Core.Services.Identity
 @using Spokes_Server.Core.Services.Projects
 @inject ProjectNoteService ProjectNoteService
+@inject UserService UserService
+@inject IEmailInboxService InboxService
+@inject Database Db
 @inject ISnackbar Snackbar
 @inject IEmailCacheMaintenanceService CacheMaintenance
 
@@ -60,12 +66,6 @@
     /// <summary>The account ID where the email is stored.</summary>
     [Parameter] public string AccountId { get; set; } = string.Empty;
 
-    /// <summary>Legacy fallback parameter for account/employee ID.</summary>
-    [Parameter] public string EmployeeId { get; set; } = string.Empty;
-
-    /// <summary>The display name of the current user (for CreatedBy).</summary>
-    [Parameter] public string CurrentUser { get; set; } = string.Empty;
-
     private Project? SelectedProject;
     private string NoteTitle = string.Empty;
     private DateTime? NoteDate;
@@ -79,9 +79,18 @@
         NoteDate = Email?.Date.DateTime ?? DateTime.Today;
     }
 
-    private Task<IEnumerable<Project>> SearchProjects(string value, CancellationToken token)
+    private async Task<IEnumerable<Project>> SearchProjects(string value, CancellationToken token)
     {
-        return Task.FromResult<IEnumerable<Project>>(ProjectNoteService.SearchActiveProjects(value));
+        var actor = await UserService.GetEmployeeAsync(allowSuspended: false);
+        if (actor == null ||
+            !actor.HasPermission(AppPermissions.Email.Use) ||
+            !actor.HasPermission(AppPermissions.Projects.Edit) ||
+            string.Equals(Db.CompanyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        return ProjectNoteService.SearchActiveProjects(value, actor);
     }
 
     private async Task Submit()
@@ -103,9 +112,25 @@
 
         try
         {
+            var actor = await UserService.GetEmployeeAsync(allowSuspended: false);
+            if (actor == null ||
+                !actor.HasPermission(AppPermissions.Email.Use) ||
+                !actor.HasPermission(AppPermissions.Projects.Edit) ||
+                string.Equals(Db.CompanyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+            {
+                Snackbar.Add("You do not have permission to add emails to project timelines.", Severity.Error);
+                return;
+            }
+
             var effectiveAccountId = !string.IsNullOrEmpty(AccountId)
                 ? AccountId
-                : (!string.IsNullOrEmpty(Email.AccountId) ? Email.AccountId : EmployeeId);
+                : (!string.IsNullOrEmpty(Email.AccountId) ? Email.AccountId : actor.Id);
+
+            if (!InboxService.CanUserAccessEmailMessage(actor, effectiveAccountId, Email.Id))
+            {
+                Snackbar.Add("You do not have access to this email message.", Severity.Error);
+                return;
+            }
 
             var mimePath = CacheMaintenance.GetMimeFilePath(effectiveAccountId, Email.Id);
             if (string.IsNullOrEmpty(mimePath))
@@ -122,9 +147,9 @@
                 NoteTitle,
                 NoteDate ?? DateTime.Today,
                 NoteContent,
-                CurrentUser);
+                actor.FullName);
 
-            await ProjectNoteService.AddEmailToTimelineAsync(request);
+            await ProjectNoteService.AddEmailToTimelineAsync(request, actor);
 
             Snackbar.Add($"Email added to {SelectedProject.DisplayName} timeline", Severity.Success);
             MudDialog.Close(DialogResult.Ok(true));

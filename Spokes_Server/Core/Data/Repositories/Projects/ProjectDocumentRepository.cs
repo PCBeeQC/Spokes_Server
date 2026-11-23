@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Models.Projects;
 
@@ -45,14 +44,14 @@ public class ProjectDocumentRepository : JsonRepository<ProjectDocument>
             {
                 var files = Directory.GetFiles(projectsPath, "*.json", SearchOption.AllDirectories)
                                      .Where(f => f.Contains("Documents" + Path.DirectorySeparatorChar));
-                LoadFiles(files, tempDocs);
+                tempDocs.AddRange(DeserializeJsonFiles(files, "project document"));
             }
 
             var businessDocsPath = Path.Combine(_basePath, "BusinessDocuments");
             if (Directory.Exists(businessDocsPath))
             {
                 var files = Directory.GetFiles(businessDocsPath, "*.json", SearchOption.TopDirectoryOnly);
-                LoadFiles(files, tempDocs);
+                tempDocs.AddRange(DeserializeJsonFiles(files, "project document"));
             }
 
             RawCache.Clear();
@@ -62,22 +61,6 @@ public class ProjectDocumentRepository : JsonRepository<ProjectDocument>
             }
             _isLoaded = true;
         }
-    }
-
-    private void LoadFiles(IEnumerable<string> files, List<ProjectDocument> destination)
-    {
-        foreach (var file in files)
-        {
-            try
-            {
-                var json = File.ReadAllText(file);
-                var item = JsonSerializer.Deserialize<ProjectDocument>(json);
-                if (item != null) destination.Add(item);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Error loading project document {File}", file);
-            }
-        }
+        RaiseOnLoaded();
     }
 }

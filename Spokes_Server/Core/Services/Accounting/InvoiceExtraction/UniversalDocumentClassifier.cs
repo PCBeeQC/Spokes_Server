@@ -12,12 +12,20 @@ using System.Text.RegularExpressions;
 /// </summary>
 public static class UniversalDocumentClassifier
 {
+    private static readonly string[] StatementFileNameTokens =
+    [
+        "statement", "releve", "relevé", "etat_de_compte", "etat-de-compte",
+        "kontoauszug", "extracto", "sommaire"
+    ];
+
     private static readonly Regex StatementTitleRegex = new(
         @"\b(?:" +
         @"statement\s+of\s+account|account\s+statement|monthly\s+statement|customer\s+statement|billing\s+statement|" +
-        @"[eé]tat\s+de\s+compte|relev[eé]\s+de\s+compte|sommaire\s+du\s+compte|relev[eé]\s+mensuel|" +
-        @"kontoauszug|saldenbest[aä]tigung|offene[\s\-]*posten[\s\-]*liste|kontokorrentauszug|" +
-        @"estado\s+de\s+cuenta|extracto\s+de\s+cuenta|" +
+        @"account\s+summary|statement\s+summary|statement\s+date|statement\s+period|aging\s+summary|" +
+        @"current\s+30\s+60\s+90|balance\s+forward|previous\s+balance|" +
+        @"[eé]tat\s+de\s+compte|relev[eé]\s+de\s+compte|sommaire\s+(?:du|de)\s+compte|rapport\s+de\s+compte|relev[eé]\s+mensuel|date\s+de\s+relev[eé]|" +
+        @"kontoauszug|rechnungsauszug|saldenbest[aä]tigung|offene[\s\-]*posten(?:[\s\-]*liste)?|kontokorrentauszug|" +
+        @"estado\s+de\s+cuenta|extracto\s+de\s+cuenta|resumen\s+de\s+cuenta|" +
         @"estratto\s+conto|riepilogo\s+conto|" +
         @"rekeningoverzicht|openstaande\s+posten|" +
         @"extrato\s+de\s+conta" +
@@ -58,16 +66,32 @@ public static class UniversalDocumentClassifier
         @")\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private const string IncomingRemittancePattern =
+        @"remittance\s+advice|avis\s+de\s+remise|avis\s+de\s+virement|avis\s+de\s+d[eé]p[oô]t|bordereau\s+de\s+paiement|" +
+        @"interac\s*e[\-\s]?transfer|virement\s+interac|" +
+        @"direct\s+deposit\s+(?:notice|advice|notification|confirmation)|d[eé]p[oô]t\s+direct|" +
+        @"(?:eft|ach|wire)\s+(?:payment\s+)?(?:advice|remittance|confirmation|notification)|" +
+        @"payment\s+received|paiement\s+re[cç]u|" +
+        @"automatically\s+deposited|d[eé]p[oô]t\s+automatique|" +
+        @"deposited\s+(?:in|into)\s+your\s+(?:bank\s+)?account|d[eé]pos[eé]\s+dans\s+votre\s+compte|" +
+        @"(?:has\s+sent\s+you|sent\s+you|vous\s+a\s+envoy[eé])\s+(?:money|funds|a\s+payment|an?\s+interac|un\s+virement|un\s+paiement)|" +
+        @"(?:you(?:'ve|\s+have)?|vous\s+avez)\s+(?:received|re[cç]u)\s+(?:a\s+|an\s+|un\s+|le\s+)?(?:payment|paiement|virement|d[eé]p[oô]t|transfer)";
+
     private static readonly Regex PaymentReceiptTitleRegex = new(
         @"\b(?:" +
-        @"payment\s+receipt|official\s+receipt|sales\s+receipt|receipt\s+of\s+payment|payment\s+confirmation|remittance\s+advice|" +
+        @"payment\s+receipt|official\s+receipt|sales\s+receipt|receipt\s+of\s+payment|payment\s+confirmation|" +
         @"re[cç]u\s+de\s+paiement|confirmation\s+de\s+paiement|re[cç]u\s+officiel|avis\s+de\s+paiement|" +
+        IncomingRemittancePattern + @"|" +
         @"zahlungsbest[aä]tigung|quittung|zahlungsbeleg|" +
         @"recibo\s+de\s+pago|comprobante\s+de\s+pago|" +
         @"ricevuta\s+di\s+pagamento|quietanza\s+di\s+pagamento|" +
         @"betalingsbewijs|kwitantie|" +
         @"comprovativo\s+de\s+pagamento" +
         @")\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex IncomingRemittanceOrDepositRegex = new(
+        @"\b(?:" + IncomingRemittancePattern + @")\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex CardPaymentSignalRegex = new(
@@ -87,45 +111,78 @@ public static class UniversalDocumentClassifier
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>
+    /// Checks whether a filename matches any known statement-of-account token across supported languages.
+    /// </summary>
+    public static bool TryMatchStatementFileName(string? fileName, out string? matchedToken)
+    {
+        if (!string.IsNullOrWhiteSpace(fileName))
+        {
+            foreach (var token in StatementFileNameTokens)
+            {
+                if (fileName.Contains(token, StringComparison.OrdinalIgnoreCase))
+                {
+                    matchedToken = token;
+                    return true;
+                }
+            }
+        }
+
+        matchedToken = null;
+        return false;
+    }
+
+    /// <summary>
     /// Classifies an extracted PDF document in-place (Statement, Credit Note, Payment Receipt, Scanned Image PDF).
     /// </summary>
-    public static void ClassifyDocument(ExtractedInvoiceData data, SpatialTextDocument spatialDoc)
+    public static void ClassifyDocument(ExtractedInvoiceData data, SpatialTextDocument spatialDoc, string? fileName = null)
     {
         // 1. Scanned Image PDF check
-        if (!spatialDoc.HasSelectableText || string.IsNullOrWhiteSpace(spatialDoc.FullLayoutText))
+        if (!spatialDoc.HasSelectableText ||
+            (string.IsNullOrWhiteSpace(spatialDoc.FullLayoutText) && string.IsNullOrWhiteSpace(spatialDoc.RawFullText)))
         {
             data.IsScannedImagePdf = true;
             data.ClassificationReason = "Scanned image PDF (no selectable text layer)";
-            data.ExtractionLog.Add("[Classifier] Flagged as scanned image PDF: document contains pages with 0 selectable words");
             return;
         }
 
-        var fullText = spatialDoc.FullLayoutText;
+        var fullText = !string.IsNullOrWhiteSpace(spatialDoc.FullLayoutText)
+            ? spatialDoc.FullLayoutText
+            : spatialDoc.RawFullText;
         var headerText = string.Join("\n", spatialDoc.Pages.Take(1).SelectMany(p => p.HeaderLines.Take(18)).Select(l => l.Text));
         if (string.IsNullOrWhiteSpace(headerText))
         {
             headerText = string.Join("\n", spatialDoc.AllLines.Take(18).Select(l => l.Text));
         }
 
-        // 2. Statement of Account check
-        var statementMatch = StatementTitleRegex.Match(fullText);
-        if (statementMatch.Success)
+        // 2. Statement of Account check (filename tokens and body phrases before Credit Note / Payment Receipt)
+        if (TryMatchStatementFileName(fileName, out var matchedFileToken))
         {
-            data.IsStatement = true;
-            data.ClassificationReason = $"Statement of account (matched '{statementMatch.Value.Trim()}')";
-            data.ExtractionLog.Add($"[Classifier] Flagged as Statement of Account via phrase '{statementMatch.Value.Trim()}'");
+            data.IsAccountStatement = true;
+            data.ClassificationReason = $"Statement of account (filename matched '{matchedFileToken}')";
             return;
         }
 
-        var agingMatches = AgingBucketRegex.Matches(fullText)
+        var statementSearchText = string.IsNullOrWhiteSpace(spatialDoc.RawFullText) ||
+                                  string.Equals(spatialDoc.RawFullText, fullText, StringComparison.Ordinal)
+            ? fullText
+            : $"{fullText}\n{spatialDoc.RawFullText}";
+
+        var statementMatch = StatementTitleRegex.Match(statementSearchText);
+        if (statementMatch.Success)
+        {
+            data.IsAccountStatement = true;
+            data.ClassificationReason = $"Statement of account (matched '{statementMatch.Value.Trim()}')";
+            return;
+        }
+
+        var agingMatches = AgingBucketRegex.Matches(statementSearchText)
             .Select(m => m.Value.ToLowerInvariant())
             .Distinct()
             .ToList();
         if (agingMatches.Count >= 2 && !InvoiceTitleSignalRegex.IsMatch(headerText))
         {
-            data.IsStatement = true;
+            data.IsAccountStatement = true;
             data.ClassificationReason = $"Statement of account (detected aging buckets: {string.Join(", ", agingMatches.Take(3))})";
-            data.ExtractionLog.Add($"[Classifier] Flagged as Statement of Account via structural aging buckets ({string.Join(", ", agingMatches)})");
             return;
         }
 
@@ -170,29 +227,29 @@ public static class UniversalDocumentClassifier
         var textWithoutReceiptTerms = PaymentTermsExclusionRegex.Replace(fullText, " ");
         var headerWithoutReceiptTerms = PaymentTermsExclusionRegex.Replace(headerText, " ");
 
-        var receiptTitleMatch = PaymentReceiptTitleRegex.Match(headerWithoutReceiptTerms);
-        if (!receiptTitleMatch.Success)
-        {
-            receiptTitleMatch = PaymentReceiptTitleRegex.Match(textWithoutReceiptTerms);
-        }
+        var receiptInHeaderMatch = PaymentReceiptTitleRegex.Match(headerWithoutReceiptTerms);
+        var receiptTitleMatch = receiptInHeaderMatch.Success
+            ? receiptInHeaderMatch
+            : PaymentReceiptTitleRegex.Match(textWithoutReceiptTerms);
 
         bool hasInvoiceHeader = InvoiceTitleSignalRegex.IsMatch(headerText) || !string.IsNullOrWhiteSpace(data.InvoiceNumber);
         bool hasStoreChargeOrTerms = !string.IsNullOrWhiteSpace(data.PaymentTerms) || StoreChargeTermsSignalRegex.IsMatch(textWithoutReceiptTerms);
+        bool strongIncomingRemittance = IncomingRemittanceOrDepositRegex.IsMatch(textWithoutReceiptTerms);
+        bool settledWithZeroBalance = data.PaidAmount > 0m && data.BalanceDue <= 0.01m;
+        bool suppressForUnpaidTerms = hasStoreChargeOrTerms && !receiptInHeaderMatch.Success && !strongIncomingRemittance && !settledWithZeroBalance;
 
-        if (receiptTitleMatch.Success && !hasStoreChargeOrTerms)
+        if (receiptTitleMatch.Success && !suppressForUnpaidTerms)
         {
             data.IsPaymentReceipt = true;
             data.ClassificationReason = $"Payment receipt (matched '{receiptTitleMatch.Value.Trim()}')";
-            data.ExtractionLog.Add($"[Classifier] Flagged as Payment Receipt via phrase '{receiptTitleMatch.Value.Trim()}'");
             return;
         }
 
         var cardSignalMatch = CardPaymentSignalRegex.Match(textWithoutReceiptTerms);
-        if (cardSignalMatch.Success && !hasInvoiceHeader && !hasStoreChargeOrTerms)
+        if (cardSignalMatch.Success && !hasInvoiceHeader && (!hasStoreChargeOrTerms || settledWithZeroBalance))
         {
             data.IsPaymentReceipt = true;
             data.ClassificationReason = $"Payment receipt (card payment '{cardSignalMatch.Value.Trim()}')";
-            data.ExtractionLog.Add($"[Classifier] Flagged as Payment Receipt via card payment signal '{cardSignalMatch.Value.Trim()}'");
         }
     }
 
@@ -221,11 +278,6 @@ public static class UniversalDocumentClassifier
                     item.Total = -Math.Abs(item.Total);
                 }
             }
-            data.ExtractionLog.Add($"[Classifier] Normalized Credit Note totals to negative values ({reason})");
-        }
-        else
-        {
-            data.ExtractionLog.Add($"[Classifier] Classified as Credit Note ({reason})");
         }
     }
 
@@ -238,14 +290,24 @@ public static class UniversalDocumentClassifier
         string textBody,
         IReadOnlyList<ExtractedInvoiceData> extractedInvoices)
     {
+        var combined = $"{subject}\n{textBody}";
+        var cleaned = PaymentTermsExclusionRegex.Replace(combined, " ");
+
+        // Explicit incoming remittance / bank deposit / Interac e-Transfer emails to our company must be treated as payment receipts even if an invoice PDF is attached as reference
+        var strongRemittanceMatch = IncomingRemittanceOrDepositRegex.Match(cleaned);
+        if (strongRemittanceMatch.Success)
+        {
+            return (false, true, $"Payment receipt / incoming remittance (matched '{strongRemittanceMatch.Value.Trim()}' in email)");
+        }
+
         // If any attached PDF was confidently parsed as an actionable invoice (or credit note), process it as a bill!
-        if (extractedInvoices.Any(i => i.IsConfident && !i.IsStatement && !i.IsPaymentReceipt))
+        if (extractedInvoices.Any(i => i.IsConfident && !i.IsAccountStatement && !i.IsPaymentReceipt))
         {
             return (false, false, null);
         }
 
         // If all extracted attachments were statements
-        if (extractedInvoices.Count > 0 && extractedInvoices.All(i => i.IsStatement))
+        if (extractedInvoices.Count > 0 && extractedInvoices.All(i => i.IsAccountStatement))
         {
             var reason = extractedInvoices.First().ClassificationReason ?? "Attached PDF classified as Statement of Account";
             return (true, false, reason);
@@ -257,10 +319,6 @@ public static class UniversalDocumentClassifier
             var reason = extractedInvoices.First().ClassificationReason ?? "Attached PDF classified as Payment Receipt";
             return (false, true, reason);
         }
-
-        // Inspect subject + email body when no actionable invoice PDF was extracted
-        var combined = $"{subject}\n{textBody}";
-        var cleaned = PaymentTermsExclusionRegex.Replace(combined, " ");
 
         var statementMatch = StatementTitleRegex.Match(cleaned);
         if (statementMatch.Success)

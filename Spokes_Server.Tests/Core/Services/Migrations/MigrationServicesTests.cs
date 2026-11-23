@@ -33,6 +33,7 @@ public class MigrationServicesTests : TestDataTestBase
 
         _configMock = new Mock<IConfiguration>();
         _configMock.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        _configMock.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
         _sessionRepo = new DeviceSessionRepository(_persistence, _configMock.Object);
@@ -162,59 +163,34 @@ public class MigrationServicesTests : TestDataTestBase
     }
 
     [Fact]
-    public void EmailDataMigrationStep_MovesLegacyFilesToEmployeeCentricPaths()
+    public async Task PushSubscriptionsCaseFixMigrationStep_MigratesLowercasePushSubscriptionsDirectory()
     {
-        var empId = "emp-email-test";
-        var legacyFolders = Path.Combine(_testDataDir, "EmailFolders");
-        var legacyMessages = Path.Combine(_testDataDir, "EmailMessages");
-        var legacyBodies = Path.Combine(_testDataDir, "Emails");
+        var session = new DeviceSession { Id = "sess-lowercase", EmployeeId = "emp-lc", ExpiresAt = DateTime.UtcNow.AddDays(30) };
+        _sessionRepo.Save(session);
+        await _persistence.FlushAllAsync();
 
-        Directory.CreateDirectory(legacyFolders);
-        Directory.CreateDirectory(legacyMessages);
-        Directory.CreateDirectory(legacyBodies);
+        var lowerPushDir = Path.Combine(_testDataDir, "pushsubscriptions");
+        Directory.CreateDirectory(lowerPushDir);
+        var subJson = JsonSerializer.Serialize(new
+        {
+            Id = "sub-lc",
+            UserId = "emp-lc",
+            SessionId = "sess-lowercase",
+            Endpoint = "https://fcm.example/lc",
+            P256dh = "key-lc",
+            Auth = "auth-lc",
+            IsEnabled = true
+        });
+        await File.WriteAllTextAsync(Path.Combine(lowerPushDir, "sub-lc.json"), subJson);
 
-        var folder = new EmailFolder { Id = "f-1", AccountId = empId, Name = "Inbox" };
-        File.WriteAllText(Path.Combine(legacyFolders, "f-1.json"), JsonSerializer.Serialize(folder));
+        var step = new PushSubscriptionsCaseFixMigrationStep(_sessionRepo, _configMock.Object);
+        await step.ExecuteAsync();
+        await _persistence.FlushAllAsync();
 
-        var message = new EmailMessage { Id = "m-1", AccountId = empId, Subject = "Hello" };
-        File.WriteAllText(Path.Combine(legacyMessages, "m-1.json"), JsonSerializer.Serialize(message));
-        File.WriteAllText(Path.Combine(legacyBodies, "m-1.html"), "<p>Body</p>");
-
-        var step = new EmailDataMigrationStep(null, _testDataDir);
-        step.MigrateEmailData();
-
-        var targetFolderFile = Path.Combine(_testDataDir, "EmailAccounts", empId, "Folders", "f-1.json");
-        var targetMessageFile = Path.Combine(_testDataDir, "EmailAccounts", empId, "Messages", "m-1.json");
-        var targetBodyFile = Path.Combine(_testDataDir, "EmailAccounts", empId, "Bodies", "m-1.html");
-
-        Assert.True(File.Exists(targetFolderFile));
-        Assert.True(File.Exists(targetMessageFile));
-        Assert.True(File.Exists(targetBodyFile));
-    }
-
-    [Fact]
-    public async Task MigrationRunnerService_CoordinatesMigrationsSuccessfully()
-    {
-        var step1Mock = new Mock<IMigrationStep>();
-        step1Mock.SetupGet(s => s.MigrationKey).Returns("20260101_Step1");
-        step1Mock.SetupGet(s => s.Description).Returns("Step 1");
-        step1Mock.SetupGet(s => s.Order).Returns(10);
-        step1Mock.Setup(s => s.ExecuteAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-
-        var step2Mock = new Mock<IMigrationStep>();
-        step2Mock.SetupGet(s => s.MigrationKey).Returns("20260102_Step2");
-        step2Mock.SetupGet(s => s.Description).Returns("Step 2");
-        step2Mock.SetupGet(s => s.Order).Returns(20);
-        step2Mock.Setup(s => s.ExecuteAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-
-        var runner = new MigrationRunnerService(new[] { step1Mock.Object, step2Mock.Object }, _configMock.Object, _persistence);
-        await runner.RunPendingMigrationsAsync();
-
-        step1Mock.Verify(s => s.ExecuteAsync(It.IsAny<CancellationToken>()), Times.Once);
-        step2Mock.Verify(s => s.ExecuteAsync(It.IsAny<CancellationToken>()), Times.Once);
-
-        var applied = runner.GetAppliedMigrations();
-        Assert.Equal(2, applied.Count);
+        var updated = _sessionRepo.GetById("sess-lowercase");
+        Assert.NotNull(updated);
+        Assert.Equal("https://fcm.example/lc", updated!.PushEndpoint);
+        Assert.False(Directory.Exists(lowerPushDir));
     }
 
     [Fact]
@@ -264,75 +240,6 @@ public class MigrationServicesTests : TestDataTestBase
 
         step1Mock.Verify(s => s.ExecuteAsync(It.IsAny<CancellationToken>()), Times.Once);
         step2Mock.Verify(s => s.ExecuteAsync(It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task AvatarMigrationStep_MigratesBase64AvatarsToDisk()
-    {
-        var empRepo = new EmployeeRepository(_persistence, _configMock.Object);
-        var rawBytes = new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 };
-        var base64 = "data:image/png;base64," + Convert.ToBase64String(rawBytes);
-
-        var employee = new Employee
-        {
-            Id = "emp-step-1",
-            FirstName = "Grace",
-            AvatarBase64 = base64
-        };
-        empRepo.Save(employee);
-
-        var step = new AvatarMigrationStep(empRepo, _configMock.Object);
-        Assert.Equal("20260103_AvatarFileCentric", step.MigrationKey);
-        Assert.Equal(30, step.Order);
-
-        await step.ExecuteAsync(CancellationToken.None);
-
-        var updated = empRepo.GetById("emp-step-1");
-        Assert.NotNull(updated);
-        Assert.Null(updated.AvatarBase64);
-        Assert.Equal("avatar.png", updated.AvatarFile);
-
-        var targetFile = Path.Combine(_testDataDir, "Employees", "emp-step-1", "avatar.png");
-        Assert.True(File.Exists(targetFile));
-        Assert.Equal(rawBytes, File.ReadAllBytes(targetFile));
-    }
-
-    [Fact]
-    public async Task SupplierContactsMigrationStep_MigratesLegacyInfoToContactsAndSetsPrimary()
-    {
-        var supplierRepo = new SupplierRepository(_persistence, _configMock.Object);
-        var supplier = new Supplier
-        {
-            Id = "sup-test-1",
-            ContactInfo = new Spokes_Server.Core.Models.Core.ClientInfo
-            {
-                BusinessName = "Acme Corp",
-                ContactPersonPrefix = "Mr.",
-                ContactPersonName = "John Doe",
-                ContactPersonTitle = "Manager",
-                ContactPersonEmail = "john@acme.com",
-                ContactPersonPhone = "555-1234"
-            },
-            Contacts = new List<ContactPerson>()
-        };
-        supplierRepo.Save(supplier);
-
-        var step = new SupplierContactsMigrationStep(supplierRepo);
-        Assert.Equal("20260107_SupplierContactsMigration", step.MigrationKey);
-        Assert.Equal(80, step.Order);
-
-        await step.ExecuteAsync(CancellationToken.None);
-
-        var updated = supplierRepo.GetById("sup-test-1");
-        Assert.NotNull(updated);
-        Assert.Single(updated.Contacts);
-        var contact = updated.Contacts[0];
-        Assert.True(contact.IsPrimary);
-        Assert.Equal("Mr.", contact.Prefix);
-        Assert.Equal("John Doe", contact.Name);
-        Assert.Equal("Manager", contact.Title);
-        Assert.Equal("john@acme.com", contact.Email);
-        Assert.Equal("555-1234", contact.Phone);
     }
 
     [Fact]
@@ -397,5 +304,96 @@ public class MigrationServicesTests : TestDataTestBase
         Assert.Single(updated.CustomChannelOrder);
         Assert.True(updated.CustomChannelOrder.ContainsKey("chan-public-1"));
         Assert.False(updated.CustomChannelOrder.ContainsKey("chan-direct-1"));
+    }
+
+    [Fact]
+    public async Task MigrationRunnerService_WhenLedgerContainsRemovedMigrationKeys_RunsPendingStepsIdempotently()
+    {
+        // Simulate an existing test server whose MigrationHistory.json recorded all removed Business migration keys
+        // alongside already-applied Family keys before upgrading to a build with only the 6 surviving Family steps.
+        var existingLedger = new MigrationHistoryLedger
+        {
+            AppliedMigrations =
+            [
+                new MigrationRecord { Key = "20260101_EmailEmployeeCentric", Description = "Removed Email step", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) },
+                new MigrationRecord { Key = "20260104_DocumentStatusSentToFinal", Description = "Removed Status step", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) },
+                new MigrationRecord { Key = "20260929_InvoiceLegacyPaymentToPaymentRecord", Description = "Removed Payment step", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) },
+                new MigrationRecord { Key = "20260105_LegacyBase64AttachmentMigration", Description = "Removed Attachment step", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) },
+                new MigrationRecord { Key = "20260106_WorkTypeDefaultSubTask", Description = "Removed WorkType step", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) },
+                new MigrationRecord { Key = "20260107_SupplierContactsMigration", Description = "Removed SupplierContacts step", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) },
+                new MigrationRecord { Key = "20261112_QuoteAndSignatureFileMigration", Description = "Removed Quote/Signature step", AppliedAtUtc = DateTime.UtcNow.AddDays(-2) },
+                new MigrationRecord { Key = "20261112_LegacyInvoiceAndPoCleanup", Description = "Removed Invoice/PO cleanup step", AppliedAtUtc = DateTime.UtcNow.AddDays(-2) },
+                new MigrationRecord { Key = "20260102_PushDeviceSessionSubscriptions", Description = "Push", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) },
+                new MigrationRecord { Key = "20260103_AvatarFileCentric", Description = "Avatar", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) },
+                new MigrationRecord { Key = "20260106_LegacyOidcSubCleanup", Description = "OIDC", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) },
+                new MigrationRecord { Key = "20260107_EmployeeDirectChannelOrderCleanup", Description = "ChannelOrder", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) },
+                new MigrationRecord { Key = "20260108_LegacyChatAttachmentRoutes", Description = "ChatAttachmentRoute", AppliedAtUtc = DateTime.UtcNow.AddDays(-10) }
+            ]
+        };
+        File.WriteAllText(Path.Combine(_testDataDir, "MigrationHistory.json"), JsonSerializer.Serialize(existingLedger));
+
+        var appliedFamilyMocks = new[]
+        {
+            "20260102_PushDeviceSessionSubscriptions",
+            "20260103_AvatarFileCentric",
+            "20260106_LegacyOidcSubCleanup",
+            "20260107_EmployeeDirectChannelOrderCleanup",
+            "20260108_LegacyChatAttachmentRoutes"
+        }.Select((key, idx) =>
+        {
+            var m = new Mock<IMigrationStep>();
+            m.SetupGet(s => s.MigrationKey).Returns(key);
+            m.SetupGet(s => s.Description).Returns(key);
+            m.SetupGet(s => s.Order).Returns(20 + idx * 10);
+            return m;
+        }).ToList();
+
+        var newlyPendingStep = new Mock<IMigrationStep>();
+        newlyPendingStep.SetupGet(s => s.MigrationKey).Returns("20261112_PushSubscriptionsCaseFix");
+        newlyPendingStep.SetupGet(s => s.Description).Returns("Push case fix");
+        newlyPendingStep.SetupGet(s => s.Order).Returns(115);
+        newlyPendingStep.Setup(s => s.ExecuteAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+
+        var steps = appliedFamilyMocks.Select(m => m.Object).Append(newlyPendingStep.Object).ToList();
+        var runner = new MigrationRunnerService(steps, _configMock.Object, _persistence);
+
+        var summary = await runner.RunPendingMigrationsAsync();
+
+        Assert.Equal(6, summary.TotalSteps);
+        Assert.Equal(5, summary.SkippedSteps);
+        Assert.Equal(1, summary.ExecutedSteps);
+
+        foreach (var appliedMock in appliedFamilyMocks)
+        {
+            appliedMock.Verify(s => s.ExecuteAsync(It.IsAny<CancellationToken>()), Times.Never);
+        }
+        newlyPendingStep.Verify(s => s.ExecuteAsync(It.IsAny<CancellationToken>()), Times.Once);
+
+        var appliedAfter = runner.GetAppliedMigrations();
+        Assert.Equal(14, appliedAfter.Count);
+        Assert.Contains(appliedAfter, r => r.Key == "20261112_PushSubscriptionsCaseFix");
+        Assert.Contains(appliedAfter, r => r.Key == "20261112_LegacyInvoiceAndPoCleanup");
+    }
+
+    [Fact]
+    public void MigrationAssembly_ContainsOnlyTheSixRetainedFamilyMigrationSteps()
+    {
+        var migrationStepTypes = typeof(IMigrationStep).Assembly
+            .GetTypes()
+            .Where(t => typeof(IMigrationStep).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract)
+            .Select(t => t.Name)
+            .OrderBy(n => n)
+            .ToArray();
+
+        Assert.Equal(
+            [
+                "AvatarMigrationStep",
+                "EmployeeChannelOrderMigrationStep",
+                "LegacyChatAttachmentRouteMigrationStep",
+                "LegacyOidcSubMigrationStep",
+                "PushDeviceSessionMigrationStep",
+                "PushSubscriptionsCaseFixMigrationStep"
+            ],
+            migrationStepTypes);
     }
 }

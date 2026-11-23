@@ -55,6 +55,7 @@ public class DeviceTokenAuthHandlerTests : TestDataTestBase
     {
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         _persistence = new DiskPersistenceService(Mock.Of<ILogger<DiskPersistenceService>>());
         _sessionRepo = new DeviceSessionRepository(_persistence, mockConfig.Object);

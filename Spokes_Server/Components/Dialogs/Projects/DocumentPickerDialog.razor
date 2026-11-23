@@ -1,11 +1,18 @@
+@using System.IO
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Communication.Email
 @inject Database Db
+@inject UserService UserService
 
 <MudDialog>
     <DialogContent>
-        <MudTabs Elevation="0" Rounded="true" TabPanelsClass="pa-4" Border="true">
+        <MudTabs Elevation="0" Outlined="true" Rounded="true" TabPanelsClass="pa-4" Border="true">
             <MudTabPanel Text="Quotes">
                 <MudTextField @bind-Value="searchQuote" Placeholder="SearchQuotes..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 mb-3" />
-                <MudTable Items="@Quotes" MultiSelection="true" @bind-SelectedItems="SelectedQuotes" Filter="new Func<DocumentItem,bool>(FilterQuote)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
+                <MudTable Elevation="0" Outlined="true" Items="@Quotes" MultiSelection="true" @bind-SelectedItems="SelectedQuotes" Filter="new Func<DocumentItem,bool>(FilterQuote)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
                     <HeaderContent>
                         <MudTh>Number</MudTh>
                         <MudTh>Project</MudTh>
@@ -23,7 +30,7 @@
 
             <MudTabPanel Text="Invoices">
                 <MudTextField @bind-Value="searchInvoice" Placeholder="Search Invoices..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 mb-3" />
-                <MudTable Items="@Invoices" MultiSelection="true" @bind-SelectedItems="SelectedInvoices" Filter="new Func<DocumentItem,bool>(FilterInvoice)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
+                <MudTable Elevation="0" Outlined="true" Items="@Invoices" MultiSelection="true" @bind-SelectedItems="SelectedInvoices" Filter="new Func<DocumentItem,bool>(FilterInvoice)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
                     <HeaderContent>
                         <MudTh>Number</MudTh>
                         <MudTh>Project</MudTh>
@@ -39,7 +46,7 @@
 
             <MudTabPanel Text="Project Documents">
                 <MudTextField @bind-Value="searchDoc" Placeholder="Search Documents..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 mb-3" />
-                <MudTable Items="@Documents" MultiSelection="true" @bind-SelectedItems="SelectedDocuments" Filter="new Func<DocumentItem,bool>(FilterDoc)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
+                <MudTable Elevation="0" Outlined="true" Items="@Documents" MultiSelection="true" @bind-SelectedItems="SelectedDocuments" Filter="new Func<DocumentItem,bool>(FilterDoc)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
                     <HeaderContent>
                         <MudTh>Name</MudTh>
                         <MudTh>Project</MudTh>
@@ -55,7 +62,7 @@
 
             <MudTabPanel Text="Business Documents">
                 <MudTextField @bind-Value="searchBizDoc" Placeholder="Search Business Documents..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 mb-3" />
-                <MudTable Items="@BusinessDocuments" MultiSelection="true" @bind-SelectedItems="SelectedBusinessDocuments" Filter="new Func<DocumentItem,bool>(FilterBizDoc)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
+                <MudTable Elevation="0" Outlined="true" Items="@BusinessDocuments" MultiSelection="true" @bind-SelectedItems="SelectedBusinessDocuments" Filter="new Func<DocumentItem,bool>(FilterBizDoc)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
                     <HeaderContent>
                         <MudTh>Name</MudTh>
                         <MudTh>Date</MudTh>
@@ -69,7 +76,7 @@
 
             <MudTabPanel Text="Purchase Orders">
                 <MudTextField @bind-Value="searchPO" Placeholder="Search POs..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="mt-0 mb-3" />
-                <MudTable Items="@PurchaseOrders" MultiSelection="true" @bind-SelectedItems="SelectedPOs" Filter="new Func<DocumentItem,bool>(FilterPO)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
+                <MudTable Elevation="0" Outlined="true" Items="@PurchaseOrders" MultiSelection="true" @bind-SelectedItems="SelectedPOs" Filter="new Func<DocumentItem,bool>(FilterPO)" Dense="true" Hover="true" FixedHeader="true" Height="400px">
                     <HeaderContent>
                         <MudTh>PO Number</MudTh>
                         <MudTh>Supplier</MudTh>
@@ -128,86 +135,200 @@
 
     private int TotalSelected => SelectedQuotes.Count + SelectedInvoices.Count + SelectedDocuments.Count + SelectedPOs.Count + SelectedBusinessDocuments.Count;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        var projects = Db.Projects.GetAll().ToDictionary(p => p.Id, p => p.DisplayName);
+        var emp = await UserService.GetEmployeeAsync();
+        var edition = Db.CompanyProfile.Get()?.Edition;
+        if (emp == null ||
+            !emp.IsActiveUnsuspended ||
+            string.Equals(edition, "Family", StringComparison.OrdinalIgnoreCase) ||
+            !emp.HasPermission(AppPermissions.Email.Use))
+        {
+            return;
+        }
+
+        var allProjects = Db.Projects.GetAll().ToDictionary(p => p.Id);
 
         // Quotes
         Quotes = Db.Quotes.GetAll()
-            .Where(q => q.Status == QuoteStatus.Final && !string.IsNullOrEmpty(q.PdfPath) && System.IO.File.Exists(q.PdfPath))
+            .Where(q => q.Status == QuoteStatus.Final &&
+                        !string.IsNullOrEmpty(q.PdfPath) &&
+                        File.Exists(q.PdfPath) &&
+                        allProjects.TryGetValue(q.ProjectId, out var proj) &&
+                        UserService.CanViewProject(emp, proj, allowAccountingFinancialRead: false))
             .OrderByDescending(q => q.Date)
             .Select(q => new DocumentItem
             {
                 Id = q.Id,
                 Number = q.QuoteNumber,
                 Name = q.Title,
-                ProjectName = projects.TryGetValue(q.ProjectId, out var pName) ? pName : "Unknown Project",
+                ProjectName = allProjects.TryGetValue(q.ProjectId, out var proj) ? proj.DisplayName : "Unknown Project",
                 Date = q.Date,
                 PdfPath = q.PdfPath
             }).ToList();
 
         // Invoices
+        var canAccountingInvoiceRead = emp.IsAdmin ||
+                                       emp.HasPermission(AppPermissions.Finance.AccessAccounting) ||
+                                       emp.HasPermission(AppPermissions.Finance.ApproveInvoices);
         Invoices = Db.Invoices.GetAll()
-            .Where(i => i.Status != InvoiceStatus.Draft && !string.IsNullOrEmpty(i.PdfPath) && System.IO.File.Exists(i.PdfPath))
+            .Where(i => i.Status != InvoiceStatus.Draft &&
+                        !string.IsNullOrEmpty(i.PdfPath) &&
+                        File.Exists(i.PdfPath) &&
+                        CanAccessInvoice(emp, i, canAccountingInvoiceRead, allProjects))
             .OrderByDescending(i => i.Date)
             .Select(i => new DocumentItem
             {
                 Id = i.Id,
                 Number = i.InvoiceNumber,
-                ProjectName = projects.TryGetValue(i.ProjectId, out var pName) ? pName : "Unknown Project",
+                ProjectName = ResolveInvoiceProjectName(i, allProjects),
                 Date = i.Date,
                 PdfPath = i.PdfPath
             }).ToList();
 
-        // Documents
+        // Project Documents
         var allDocs = Db.ProjectDocuments.GetAll()
-            .Where(d => d.Status == ProjectDocumentStatus.Final && !string.IsNullOrEmpty(d.ProjectId) && !string.IsNullOrEmpty(d.PdfPath) && System.IO.File.Exists(d.PdfPath))
+            .Where(d => d.Status == ProjectDocumentStatus.Final &&
+                        !string.IsNullOrEmpty(d.ProjectId) &&
+                        !string.IsNullOrEmpty(d.PdfPath) &&
+                        File.Exists(d.PdfPath) &&
+                        allProjects.TryGetValue(d.ProjectId, out var proj) &&
+                        UserService.CanViewProject(emp, proj, allowAccountingFinancialRead: false))
             .OrderByDescending(d => d.CreatedAt)
             .ToList();
-            
+
         foreach (var doc in allDocs)
         {
-            var pId = projects.Keys.FirstOrDefault(pid => System.IO.Directory.Exists($"AppData/Projects/{pid}/Documents") && new System.IO.DirectoryInfo($"AppData/Projects/{pid}/Documents").GetFiles($"{doc.Id}.json").Any());
-            
             Documents.Add(new DocumentItem
             {
                 Id = doc.Id,
                 Name = doc.Name,
-                ProjectName = pId != null && projects.TryGetValue(pId, out var dpName) ? dpName : "Unknown Project",
+                ProjectName = allProjects.TryGetValue(doc.ProjectId, out var proj) ? proj.DisplayName : "Unknown Project",
                 Date = doc.CreatedAt,
                 PdfPath = doc.PdfPath
             });
         }
 
-        // POs
-        PurchaseOrders = Db.PurchaseOrders.GetAll()
-            .Where(po => po.Status != PurchaseOrderStatus.Draft && !string.IsNullOrEmpty(po.PdfPath) && System.IO.File.Exists(po.PdfPath))
-            .OrderByDescending(po => po.Date)
-            .Select(po => new DocumentItem
-            {
-                Id = po.Id,
-                Number = po.PoNumber,
-                Name = po.Supplier?.BusinessName ?? "Unknown Supplier",
-                Date = po.Date,
-                PdfPath = po.PdfPath
-            }).ToList();
+        // Purchase Orders
+        var canViewPOs = emp.IsAdmin ||
+                         emp.HasPermission(AppPermissions.Purchases.ViewPOs) ||
+                         emp.HasPermission(AppPermissions.Purchases.ManagePOs);
+        if (canViewPOs)
+        {
+            var canReadPoProjectsAccounting = emp.HasPermission(AppPermissions.Finance.AccessAccounting);
+            PurchaseOrders = Db.PurchaseOrders.GetAll()
+                .Where(po => po.Status != PurchaseOrderStatus.Draft &&
+                             !string.IsNullOrEmpty(po.PdfPath) &&
+                             File.Exists(po.PdfPath) &&
+                             CanAccessPurchaseOrder(emp, po, canReadPoProjectsAccounting, allProjects))
+                .OrderByDescending(po => po.Date)
+                .Select(po => new DocumentItem
+                {
+                    Id = po.Id,
+                    Number = po.PoNumber,
+                    Name = po.Supplier?.BusinessName ?? "Unknown Supplier",
+                    Date = po.Date,
+                    PdfPath = po.PdfPath
+                }).ToList();
+        }
 
         // Business Documents
-        var allBizDocs = Db.ProjectDocuments.GetBusinessDocuments()
-            .Where(d => d.Status == ProjectDocumentStatus.Final && !string.IsNullOrEmpty(d.PdfPath) && System.IO.File.Exists(d.PdfPath))
-            .ToList();
-            
-        foreach(var doc in allBizDocs)
+        if (emp.IsAdmin || emp.HasPermission(AppPermissions.BusinessDocuments.View))
         {
-            BusinessDocuments.Add(new DocumentItem
+            var allBizDocs = Db.ProjectDocuments.GetBusinessDocuments()
+                .Where(d => d.Status == ProjectDocumentStatus.Final &&
+                            !string.IsNullOrEmpty(d.PdfPath) &&
+                            File.Exists(d.PdfPath))
+                .ToList();
+
+            foreach (var doc in allBizDocs)
             {
-                Id = doc.Id,
-                Name = doc.Name,
-                ProjectName = "Business",
-                Date = doc.CreatedAt,
-                PdfPath = doc.PdfPath
-            });
+                BusinessDocuments.Add(new DocumentItem
+                {
+                    Id = doc.Id,
+                    Name = doc.Name,
+                    ProjectName = "Business",
+                    Date = doc.CreatedAt,
+                    PdfPath = doc.PdfPath
+                });
+            }
         }
+    }
+
+    private bool CanAccessInvoice(
+        Employee emp,
+        Invoice invoice,
+        bool canAccountingInvoiceRead,
+        Dictionary<string, Project> allProjects)
+    {
+        if (canAccountingInvoiceRead)
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(invoice.ProjectGroupId))
+        {
+            var group = Db.ProjectGroups.GetById(invoice.ProjectGroupId);
+            return group != null &&
+                   group.ProjectIds.Count > 0 &&
+                   group.ProjectIds.All(pid => allProjects.TryGetValue(pid, out var gp) &&
+                                               UserService.CanViewProject(emp, gp, allowAccountingFinancialRead: true));
+        }
+
+        if (!string.IsNullOrEmpty(invoice.ProjectId))
+        {
+            return allProjects.TryGetValue(invoice.ProjectId, out var proj) &&
+                   UserService.CanViewProject(emp, proj, allowAccountingFinancialRead: true);
+        }
+
+        return false;
+    }
+
+    private string ResolveInvoiceProjectName(Invoice invoice, Dictionary<string, Project> allProjects)
+    {
+        if (!string.IsNullOrEmpty(invoice.ProjectId) && allProjects.TryGetValue(invoice.ProjectId, out var proj))
+        {
+            return proj.DisplayName;
+        }
+
+        if (!string.IsNullOrEmpty(invoice.ProjectGroupId))
+        {
+            var group = Db.ProjectGroups.GetById(invoice.ProjectGroupId);
+            if (!string.IsNullOrWhiteSpace(group?.Name))
+            {
+                return group.Name;
+            }
+        }
+
+        return "General";
+    }
+
+    private bool CanAccessPurchaseOrder(
+        Employee emp,
+        PurchaseOrder po,
+        bool canReadAccounting,
+        Dictionary<string, Project> allProjects)
+    {
+        if (emp.IsAdmin)
+        {
+            return true;
+        }
+
+        var referencedProjectIds = po.LineItems
+            .Select(i => i.ProjectId)
+            .Where(pid => !string.IsNullOrWhiteSpace(pid))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pid in referencedProjectIds)
+        {
+            if (!allProjects.TryGetValue(pid, out var proj) ||
+                !UserService.CanViewProject(emp, proj, allowAccountingFinancialRead: canReadAccounting))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private bool FilterQuote(DocumentItem item) => FilterItem(item, searchQuote);
@@ -229,14 +350,14 @@
 
     private void Submit()
     {
-        var selectedFiles = new List<(string PdfPath, string DisplayName)>();
+        var selectedDocs = new List<OutboundDocumentAttachmentRef>();
 
-        foreach (var item in SelectedQuotes) selectedFiles.Add((item.PdfPath, $"{item.DisplayName}.pdf"));
-        foreach (var item in SelectedInvoices) selectedFiles.Add((item.PdfPath, $"Invoice_{item.DisplayName}.pdf"));
-        foreach (var item in SelectedDocuments) selectedFiles.Add((item.PdfPath, $"{item.DisplayName}.pdf"));
-        foreach (var item in SelectedPOs) selectedFiles.Add((item.PdfPath, $"PO_{item.DisplayName}.pdf"));
-        foreach (var item in SelectedBusinessDocuments) selectedFiles.Add((item.PdfPath, $"{item.DisplayName}.pdf"));
+        foreach (var item in SelectedQuotes) selectedDocs.Add(new OutboundDocumentAttachmentRef(OutboundDocumentKind.Quote, item.Id, $"{item.DisplayName}.pdf"));
+        foreach (var item in SelectedInvoices) selectedDocs.Add(new OutboundDocumentAttachmentRef(OutboundDocumentKind.Invoice, item.Id, $"Invoice_{item.DisplayName}.pdf"));
+        foreach (var item in SelectedDocuments) selectedDocs.Add(new OutboundDocumentAttachmentRef(OutboundDocumentKind.ProjectDocument, item.Id, $"{item.DisplayName}.pdf"));
+        foreach (var item in SelectedPOs) selectedDocs.Add(new OutboundDocumentAttachmentRef(OutboundDocumentKind.PurchaseOrder, item.Id, $"PO_{item.DisplayName}.pdf"));
+        foreach (var item in SelectedBusinessDocuments) selectedDocs.Add(new OutboundDocumentAttachmentRef(OutboundDocumentKind.BusinessDocument, item.Id, $"{item.DisplayName}.pdf"));
 
-        MudDialog.Close(DialogResult.Ok(selectedFiles));
+        MudDialog.Close(DialogResult.Ok(selectedDocs));
     }
 }

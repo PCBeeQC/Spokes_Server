@@ -7,11 +7,8 @@ namespace Spokes_Server.Core.Security;
 
 public class CasdoorLoopbackHandler : DelegatingHandler
 {
-    private readonly string _authority;
-
-    public CasdoorLoopbackHandler(string authority)
+    public CasdoorLoopbackHandler()
     {
-        _authority = authority.TrimEnd('/');
         InnerHandler = new HttpClientHandler
         {
             ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator

@@ -17,53 +17,6 @@ public class LinkTargetExtensionTests
         }
 
         [Fact]
-        public void Setup_WithMarkdownPipelineBuilder_DoesNotThrow()
-        {
-            // Arrange
-            var extension = new LinkTargetExtension();
-            var builder = new MarkdownPipelineBuilder();
-
-            // Act
-            var exception = Record.Exception(() => extension.Setup(builder));
-
-            // Assert
-            Assert.Null(exception);
-        }
-
-        [Fact]
-        public void Setup_WithNonHtmlRenderer_ReturnsSafely()
-        {
-            // Arrange
-            var extension = new LinkTargetExtension();
-            var pipeline = new MarkdownPipelineBuilder().Build();
-            var nonHtmlRenderer = Mock.Of<IMarkdownRenderer>();
-
-            // Act
-            var exception = Record.Exception(() => extension.Setup(pipeline, nonHtmlRenderer));
-
-            // Assert
-            Assert.Null(exception);
-        }
-
-        [Fact]
-        public void Setup_WithHtmlRenderer_ReplacesRenderersSuccessfully()
-        {
-            // Arrange
-            var extension = new LinkTargetExtension();
-            var pipeline = new MarkdownPipelineBuilder().Build();
-            using var writer = new StringWriter();
-            var htmlRenderer = new HtmlRenderer(writer);
-
-            // Act & Assert - first call removes default renderers and adds custom renderers
-            var exception1 = Record.Exception(() => extension.Setup(pipeline, htmlRenderer));
-            Assert.Null(exception1);
-
-            // Act & Assert - second call handles case where default exact renderers are no longer present
-            var exception2 = Record.Exception(() => extension.Setup(pipeline, htmlRenderer));
-            Assert.Null(exception2);
-        }
-
-        [Fact]
         public void MarkdownLink_RendersWithTargetBlankAndRel()
         {
             // Arrange

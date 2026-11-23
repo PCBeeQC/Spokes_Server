@@ -1,0 +1,345 @@
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.HR
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Components.Dialogs.HR
+@inject Database Db
+@inject IPayrollCalculationEngine PayrollEngine
+@inject IJurisdictionTemplateService JurisdictionService
+@inject UserService UserService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+@if (!_isInitialized)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+}
+else if (!_canReadPayroll)
+{
+    <MudAlert Severity="Severity.Warning">@BizLoc["You do not have permission to view payroll data."]</MudAlert>
+}
+else
+{
+<MudGrid Spacing="3">
+    @* 1. Generate Pay Run Card *@
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+            <div class="d-flex justify-space-between align-center flex-wrap gap-3">
+                <div>
+                    <MudText Typo="Typo.h6">@BizLoc["Payroll & Source Deductions (DAS)"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["Active Jurisdiction:"] <b>@_activeTemplateName</b> — @BizLoc["Computes progressive income tax, capped statutory contributions (QPP/CPP, EI, QPIP, FSS, CNESST), and posts balanced GL entries."]
+                    </MudText>
+                </div>
+
+                @if (_canEditPayroll)
+                {
+                    <div class="d-flex align-center flex-wrap gap-2">
+                        <MudDatePicker @bind-Date="_periodStart" Label="@BizLoc["Period Start"]" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 155px;" />
+                        <MudDatePicker @bind-Date="_periodEnd" Label="@BizLoc["Period End"]" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 155px;" />
+                        <MudDatePicker @bind-Date="_payDate" Label="@BizLoc["Pay Date"]" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 155px;" />
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.PlaylistAddCheck"
+                                   OnClick="CreateDraftPayRun">
+                            @BizLoc["Generate Pay Run"]
+                        </MudButton>
+                    </div>
+                }
+            </div>
+        </MudPaper>
+    </MudItem>
+
+    @* 2. Pay Runs Table *@
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-3">@BizLoc["Pay Runs"] (@_payRuns.Count)</MudText>
+            <MudTable Items="@_payRuns" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>@BizLoc["Run #"]</MudTh>
+                    <MudTh>@BizLoc["Pay Period"]</MudTh>
+                    <MudTh>@BizLoc["Pay Date"]</MudTh>
+                    <MudTh>@BizLoc["Employees"]</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Gross Pay"]</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Employee Deductions"]</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Employer Burden"]</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Net Pay"]</MudTh>
+                    <MudTh>@Loc["Status"]</MudTh>
+                    <MudTh Style="text-align: right;">@Loc["Actions"]</MudTh>
+                </HeaderContent>
+                <RowTemplate Context="run">
+                    <MudTd><b>@run.RunNumber</b></MudTd>
+                    <MudTd>@run.PeriodStart.ToString("yyyy-MM-dd") → @run.PeriodEnd.ToString("yyyy-MM-dd")</MudTd>
+                    <MudTd>@run.PayDate.ToString("yyyy-MM-dd")</MudTd>
+                    <MudTd>@run.Stubs.Count</MudTd>
+                    <MudTd Style="text-align: right;">@run.TotalGrossPay.ToString("C2")</MudTd>
+                    <MudTd Style="text-align: right;">@run.TotalEmployeeDeductions.ToString("C2")</MudTd>
+                    <MudTd Style="text-align: right;">@run.TotalEmployerContributions.ToString("C2")</MudTd>
+                    <MudTd Style="text-align: right; font-weight: 700;">@run.TotalNetPay.ToString("C2")</MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="@GetRunStatusColor(run.Status)">@run.Status</MudChip>
+                        @if (run.Status == PayRunStatus.Finalized || run.Status == PayRunStatus.Paid)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block;">
+                                @($"{run.PaidStubsCount}/{run.Stubs.Count} {BizLoc["Paid"].Value.ToLower()}")
+                            </MudText>
+                        }
+                    </MudTd>
+                    <MudTd Style="text-align: right; white-space: nowrap;">
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="mr-1" OnClick="@(() => OpenPayRunDetails(run))">
+                            @BizLoc["Pay Stubs"]
+                        </MudButton>
+                        @if (_canEditPayroll)
+                        {
+                            @if (run.Status == PayRunStatus.Draft)
+                            {
+                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" Class="mr-1" OnClick="@(() => ApprovePayRun(run))">
+                                    @BizLoc["Approve & Post"]
+                                </MudButton>
+                            }
+                            else if (run.Status == PayRunStatus.Finalized)
+                            {
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="mr-1" OnClick="@(() => MarkPayRunPaid(run))">
+                                    @BizLoc["Mark All Paid"]
+                                </MudButton>
+                            }
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" title="@Loc["Delete"]" OnClick="@(() => DeletePayRun(run))" />
+                        }
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Align="Align.Center" Class="py-4 mud-text-secondary">
+                        @BizLoc["No pay runs generated yet. Select a pay period above and click 'Generate Pay Run'."]
+                    </MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    </MudItem>
+
+    @* 3. Source Deductions (DAS) Remittance by Authority & Annual Slips *@
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4 h-100" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-2">@BizLoc["Source Deductions (DAS) Remittance Summary"] (@_selectedYear)</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-3">
+                @BizLoc["Total employee withholdings + employer contributions owed to each tax authority."]
+            </MudText>
+
+            <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Bordered="true" Striped="true">
+                <thead>
+                    <tr>
+                        <th>@BizLoc["Tax Authority"]</th>
+                        <th style="text-align: right;">@BizLoc["Employee Withheld"]</th>
+                        <th style="text-align: right;">@BizLoc["Employer Contributions"]</th>
+                        <th style="text-align: right;">@BizLoc["Total Remittance"]</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in _remittanceSummaries)
+                    {
+                        <tr>
+                            <td><b>@item.AuthorityName</b></td>
+                            <td style="text-align: right;">@item.TotalEmployeeWithheld.ToString("C2")</td>
+                            <td style="text-align: right;">@item.TotalEmployerContribution.ToString("C2")</td>
+                            <td style="text-align: right; font-weight: 700;">@item.TotalRemittanceDue.ToString("C2")</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4 h-100" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-2">@BizLoc["Year-End Tax Slips Summary (T4 / Relevé 1 / W-2)"] (@_selectedYear)</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-3">
+                @BizLoc["Annual cumulative earnings and statutory deductions per employee for year-end accountant filing."]
+            </MudText>
+
+            <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Bordered="true" Striped="true">
+                <thead>
+                    <tr>
+                        <th>@BizLoc["Employee"]</th>
+                        <th style="text-align: right;">@BizLoc["YTD Gross"]</th>
+                        <th style="text-align: right;">@BizLoc["Income Tax"]</th>
+                        <th style="text-align: right;">@BizLoc["Statutory DAS"]</th>
+                        <th style="text-align: right;">@BizLoc["YTD Net"]</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var slip in _annualSlips)
+                    {
+                        var totalTax = slip.FederalIncomeTax + slip.RegionalIncomeTax;
+                        var totalEmpContrib = slip.QppOrCppEmployee + slip.Qpp2OrCpp2Employee + slip.EiEmployee + slip.QpipEmployee;
+                        <tr>
+                            <td><b>@slip.EmployeeName</b></td>
+                            <td style="text-align: right;">@slip.GrossEmploymentIncome.ToString("C2")</td>
+                            <td style="text-align: right;">@totalTax.ToString("C2")</td>
+                            <td style="text-align: right;">@totalEmpContrib.ToString("C2")</td>
+                            <td style="text-align: right; font-weight: 700;">@slip.TotalNetPay.ToString("C2")</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+}
+
+@code {
+    private Employee? _currentUser;
+    private bool _isInitialized;
+    private bool _canReadPayroll;
+    private bool _canEditPayroll;
+    private DateTime? _periodStart = DateTime.Today.AddDays(-13);
+    private DateTime? _periodEnd = DateTime.Today;
+    private DateTime? _payDate = DateTime.Today;
+    private int _selectedYear = DateTime.Today.Year;
+    private string _activeTemplateName = string.Empty;
+
+    private List<PayRun> _payRuns = [];
+    private List<DasAuthoritySummary> _remittanceSummaries = [];
+    private List<EmployeeYearEndSlipSummary> _annualSlips = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        _canReadPayroll = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: true);
+        _canEditPayroll = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false);
+        _activeTemplateName = JurisdictionService.GetActiveTemplate().Name;
+        RefreshPayrollData();
+        _isInitialized = true;
+    }
+
+    private void RefreshPayrollData()
+    {
+        if (!_canReadPayroll || _currentUser == null)
+        {
+            _payRuns = [];
+            _remittanceSummaries = [];
+            _annualSlips = [];
+            return;
+        }
+
+        _payRuns = Db.PayRuns?.GetAll().ToList() ?? [];
+        var yearStart = new DateTime(_selectedYear, 1, 1);
+        var yearEnd = new DateTime(_selectedYear, 12, 31);
+        _remittanceSummaries = PayrollEngine.CalculateDasRemittanceSummary(yearStart, yearEnd, _currentUser);
+        _annualSlips = PayrollEngine.CalculateYearEndSlipsSummary(_selectedYear, _currentUser);
+    }
+
+    private async Task CreateDraftPayRun()
+    {
+        if (!_periodStart.HasValue || !_periodEnd.HasValue || !_payDate.HasValue) return;
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false))
+        {
+            Snackbar.Add(BizLoc["Missing required permission to manage payroll."].Value, Severity.Error);
+            return;
+        }
+        var run = PayrollEngine.CreateDraftPayRun(_periodStart.Value, _periodEnd.Value, _payDate.Value, PayFrequencyType.BiWeekly, assignRunNumber: false, actor: actor);
+        await OpenPayRunDetails(run, isNewPreview: true);
+    }
+
+    private async Task OpenPayRunDetails(PayRun run, bool isNewPreview = false)
+    {
+        var parameters = new DialogParameters<PayRunDialog>
+        {
+            { x => x.PayRun, run },
+            { x => x.IsNewPreview, isNewPreview }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraLarge, FullWidth = true, CloseButton = true };
+        var title = isNewPreview || string.IsNullOrWhiteSpace(run.RunNumber)
+            ? BizLoc["Pay Run Preview"].Value
+            : $"{BizLoc["Pay Run"].Value} — {run.RunNumber}";
+        var dialog = await DialogService.ShowAsync<PayRunDialog>(title, parameters, options);
+        await dialog.Result;
+        RefreshPayrollData();
+    }
+
+    private async Task DeletePayRun(PayRun run)
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false))
+        {
+            Snackbar.Add(BizLoc["Missing required permission to manage payroll."].Value, Severity.Error);
+            return;
+        }
+
+        var message = run.Status == PayRunStatus.Draft
+            ? string.Format(BizLoc["Delete draft pay run {0}?"].Value, run.RunNumber)
+            : string.Format(BizLoc["Delete pay run {0}? Any unlocked General Ledger entries for this pay run will be removed."].Value, run.RunNumber);
+
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            Loc["Delete"].Value,
+            message,
+            yesText: Loc["Delete"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirm != true) return;
+
+        try
+        {
+            PayrollEngine.DeletePayRun(run.Id, actor: actor);
+            RefreshPayrollData();
+            Snackbar.Add(BizLoc["Pay run deleted."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task ApprovePayRun(PayRun run)
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false))
+        {
+            Snackbar.Add(BizLoc["Missing required permission to approve payroll."].Value, Severity.Error);
+            return;
+        }
+
+        try
+        {
+            PayrollEngine.FinalizePayRun(run, actor: actor);
+            RefreshPayrollData();
+            Snackbar.Add(BizLoc["Pay run approved and posted to General Ledger."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task MarkPayRunPaid(PayRun run)
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false))
+        {
+            Snackbar.Add(BizLoc["Missing required permission to disburse payroll."].Value, Severity.Error);
+            return;
+        }
+
+        try
+        {
+            var bankGlCode = Db.GlAccounts?.GetBySystemRole(GlSystemRole.OperatingBank)?.Code ?? "1020";
+            PayrollEngine.MarkPayRunPaid(run, DateTime.Today, bankGlCode, actor: actor);
+            RefreshPayrollData();
+            Snackbar.Add(BizLoc["Net pay disbursement recorded in the General Ledger."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private static Color GetRunStatusColor(string status) => status switch
+    {
+        PayRunStatus.Paid => Color.Success,
+        PayRunStatus.Finalized => Color.Info,
+        PayRunStatus.OpeningYtd => Color.Secondary,
+        PayRunStatus.Void => Color.Error,
+        _ => Color.Warning
+    };
+}

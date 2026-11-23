@@ -38,7 +38,7 @@ public class GoogleDriveBackupProviderTests : IDisposable
 
         var configDict = new Dictionary<string, string?>
         {
-            ["DataPath"] = _testDir,
+            ["DataPath"] = _testDir, ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!",
             ["Spokes:PushRelayUrl"] = "https://push.spokes.sh",
             ["Spokes:PushRelayKey"] = "test-relay-key"
         };
@@ -48,10 +48,8 @@ public class GoogleDriveBackupProviderTests : IDisposable
         _profiles = new CompanyProfileRepository(_persistence, _config);
         _serverConfigs = new ServerConfigRepository(_persistence, _config);
 
-        var versionMeta = new VersionMetadata("2026.10.0");
         _licenseValidation = new LicenseValidationService(
             new Mock<ILogger<LicenseValidationService>>().Object,
-            versionMeta,
             configuration: _config);
     }
 
@@ -110,7 +108,7 @@ public class GoogleDriveBackupProviderTests : IDisposable
             Content = new StringContent("{\"authUrl\":\"https://accounts.google.com/test\"}", Encoding.UTF8, "application/json")
         });
 
-        var provider = new GoogleDriveBackupProvider(_profiles, _serverConfigs, _licenseValidation, httpFactory, _config);
+        var provider = new GoogleDriveBackupProvider(_profiles, _serverConfigs, _licenseValidation, httpFactory, new SpokesRelayClient(httpFactory, configuration: _config), _config);
 
         var result = await provider.GetRelayAuthUrlAsync("https://spokes.lan/callback");
 
@@ -125,7 +123,7 @@ public class GoogleDriveBackupProviderTests : IDisposable
         _profiles.Save(profile);
 
         var httpFactory = CreateMockHttpClientFactory(new HttpResponseMessage(HttpStatusCode.OK));
-        var provider = new GoogleDriveBackupProvider(_profiles, _serverConfigs, _licenseValidation, httpFactory, _config);
+        var provider = new GoogleDriveBackupProvider(_profiles, _serverConfigs, _licenseValidation, httpFactory, new SpokesRelayClient(httpFactory, configuration: _config), _config);
 
         var token = await provider.GetFreshAccessTokenAsync();
 
@@ -159,13 +157,31 @@ public class GoogleDriveBackupProviderTests : IDisposable
         {
             Content = new StringContent("{\"accessToken\":\"fresh_google_access_token_123\"}", Encoding.UTF8, "application/json")
         };
-        var httpFactory = CreateMockHttpClientFactory(relayResponse);
+        HttpRequestMessage? capturedRequest = null;
+        var handlerMock = new Mock<HttpMessageHandler>();
+        handlerMock
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .Callback<HttpRequestMessage, CancellationToken>((req, _) => capturedRequest = req)
+            .ReturnsAsync(relayResponse);
 
-        var provider = new GoogleDriveBackupProvider(_profiles, _serverConfigs, _licenseValidation, httpFactory, _config);
+        var httpClient = new HttpClient(handlerMock.Object);
+        var factoryMock = new Mock<IHttpClientFactory>();
+        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
+        var httpFactory = factoryMock.Object;
+
+        var provider = new GoogleDriveBackupProvider(_profiles, _serverConfigs, _licenseValidation, httpFactory, new SpokesRelayClient(httpFactory, configuration: _config), _config);
 
         // When pass is expired, existing Google Drive backup should still obtain fresh access token
         var token = await provider.GetFreshAccessTokenAsync();
 
         Assert.Equal("fresh_google_access_token_123", token);
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("https://push.spokes.sh/api/relay-backup/google-token", capturedRequest!.RequestUri?.ToString());
+        Assert.True(capturedRequest.Headers.TryGetValues(SpokesRelayClient.RelayKeyHeaderName, out var keys));
+        Assert.Contains("test-relay-key", keys);
     }
 }

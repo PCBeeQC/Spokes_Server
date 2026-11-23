@@ -13,390 +13,250 @@
 @inject UserCircuitContext CircuitContext
 @implements IDisposable
 
-<div style="width: 100%;" class="@(!IsGrouped ? "mt-2" : "")">
+<div class="w-100 @(!IsGrouped ? "mt-2" : "")">
 @* Reply preview above message content (when this is a reply to another message) *@
 @if (!string.IsNullOrEmpty(Message.ReplyToId) && ReplyToMessage != null)
 {
     <div class="reply-preview-row" @onclick="@(() => OnScrollToMessage.InvokeAsync(Message.ReplyToId))">
-        <div class="reply-spine" style="@(IsGrouped ? "bottom: 0px;" : "bottom: -8px;")"></div>
-        <EmployeeAvatar Employee="ReplyToSender" Size="Size.Small" ShowPresence="false" Style="width: 16px; height: 16px; min-width: 16px; min-height: 16px; flex-shrink: 0;" />
-        <MudText Typo="Typo.caption" Class="mt-1" Style="font-weight: 600; color: var(--mud-palette-text-secondary); white-space: nowrap; margin-right: 4px;">
+        <div class="reply-spine @(IsGrouped ? "is-grouped" : "")"></div>
+        <EmployeeAvatar Employee="ReplyToSender" Size="Size.Small" ShowPresence="false" Class="chat-reply-avatar" />
+        <span class="mud-typography mud-typography-caption mt-1 reply-sender-name">
             @(ReplyToSender?.FullName ?? Loc["Unknown"].Value)
-        </MudText>
-        <MudText Typo="Typo.caption" Class="reply-text mt-1">
-            @GetReplyPreview(DecryptedReplyContent ?? ReplyToMessage.Content)
-        </MudText>
+        </span>
+        <span class="mud-typography mud-typography-caption reply-text mt-1">
+            @GetReplyPreview(EffectiveDecryptedReplyContent ?? ReplyToMessage.Content)
+        </span>
     </div>
 }
 
 @* When grouped (same sender within 5 min), collapse avatar/name and show compact layout *@
-@if (IsGrouped)
-{
-    <div class="py-0 pr-2 message-row message-row-grouped" data-message-id="@Message.Id" style="position: relative; padding-left: 64px; width: 100%;">
+<div class="@GetMessageRowCssClass()" data-message-id="@Message.Id">
+    @if (IsGrouped)
+    {
         @* Invisible spacer matching avatar width for alignment *@
-        <div class="message-avatar-spacer" style="position: absolute; left: 8px; top: 0; width: 40px; display: flex; align-items: flex-start; justify-content: center;">
-            <MudText Typo="Typo.caption" Class="message-hover-time"
-                Style="color: var(--mud-palette-text-disabled); font-size: 0.65rem; opacity: 0; white-space: nowrap;">
+        <div class="message-avatar-spacer">
+            <span class="mud-typography mud-typography-caption message-hover-time">
                 @Message.SentAt.ToLocalTime().ToString("h:mm tt")
-            </MudText>
+            </span>
         </div>
-
-        @{
-            var txt = DecryptedContent ?? Message.Content ?? "";
-            bool isInlineMedia = txt.Contains("![") || txt.Contains(".gif") || txt.Contains("tenor.com") || txt.Contains("giphy.com");
-            bool hasVisualMedia = HasMediaAttachments || _linkPreviews.Any() || isInlineMedia;
-        }
-        <div class="message-content-wrapper @(hasVisualMedia ? "has-media" : "")">
-            @* Message Body (no header) *@
-            <div style="flex-grow: 1; min-width: 0;">
-                @if (IsEditing)
-                {
-                    <div class="mt-2 mb-2 w-100">
-                        <ChatComposer @key="@($"edit-{Message.Id}")"
-                            ChannelId="@Message.ChannelId" 
-                            CurrentUserId="@CurrentUserId" 
-                            IsEditMode="true" 
-                            IsMobile="@IsMobile"
-                            InitialText="@(DecryptedContent ?? Message.Content)" 
-                            IdSuffix="@Message.Id"
-                            Employees="Employees"
-                            Teams="Teams"
-                            ChannelKey="@ChannelKey"
-                            OnSendMessage="@(async args => await OnSaveEdit.InvokeAsync((Message, args.Content)))"
-                            OnCancelEdit="@(async () => await OnCancelEdit.InvokeAsync())" />
-                    </div>
-                }
-                else if (Message.MessageType == ChatMessageType.CallInvite)
-                {
-                    <MudCard Class="pa-3 mt-1 mb-1" Style="max-width: 350px; background: var(--mud-palette-background-grey); box-shadow: none; border: 1px solid var(--mud-palette-divider);">
-                        <div class="d-flex align-center gap-3">
-                            <MudIcon Icon="@Icons.Material.Filled.Phone" Color="Color.Info" Size="Size.Medium" />
-                            <div>
-                                <MudText Typo="Typo.subtitle2"><b>@Loc["Voice Call Started"]</b></MudText>
-                                @if (Message.CallStatus == CallStatus.Declined)
-                                {
-                                    <MudText Typo="Typo.body2" Color="Color.Error">@Loc["Call was declined."]</MudText>
-                                }
-                                else if (Message.CallStatus == CallStatus.Ended)
-                                {
-                                    <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Call ended."]</MudText>
-                                }
-                                else if (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId)
-                                {
-                                    <MudText Typo="Typo.body2" Color="Color.Success">@Loc["Call joined."]</MudText>
-                                }
-                                else
-                                {
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Join the conversation!"]</MudText>
-                                }
-                            </div>
-                        </div>
-                        @if (Message.CallStatus != CallStatus.Declined && Message.CallStatus != CallStatus.Ended && !(VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId))
-                        {
-                            <div class="d-flex justify-end gap-2 mt-2">
-                                @if (CurrentUserId != Message.SenderId)
-                                {
-                                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="@(() => OnDeclineCall.InvokeAsync(Message))">@Loc["Decline"]</MudButton>
-                                }
-                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" Disabled="@(VoiceService.IsConnecting || (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId))" OnClick="@(() => OnJoinCall.InvokeAsync(Message))">@(VoiceService.IsConnecting ? Loc["Connecting..."].Value : Loc["Join Call"].Value)</MudButton>
-                            </div>
-                        }
-                    </MudCard>
-                }
-                else if (Message.IsEncrypted && DecryptedContent == null && !string.IsNullOrEmpty(Message.Content))
-                {
-                    <div class="d-flex align-center gap-2" style="opacity: 0.6; font-style: italic;">
-                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
-                        <MudText Typo="Typo.body2">@Loc["Encrypted message"]</MudText>
-                    </div>
-                }
-                else if (!string.IsNullOrWhiteSpace(DecryptedContent ?? Message.Content))
-                {
-                    var rawContent = DecryptedContent ?? Message.Content ?? "";
-                    var displayContent = GetDisplayContent(rawContent);
-                    <ChatMarkdownRenderer Content="@displayContent" FullContent="@rawContent" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" SessionId="@SessionId" Employees="Employees" IsEdited="@Message.EditedAt.HasValue" ChannelKey="@ChannelKey" />
-                    if (rawContent.Length > MaxMessageLength)
-                    {
-                        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="() => _isExpanded = !_isExpanded" Class="mt-1 px-1" Style="min-width: unset;">
-                            @(_isExpanded ? Loc["Show Less"].Value : Loc["Read More"].Value)
-                        </MudButton>
-                    }
-                }
-                @RenderLinkPreviews()
-                @if (Message.Attachments.Any())
-                {
-                    <div class="d-flex flex-wrap gap-2 mt-1">
-                        @foreach (var attachment in Message.Attachments)
-                        {
-                            @RenderAttachment(attachment)
-                        }
-                    </div>
-                }
-                @RenderAlbumConversionPrompt()
-                @if (Message.MentionedEventIds != null && Message.MentionedEventIds.Any())
-                {
-                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
-                        @foreach (var eventId in Message.MentionedEventIds)
-                        {
-                            <EventMentionCard EventId="@eventId" CurrentUserId="@CurrentUserId" Employees="Employees" />
-                        }
-                    </div>
-                }
-                @if (Message.MentionedAlbumIds != null && Message.MentionedAlbumIds.Any())
-                {
-                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
-                        @foreach (var albumId in Message.MentionedAlbumIds)
-                        {
-                            <AlbumMentionCard AlbumId="@albumId" CurrentUserId="@CurrentUserId" SessionId="@SessionId" Employees="Employees" ChannelId="@Message.ChannelId" />
-                        }
-                    </div>
-                }
-                @if (Message.MentionedPollIds != null && Message.MentionedPollIds.Any())
-                {
-                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
-                        @foreach (var pollId in Message.MentionedPollIds)
-                        {
-                            <PollMentionCard PollId="@pollId" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" ChannelKey="@ChannelKey" Employees="Employees" />
-                        }
-                    </div>
-                }
-                @if (Message.Reactions.Any() || ReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
-                {
-                    <div class="d-flex justify-space-between align-center w-100 mt-1">
-                        <div class="reactions-container">
-                            @if (Message.Reactions.Any())
-                            {
-                                <div class="d-flex flex-wrap gap-1">
-                                    @foreach (var reactionGroup in GetReactionGroups())
-                                    {
-                                        <MudTooltip Text="@GetReactionTooltip(reactionGroup.Emoji)" Placement="Placement.Top">
-                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(reactionGroup.HasReacted ? Color.Primary : Color.Default)"
-                                                OnClick="@(() => { if (CanReact) OnReact.InvokeAsync((Message.Id, reactionGroup.Emoji)); })"
-                                                Style="border-radius: 12px; height: 24px;">
-                                                @reactionGroup.Emoji <span class="ml-1">@reactionGroup.Count</span>
-                                            </MudChip>
-                                        </MudTooltip>
-                                    }
-                                </div>
-                            }
-                        </div>
-                        
-                        <div class="message-read-receipts d-flex align-center justify-end gap-1">
-                            @if (ReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
-                            {
-                                @RenderReadReceipts()
-                            }
-                        </div>
-                    </div>
-                }
-            </div>
-
-            @* Actions Stack (Desktop float right) *@
-            @if (!IsMobile && !Message.IsDeleted && !IsEditing)
-            {
-                <div class="message-actions-stack ml-2">
-                    <div class="message-actions d-flex align-center @(_showEmojiPicker ? "force-visible" : "")">
-                        @RenderMessageActions()
-                    </div>
-                </div>
-            }
-        </div>
-    </div>
-}
-else
-{
-    <div class="mb-0 py-1 pr-2 message-row" data-message-id="@Message.Id" style="position: relative; padding-left: 64px; width: 100%;">
+    }
+    else
+    {
         @* Avatar *@
-        <div @onclick="@(() => OnAvatarClicked.InvokeAsync(Sender))" style="position: absolute; left: 8px; top: 4px; cursor: pointer;">
-            <EmployeeAvatar Employee="@Sender" Size="Size.Medium" Style="flex-shrink: 0; cursor: pointer;" />
+        <div class="message-avatar-trigger" @onclick="@(() => OnAvatarClicked.InvokeAsync(Sender))">
+            <EmployeeAvatar Employee="@Sender" Size="Size.Medium" Class="chat-msg-avatar" />
         </div>
+    }
 
-        @{
-            var txt = DecryptedContent ?? Message.Content ?? "";
-            bool isInlineMedia = txt.Contains("![") || txt.Contains(".gif") || txt.Contains("tenor.com") || txt.Contains("giphy.com");
-            bool hasVisualMedia = HasMediaAttachments || _linkPreviews.Any() || isInlineMedia;
-        }
-        <div class="message-content-wrapper @(hasVisualMedia ? "has-media" : "")">
-            @* Message Body *@
-            <div style="flex-grow: 1; min-width: 0;">
+    @{
+        var decryptedContent = EffectiveDecryptedContent;
+        var txt = decryptedContent ?? Message.Content ?? "";
+        bool isInlineMedia = txt.Contains("![") || txt.Contains(".gif") || txt.Contains("tenor.com") || txt.Contains("giphy.com");
+        bool hasVisualMedia = HasMediaAttachments || _linkPreviews.Any() || isInlineMedia;
+    }
+    <div class="message-content-wrapper @(hasVisualMedia ? "has-media" : "")">
+        @* Message Body *@
+        <div class="message-body-col">
+            @if (!IsGrouped)
+            {
                 @* Header: Name + Time *@
                 <div class="d-flex align-center gap-2">
-                    <MudText Typo="Typo.subtitle2" Style="font-weight: 700; color: var(--mud-palette-text-primary); cursor: pointer;" @onclick="@(() => OnAvatarClicked.InvokeAsync(Sender))">
+                    <span class="mud-typography mud-typography-subtitle2 message-sender-name" @onclick="@(() => OnAvatarClicked.InvokeAsync(Sender))">
                         @(Sender?.FullName ?? Loc["Unknown User"].Value)
-                    </MudText>
-                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">
+                    </span>
+                    <span class="mud-typography mud-typography-caption message-timestamp">
                         @{
                             var localTime = Message.SentAt.ToLocalTime();
                             var isToday = localTime.Date == DateTime.Now.Date;
                         }
                         @localTime.ToString(isToday ? "h:mm tt" : "MMM dd, h:mm tt")
-                    </MudText>
+                    </span>
                 </div>
+            }
 
-                @if (IsEditing)
-                {
-                    <div class="mt-2 mb-2 w-100">
-                        <ChatComposer @key="@($"edit-{Message.Id}")"
-                            ChannelId="@Message.ChannelId" 
-                            CurrentUserId="@CurrentUserId" 
-                            IsEditMode="true" 
-                            IsMobile="@IsMobile"
-                            InitialText="@(DecryptedContent ?? Message.Content)" 
-                            IdSuffix="@Message.Id"
-                            Employees="Employees"
-                            Teams="Teams"
-                            ChannelKey="@ChannelKey"
-                            OnSendMessage="@(async args => await OnSaveEdit.InvokeAsync((Message, args.Content)))"
-                            OnCancelEdit="@(async () => await OnCancelEdit.InvokeAsync())" />
-                    </div>
-                }
-                else if (Message.MessageType == ChatMessageType.CallInvite)
-                {
-                    <MudCard Class="pa-3 mt-1 mb-1" Style="max-width: 350px; background: var(--mud-palette-background-grey); box-shadow: none; border: 1px solid var(--mud-palette-divider);">
-                        <div class="d-flex align-center gap-3">
-                            <MudIcon Icon="@Icons.Material.Filled.Phone" Color="Color.Info" Size="Size.Medium" />
-                            <div>
-                                <MudText Typo="Typo.subtitle2"><b>@Loc["Voice Call Started"]</b></MudText>
-                                @if (Message.CallStatus == CallStatus.Declined)
-                                {
-                                    <MudText Typo="Typo.body2" Color="Color.Error">@Loc["Call was declined."]</MudText>
-                                }
-                                else if (Message.CallStatus == CallStatus.Ended)
-                                {
-                                    <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Call ended."]</MudText>
-                                }
-                                else if (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId)
-                                {
-                                    <MudText Typo="Typo.body2" Color="Color.Success">@Loc["Call joined."]</MudText>
-                                }
-                                else
-                                {
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Join the conversation!"]</MudText>
-                                }
-                            </div>
-                        </div>
-                        @if (Message.CallStatus != CallStatus.Declined && Message.CallStatus != CallStatus.Ended && !(VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId))
-                        {
-                            <div class="d-flex justify-end gap-2 mt-2">
-                                @if (CurrentUserId != Message.SenderId)
-                                {
-                                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="@(() => OnDeclineCall.InvokeAsync(Message))">@Loc["Decline"]</MudButton>
-                                }
-                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" Disabled="@(VoiceService.IsConnecting || (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId))" OnClick="@(() => OnJoinCall.InvokeAsync(Message))">@(VoiceService.IsConnecting ? Loc["Connecting..."].Value : Loc["Join Call"].Value)</MudButton>
-                            </div>
-                        }
-                    </MudCard>
-                }
-                else if (Message.IsEncrypted && DecryptedContent == null && !string.IsNullOrEmpty(Message.Content))
-                {
-                    <div class="d-flex align-center gap-2" style="opacity: 0.6; font-style: italic;">
-                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
-                        <MudText Typo="Typo.body2">@Loc["Encrypted message"]</MudText>
-                    </div>
-                }
-                else if (!string.IsNullOrWhiteSpace(DecryptedContent ?? Message.Content))
-                {
-                    var rawContent = DecryptedContent ?? Message.Content ?? "";
-                    var displayContent = GetDisplayContent(rawContent);
-                    <ChatMarkdownRenderer Content="@displayContent" FullContent="@rawContent" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" SessionId="@SessionId" Employees="Employees" IsEdited="@Message.EditedAt.HasValue" ChannelKey="@ChannelKey" />
-                    if (rawContent.Length > MaxMessageLength)
-                    {
-                        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="() => _isExpanded = !_isExpanded" Class="mt-1 px-1" Style="min-width: unset;">
-                            @(_isExpanded ? Loc["Show Less"].Value : Loc["Read More"].Value)
-                        </MudButton>
-                    }
-                }
-                @RenderLinkPreviews()
-                @if (Message.Attachments.Any())
-                {
-                    <div class="d-flex flex-wrap gap-2 mt-2">
-                        @foreach (var attachment in Message.Attachments)
-                        {
-                            @RenderAttachment(attachment)
-                        }
-                    </div>
-                }
-                @RenderAlbumConversionPrompt()
-                @if (Message.MentionedEventIds != null && Message.MentionedEventIds.Any())
-                {
-                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
-                        @foreach (var eventId in Message.MentionedEventIds)
-                        {
-                            <EventMentionCard EventId="@eventId" CurrentUserId="@CurrentUserId" Employees="Employees" />
-                        }
-                    </div>
-                }
-                @if (Message.MentionedAlbumIds != null && Message.MentionedAlbumIds.Any())
-                {
-                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
-                        @foreach (var albumId in Message.MentionedAlbumIds)
-                        {
-                            <AlbumMentionCard AlbumId="@albumId" CurrentUserId="@CurrentUserId" SessionId="@SessionId" Employees="Employees" ChannelId="@Message.ChannelId" />
-                        }
-                    </div>
-                }
-                @if (Message.MentionedPollIds != null && Message.MentionedPollIds.Any())
-                {
-                    <div class="d-flex flex-wrap gap-2 mt-2 w-100">
-                        @foreach (var pollId in Message.MentionedPollIds)
-                        {
-                            <PollMentionCard PollId="@pollId" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" ChannelKey="@ChannelKey" Employees="Employees" />
-                        }
-                    </div>
-                }
-                @if (Message.Reactions.Any() || ReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
-                {
-                    <div class="d-flex justify-space-between align-center w-100 mt-1">
-                        <div class="reactions-container">
-                            @if (Message.Reactions.Any())
-                            {
-                                <div class="d-flex flex-wrap gap-1">
-                                    @foreach (var reactionGroup in GetReactionGroups())
-                                    {
-                                        <MudTooltip Text="@GetReactionTooltip(reactionGroup.Emoji)" Placement="Placement.Top">
-                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(reactionGroup.HasReacted ? Color.Primary : Color.Default)"
-                                                OnClick="@(() => { if (CanReact) OnReact.InvokeAsync((Message.Id, reactionGroup.Emoji)); })"
-                                                Style="border-radius: 12px; height: 24px;">
-                                                @reactionGroup.Emoji <span class="ml-1">@reactionGroup.Count</span>
-                                            </MudChip>
-                                        </MudTooltip>
-                                    }
-                                </div>
-                            }
-                        </div>
-                        
-                        <div class="message-read-receipts d-flex align-center justify-end gap-1">
-                            @if (ReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
-                            {
-                                @RenderReadReceipts()
-                            }
-                        </div>
-                    </div>
-                }
-            </div>
-
-            @* Actions Stack (Desktop float right) *@
-            @if (!IsMobile && !Message.IsDeleted && !IsEditing)
+            @if (IsEditing)
             {
-                <div class="message-actions-stack ml-2">
-                    <div class="message-actions d-flex align-center @(_showEmojiPicker ? "force-visible" : "")">
-                        @RenderMessageActions()
+                <div class="mt-2 mb-2 w-100">
+                    <ChatComposer @key="@($"edit-{Message.Id}")"
+                        ChannelId="@Message.ChannelId" 
+                        CurrentUserId="@CurrentUserId" 
+                        IsEditMode="true" 
+                        IsMobile="@IsMobile"
+                        InitialText="@(decryptedContent ?? Message.Content)" 
+                        IdSuffix="@Message.Id"
+                        Employees="@(ChannelEmployees ?? Employees)"
+                        Teams="Teams"
+                        ChannelKey="@ChannelKey"
+                        OnSendMessage="@(async args => await OnSaveEdit.InvokeAsync((Message, args.Content)))"
+                        OnCancelEdit="@(async () => await OnCancelEdit.InvokeAsync())" />
+                </div>
+            }
+            else if (Message.MessageType == ChatMessageType.CallInvite)
+            {
+                <MudCard Class="pa-3 mt-1 mb-1 chat-call-invite-card">
+                    <div class="d-flex align-center gap-3">
+                        <MudIcon Icon="@Icons.Material.Filled.Phone" Color="Color.Info" Size="Size.Medium" />
+                        <div>
+                            <MudText Typo="Typo.subtitle2"><b>@Loc["Voice Call Started"]</b></MudText>
+                            @if (Message.CallStatus == CallStatus.Declined)
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Error">@Loc["Call was declined."]</MudText>
+                            }
+                            else if (Message.CallStatus == CallStatus.Ended)
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Call ended."]</MudText>
+                            }
+                            else if (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId)
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Success">@Loc["Call joined."]</MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Join the conversation!"]</MudText>
+                            }
+                        </div>
+                    </div>
+                    @if (Message.CallStatus != CallStatus.Declined && Message.CallStatus != CallStatus.Ended && !(VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId))
+                    {
+                        <div class="d-flex justify-end gap-2 mt-2">
+                            @if (CurrentUserId != Message.SenderId)
+                            {
+                                <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="@(() => OnDeclineCall.InvokeAsync(Message))">@Loc["Decline"]</MudButton>
+                            }
+                            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" Disabled="@(VoiceService.IsConnecting || (VoiceService.IsInVoiceCall && VoiceService.CurrentChannelId == Message.ChannelId))" OnClick="@(() => OnJoinCall.InvokeAsync(Message))">@(VoiceService.IsConnecting ? Loc["Connecting..."].Value : Loc["Join Call"].Value)</MudButton>
+                        </div>
+                    }
+                </MudCard>
+            }
+            else if (Message.IsEncrypted && decryptedContent == null && !string.IsNullOrEmpty(Message.Content))
+            {
+                <div class="d-flex align-center gap-2 chat-encrypted-msg-row">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" />
+                    <MudText Typo="Typo.body2">@Loc["Encrypted message"]</MudText>
+                </div>
+            }
+            else if (!string.IsNullOrWhiteSpace(decryptedContent ?? Message.Content))
+            {
+                var rawContent = decryptedContent ?? Message.Content ?? "";
+                var displayContent = GetDisplayContent(rawContent);
+                var truncatedFullContent = (rawContent.Length > MaxMessageLength && !_isExpanded) ? new ChatTextRef(rawContent) : null;
+                <ChatMarkdownRenderer Content="@displayContent" FullContentRef="@truncatedFullContent" MessageId="@Message.Id" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" SessionId="@SessionId" Employees="Employees" IsEdited="@Message.EditedAt.HasValue" ChannelKey="@ChannelKey" />
+                if (rawContent.Length > MaxMessageLength)
+                {
+                    <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="() => { _isExpanded = !_isExpanded; _forceRender = true; }" Class="mt-1 px-1" Style="min-width: unset;">
+                        @(_isExpanded ? Loc["Show Less"].Value : Loc["Read More"].Value)
+                    </MudButton>
+                }
+            }
+            @RenderLinkPreviews()
+            @if (Message.Attachments.Any())
+            {
+                <div class="@(IsGrouped ? "d-flex flex-wrap gap-2 my-1" : "d-flex flex-wrap gap-2 mt-2")">
+                    @foreach (var attachment in Message.Attachments)
+                    {
+                        @RenderAttachment(attachment)
+                    }
+                </div>
+            }
+            @RenderAlbumConversionPrompt()
+            @if (Message.MentionedEventIds != null && Message.MentionedEventIds.Any())
+            {
+                <div class="@(IsGrouped ? "d-flex flex-wrap gap-2 mt-2 mb-1 w-100" : "d-flex flex-wrap gap-2 mt-2 w-100")">
+                    @foreach (var eventId in Message.MentionedEventIds)
+                    {
+                        <EventMentionCard EventId="@eventId" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" Employees="Employees" />
+                    }
+                </div>
+            }
+            @if (Message.MentionedAlbumIds != null && Message.MentionedAlbumIds.Any())
+            {
+                <div class="@(IsGrouped ? "d-flex flex-wrap gap-2 mt-2 mb-1 w-100" : "d-flex flex-wrap gap-2 mt-2 w-100")">
+                    @foreach (var albumId in Message.MentionedAlbumIds)
+                    {
+                        <AlbumMentionCard AlbumId="@albumId" CurrentUserId="@CurrentUserId" SessionId="@SessionId" Employees="Employees" ChannelId="@Message.ChannelId" MessageIndex="@MessageIndex" />
+                    }
+                </div>
+            }
+            @if (Message.MentionedPollIds != null && Message.MentionedPollIds.Any())
+            {
+                <div class="@(IsGrouped ? "d-flex flex-wrap gap-2 mt-2 mb-1 w-100" : "d-flex flex-wrap gap-2 mt-2 w-100")">
+                    @foreach (var pollId in Message.MentionedPollIds)
+                    {
+                        <PollMentionCard PollId="@pollId" CurrentUserId="@CurrentUserId" ChannelId="@Message.ChannelId" ChannelKey="@ChannelKey" Employees="Employees" />
+                    }
+                </div>
+            }
+            @if (Message.Reactions.Any() || ReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
+            {
+                <div class="d-flex justify-space-between align-center w-100 mt-1">
+                    <div class="reactions-container">
+                        @if (Message.Reactions.Any())
+                        {
+                            <div class="d-flex flex-wrap gap-1">
+                                @foreach (var reactionGroup in GetReactionGroups())
+                                {
+                                    <button type="button"
+                                            class="mud-chip mud-chip-outlined mud-chip-size-small @(reactionGroup.HasReacted ? "mud-chip-color-primary" : "mud-chip-color-default") message-reaction-pill"
+                                            @onclick="@(() => { if (CanReact) OnReact.InvokeAsync((Message.Id, reactionGroup.Emoji)); })"
+                                            title="@(!IsMobile ? GetReactionTooltip(reactionGroup.Emoji) : null)">
+                                        @reactionGroup.Emoji <span class="ml-1">@reactionGroup.Count</span>
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </div>
+                    
+                    <div class="message-read-receipts d-flex align-center justify-end gap-1">
+                        @if (ReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
+                        {
+                            @RenderReadReceipts()
+                        }
                     </div>
                 </div>
             }
         </div>
+
+        @* Actions Stack (Desktop float right): idle rows emit a dedicated JS mount slot (.message-actions-slot) so Chat.razor.js never collides with Blazor's child diffing; Blazor atomically replaces the slot with popup markup for the single active row. *@
+        @if (!IsMobile && !Message.IsDeleted && !IsEditing)
+        {
+            <div class="message-actions-stack ml-2">
+                @if (ShowEmojiPicker || ShowMoreMenu)
+                {
+                    <div class="message-actions d-flex align-center force-visible">
+                        @RenderMessageActions()
+                    </div>
+                }
+                else
+                {
+                    <div class="message-actions-slot"></div>
+                }
+            </div>
+        }
     </div>
-}
 </div>
+</div>
+@{
+    _lastRenderFingerprint = ComputeRenderFingerprint();
+    _forceRender = false;
+}
 
 @* Styles live in wwwroot/css/chat.css: this component renders once per message, so inline style blocks would be re-sent and re-inserted per instance (AGENTS.md §3). *@
 
 @code {
     [Parameter] public ChatMessage Message { get; set; } = new();
-    [Parameter] public string DataFingerprint { get; set; } = "";
-    [Parameter] public string? DecryptedContent { get; set; }
-    [Parameter] public string? DecryptedReplyContent { get; set; }
+    [Parameter] public int DataVersionHash { get; set; }
+    [Parameter] public IReadOnlyDictionary<string, string>? DecryptedContents { get; set; }
     [Parameter] public Employee? Sender { get; set; }
+
+    private string? EffectiveDecryptedContent =>
+        DecryptedContents != null && !string.IsNullOrEmpty(Message.Id) && DecryptedContents.TryGetValue(Message.Id, out var val)
+            ? val
+            : null;
+
+    private string? EffectiveDecryptedReplyContent =>
+        DecryptedContents != null && ReplyToMessage != null && !string.IsNullOrEmpty(ReplyToMessage.Id) && DecryptedContents.TryGetValue(ReplyToMessage.Id, out var val)
+            ? val
+            : null;
     [Parameter] public bool IsOwnMessage { get; set; }
     [Parameter] public bool IsGrouped { get; set; }
     [Parameter] public string? CurrentUserId { get; set; }
@@ -431,7 +291,25 @@ else
     public string? ChannelKey { get; set; }
     [Parameter] public bool CanReact { get; set; } = true;
     [Parameter] public bool AnonymizeReactions { get; set; } = false;
+    [Parameter] public List<Employee>? ChannelEmployees { get; set; }
+    [Parameter] public bool HideReadReceipts { get; set; } = false;
     [Parameter] public bool IsMobile { get; set; }
+    [Parameter] public int MessageIndex { get; set; }
+    [Parameter] public bool ShowEmojiPicker { get; set; }
+    [Parameter] public bool ShowMoreMenu { get; set; }
+    [Parameter] public bool IsActionSheetTarget { get; set; }
+    [Parameter] public EventCallback OnCloseActionPopups { get; set; }
+    [Parameter] public IReadOnlyList<string>? QuickReactEmojis { get; set; }
+
+    private string GetMessageRowCssClass() => (IsGrouped, IsActionSheetTarget) switch
+    {
+        (true, true) => "py-0 pr-2 message-row message-row-grouped message-row-action-target",
+        (true, false) => "py-0 pr-2 message-row message-row-grouped",
+        (false, true) => "mb-0 py-1 pr-2 message-row message-row-action-target",
+        (false, false) => "mb-0 py-1 pr-2 message-row",
+    };
+
+    private static readonly string[] DefaultQuickReactEmojis = ["👍", "❤️", "😂"];
 
     private bool _isExpanded;
     private const int MaxMessageLength = 1000;
@@ -465,11 +343,14 @@ else
         return displayContent;
     }
 
-    private bool _showEmojiPicker;
     private List<LinkPreview> _linkPreviews = [];
     private int _skeletonCount;
-    private string? _lastPreviewedFingerprint;
+    private string? _lastPreviewedContent;
     private CancellationTokenSource? _previewCts;
+    private bool _subscribedToVoice;
+    private bool _lastVoiceInCall;
+    private string? _lastVoiceChannelId;
+    private bool _lastVoiceConnecting;
 
     private bool HasMediaAttachments => Message.Attachments?.Any(a => IsImageFile(a.FileName) || IsVideoFile(a.FileName)) ?? false;
     private bool _dismissedAlbumPrompt;
@@ -520,7 +401,7 @@ else
 
     private async Task CopyMessageText()
     {
-        var textToCopy = DecryptedContent ?? Message.Content ?? "";
+        var textToCopy = EffectiveDecryptedContent ?? Message.Content ?? "";
         if (!string.IsNullOrWhiteSpace(textToCopy))
         {
             await JS.InvokeVoidAsync("navigator.clipboard.writeText", textToCopy);
@@ -535,7 +416,7 @@ else
     private bool _forceRender = true; // always render on first pass
 
     internal static string BuildRenderFingerprint(
-        string dataFingerprint,
+        int dataVersionHash,
         bool isEditing,
         bool isGrouped,
         bool isOwnMessage,
@@ -549,43 +430,59 @@ else
         bool isExpanded,
         bool? isInVoiceCall,
         string? currentVoiceChannelId,
-        bool isMobile = false)
+        bool isMobile = false,
+        bool showMoreMenu = false,
+        bool? isVoiceConnecting = null,
+        bool isActionSheetTarget = false)
     {
         var readersKey = readReceiptUserIds == null || readReceiptUserIds.Count == 0 ? "0" : string.Join(",", readReceiptUserIds);
-        var decContentKey = decryptedContent == null ? "\0null" : decryptedContent;
-        var decReplyKey = decryptedReplyContent == null ? "\0null" : decryptedReplyContent;
+        var decContentKey = decryptedContent == null
+            ? "\0null"
+            : $"{decryptedContent.Length}:{string.GetHashCode(decryptedContent, StringComparison.Ordinal):x8}";
+        var decReplyKey = decryptedReplyContent == null
+            ? "\0null"
+            : $"{decryptedReplyContent.Length}:{string.GetHashCode(decryptedReplyContent, StringComparison.Ordinal):x8}";
         var key = channelKey ?? "\0null";
 
-        return $"{dataFingerprint}|{isEditing}|{isGrouped}|{isOwnMessage}|{decContentKey}|{decReplyKey}|{key}|{readersKey}|{linkPreviewsCount}|{skeletonCount}|{showEmojiPicker}|{isExpanded}|{isInVoiceCall}_{currentVoiceChannelId}|{isMobile}";
+        return $"{dataVersionHash:x8}|{isEditing}|{isGrouped}|{isOwnMessage}|{decContentKey}|{decReplyKey}|{key}|{readersKey}|{linkPreviewsCount}|{skeletonCount}|{showEmojiPicker}|{showMoreMenu}|{isActionSheetTarget}|{isExpanded}|{isInVoiceCall}_{currentVoiceChannelId}_{isVoiceConnecting}|{isMobile}";
     }
 
     internal string ComputeRenderFingerprint()
-        => BuildRenderFingerprint(
-            DataFingerprint,
+    {
+        bool isActiveCallInvite = Message.MessageType == ChatMessageType.CallInvite &&
+                                  Message.CallStatus != CallStatus.Ended &&
+                                  Message.CallStatus != CallStatus.Declined;
+        return BuildRenderFingerprint(
+            DataVersionHash,
             IsEditing,
             IsGrouped,
             IsOwnMessage,
-            DecryptedContent,
-            DecryptedReplyContent,
+            EffectiveDecryptedContent,
+            EffectiveDecryptedReplyContent,
             ChannelKey,
             ReadReceiptUserIds,
             _linkPreviews.Count,
             _skeletonCount,
-            _showEmojiPicker,
+            ShowEmojiPicker,
             _isExpanded,
-            VoiceService?.IsInVoiceCall,
-            VoiceService?.CurrentChannelId,
-            IsMobile) + $"|{CanCreateAlbum}|{_dismissedAlbumPrompt}|{ImageAttachmentCount}|{Message.MentionedAlbumIds?.Count ?? 0}";
+            isActiveCallInvite ? VoiceService?.IsInVoiceCall : null,
+            isActiveCallInvite ? VoiceService?.CurrentChannelId : null,
+            IsMobile,
+            ShowMoreMenu,
+            isActiveCallInvite ? VoiceService?.IsConnecting : null,
+            IsActionSheetTarget) + $"|{CanCreateAlbum}|{_dismissedAlbumPrompt}|{ImageAttachmentCount}|{Message.MentionedAlbumIds?.Count ?? 0}|{HideReadReceipts}|{AnonymizeReactions}";
+    }
 
     protected override bool ShouldRender()
     {
+        var fingerprint = ComputeRenderFingerprint();
+
         if (_forceRender)
         {
             _forceRender = false;
+            _lastRenderFingerprint = fingerprint;
             return true;
         }
-
-        var fingerprint = ComputeRenderFingerprint();
 
         if (fingerprint == _lastRenderFingerprint)
             return false;
@@ -596,16 +493,36 @@ else
 
     protected override void OnParametersSet()
     {
-        // Only reload link previews when the message content actually changes.
-        // This prevents re-creating LinkPreviewCard components (which resets
-        // their _faviconFailed / _imageFailed error-suppression state).
-        if (_lastPreviewedFingerprint != DataFingerprint)
+        bool needsVoiceSubscription = Message.MessageType == ChatMessageType.CallInvite &&
+                                      Message.CallStatus != CallStatus.Ended &&
+                                      Message.CallStatus != CallStatus.Declined;
+        if (needsVoiceSubscription && !_subscribedToVoice)
         {
-            _lastPreviewedFingerprint = DataFingerprint;
-            _forceRender = true; // ensure we re-render after fetching
+            _lastVoiceInCall = VoiceService.IsInVoiceCall;
+            _lastVoiceChannelId = VoiceService.CurrentChannelId;
+            _lastVoiceConnecting = VoiceService.IsConnecting;
+            VoiceService.OnChange += HandleVoiceChanged;
+            _subscribedToVoice = true;
+        }
+        else if (!needsVoiceSubscription && _subscribedToVoice)
+        {
+            VoiceService.OnChange -= HandleVoiceChanged;
+            _subscribedToVoice = false;
+        }
+
+        // Only reload link previews when the effective message text content actually changes.
+        // Resolving cached and known-failed URLs synchronously here prevents post-mount
+        // render storms (skeleton flash + individual StateHasChanged batches per message).
+        var decryptedContent = EffectiveDecryptedContent;
+        var effectiveContent = (Message.IsEncrypted && decryptedContent == null)
+            ? "\0encrypted-locked"
+            : (decryptedContent ?? Message.Content ?? string.Empty);
+
+        if (!string.Equals(_lastPreviewedContent, effectiveContent, StringComparison.Ordinal))
+        {
+            _lastPreviewedContent = effectiveContent;
             CancelPreviewFetch();
-            _previewCts = new CancellationTokenSource();
-            _ = LoadLinkPreviewsAsync(_previewCts.Token);
+            ResolveLinkPreviewsSynchronouslyOrStartFetch(effectiveContent);
         }
     }
 
@@ -619,69 +536,49 @@ else
         }
     }
 
-    private async Task LoadLinkPreviewsAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            await LoadLinkPreviews(cancellationToken);
-            if (cancellationToken.IsCancellationRequested)
-                return;
-            _forceRender = true;
-            await InvokeAsync(StateHasChanged);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // Component navigated away or fingerprint updated
-        }
-        catch (ObjectDisposedException)
-        {
-            // Component already disposed
-        }
-    }
-
-    protected override Task OnAfterRenderAsync(bool firstRender)
-    {
-        // No-op: CSS overflow-anchor handles scroll-after-preview natively.
-        // Removed OnMediaLoaded.InvokeAsync() call because EventCallback.InvokeAsync()
-        // implicitly triggers StateHasChanged on the parent, causing a cascade.
-        return Task.CompletedTask;
-    }
-
-    private async Task LoadLinkPreviews(CancellationToken cancellationToken)
+    private void ResolveLinkPreviewsSynchronouslyOrStartFetch(string effectiveContent)
     {
         _linkPreviews.Clear();
         _skeletonCount = 0;
-        if (Message.IsEncrypted && DecryptedContent == null)
+
+        if (Message.IsEncrypted && EffectiveDecryptedContent == null)
             return;
 
-        var contentToPreview = DecryptedContent ?? Message.Content;
-        if (string.IsNullOrWhiteSpace(contentToPreview)) return;
+        if (string.IsNullOrWhiteSpace(effectiveContent))
+            return;
 
-        var urls = LinkPreviews.ExtractUrls(contentToPreview);
-        List<string> urlsToFetch = [];
+        var urls = LinkPreviews.ExtractUrls(effectiveContent);
+        if (urls.Count == 0)
+            return;
+
+        List<string>? urlsToFetch = null;
         foreach (var url in urls)
         {
-            var preview = LinkPreviews.GetPreview(url);
-            if (preview != null)
+            if (LinkPreviews.TryGetCachedPreview(url, out var cachedPreview))
             {
-                _linkPreviews.Add(preview);
+                if (cachedPreview != null)
+                {
+                    _linkPreviews.Add(cachedPreview);
+                }
             }
             else
             {
-                urlsToFetch.Add(url);
+                (urlsToFetch ??= []).Add(url);
             }
         }
 
-        if (urlsToFetch.Any())
+        if (urlsToFetch is { Count: > 0 })
         {
-            if (cancellationToken.IsCancellationRequested)
-                return;
-
             _skeletonCount = urlsToFetch.Count;
-            // Force a render pass to show the skeletons immediately
-            _forceRender = true;
-            await InvokeAsync(StateHasChanged);
+            _previewCts = new CancellationTokenSource();
+            _ = FetchUncachedLinkPreviewsAsync(urlsToFetch, _previewCts.Token);
+        }
+    }
 
+    private async Task FetchUncachedLinkPreviewsAsync(List<string> urlsToFetch, CancellationToken cancellationToken)
+    {
+        try
+        {
             foreach (var url in urlsToFetch)
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -696,9 +593,28 @@ else
                     _linkPreviews.Add(fetched);
                 }
             }
-            
+
             _skeletonCount = 0;
+            if (cancellationToken.IsCancellationRequested)
+                return;
+
+            _forceRender = true;
+            await InvokeAsync(StateHasChanged);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Component navigated away or content updated
+        }
+        catch (ObjectDisposedException)
+        {
+            // Component already disposed
+        }
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        // No-op: CSS overflow-anchor handles scroll-after-preview natively.
+        return Task.CompletedTask;
     }
 
     private RenderFragment RenderLinkPreviews() => __builder =>
@@ -721,49 +637,32 @@ else
             var imageIndex = imageAttachments.IndexOf(attachment);
             bool hasDimensions = attachment.ImageWidth.HasValue && attachment.ImageHeight.HasValue && attachment.ImageHeight.Value > 0;
             
-            string dimensionStyle = "";
+            string dimensionStyle = "min-width: 160px; min-height: 120px;";
             if (hasDimensions)
             {
                 var targetWidth = Math.Round(500.0 * attachment.ImageWidth!.Value / attachment.ImageHeight!.Value);
                 dimensionStyle = $"width: {targetWidth}px; max-width: 100%; aspect-ratio: {attachment.ImageWidth} / {attachment.ImageHeight}; max-height: 500px;";
             }
 
-            var effectiveSessionId = EffectiveSessionId;
-            var token = !string.IsNullOrWhiteSpace(CurrentUserId) && !string.IsNullOrWhiteSpace(effectiveSessionId)
-                ? FileTokens.GenerateAccessToken("chat", Message.ChannelId, attachment.FilePath, ChannelKey, CurrentUserId, effectiveSessionId)
-                : null;
-            var fullUrl = string.IsNullOrEmpty(token)
-                ? attachment.FilePath
-                : (attachment.FilePath.Contains("?") ? $"{attachment.FilePath}&t={token}" : $"{attachment.FilePath}?t={token}");
-            var thumbUrl = string.IsNullOrEmpty(token)
-                ? attachment.ThumbnailUrl
-                : (attachment.ThumbnailUrl.Contains("?") ? $"{attachment.ThumbnailUrl}&t={token}" : $"{attachment.ThumbnailUrl}?t={token}");
+            var useThumbnail = attachment.CanUseServerThumbnail;
+            var displayUrl = GetTokenizedUrl(attachment, isThumbnail: useThumbnail, includeFileName: false);
 
             <div class="attachment-image" @onclick="@(() => OnOpenLightbox.InvokeAsync((Message, imageAttachments, imageIndex)))"
-                style="cursor: pointer; position: relative; display: inline-block; @dimensionStyle">
-                
-                @if (hasDimensions)
-                {
-                    <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="100%" Height="100%" Class="attachment-skeleton" Style="position: absolute; top: 0; left: 0; border-radius: 8px;" Animation="Animation.Wave" />
-                }
-                
-                <picture style="display: contents;">
-                    @if (attachment.HasServerThumbnail)
-                    {
-                        <source media="(min-width: 960px), (hover: hover) and (pointer: fine)" srcset="@fullUrl" />
-                    }
-                    <img src="@(attachment.HasServerThumbnail ? thumbUrl : fullUrl)" alt="@attachment.FileName"
-                        loading="lazy"
-                        decoding="async"
-                        onload="this.closest('.attachment-image')?.classList.add('is-loaded');"
-                        class="@(hasDimensions ? "needs-fade" : "")"
-                        style="max-width: 100%; max-height: 500px; width: auto; height: 100%; border-radius: 8px; display: block; object-fit: contain; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;" />
-                </picture>
+                style="@dimensionStyle">
+                <div class="attachment-skeleton"></div>
+                <img data-media-src="@displayUrl"
+                    data-media-priority="chat"
+                    data-media-order="@(MessageIndex * 100 + imageIndex)"
+                    data-media-encrypted="@(Message.IsEncrypted || !string.IsNullOrEmpty(ChannelKey) ? "true" : null)"
+                    alt="@attachment.FileName"
+                    decoding="async"
+                    class="needs-fade attachment-image-el" />
             </div>
         }
         else if (IsVideoFile(attachment.FileName))
         {
-            <ChatVideoAttachment Attachment="attachment" CurrentUserId="@CurrentUserId" SessionId="@EffectiveSessionId" ChannelId="@Message.ChannelId" ChannelKey="@ChannelKey" />
+            var videoIndex = Message.Attachments.IndexOf(attachment);
+            <ChatVideoAttachment Attachment="attachment" CurrentUserId="@CurrentUserId" SessionId="@EffectiveSessionId" ChannelId="@Message.ChannelId" ChannelKey="@ChannelKey" MediaOrder="@(MessageIndex * 100 + Math.Max(0, videoIndex))" />
         }
         else if (IsAudioFile(attachment.FileName) || (attachment.ContentType != null && attachment.ContentType.StartsWith("audio/")))
         {
@@ -772,14 +671,14 @@ else
         }
         else
         {
-            <MudPaper Elevation="1" Class="pa-2 d-flex align-center gap-2" Style="border-radius: 8px;">
+            <MudPaper Elevation="1" Class="pa-2 d-flex align-center gap-2 chat-file-card">
                 <MudIcon Icon="@GetFileIcon(attachment.FileName)" Color="Color.Primary" />
-                <div style="flex-grow: 1;" @onclick="@(() => DownloadOrOpenDocument(attachment))">
-                    <MudText Typo="Typo.body2" Color="Color.Primary" Style="font-weight: 500; cursor: pointer;" Class="mud-link-underline-hover">
+                <div class="flex-grow-1" @onclick="@(() => DownloadOrOpenDocument(attachment))">
+                    <MudText Typo="Typo.body2" Color="Color.Primary" Class="mud-link-underline-hover chat-file-card-name">
                         @attachment.FileName
                     </MudText>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="cursor: pointer;">
-                        @FormatFileSize(attachment.FileSizeBytes)
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="cursor-pointer">
+                        @FileHelper.FormatBytes(attachment.FileSizeBytes)
                     </MudText>
                 </div>
                 <MudIconButton Icon="@Icons.Material.Filled.Share" Size="Size.Small" Color="Color.Secondary" OnClick="@(() => ShareDocument(attachment))" />
@@ -787,34 +686,48 @@ else
         }
     };
 
+    private Task CloseActionPopupsAsync() =>
+        OnCloseActionPopups.HasDelegate ? OnCloseActionPopups.InvokeAsync() : Task.CompletedTask;
+
+    private IReadOnlyList<string> ResolveQuickReactEmojis()
+    {
+        if (QuickReactEmojis is { Count: > 0 })
+        {
+            return QuickReactEmojis;
+        }
+        var currentEmployee = Employees.FirstOrDefault(e => e.Id == CurrentUserId);
+        var recentEmojis = currentEmployee?.RecentEmojis;
+        if (recentEmojis == null || recentEmojis.Count == 0)
+        {
+            return DefaultQuickReactEmojis;
+        }
+        return recentEmojis.Concat(DefaultQuickReactEmojis).Distinct().Take(3).ToArray();
+    }
+
     private RenderFragment RenderMessageActions() => __builder =>
     {
-        var currentEmployee = Employees.FirstOrDefault(e => e.Id == CurrentUserId);
-        var recentEmojis = currentEmployee?.RecentEmojis?.ToList() ?? [];
-        
-        string[] defaultEmojis = ["👍", "❤️", "😂"];
-        var top3Emojis = recentEmojis.Concat(defaultEmojis).Distinct().Take(3).ToList();
+        var top3Emojis = ResolveQuickReactEmojis();
 
         @if (CanReact)
         {
             foreach (var emoji in top3Emojis)
             {
-                <MudIconButton Size="Size.Small" Style="font-size: 1.1rem; color: var(--mud-palette-text-primary);" OnClick="@(() => OnReact.InvokeAsync((Message.Id, emoji)))">
+                <button type="button" class="message-action-btn message-action-btn-emoji" data-msg-action="react" data-emoji="@emoji">
                     @emoji
-                </MudIconButton>
+                </button>
             }
 
-            <div style="position: relative;">
-                <MudTooltip Text="@Loc["Add Reaction"]">
-                    <MudIconButton Icon="@Icons.Material.Outlined.AddReaction" Size="Size.Small" Color="Color.Secondary"
-                        OnClick="@(() => _showEmojiPicker = !_showEmojiPicker)" />
-                </MudTooltip>
-                @if (_showEmojiPicker)
+            <div class="p-rel">
+                <button type="button" class="message-action-btn" data-msg-action="emoji-picker"
+                        title="@Loc["Add Reaction"]" aria-label="@Loc["Add Reaction"]">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#spokes-icon-add-reaction" /></svg>
+                </button>
+                @if (ShowEmojiPicker)
                 {
-                    <MudPopover Open="@_showEmojiPicker" AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomRight" OverflowBehavior="OverflowBehavior.FlipAlways">
+                    <MudPopover Open="true" AnchorOrigin="Origin.TopRight" TransformOrigin="Origin.BottomRight" OverflowBehavior="OverflowBehavior.FlipAlways">
                         <EmojiPicker IsOpen="@true"
-                            OnEmojiSelected="@(async (emoji) => { _showEmojiPicker = false; await OnReact.InvokeAsync((Message.Id, emoji)); })"
-                            OnClose="@(() => _showEmojiPicker = false)"
+                            OnEmojiSelected="@(async (emoji) => { await CloseActionPopupsAsync(); await OnReact.InvokeAsync((Message.Id, emoji)); })"
+                            OnClose="CloseActionPopupsAsync"
                             DisableGifs="true"
                             ContainerStyle="position: relative; margin: 0; box-shadow: none;" />
                     </MudPopover>
@@ -822,88 +735,131 @@ else
             </div>
         }
 
-        <MudTooltip Text="@Loc["Reply"]">
-            <MudIconButton Icon="@Icons.Material.Filled.Reply" Size="Size.Small" Color="Color.Secondary"
-                OnClick="@(() => OnReply.InvokeAsync(Message))" Style="transform: scaleX(-1);" />
-        </MudTooltip>
+        <button type="button" class="message-action-btn" data-msg-action="reply"
+                title="@Loc["Reply"]" aria-label="@Loc["Reply"]">
+            <svg viewBox="0 0 24 24" aria-hidden="true" class="icon-flip-x"><use href="#spokes-icon-reply" /></svg>
+        </button>
 
-        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" IconColor="Color.Secondary">
-            @if (Message.Reactions.Any())
+        <div class="p-rel">
+            <button type="button" class="message-action-btn" data-msg-action="more">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#spokes-icon-more-vert" /></svg>
+            </button>
+            @if (ShowMoreMenu)
             {
-                <MudMenuItem OnClick="@(() => OnViewReactions.InvokeAsync(Message))">
-                    <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Class="mr-2" />
-                    @Loc["View Reactions"]
-                </MudMenuItem>
+                <MudOverlay Visible="true" OnClick="CloseActionPopupsAsync" AutoClose="true" LockScroll="false" Style="background: transparent;" ZIndex="1399" data-spokes-back-dismiss="menu" />
+                <MudPopover Open="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" OverflowBehavior="OverflowBehavior.FlipAlways" Paper="true" Elevation="8" Style="min-width: 190px; z-index: 1400;">
+                    <MudList T="string" Dense="true" Class="py-1">
+                        @if (Message.Reactions.Any())
+                        {
+                            <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { await CloseActionPopupsAsync(); await OnViewReactions.InvokeAsync(Message); })">
+                                <div class="d-flex align-center">
+                                    <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Class="mr-2" />
+                                    @Loc["View Reactions"]
+                                </div>
+                            </MudListItem>
+                        }
+                        @if (!HideReadReceipts && CumulativeReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
+                        {
+                            <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { await CloseActionPopupsAsync(); await OnViewReadReceipts.InvokeAsync(Message); })">
+                                <div class="d-flex align-center">
+                                    <MudIcon Icon="@Icons.Material.Filled.DoneAll" Size="Size.Small" Class="mr-2" />
+                                    @Loc["View Read Receipts"]
+                                </div>
+                            </MudListItem>
+                        }
+                        <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { await CloseActionPopupsAsync(); await CopyMessageText(); })">
+                            <div class="d-flex align-center">
+                                <MudIcon Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" Class="mr-2" />
+                                @Loc["Copy Text"]
+                            </div>
+                        </MudListItem>
+                        @if (Message.Attachments.Any())
+                        {
+                            <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { await CloseActionPopupsAsync(); await OnShareMedia.InvokeAsync(Message); })">
+                                <div class="d-flex align-center">
+                                    <MudIcon Icon="@Icons.Material.Filled.Share" Size="Size.Small" Class="mr-2" />
+                                    @Loc["Share"]
+                                </div>
+                            </MudListItem>
+                        }
+                        @if (HasMediaAttachments)
+                        {
+                            <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { await CloseActionPopupsAsync(); await OnDownloadMedia.InvokeAsync(Message); })">
+                                <div class="d-flex align-center">
+                                    <MudIcon Icon="@Icons.Material.Filled.Download" Size="Size.Small" Class="mr-2" />
+                                    @Loc["Download"]
+                                </div>
+                            </MudListItem>
+                        }
+                        @if (IsOwnMessage)
+                        {
+                            @if (EligibleForAlbumConversion)
+                            {
+                                <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { await CloseActionPopupsAsync(); await OnCreateAlbumFromMessage.InvokeAsync(Message); })">
+                                    <div class="d-flex align-center">
+                                        <MudIcon Icon="@Icons.Material.Filled.PhotoLibrary" Size="Size.Small" Class="mr-2" Color="Color.Primary" />
+                                        @Loc["Create Album from Photos"]
+                                    </div>
+                                </MudListItem>
+                            }
+                            <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { await CloseActionPopupsAsync(); await OnEdit.InvokeAsync(Message); })">
+                                <div class="d-flex align-center">
+                                    <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Class="mr-2" />
+                                    @Loc["Edit"]
+                                </div>
+                            </MudListItem>
+                            <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { await CloseActionPopupsAsync(); await OnDelete.InvokeAsync(Message); })">
+                                <div class="d-flex align-center">
+                                    <MudIcon Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Class="mr-2" Color="Color.Error" />
+                                    @Loc["Delete"]
+                                </div>
+                            </MudListItem>
+                        }
+                        else
+                        {
+                            <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { await CloseActionPopupsAsync(); await OnBlockUser.InvokeAsync(Message); })">
+                                <div class="d-flex align-center">
+                                    <MudIcon Icon="@Icons.Material.Filled.Block" Size="Size.Small" Class="mr-2" Color="Color.Error" />
+                                    @Loc["Block User"]
+                                </div>
+                            </MudListItem>
+                            <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { await CloseActionPopupsAsync(); await OnReportMessage.InvokeAsync(Message); })">
+                                <div class="d-flex align-center">
+                                    <MudIcon Icon="@Icons.Material.Filled.Flag" Size="Size.Small" Class="mr-2" Color="Color.Warning" />
+                                    @Loc["Report Message"]
+                                </div>
+                            </MudListItem>
+                        }
+                    </MudList>
+                </MudPopover>
             }
-            @if (CumulativeReadReceiptUserIds.Any(id => id != Message.SenderId && id != CurrentUserId))
-            {
-                <MudMenuItem OnClick="@(() => OnViewReadReceipts.InvokeAsync(Message))">
-                    <MudIcon Icon="@Icons.Material.Filled.DoneAll" Size="Size.Small" Class="mr-2" />
-                    @Loc["View Read Receipts"]
-                </MudMenuItem>
-            }
-            <MudMenuItem OnClick="@CopyMessageText">
-                <MudIcon Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" Class="mr-2" />
-                @Loc["Copy Text"]
-            </MudMenuItem>
-            @if (Message.Attachments.Any())
-            {
-                <MudMenuItem OnClick="@(() => OnShareMedia.InvokeAsync(Message))">
-                    <MudIcon Icon="@Icons.Material.Filled.Share" Size="Size.Small" Class="mr-2" />
-                    @Loc["Share"]
-                </MudMenuItem>
-            }
-            @if (HasMediaAttachments)
-            {
-                <MudMenuItem OnClick="@(() => OnDownloadMedia.InvokeAsync(Message))">
-                    <MudIcon Icon="@Icons.Material.Filled.Download" Size="Size.Small" Class="mr-2" />
-                    @Loc["Download"]
-                </MudMenuItem>
-            }
-            @if (IsOwnMessage)
-            {
-                @if (EligibleForAlbumConversion)
-                {
-                    <MudMenuItem OnClick="@(() => OnCreateAlbumFromMessage.InvokeAsync(Message))">
-                        <MudIcon Icon="@Icons.Material.Filled.PhotoLibrary" Size="Size.Small" Class="mr-2" Color="Color.Primary" />
-                        @Loc["Create Album from Photos"]
-                    </MudMenuItem>
-                }
-                <MudMenuItem OnClick="@(() => OnEdit.InvokeAsync(Message))">
-                    <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Class="mr-2" />
-                    @Loc["Edit"]
-                </MudMenuItem>
-                <MudMenuItem OnClick="@(() => OnDelete.InvokeAsync(Message))">
-                    <MudIcon Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Class="mr-2" Color="Color.Error" />
-                    @Loc["Delete"]
-                </MudMenuItem>
-            }
-            else
-            {
-                <MudMenuItem OnClick="@(() => OnBlockUser.InvokeAsync(Message))">
-                    <MudIcon Icon="@Icons.Material.Filled.Block" Size="Size.Small" Class="mr-2" Color="Color.Error" />
-                    @Loc["Block User"]
-                </MudMenuItem>
-                @if (Message.ChannelType != ChatChannelType.Direct)
-                {
-                    <MudMenuItem OnClick="@(() => OnReportMessage.InvokeAsync(Message))">
-                        <MudIcon Icon="@Icons.Material.Filled.Flag" Size="Size.Small" Class="mr-2" Color="Color.Warning" />
-                        @Loc["Report Message"]
-                    </MudMenuItem>
-                }
-            }
-        </MudMenu>
+        </div>
     };
     
     private RenderFragment RenderReadReceipts() => __builder =>
     {
         var readers = ReadReceiptUserIds.Where(id => id != Message.SenderId && id != CurrentUserId).ToList();
+        if (HideReadReceipts)
+        {
+            if (readers.Count > 0)
+            {
+                <div class="d-inline-flex align-center gap-1" style="font-size: 0.65rem; color: var(--mud-palette-text-secondary);" title="@Loc["View Read Receipts"]">
+                    <MudIcon Icon="@Icons.Material.Filled.DoneAll" Size="Size.Small" Style="font-size: 0.8rem;" />
+                    <span>@readers.Count</span>
+                </div>
+            }
+            return;
+        }
         foreach (var readerId in readers.Take(3))
         {
             var emp = Employees.FirstOrDefault(e => e.Id == readerId);
             if (emp != null)
             {
-                <EmployeeAvatar Employee="emp" Size="Size.Small" ShowPresence="false" Style="width: 14px; height: 14px; min-width: 14px; min-height: 14px; font-size: 0.5rem;" />
+                <EmployeeAvatar Employee="emp" Size="Size.Small" ShowPresence="false" Style="width: 14px; height: 14px; min-width: 14px; min-height: 14px;" />
+            }
+            else
+            {
+                <MudAvatar Size="Size.Small" Style="width: 14px; height: 14px; min-width: 14px; min-height: 14px; font-size: 0.5rem; background: var(--mud-palette-action-disabled-background); color: var(--mud-palette-text-secondary);">?</MudAvatar>
             }
         }
         if (readers.Count > 3)
@@ -914,13 +870,21 @@ else
 
     private string? EffectiveSessionId => !string.IsNullOrWhiteSpace(SessionId) ? SessionId : CircuitContext?.SessionId;
 
-    private string GetTokenizedUrl(ChatAttachment attachment)
+    private string GetTokenizedUrl(ChatAttachment attachment, bool isThumbnail = false, bool includeFileName = true)
     {
-        var effectiveSessionId = EffectiveSessionId;
-        if (string.IsNullOrWhiteSpace(CurrentUserId) || string.IsNullOrWhiteSpace(effectiveSessionId))
-            return attachment.FilePath;
-        var token = FileTokens.GenerateAccessToken("chat", Message.ChannelId, attachment.FilePath, ChannelKey, CurrentUserId, effectiveSessionId);
-        return attachment.FilePath.Contains("?") ? $"{attachment.FilePath}&t={token}" : $"{attachment.FilePath}?t={token}";
+        var targetUrl = isThumbnail && attachment.CanUseServerThumbnail && !string.IsNullOrWhiteSpace(attachment.ThumbnailUrl)
+            ? attachment.ThumbnailUrl
+            : attachment.FilePath;
+
+        return FileTokens.BuildTokenizedUrl(
+            "chat",
+            Message.ChannelId,
+            targetUrl,
+            ChannelKey,
+            CurrentUserId,
+            EffectiveSessionId,
+            isThumbnail: isThumbnail,
+            displayFileName: includeFileName ? attachment.FileName : null);
     }
 
     private async Task ShareDocument(ChatAttachment attachment)
@@ -975,23 +939,33 @@ else
         return System.Text.RegularExpressions.Regex.Replace(singleLine, @"@\[([^\]]+)\]", "@$1");
     }
 
-    private string FormatFileSize(long bytes)
-    {
-        if (bytes < 1024) return $"{bytes} B";
-        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
-        return $"{bytes / (1024.0 * 1024.0):F1} MB";
-    }
-
     protected override void OnInitialized()
     {
         ImageRecovery.OnTokensWiped += HandleTokensWiped;
-        VoiceService.OnChange += HandleVoiceChanged;
     }
 
-    private void HandleTokensWiped() => InvokeAsync(StateHasChanged);
+    private void HandleTokensWiped()
+    {
+        _forceRender = true;
+        InvokeAsync(StateHasChanged);
+    }
 
     private void HandleVoiceChanged()
     {
+        bool inCall = VoiceService.IsInVoiceCall;
+        string? voiceChannelId = VoiceService.CurrentChannelId;
+        bool connecting = VoiceService.IsConnecting;
+
+        if (inCall == _lastVoiceInCall &&
+            string.Equals(voiceChannelId, _lastVoiceChannelId, StringComparison.Ordinal) &&
+            connecting == _lastVoiceConnecting)
+        {
+            return;
+        }
+
+        _lastVoiceInCall = inCall;
+        _lastVoiceChannelId = voiceChannelId;
+        _lastVoiceConnecting = connecting;
         _forceRender = true;
         InvokeAsync(StateHasChanged);
     }
@@ -1000,6 +974,10 @@ else
     {
         CancelPreviewFetch();
         ImageRecovery.OnTokensWiped -= HandleTokensWiped;
-        VoiceService.OnChange -= HandleVoiceChanged;
+        if (_subscribedToVoice)
+        {
+            VoiceService.OnChange -= HandleVoiceChanged;
+            _subscribedToVoice = false;
+        }
     }
 }

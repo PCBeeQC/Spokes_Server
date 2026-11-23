@@ -1,11 +1,13 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Serialization;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Models.Common;
 using Spokes_Server.Core.Services.Accounting;
 
-public class ExpenseReport : IDataEntity, IHasAssociatedFiles
+public class ExpenseReport : IDataEntity, IHasAssociatedFiles, IHasDocumentHistory
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -27,10 +29,9 @@ public class ExpenseReport : IDataEntity, IHasAssociatedFiles
     public DateTime? DateSubmitted { get; set; }
     public DateTime? DatePaid { get; set; }
 
-    // Accounting / Sage Export Tracking
-    public bool IsExported => ExportedToSageAt.HasValue;
-    public DateTime? ExportedToSageAt { get; set; }
-    public string? SageBatchId { get; set; }
+    // Accounting & Payment Source
+    public string? PaymentSourceGlCode { get; set; }
+    public string? PaymentReference { get; set; }
 
     // Content
     public List<ExpenseItem> LineItems { get; set; } = [];
@@ -42,14 +43,6 @@ public class ExpenseReport : IDataEntity, IHasAssociatedFiles
     {
         get => null;
         set { if (value != null && LineItems.Count == 0) LineItems = value; }
-    }
-
-    [Obsolete("Prefer LineItems for consistency across accounting models.")]
-    [JsonIgnore]
-    public List<ExpenseItem> Items
-    {
-        get => LineItems;
-        set => LineItems = value;
     }
 
     // Financials
@@ -64,6 +57,8 @@ public class ExpenseReport : IDataEntity, IHasAssociatedFiles
         DatePaid.HasValue ? ExpenseReportStatus.Paid :
         DateSubmitted.HasValue ? ExpenseReportStatus.Submitted :
         ExpenseReportStatus.Draft;
+
+    public List<DocumentHistoryEntry> History { get; set; } = [];
 
     public IEnumerable<string> GetAssociatedFilePaths() =>
         LineItems?.Select(i => i.ReceiptPath).Where(p => !string.IsNullOrWhiteSpace(p)) ?? Enumerable.Empty<string>();
@@ -90,13 +85,13 @@ public class ExpenseItem : IHasAssociatedFiles
     // Amount (If Kilometrage, calc from Km * Rate. If regular, manual entry)
     public decimal Amount { get; set; } = 0;
 
-    // Tax & GL Breakdown for Sage 50 Export
+    // Tax & Chart of Accounts Breakdown
     public bool IsTaxExempt { get; set; }
     public decimal SubTotal { get; set; } = 0;
     public decimal TpsAmount { get; set; } = 0;
     public decimal TvqAmount { get; set; } = 0;
+    public List<DocumentTaxLine> TaxComponents { get; set; } = [];
     public string? GlAccountCode { get; set; }
-    public string? SageItemCode { get; set; }
 
     public decimal Total => IsKilometrage ? System.Math.Round(Kilometers * KilometrageRate, 2, System.MidpointRounding.AwayFromZero) : Amount;
 

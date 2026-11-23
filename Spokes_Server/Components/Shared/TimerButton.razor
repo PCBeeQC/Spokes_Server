@@ -1,3 +1,5 @@
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Projects
 @inject Database Db
 @inject TimesheetTimerService TimerService
 @inject UserService UserService
@@ -5,7 +7,7 @@
 @inject ILogger<TimerButton> Logger
 @implements IDisposable
 
-@if (_currentUser != null)
+@if (_canUseTimer)
 {
     @if (_state.IsRunning)
     {
@@ -88,6 +90,7 @@
 
 @code {
     private Employee? _currentUser;
+    private bool _canUseTimer => _currentUser is { IsActiveUnsuspended: true } && _currentUser.HasPermission(AppPermissions.Timesheets.AccessTimesheet);
     private TimerState _state = new();
     private TimeSpan _elapsed;
     private System.Timers.Timer? _uiTimer;
@@ -110,10 +113,10 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _currentUser = await UserService.GetEmployeeAsync();
-        if (_currentUser == null) return;
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        if (!_canUseTimer) return;
 
-        _state = TimerService.GetState(_currentUser.Id);
+        _state = TimerService.GetState(_currentUser!.Id);
 
         // Load DB data asynchronously so it doesn't block
         _ = LoadTimerDataAsync();
@@ -143,25 +146,19 @@
 
     private void LoadProjects()
     {
-        if (_currentUser == null) return;
-
-        if (_currentUser.IsAdmin)
+        if (!_canUseTimer)
         {
-            _projects = Db.Projects.GetAll()
-            .Where(p => p.IsActive || p.Status != ProjectStatus.Archived)
-            .OrderBy(p => p.DisplayName)
-            .ToList();
+            _projects = new();
             return;
         }
 
         _projects = Db.Projects.GetAll()
-        .Where(p => (p.IsActive || p.Status != ProjectStatus.Archived) &&
-        (p.AccessPolicy == ProjectAccessPolicy.Public ||
-        (p.AllowedUserIds != null && p.AllowedUserIds.Contains(_currentUser.Id)) ||
-        (!string.IsNullOrEmpty(_currentUser.TeamId) && p.AllowedTeamIds != null &&
-        p.AllowedTeamIds.Contains(_currentUser.TeamId))))
-        .OrderBy(p => p.DisplayName)
-        .ToList();
+            .Where(p => p.IsActive &&
+                        p.Status != ProjectStatus.Archived &&
+                        p.Status != ProjectStatus.Draft &&
+                        ProjectAccessHelper.CanLogTimeToProject(_currentUser, p, Db.Teams))
+            .OrderBy(p => p.DisplayName)
+            .ToList();
     }
 
     private Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
@@ -173,12 +170,34 @@
     private void TogglePopover() => _popoverOpen = !_popoverOpen;
     private void ClosePopover() => _popoverOpen = false;
 
-    private void StartTimer()
+    private async Task StartTimer()
     {
-        if (_currentUser == null || string.IsNullOrEmpty(_selectedProjectId) || string.IsNullOrEmpty(_selectedWorkTypeId))
+        if (string.IsNullOrEmpty(_selectedProjectId) || string.IsNullOrEmpty(_selectedWorkTypeId))
             return;
 
-        var result = TimerService.Start(_currentUser.Id, _selectedProjectId, _selectedWorkTypeId, _selectedSubTaskId, _note);
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        if (!_canUseTimer)
+        {
+            _popoverOpen = false;
+            StopUiTimer();
+            Snackbar.Add("You do not have permission to use the timesheet timer.", Severity.Error);
+            StateHasChanged();
+            return;
+        }
+
+        var targetProject = Db.Projects.GetById(_selectedProjectId);
+        if (targetProject is not { IsActive: true } ||
+            targetProject.Status == ProjectStatus.Archived ||
+            targetProject.Status == ProjectStatus.Draft ||
+            !ProjectAccessHelper.CanLogTimeToProject(_currentUser, targetProject, Db.Teams))
+        {
+            LoadProjects();
+            Snackbar.Add("You do not have permission to log time to this project.", Severity.Error);
+            StateHasChanged();
+            return;
+        }
+
+        var result = TimerService.Start(_currentUser!.Id, _selectedProjectId, _selectedWorkTypeId, _selectedSubTaskId, _note);
         if (!result.IsSuccess)
         {
             Snackbar.Add(result.ErrorMessage ?? "Cannot start timer.", Severity.Error);
@@ -191,11 +210,19 @@
         StartUiTimer();
     }
 
-    private void StopTimer()
+    private async Task StopTimer()
     {
-        if (_currentUser == null) return;
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        if (!_canUseTimer)
+        {
+            _popoverOpen = false;
+            StopUiTimer();
+            Snackbar.Add("You do not have permission to use the timesheet timer.", Severity.Error);
+            StateHasChanged();
+            return;
+        }
 
-        var result = TimerService.Stop(_currentUser.Id);
+        var result = TimerService.Stop(_currentUser!.Id);
         _state = TimerService.GetState(_currentUser.Id);
         if (_state.IsRunning)
         {
@@ -224,10 +251,19 @@
         }
     }
 
-    private void CancelTimer()
+    private async Task CancelTimer()
     {
-        if (_currentUser == null) return;
-        TimerService.Cancel(_currentUser.Id);
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        if (!_canUseTimer)
+        {
+            _popoverOpen = false;
+            StopUiTimer();
+            Snackbar.Add("You do not have permission to use the timesheet timer.", Severity.Error);
+            StateHasChanged();
+            return;
+        }
+
+        TimerService.Cancel(_currentUser!.Id);
         _state = TimerService.GetState(_currentUser.Id);
         StopUiTimer();
         Snackbar.Add("Timer cancelled", Severity.Info);

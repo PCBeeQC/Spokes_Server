@@ -7,51 +7,26 @@
 @using Spokes_Server.Core.Services.Communication.Email
 @inject UserService UserService
 @inject IDialogService _dialogService
-@inject IEmailFolderService FolderService
 @inject IEmailSyncService EmailSyncService
 @inject Database Db
-@inject ISnackbar Snackbar
 @inject IStringLocalizer<AppResources> Loc
-
-<style>
-    .folder-actions {
-        visibility: hidden;
-    }
-    .mud-treeview-item-content:hover .folder-actions,
-    .inbox-nav-item:hover .folder-actions {
-        visibility: visible;
-    }
-    .email-folder-selected > .mud-treeview-item-content,
-    .email-nav-selected {
-        background-color: var(--mud-palette-primary-hover) !important;
-        border-radius: 6px;
-    }
-    .inbox-nav-item {
-        border-radius: 6px;
-        height: 44px;
-        min-height: 44px;
-        max-height: 44px;
-        overflow: hidden;
-        transition: background-color 0.15s ease;
-    }
-    .inbox-nav-item:hover {
-        background-color: var(--mud-palette-action-default-hover);
-    }
-</style>
 
 <MudPaper Width="100%" Elevation="0" Class="d-flex flex-column border-r custom-scrollbar"
           Style="flex: none; height: 100%; overflow-y: auto; border-color: var(--mud-palette-divider);">
     <!-- Top Header & Compose Button -->
-    <div class="pa-3 d-flex flex-column gap-2" style="border-bottom: 1px solid var(--mud-palette-divider);">
-        <MudButton Variant="Variant.Filled"
-                   Color="Color.Primary"
-                   FullWidth="true"
-                   StartIcon="@Icons.Material.Filled.Edit"
-                   Class="rounded-lg py-2"
-                   OnClick="OnCompose">
-            @Loc["Compose"]
-        </MudButton>
-    </div>
+    @if (CanCompose)
+    {
+        <div class="pa-3 d-flex flex-column gap-2" style="border-bottom: 1px solid var(--mud-palette-divider);">
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       FullWidth="true"
+                       StartIcon="@Icons.Material.Filled.Edit"
+                       Class="rounded-lg py-2"
+                       OnClick="OnCompose">
+                @Loc["Compose"]
+            </MudButton>
+        </div>
+    }
 
     <div class="px-2 py-2 d-flex flex-column gap-1 flex-grow-1 overflow-y-auto">
         <!-- ==================== CATEGORY 1: INBOXES ==================== -->
@@ -133,6 +108,7 @@
                                      Folders="Folders"
                                      SelectedFolder="SelectedFolder"
                                      SelectedNodeKey="@SelectedNodeKey"
+                                     CanManageFolders="@IsEmployeeEligible"
                                      OnSelectFolder="HandleFolderSelected"
                                      OnFoldersChanged="OnFoldersChanged" />
                     @if (unread > 0)
@@ -208,7 +184,7 @@
     [Parameter] public EventCallback<EmailInbox> OnSelectInbox { get; set; }
     [Parameter] public EventCallback<EmailFolder> OnSelectFolder { get; set; }
     [Parameter] public EventCallback OnCompose { get; set; }
-    [Parameter] public EventCallback OnRepairAttachments { get; set; }
+    [Parameter] public EventCallback<string> OnRepairAttachments { get; set; }
     [Parameter] public EventCallback OnFoldersChanged { get; set; }
     [Parameter] public bool IsRepairing { get; set; }
 
@@ -218,12 +194,16 @@
 
     private bool _inboxesExpanded = true;
 
-    private bool IsEmployeeEligible => _currentEmployee is { IsActive: true, IsBanned: false, IsSuspended: false };
-    private bool IsAdminUser => _currentEmployee != null && (_currentEmployee.IsAdmin || _currentEmployee.HasPermission(AppPermissions.Admin.ManageSettings));
-    private bool CanConnectRealInboxes => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToConnectRealInboxes);
-    private bool CanCreateVirtualInboxes => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToCreateVirtualInboxes);
-    private bool CanShareEntities => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToShareEmailEntities);
-    private bool CanManageServers => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToManageServers);
+    private Employee? LiveEmployee => _currentEmployee != null ? (Db.Employees.GetById(_currentEmployee.Id) ?? _currentEmployee) : null;
+    private bool IsEmployeeEligible => LiveEmployee is { IsActive: true, IsBanned: false, IsSuspended: false };
+    private bool CanCompose => IsEmployeeEligible &&
+                               !string.Equals(Db.CompanyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase) &&
+                               (LiveEmployee?.HasPermission(AppPermissions.Email.Use) ?? false);
+    private bool IsAdminUser => LiveEmployee != null && (LiveEmployee.IsEffectiveAdmin || LiveEmployee.HasPermission(AppPermissions.Admin.ManageSettings));
+    private bool CanConnectRealInboxes => CanCompose && (IsAdminUser || _emailSettings.AllowUsersToConnectRealInboxes);
+    private bool CanCreateVirtualInboxes => CanCompose && (IsAdminUser || _emailSettings.AllowUsersToCreateVirtualInboxes);
+    private bool CanShareEntities => CanCompose && (IsAdminUser || _emailSettings.AllowUsersToShareEmailEntities);
+    private bool CanManageServers => CanCompose && (IsAdminUser || _emailSettings.AllowUsersToManageServers);
 
     protected override async Task OnInitializedAsync()
     {

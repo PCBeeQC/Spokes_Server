@@ -4,91 +4,56 @@
 <PageTitle>Accounting Dashboard</PageTitle>
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Common
+@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Components.Pages.Accounting.Expenses
 @using Spokes_Server.Components.Pages.Projects
 @using Spokes_Server.Components.Pages.Accounting.Tabs
 @using Spokes_Server.Components.Pages.Accounting.BusinessExpenses
+@using Spokes_Server.Components.Pages.HR
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Dialogs.HR
 @using Spokes_Server.Components.Shared
 @using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.HR
+@using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.Security
 @inject Database Db
 @inject IAccountingService AccountingService
+@inject IPayrollCalculationEngine PayrollEngine
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
-@inject AuthenticationStateProvider AuthStateProvider
 @inject UserService UserService
+@inject FileUrlSigner FileUrls
 
 <MudContainer MaxWidth="MaxWidth.False" Class="pa-4 px-md-6 h-100 d-flex flex-column" Style="min-height: 0;">
-    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mt-4 mb-3 flex-shrink-0">
+    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mt-2 mb-3 flex-shrink-0">
         <div>
-            <MudText Typo="Typo.h4">Accounting & Invoicing</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Secondary">Payables, receivables, cash flow, and bill processing.</MudText>
-        </div>
-        <div class="d-flex align-center gap-2">
-            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Dashboard"
-                       OnClick="@(() => Nav.NavigateTo("/business-dashboard"))">
-                Financial Dashboard
-            </MudButton>
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.MarkEmailUnread"
-                       OnClick="@(() => Nav.NavigateTo("/business/accounting/inbox"))">
-                Company Bill Inbox
-            </MudButton>
+            <MudText Typo="Typo.h4">@BizLoc["Accounting & Invoicing"]</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">@BizLoc["Receivables, payables, payroll, bank reconciliation, tax filings, and general ledger."]</MudText>
         </div>
     </div>
 
-<div class="d-flex flex-wrap gap-4 mb-6 flex-shrink-0">
-    <div style="flex: 1; min-width: 200px;">
-        <StatCard Title="Total Outstanding Payable" 
-                  Value="@TotalOutstandingPayable.ToString("C0")" 
-                  Icon="@Icons.Material.Filled.MoneyOff" 
-                  IconColor="Color.Error" 
-                  Subtitle="@(AwaitingApprovalBills.Count > 0 ? $"{AwaitingApprovalBills.Count} bill(s) ({TotalAwaitingApproval.ToString("C0")}) awaiting approval" : null)" />
-    </div>
-    <div style="flex: 1; min-width: 200px;">
-        <StatCard Title="Due or Past Due Payable" 
-                  Value="@DuePastDuePayable.ToString("C0")" 
-                  Icon="@Icons.Material.Filled.Warning" 
-                  IconColor="Color.Error" 
-                  Subtitle="@($"{DuePastDuePayableCount} item(s)")" />
-    </div>
-    <div style="flex: 1; min-width: 200px;">
-        <StatCard Title="Outstanding Receivable" 
-                  Value="@OutstandingReceivable.ToString("C0")" 
-                  Icon="@Icons.Material.Filled.AttachMoney" 
-                  IconColor="Color.Success" />
-    </div>
-    <div style="flex: 1; min-width: 200px;">
-        <StatCard Title="Overdue Receivable" 
-                  Value="@OverdueReceivable.ToString("C0")" 
-                  Icon="@Icons.Material.Filled.AssignmentLate" 
-                  IconColor="Color.Warning" 
-                  Subtitle="@($"{OverdueReceivableCount} invoice(s) past due")" />
-    </div>
-    <div style="flex: 1; min-width: 200px;">
-        <StatCard Title="Net Cash Flow (30 Days)" 
-                  Value="@NetCashFlow30Days.ToString("C0")" 
-                  Icon="@Icons.Material.Filled.Timeline" 
-                  IconColor="@(NetCashFlow30Days >= 0 ? Color.Success : Color.Error)" 
-                  Subtitle="Expected AR - AP" />
-    </div>
-</div>
-
-<MudToggleGroup T="string" Value="@currentTab" ValueChanged="UpdateActiveTab" Outlined="true" Delimiters="true" CheckMark="false" Class="mb-4 flex-wrap">
-    <MudToggleItem Value="@("receivables")" Text="Receivables" UnselectedIcon="@Icons.Material.Filled.AttachMoney" SelectedIcon="@Icons.Material.Filled.AttachMoney" />
-    <MudToggleItem Value="@("payables")" Text="Payables" UnselectedIcon="@Icons.Material.Filled.MoneyOff" SelectedIcon="@Icons.Material.Filled.MoneyOff" />
-    <MudToggleItem Value="@("history")" Text="History" UnselectedIcon="@Icons.Material.Filled.History" SelectedIcon="@Icons.Material.Filled.History" />
-    <MudToggleItem Value="@("manage")" Text="Manage Bills" UnselectedIcon="@Icons.Material.Filled.NoteAdd" SelectedIcon="@Icons.Material.Filled.NoteAdd" />
-    <MudToggleItem Value="@("export")" Text="Sage 50 Export" UnselectedIcon="@Icons.Material.Filled.AccountBalance" SelectedIcon="@Icons.Material.Filled.AccountBalance" />
-</MudToggleGroup>
-
-<div class="flex-grow-1 overflow-auto">
-    @if (currentTab == "receivables")
-    {
+    <SpokesTabs ActivePanelIndex="@ActiveTabIndex"
+                ActivePanelIndexChanged="OnTabIndexChanged"
+                Class="flex-grow-1"
+                Style="min-height: 0;"
+                TabPanelsClass="pa-4 flex-grow-1 overflow-auto">
+        <MudTabPanel Text="@BizLoc["Receivables"]" Icon="@Icons.Material.Filled.AttachMoney">
         <!-- RECEIVABLES (Money In - Invoices) -->
-        <MudTable Items="@ReceivableItems" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<AccountingItem, bool>(FilterFuncReceivables)">
+        <MudTable Items="@FilteredReceivableItems" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<AccountingItem, bool>(FilterFuncReceivables)">
             <ToolBarContent>
-                <MudText Typo="Typo.h6">Client Invoices</MudText>
+                <div class="d-flex align-center gap-2 flex-wrap">
+                    <MudText Typo="Typo.h6">@BizLoc["Client Invoices"]</MudText>
+                    <MudChipSet T="string" SelectedValue="@receivablesStatusFilter" SelectedValueChanged="OnReceivablesFilterChanged" Variant="Variant.Filled">
+                        <MudChip Value="@("open")" Color="Color.Primary" Size="Size.Small">@BizLoc["Open"] (@Receivables.Count(r => r.Balance > 0 && r.Status != InvoiceStatus.Draft))</MudChip>
+                        <MudChip Value="@("overdue")" Color="Color.Error" Size="Size.Small">@BizLoc["Overdue"] (@Receivables.Count(r => r.Balance > 0 && r.DueDate < DateTime.Today && r.Status != InvoiceStatus.Draft))</MudChip>
+                        <MudChip Value="@("paid")" Color="Color.Success" Size="Size.Small">@BizLoc["Paid / Closed"] (@Receivables.Count(r => InvoiceStatus.IsSettled(r.Status) || (r.Balance <= 0 && r.Status != InvoiceStatus.Draft)))</MudChip>
+                        <MudChip Value="@("draft")" Color="Color.Default" Size="Size.Small">@BizLoc["Draft"] (@Receivables.Count(r => r.Status == InvoiceStatus.Draft))</MudChip>
+                        <MudChip Value="@("all")" Color="Color.Info" Size="Size.Small">@BizLoc["All"] (@Receivables.Count)</MudChip>
+                    </MudChipSet>
+                </div>
                 <MudSpacer />
                 <MudTextField @bind-Value="searchReceivables" Placeholder="Search Number, Client, Project..."
                     Adornment="Adornment.Start" Margin="Margin.Dense" Variant="Variant.Outlined" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium"
@@ -124,9 +89,13 @@
                     {
                         <MudText Color="Color.Error"><b>@context.Balance.ToString("C")</b></MudText>
                     }
+                    else if (context.Status == InvoiceStatus.WrittenOff)
+                    {
+                        <MudText Color="Color.Secondary">@BizLoc["Written Off"]</MudText>
+                    }
                     else
                     {
-                        <MudText Color="Color.Success">Paid</MudText>
+                        <MudText Color="Color.Success">@BizLoc["Paid"]</MudText>
                     }
                 </MudTd>
                 <MudTd Style="white-space: nowrap;">
@@ -144,15 +113,26 @@
                     }
                 </MudTd>
                 <MudTd Style="white-space: nowrap;">
-                    <StatusChip Status="@context.Status" />
+                    <div class="d-flex align-center gap-1">
+                        <StatusChip Status="@context.Status" />
+                        @if (context.HasWriteOffs)
+                        {
+                            <MudTooltip Text="@context.WriteOffTooltip">
+                                <MudIcon Icon="@Icons.Material.Filled.Balance" Size="Size.Small" Color="Color.Warning" />
+                            </MudTooltip>
+                        }
+                    </div>
                 </MudTd>
                 <MudHidden Breakpoint="Breakpoint.SmAndDown"><MudTd Style="white-space: nowrap;">@(context.DatePaid.HasValue ? context.DatePaid.Value.ToShortDateString() : "-")</MudTd></MudHidden>
                 <MudTd Style="white-space: nowrap; text-align: right;">
                     <div class="d-flex align-center justify-end gap-2" style="white-space: nowrap;">
-                        <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View</MudButton>
-                        @if (context.Status != InvoiceStatus.Paid)
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">@Loc["View"]</MudButton>
+                        @if (_canWriteAccounting && !InvoiceStatus.IsSettled(context.Status) && context.Status != InvoiceStatus.Draft && context.Balance > 0)
                         {
-                            <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkPaid(context))">Mark Paid</MudButton>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkPaid(context))">@BizLoc["Mark Paid"]</MudButton>
+                            <MudTooltip Text="@BizLoc["Close / Write Off Balance"]">
+                                <MudIconButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small" Icon="@Icons.Material.Filled.Balance" OnClick="@(() => CloseBalance(context))" />
+                            </MudTooltip>
                         }
                     </div>
                 </MudTd>
@@ -161,9 +141,55 @@
                 <MudTablePager />
             </PagerContent>
         </MudTable>
-    }
-    else if (currentTab == "payables")
-    {
+        </MudTabPanel>
+
+        <MudTabPanel Text="@BizLoc["Payables"]" Icon="@Icons.Material.Filled.MoneyOff">
+        @if (GovernmentPayableItems.Count > 0)
+        {
+            <!-- GOVERNMENT & PAYROLL REMITTANCES DUE -->
+            <MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4" Style="border-left: 4px solid var(--mud-palette-warning);">
+                <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-2">
+                    <div class="d-flex align-center gap-2">
+                        <MudIcon Icon="@Icons.Material.Filled.AccountBalance" Color="Color.Warning" />
+                        <MudText Typo="Typo.h6">@BizLoc["Government & Payroll Obligations Due"]</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">
+                            @GovernmentPayableItems.Sum(g => g.Balance).ToString("C2")
+                        </MudChip>
+                    </div>
+                </div>
+                <MudTable Items="@GovernmentPayableItems" Dense="true" Hover="true" Elevation="0" Outlined="true">
+                    <HeaderContent>
+                        <MudTh Style="width: 140px;">@BizLoc["Type"]</MudTh>
+                        <MudTh Style="width: 150px;">@BizLoc["Reference"]</MudTh>
+                        <MudTh>@BizLoc["Authority / Payee"]</MudTh>
+                        <MudTh Style="width: 130px;">@BizLoc["Due Date"]</MudTh>
+                        <MudTh Style="width: 140px; text-align: right;">@BizLoc["Amount Due"]</MudTh>
+                        <MudTh Style="width: 240px; text-align: right;">@Loc["Actions"]</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="gov">
+                        <MudTd>
+                            <MudChip T="string" Size="Size.Small" Color="@GetTypeColor(gov.Type)">@gov.Type</MudChip>
+                        </MudTd>
+                        <MudTd><b>@gov.Number</b></MudTd>
+                        <MudTd>@gov.Entity</MudTd>
+                        <MudTd>@(gov.DueDate?.ToString("yyyy-MM-dd") ?? "-")</MudTd>
+                        <MudTd Style="text-align: right; font-weight: 700; color: var(--mud-palette-warning);">@gov.Balance.ToString("C2")</MudTd>
+                        <MudTd Style="text-align: right;">
+                            <div class="d-flex justify-end gap-2">
+                                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility"
+                                           OnClick="@(() => OpenItem(gov))">@Loc["View"]</MudButton>
+                                @if (CanMarkItemPaid(gov))
+                                {
+                                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck"
+                                               OnClick="@(() => MarkPaid(gov))">@BizLoc["Mark Paid / Remitted"]</MudButton>
+                                }
+                            </div>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudPaper>
+        }
+
         <!-- APPROVED OUTSTANDING PAYABLES (Money Out) -->
         <MudTable Items="@PayableItems" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<AccountingItem, bool>(FilterFuncPayables)" Class="mb-6">
             <ToolBarContent>
@@ -236,11 +262,11 @@
                             <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View</MudButton>
                             @if (context.RecurringRecord != null && !string.IsNullOrEmpty(context.RecurringRecord.AttachmentPath))
                             {
-                                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.AttachFile" Href="@context.RecurringRecord.AttachmentPath" Target="_blank">
+                                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.AttachFile" Href="@FileUrls.SignUrl(context.RecurringRecord.AttachmentPath)" Target="_blank">
                                     Attachment
                                 </MudButton>
                             }
-                            else
+                            else if (_canManageBills)
                             {
                                 <ApiFileUpload 
                                     Category="recurringcosts" 
@@ -253,9 +279,18 @@
                                     </CustomContent>
                                 </ApiFileUpload>
                             }
-                            <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkRecurringPaid(context))">
-                                Mark Paid
-                            </MudButton>
+                            @if (_canManageBills)
+                            {
+                                <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkRecurringPaid(context))">
+                                    @BizLoc["Mark Paid"]
+                                </MudButton>
+                                @if (context.Balance > 0)
+                                {
+                                    <MudTooltip Text="@BizLoc["Close / Write Off Balance"]">
+                                        <MudIconButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small" Icon="@Icons.Material.Filled.Balance" OnClick="@(() => CloseBalance(context))" />
+                                    </MudTooltip>
+                                }
+                            }
                         }
                         else
                         {
@@ -263,11 +298,20 @@
                             {
                                 <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Assignment" OnClick="@(() => ViewPo(bill.PurchaseOrderId))">View PO</MudButton>
                             }
-                            <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">View</MudButton>
-                            <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkPaid(context))">
-                                Mark Paid
-                            </MudButton>
-                            @if (context.Type == "Bill" && context.OriginalItem is Bill unvoidedBill && unvoidedBill.Status != BillStatus.Void && unvoidedBill.AmountPaid == 0)
+                            <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">@Loc["View"]</MudButton>
+                            @if (CanMarkItemPaid(context))
+                            {
+                                <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkPaid(context))">
+                                    @BizLoc["Mark Paid"]
+                                </MudButton>
+                                @if (context.Type == "Bill" && context.Balance > 0)
+                                {
+                                    <MudTooltip Text="@BizLoc["Close / Write Off Balance"]">
+                                        <MudIconButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small" Icon="@Icons.Material.Filled.Balance" OnClick="@(() => CloseBalance(context))" />
+                                    </MudTooltip>
+                                }
+                            }
+                            @if (_canManageBills && context.Type == "Bill" && context.OriginalItem is Bill unvoidedBill && unvoidedBill.Status != BillStatus.Void && unvoidedBill.AmountPaid == 0 && !unvoidedBill.HasWriteOffs)
                             {
                                 <MudTooltip Text="Void Bill">
                                     <MudIconButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" Icon="@Icons.Material.Filled.Block" OnClick="@(() => VoidBill(context))" />
@@ -373,7 +417,7 @@
                                 </MudButton>
                             </MudTooltip>
                         }
-                        @if (context.OriginalItem is Bill unvoidedBill && unvoidedBill.AmountPaid == 0)
+                        @if (_canManageBills && context.OriginalItem is Bill unvoidedBill && unvoidedBill.AmountPaid == 0)
                         {
                             <MudTooltip Text="Void Bill">
                                 <MudIconButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" Icon="@Icons.Material.Filled.Block" OnClick="@(() => VoidBill(context))" />
@@ -389,18 +433,46 @@
                 <MudTablePager />
             </PagerContent>
         </MudTable>
-    }
-    else if (currentTab == "history")
-    {
+        </MudTabPanel>
+
+        <MudTabPanel Text="@BizLoc["Other Transactions"]" Icon="@Icons.Material.Filled.SwapHoriz">
+            <DirectTransactionsTab OnTransactionChanged="Refresh" />
+        </MudTabPanel>
+
+        @if (_canReadPayroll)
+        {
+            <MudTabPanel Text="@BizLoc["Payroll & Pay Runs"]" Icon="@Icons.Material.Filled.Payments">
+                <PayrollTab />
+            </MudTabPanel>
+        }
+
+        <MudTabPanel Text="@BizLoc["Bank Reconciliation"]" Icon="@Icons.Material.Filled.FactCheck">
+            <BankReconciliationTab />
+        </MudTabPanel>
+
+        <MudTabPanel Text="@BizLoc["Sales Tax Filing"]" Icon="@Icons.Material.Filled.RequestQuote">
+            <TaxRemittanceTab />
+        </MudTabPanel>
+
+        <MudTabPanel Text="@BizLoc["General Ledger"]" Icon="@Icons.Material.Filled.AccountBalance">
+            <GeneralLedgerAndExportTab InitialSubTab="@(_effectiveSubTab)" />
+        </MudTabPanel>
+
+        <MudTabPanel Text="@BizLoc["CPA & Accountant"]" Icon="@Icons.Material.Filled.WorkHistory">
+            <AccountantCpaTab />
+        </MudTabPanel>
+
+        <MudTabPanel Text="@BizLoc["History"]" Icon="@Icons.Material.Filled.History">
         <!-- PAYABLES & VOID HISTORY -->
         <MudTable Items="@HistoryDisplayItems" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<AccountingItem, bool>(FilterFuncHistory)">
             <ToolBarContent>
                 <div class="d-flex align-center gap-2 flex-wrap">
                     <MudText Typo="Typo.h6">History</MudText>
                     <MudChipSet T="string" SelectedValue="@historyFilter" SelectedValueChanged="OnHistoryFilterChanged" Variant="Variant.Filled">
-                        <MudChip Value="@("all")" Color="Color.Default" Size="Size.Small">All (@(PaidPayables.Count + VoidedPayables.Count))</MudChip>
-                        <MudChip Value="@("paid")" Color="Color.Success" Size="Size.Small">Paid (@PaidPayables.Count)</MudChip>
-                        <MudChip Value="@("voided")" Color="Color.Error" Size="Size.Small">Voided (@VoidedPayables.Count)</MudChip>
+                        <MudChip Value="@("all")" Color="Color.Default" Size="Size.Small">@BizLoc["All"] (@(PaidPayables.Count + WrittenOffPayables.Count + VoidedPayables.Count))</MudChip>
+                        <MudChip Value="@("paid")" Color="Color.Success" Size="Size.Small">@BizLoc["Paid"] (@PaidPayables.Count)</MudChip>
+                        <MudChip Value="@("writtenoff")" Color="Color.Secondary" Size="Size.Small">@BizLoc["Written Off"] (@WrittenOffPayables.Count)</MudChip>
+                        <MudChip Value="@("voided")" Color="Color.Error" Size="Size.Small">@BizLoc["Voided"] (@VoidedPayables.Count)</MudChip>
                     </MudChipSet>
                 </div>
                 <MudSpacer />
@@ -441,12 +513,26 @@
                             ? $"Voided by {b.VoidedBy ?? "User"} on {b.VoidedAt?.ToLocalTime().ToString("d") ?? ""}: {b.VoidReason}" 
                             : "Voided";
                         <MudTooltip Text="@voidTooltip">
-                            <MudChip T="string" Size="Size.Small" Color="Color.Error">Void</MudChip>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error">@BizLoc["Void"]</MudChip>
+                        </MudTooltip>
+                    }
+                    else if (context.Status == BillStatus.WrittenOff)
+                    {
+                        <MudTooltip Text="@context.WriteOffTooltip">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Secondary">@BizLoc["Written Off"]</MudChip>
                         </MudTooltip>
                     }
                     else
                     {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success">Paid</MudChip>
+                        <div class="d-flex align-center gap-1">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success">@BizLoc["Paid"]</MudChip>
+                            @if (context.HasWriteOffs)
+                            {
+                                <MudTooltip Text="@context.WriteOffTooltip">
+                                    <MudIcon Icon="@Icons.Material.Filled.Balance" Size="Size.Small" Color="Color.Warning" />
+                                </MudTooltip>
+                            }
+                        </div>
                     }
                 </MudTd>
                 <MudTd Style="white-space: nowrap; text-align: right;">
@@ -459,18 +545,8 @@
                 <MudTablePager />
             </PagerContent>
         </MudTable>
-    }
-    else if (currentTab == "manage")
-    {
-        <!-- ADD BILLS (Manage Actual Profiles) -->
-        <AddBillsTab OnChanged="Refresh" />
-    }
-    else if (currentTab == "export")
-    {
-        <!-- SAGE 50 EXPORT -->
-        <SageExportTab />
-    }
-</div>
+        </MudTabPanel>
+    </SpokesTabs>
 </MudContainer>
 
 @code {
@@ -488,23 +564,43 @@
         public decimal Balance { get; set; }
         public string Status { get; set; } = string.Empty;
         public DateTime? DatePaid { get; set; }
+        public bool HasWriteOffs { get; set; }
+        public string WriteOffTooltip { get; set; } = string.Empty;
         public object OriginalItem { get; set; } = default!;
         public RecurringBillRecord? RecurringRecord { get; set; }
     }
 
     private List<AccountingItem> Payables = []; // Outstanding Bills/Expenses
+    private List<AccountingItem> GovernmentPayableItems = []; // Payroll Net Pay, Payroll DAS, Sales Tax Remittances
     private List<AccountingItem> AwaitingApprovalBills = []; // Bills awaiting approval
     private List<AccountingItem> PaidPayables = []; // History
+    private List<AccountingItem> WrittenOffPayables = []; // Written Off History
     private List<AccountingItem> VoidedPayables = []; // Voided History
-    private List<AccountingItem> Receivables = []; // Invoices (Sent/Paid/Partial)
+    private List<AccountingItem> Receivables = []; // Invoices (Draft/Sent/Paid/WrittenOff/Partial)
 
     private string historyFilter = "all";
+    private string receivablesStatusFilter = "open";
 
     private void OnHistoryFilterChanged(string val)
     {
         historyFilter = val ?? "all";
         StateHasChanged();
     }
+
+    private void OnReceivablesFilterChanged(string val)
+    {
+        receivablesStatusFilter = val ?? "open";
+        StateHasChanged();
+    }
+
+    private IEnumerable<AccountingItem> FilteredReceivableItems => receivablesStatusFilter switch
+    {
+        "open" => Receivables.Where(r => r.Balance > 0 && r.Status != InvoiceStatus.Draft).OrderByDescending(r => r.Date),
+        "overdue" => Receivables.Where(r => r.Balance > 0 && r.DueDate < DateTime.Today && r.Status != InvoiceStatus.Draft).OrderBy(r => r.DueDate),
+        "paid" => Receivables.Where(r => InvoiceStatus.IsSettled(r.Status) || (r.Balance <= 0 && r.Status != InvoiceStatus.Draft)).OrderByDescending(r => r.DatePaid ?? r.Date),
+        "draft" => Receivables.Where(r => r.Status == InvoiceStatus.Draft).OrderByDescending(r => r.Date),
+        _ => Receivables.OrderByDescending(r => r.Date)
+    };
 
     private IEnumerable<AccountingItem> HistoryDisplayItems
     {
@@ -513,8 +609,9 @@
             var items = historyFilter switch
             {
                 "paid" => PaidPayables,
+                "writtenoff" => WrittenOffPayables,
                 "voided" => VoidedPayables,
-                _ => PaidPayables.Concat(VoidedPayables)
+                _ => PaidPayables.Concat(WrittenOffPayables).Concat(VoidedPayables)
             };
             return items.OrderByDescending(i => i.DatePaid ?? i.Date);
         }
@@ -522,38 +619,53 @@
 
     private IEnumerable<AccountingItem> PayableItems => Payables.OrderBy(i => i.DueDate);
     private IEnumerable<AccountingItem> AwaitingApprovalBillItems => AwaitingApprovalBills.OrderBy(i => i.DueDate ?? i.Date);
-    private IEnumerable<AccountingItem> ReceivableItems => Receivables.OrderByDescending(i => i.Date);
-    private IEnumerable<AccountingItem> PaidPayableItems => PaidPayables.OrderByDescending(i => i.DatePaid ?? i.Date);
 
     private string searchPayables = "";
     private string searchAwaitingApproval = "";
     private string searchReceivables = "";
     private string searchHistory = "";
 
-    // --- Dashboard Metrics ---
-    private decimal TotalOutstandingPayable;
     private decimal TotalAwaitingApproval;
-    private decimal DuePastDuePayable;
-    private int DuePastDuePayableCount;
-    private decimal OutstandingReceivable;
-    
-    private decimal OverdueReceivable;
-    private int OverdueReceivableCount;
-    
-    private decimal NetCashFlow30Days;
-    private bool CanApproveBills = false;
+    private Employee? _currentUser;
+    private bool _isInitialized = false;
+    private bool _canWriteAccounting = false;
+    private bool _canApproveBills = false;
+    private bool _canManageBills = false;
+    private bool _canReadPayroll = false;
+    private bool _canEditPayroll = false;
+    private bool CanApproveBills => _canApproveBills;
 
-    private List<ChartSeries<double>> CashFlowSeries = [];
-    private string[] CashFlowLabels = [];
-    private ChartOptions CashFlowChartOptions = new()
+    private IReadOnlyList<string> AvailableTabs => _canReadPayroll
+        ? ["receivables", "payables", "transactions", "payroll", "reconciliation", "taxes", "ledger", "cpa", "history"]
+        : ["receivables", "payables", "transactions", "reconciliation", "taxes", "ledger", "cpa", "history"];
+
+    private bool CanMarkItemPaid(AccountingItem item) => item.Type switch
     {
-        ChartPalette = [Colors.Green.Default, Colors.Red.Default]
+        "Payroll Net" or "Payroll DAS" => _canEditPayroll,
+        "Bill" or "PO" or "Recurring" or "One-Time" => _canManageBills,
+        "Expense" or "Commission" or "Clawback" or "Invoice" or "Sales Tax" => _canWriteAccounting,
+        _ => false
     };
 
     protected override async Task OnInitializedAsync()
     {
-        CanApproveBills = await UserService.IsAdminAsync() || await UserService.HasPermissionAsync(AppPermissions.Purchases.ApproveBills);
+        await RefreshCurrentUserAsync();
+        if (currentTab == "payroll" && !_canReadPayroll)
+        {
+            currentTab = "receivables";
+        }
+        _isInitialized = true;
         Refresh();
+    }
+
+    private async Task RefreshCurrentUserAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        _canWriteAccounting = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false);
+        _canApproveBills = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Purchases.ApproveBills, allowSuspended: false);
+        _canManageBills = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false);
+        _canReadPayroll = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: true);
+        _canEditPayroll = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false);
     }
 
     private void ViewPo(string id)
@@ -564,8 +676,10 @@
     private void Refresh()
     {
         Payables.Clear();
+        GovernmentPayableItems.Clear();
         AwaitingApprovalBills.Clear();
         PaidPayables.Clear();
+        WrittenOffPayables.Clear();
         VoidedPayables.Clear();
         Receivables.Clear();
 
@@ -617,7 +731,10 @@
                 continue;
             }
 
-            var isPaid = b.BalanceDue <= 0 || b.Status == BillStatus.Paid;
+            var isSettled = b.BalanceDue <= 0 || BillStatus.IsSettled(b.Status);
+            var resolvedBillStatus = isSettled
+                ? (b.AmountPaid <= 0 && b.HasWriteOffs ? BillStatus.WrittenOff : BillStatus.Paid)
+                : (b.AmountPaid > 0 ? "Partially Paid" : b.Status);
 
             var item = new AccountingItem
                 {
@@ -629,14 +746,19 @@
                     DueDate = b.DueDate,
                     Total = b.Amount,
                     Balance = b.BalanceDue,
-                    Status = isPaid ? BillStatus.Paid : (b.AmountPaid > 0 ? "Partially Paid" : b.Status),
-                    DatePaid = b.DatePaid ?? b.Date,
+                    Status = resolvedBillStatus,
+                    DatePaid = b.DatePaid ?? (b.HasWriteOffs ? b.WriteOffs.MaxBy(w => w.Date)?.Date : null) ?? b.Date,
+                    HasWriteOffs = b.HasWriteOffs,
+                    WriteOffTooltip = FormatWriteOffTooltip(b.WriteOffs),
                     OriginalItem = b
                 };
 
-            if (isPaid) 
+            if (isSettled)
             {
-                PaidPayables.Add(item);
+                if (resolvedBillStatus == BillStatus.WrittenOff)
+                    WrittenOffPayables.Add(item);
+                else
+                    PaidPayables.Add(item);
             }
             else if (b.Status == BillStatus.AwaitingApproval)
             {
@@ -649,7 +771,7 @@
         }
 
         // 3. Recurring Expenses (All Unpaid Actual Bills for Payables List)
-        var allRecurring = Db.RecurringExpenses.GetAll().Where(e => !e.IsEstimate).ToList();
+        var allRecurring = Db.RecurringExpenses.GetAll().ToList();
 
         foreach (var re in allRecurring)
         {
@@ -670,18 +792,21 @@
                     Total = record.Amount,
                     Balance = record.BalanceDue,
                     Status = record.AmountPaid > 0 ? "Partially Paid" : BillStatus.Unpaid,
+                    HasWriteOffs = record.HasWriteOffs,
+                    WriteOffTooltip = FormatWriteOffTooltip(record.WriteOffs),
                     OriginalItem = re,
                     RecurringRecord = record
                 });
             }
         }
 
-        // 5. PAID HISTORY from Recurring & One-Time Expenses
+        // 5. PAID & WRITTEN OFF HISTORY from Recurring & One-Time Expenses
         foreach (var re in allRecurring)
         {
             foreach (var historyItem in re.History.Where(h => h.BalanceDue <= 0))
             {
-                PaidPayables.Add(new AccountingItem
+                var isRecWrittenOff = historyItem.AmountPaid <= 0 && historyItem.HasWriteOffs;
+                var recItem = new AccountingItem
                     {
                         Id = historyItem.Id,
                         Type = re.Frequency == RecurringExpenseFrequency.OneTime ? "One-Time" : "Recurring",
@@ -692,11 +817,18 @@
                         DueDate = historyItem.Date,
                         Total = historyItem.Amount,
                         Balance = 0,
-                        Status = BillStatus.Paid,
-                        DatePaid = historyItem.DatePaid ?? historyItem.Date,
+                        Status = isRecWrittenOff ? BillStatus.WrittenOff : BillStatus.Paid,
+                        DatePaid = historyItem.DatePaid ?? (historyItem.HasWriteOffs ? historyItem.WriteOffs.MaxBy(w => w.Date)?.Date : null) ?? historyItem.Date,
+                        HasWriteOffs = historyItem.HasWriteOffs,
+                        WriteOffTooltip = FormatWriteOffTooltip(historyItem.WriteOffs),
                         OriginalItem = re, // Identify as the parent expense
                         RecurringRecord = historyItem
-                    });
+                    };
+
+                if (isRecWrittenOff)
+                    WrittenOffPayables.Add(recItem);
+                else
+                    PaidPayables.Add(recItem);
             }
         }
 
@@ -704,26 +836,44 @@
         var invoices = Db.Invoices.GetAll();
         foreach (var inv in invoices)
         {
-            if (inv.Status == InvoiceStatus.Draft || inv.Status == InvoiceStatus.Void) continue;
+            if (inv.Status == InvoiceStatus.Void) continue;
 
             var proj = Db.Projects.GetById(inv.ProjectId);
+            var resolvedInvStatus = inv.Status == InvoiceStatus.Draft
+                ? InvoiceStatus.Draft
+                : (inv.BalanceDue <= 0
+                    ? (inv.AmountPaid <= 0 && inv.HasWriteOffs ? InvoiceStatus.WrittenOff : InvoiceStatus.Paid)
+                    : ((inv.AmountPaid > 0 || inv.HasWriteOffs) ? InvoiceStatus.Partial : inv.Status));
 
-            Receivables.Add(new AccountingItem
-                {
-                    Id = inv.Id,
-                    Type = "Invoice",
-                    Number = inv.InvoiceNumber,
-                    Entity = proj?.Client?.BusinessName ?? "Unknown", // Fallback for Search
-                    ClientName = proj?.Client?.BusinessName ?? "-",
-                    ProjectName = proj?.DisplayName ?? "-",
-                    Date = inv.Date,
-                    DueDate = inv.DueDate,
-                    Total = inv.GrandTotal,
-                    Balance = inv.BalanceDue,
-                    Status = inv.BalanceDue <= 0 ? InvoiceStatus.Paid : (inv.AmountPaid > 0 ? InvoiceStatus.Partial : inv.Status),
-                    DatePaid = inv.DatePaid ?? (inv.BalanceDue <= 0 ? inv.Date : null),
-                    OriginalItem = inv
-                });
+            var invItem = new AccountingItem
+            {
+                Id = inv.Id,
+                Type = "Invoice",
+                Number = inv.InvoiceNumber,
+                Entity = proj?.Client?.BusinessName ?? "Unknown",
+                ClientName = proj?.Client?.BusinessName ?? "-",
+                ProjectName = proj?.DisplayName ?? "-",
+                Date = inv.Date,
+                DueDate = inv.DueDate,
+                Total = inv.GrandTotal,
+                Balance = inv.Status == InvoiceStatus.Draft ? inv.GrandTotal : inv.BalanceDue,
+                Status = resolvedInvStatus,
+                DatePaid = inv.DatePaid ?? (inv.BalanceDue <= 0 && inv.Status != InvoiceStatus.Draft
+                    ? (inv.HasWriteOffs ? inv.WriteOffs.MaxBy(w => w.Date)?.Date : inv.Date)
+                    : null),
+                HasWriteOffs = inv.HasWriteOffs,
+                WriteOffTooltip = FormatWriteOffTooltip(inv.WriteOffs),
+                OriginalItem = inv
+            };
+            Receivables.Add(invItem);
+
+            if (inv.Status != InvoiceStatus.Draft && inv.BalanceDue <= 0)
+            {
+                if (resolvedInvStatus == InvoiceStatus.WrittenOff)
+                    WrittenOffPayables.Add(invItem);
+                else
+                    PaidPayables.Add(invItem);
+            }
         }
 
         // 7. Commissions from Ledger
@@ -753,60 +903,120 @@
             if (isPaid) PaidPayables.Add(item); else Payables.Add(item);
         }
 
-        ComputeDashboardMetrics();
-    }
-
-    private void ComputeDashboardMetrics()
-    {
-        TotalOutstandingPayable = Payables.Sum(x => x.Balance);
-        TotalAwaitingApproval = AwaitingApprovalBills.Sum(x => x.Balance);
-        
-        var duePayables = Payables.Where(x => x.DueDate.HasValue && x.DueDate.Value.Date <= DateTime.Today.Date).ToList();
-        DuePastDuePayable = duePayables.Sum(x => x.Balance);
-        DuePastDuePayableCount = duePayables.Count;
-
-        OutstandingReceivable = Receivables.Where(x => x.Balance > 0).Sum(x => x.Balance);
-
-        var overdueReceivables = Receivables.Where(x => x.Balance > 0 && x.DueDate.HasValue && x.DueDate.Value.Date < DateTime.Today.Date).ToList();
-        OverdueReceivable = overdueReceivables.Sum(x => x.Balance);
-        OverdueReceivableCount = overdueReceivables.Count;
-
-        var thirtyDaysFromNow = DateTime.Today.AddDays(30);
-        var comingAR30Days = Receivables.Where(x => x.Balance > 0 && (!x.DueDate.HasValue || x.DueDate.Value.Date <= thirtyDaysFromNow)).Sum(x => x.Balance);
-        var comingAP30Days = Payables.Where(x => x.Balance > 0 && (!x.DueDate.HasValue || x.DueDate.Value.Date <= thirtyDaysFromNow)).Sum(x => x.Balance);
-        NetCashFlow30Days = comingAR30Days - comingAP30Days;
-
-        // Compute Weekly Chart (Next 4 Weeks)
-        var today = DateTime.Today;
-        CashFlowLabels = new string[4];
-        var arData = new double[4];
-        var apData = new double[4];
-
-        for (int i = 0; i < 4; i++)
+        // 8. Payroll Obligations (Net Pay & DAS Remittances)
+        if (_canReadPayroll)
         {
-            var weekStart = today.AddDays(i * 7);
-            var weekEnd = weekStart.AddDays(7).AddSeconds(-1);
-            
-            if (i == 0) CashFlowLabels[i] = "This Week";
-            else if (i == 1) CashFlowLabels[i] = "Next Week";
-            else CashFlowLabels[i] = $"In {i} Weeks";
+            var allPayRuns = Db.PayRuns?.GetAll() ?? [];
+            foreach (var run in allPayRuns)
+            {
+                if (run.Status == PayRunStatus.Void)
+                {
+                    VoidedPayables.Add(new AccountingItem
+                    {
+                        Id = run.Id,
+                        Type = "Payroll",
+                        Number = run.RunNumber,
+                        Entity = $"Pay Period {run.PeriodStart:yyyy-MM-dd} → {run.PeriodEnd:yyyy-MM-dd}",
+                        Date = run.PayDate,
+                        DueDate = run.PayDate,
+                        Total = run.TotalNetPay,
+                        Balance = 0,
+                        Status = BillStatus.Void,
+                        DatePaid = run.PayDate,
+                        OriginalItem = run
+                    });
+                    continue;
+                }
 
-            // If it's the first week, we also include everything past due
-            var arSum = Receivables.Where(x => x.Balance > 0 && x.DueDate.HasValue && 
-                (i == 0 ? x.DueDate.Value <= weekEnd : (x.DueDate.Value > weekStart && x.DueDate.Value <= weekEnd))).Sum(x => x.Balance);
-                
-            var apSum = Payables.Where(x => x.Balance > 0 && x.DueDate.HasValue && 
-                (i == 0 ? x.DueDate.Value <= weekEnd : (x.DueDate.Value > weekStart && x.DueDate.Value <= weekEnd))).Sum(x => x.Balance);
+                if (run.Status == PayRunStatus.Finalized && !run.DatePaid.HasValue && run.TotalNetPay > 0)
+                {
+                    GovernmentPayableItems.Add(new AccountingItem
+                    {
+                        Id = run.Id,
+                        Type = "Payroll Net",
+                        Number = run.RunNumber,
+                        Entity = $"Employee Net Payroll ({run.Stubs.Count} employees)",
+                        Date = run.PayDate,
+                        DueDate = run.PayDate,
+                        Total = run.TotalNetPay,
+                        Balance = run.TotalNetPay,
+                        Status = BillStatus.Unpaid,
+                        OriginalItem = run
+                    });
+                }
+                else if (run.Status == PayRunStatus.Paid || run.DatePaid.HasValue)
+                {
+                    PaidPayables.Add(new AccountingItem
+                    {
+                        Id = run.Id,
+                        Type = "Payroll Net",
+                        Number = run.RunNumber,
+                        Entity = $"Employee Net Payroll ({run.Stubs.Count} employees)",
+                        Date = run.PayDate,
+                        DueDate = run.PayDate,
+                        Total = run.TotalNetPay,
+                        Balance = 0,
+                        Status = BillStatus.Paid,
+                        DatePaid = run.DatePaid ?? run.PayDate,
+                        OriginalItem = run
+                    });
+                }
 
-            arData[i] = (double)arSum;
-            apData[i] = (double)apSum;
+                var totalDas = Math.Round(run.TotalEmployeeDeductions + run.TotalEmployerContributions, 2);
+                if ((run.Status == PayRunStatus.Finalized || run.Status == PayRunStatus.Paid) && totalDas > 0)
+                {
+                    var nextMonth15 = new DateTime(run.PayDate.Year, run.PayDate.Month, 1).AddMonths(1).AddDays(14);
+                    var dasItem = new AccountingItem
+                    {
+                        Id = $"{run.Id}:DAS",
+                        Type = "Payroll DAS",
+                        Number = $"{run.RunNumber} DAS",
+                        Entity = $"Government Source Deductions (DAS — {run.JurisdictionId})",
+                        Date = run.PayDate,
+                        DueDate = nextMonth15,
+                        Total = totalDas,
+                        Balance = run.IsDasRemitted ? 0 : totalDas,
+                        Status = run.IsDasRemitted ? BillStatus.Paid : BillStatus.Unpaid,
+                        DatePaid = run.DasRemittedAt ?? run.PayDate,
+                        OriginalItem = run
+                    };
+
+                    if (run.IsDasRemitted)
+                        PaidPayables.Add(dasItem);
+                    else
+                        GovernmentPayableItems.Add(dasItem);
+                }
+            }
         }
 
-        CashFlowSeries =
-        [
-            new ChartSeries<double> { Name = "Receivables (AR)", Data = arData },
-            new ChartSeries<double> { Name = "Payables (AP)", Data = apData }
-        ];
+        // 9. Sales Tax Filing Periods
+        var taxPeriods = Db.TaxFilingPeriods?.GetAll() ?? [];
+        foreach (var tp in taxPeriods)
+        {
+            if (tp.NetTaxRemittanceDue == 0) continue;
+            var isRemitted = tp.Status == TaxFilingStatus.Paid || tp.PaidAt.HasValue;
+            var tpItem = new AccountingItem
+            {
+                Id = tp.Id,
+                Type = "Sales Tax",
+                Number = !string.IsNullOrWhiteSpace(tp.PeriodLabel) ? tp.PeriodLabel : $"{tp.StartDate:yyyy-MM}..{tp.EndDate:yyyy-MM}",
+                Entity = $"Sales Tax Remittance ({tp.Frequency})",
+                Date = tp.EndDate,
+                DueDate = tp.EndDate.AddMonths(1),
+                Total = tp.NetTaxRemittanceDue,
+                Balance = isRemitted ? 0 : tp.NetTaxRemittanceDue,
+                Status = isRemitted ? BillStatus.Paid : BillStatus.Unpaid,
+                DatePaid = tp.PaidAt?.ToLocalTime().Date ?? tp.EndDate,
+                OriginalItem = tp
+            };
+
+            if (isRemitted)
+                PaidPayables.Add(tpItem);
+            else if (tp.Status == TaxFilingStatus.Filed && tp.NetTaxRemittanceDue > 0)
+                GovernmentPayableItems.Add(tpItem);
+        }
+
+        TotalAwaitingApproval = AwaitingApprovalBills.Sum(x => x.Balance);
     }
 
     private Color GetTypeColor(string type) => type switch
@@ -818,6 +1028,8 @@
         "Commission" => Color.Secondary,
         "Recurring" => Color.Tertiary,
         "One-Time" => Color.Dark,
+        "Payroll Net" or "Payroll" => Color.Success,
+        "Payroll DAS" or "Sales Tax" => Color.Warning,
         _ => Color.Default
     };
 
@@ -836,7 +1048,7 @@
         }
         else if (item.Type == "Bill")
         {
-            var b = (Bill)item.OriginalItem;
+            var b = ((Bill)item.OriginalItem).DeepClone();
             var parameters = new DialogParameters { ["Bill"] = b };
             var dialog = await DialogService.ShowAsync<BillEditorDialog>("Bill Details", parameters, new DialogOptions
                 {
@@ -847,18 +1059,46 @@
             var result = await dialog.Result;
             if (result != null && !result.Canceled && result.Data is Bill bResult) 
             { 
-                var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-                var userName = auth.User.Identity?.Name ?? "User";
+                var actor = await UserService.GetEmployeeAsync();
+                var userName = actor?.FullName ?? actor?.Email ?? "User";
                 if (item.Status == BillStatus.AwaitingApproval && bResult.Status != BillStatus.AwaitingApproval && bResult.Status != BillStatus.Void)
                 {
-                    AccountingService.ApproveBill(bResult, userName);
+                    if (actor == null || !actor.HasEffectivePermission(AppPermissions.Purchases.ApproveBills, allowSuspended: false))
+                    {
+                        Snackbar.Add("Missing Purchases.ApproveBills permission to approve bills.", Severity.Error);
+                        return;
+                    }
+                    AccountingService.ApproveBill(bResult, userName, actor);
                 }
                 else
                 {
-                    Db.Bills.Save(bResult);
+                    if (actor == null || !actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false))
+                    {
+                        Snackbar.Add("Missing Purchases.ManageBills permission to save bills.", Severity.Error);
+                        return;
+                    }
+                    AccountingService.SaveBill(bResult, userName, actor);
                 }
             }
             Refresh();
+        }
+        else if (item.Type is "Payroll Net" or "Payroll DAS" or "Payroll" && item.OriginalItem is PayRun payRun)
+        {
+            var actor = await UserService.GetEmployeeAsync();
+            if (actor == null || !actor.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: true))
+            {
+                Snackbar.Add("Missing Hr.ManageSalaries permission to view payroll.", Severity.Error);
+                return;
+            }
+            var clonedPayRun = payRun.DeepClone() ?? payRun;
+            var parameters = new DialogParameters<PayRunDialog> { { x => x.PayRun, clonedPayRun } };
+            var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true };
+            await DialogService.ShowAsync<PayRunDialog>($"Pay Run {payRun.RunNumber}", parameters, options);
+            Refresh();
+        }
+        else if (item.Type == "Sales Tax")
+        {
+            UpdateActiveTab("taxes");
         }
         else if (item.Type == "PO")
         {
@@ -874,22 +1114,32 @@
         else if (item.Type == "Commission" || item.Type == "Clawback")
         {
             var record = (CommissionLedgerRecord)item.OriginalItem;
-            Nav.NavigateTo($"/projects/{record.ProjectId}");
+            if (_currentUser != null && ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, _currentUser, record.ProjectId, allowAccountingFinancialRead: false))
+            {
+                Nav.NavigateTo($"/projects/{record.ProjectId}");
+            }
+            else
+            {
+                Snackbar.Add("You do not have permission to open this restricted project workspace.", Severity.Warning);
+            }
         }
         else if (item.Type == "Recurring" || item.Type == "One-Time")
         {
             if (item.OriginalItem is RecurringExpense expense)
             {
-                var record = item.RecurringRecord ?? expense.History.FirstOrDefault(h => h.Id == item.Id);
+                var clonedExpense = expense.DeepClone() ?? expense;
+                var record = item.RecurringRecord != null
+                    ? clonedExpense.History.FirstOrDefault(h => h.Id == item.RecurringRecord.Id) ?? item.RecurringRecord.DeepClone()
+                    : clonedExpense.History.FirstOrDefault(h => h.Id == item.Id);
                 if (record != null)
                 {
                     var parameters = new DialogParameters<RecurringBillViewerDialog>
                     {
-                        { x => x.Expense, expense },
+                        { x => x.Expense, clonedExpense },
                         { x => x.Record, record }
                     };
                     var dialog = await DialogService.ShowAsync<RecurringBillViewerDialog>(
-                        $"{expense.Name} - {record.Date:yyyy-MM-dd}",
+                        $"{clonedExpense.Name} - {record.Date:yyyy-MM-dd}",
                         parameters,
                         new DialogOptions
                         {
@@ -900,7 +1150,13 @@
                     var result = await dialog.Result;
                     if (result != null && !result.Canceled && result.Data is RecurringExpense updated)
                     {
-                        Db.RecurringExpenses.Save(updated);
+                        var actor = await UserService.GetEmployeeAsync();
+                        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false))
+                        {
+                            Snackbar.Add("Missing Purchases.ManageBills permission to save recurring bills.", Severity.Error);
+                            return;
+                        }
+                        AccountingService.SaveRecurringExpense(updated, actor);
                     }
                     Refresh();
                 }
@@ -908,12 +1164,12 @@
                 {
                     var parameters = new DialogParameters<RecurringExpenseDialog>
                     {
-                        { x => x.Expense, expense },
+                        { x => x.Expense, clonedExpense },
                         { x => x.IsNew, false },
                         { x => x.ActiveTabIndex, 1 }
                     };
                     var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>(
-                        $"Recurring Bill - {expense.Name}",
+                        $"Recurring Bill - {clonedExpense.Name}",
                         parameters,
                         new DialogOptions
                         {
@@ -924,7 +1180,13 @@
                     var result = await dialog.Result;
                     if (result != null && !result.Canceled && result.Data is RecurringExpense updated)
                     {
-                        Db.RecurringExpenses.Save(updated);
+                        var actor = await UserService.GetEmployeeAsync();
+                        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false))
+                        {
+                            Snackbar.Add("Missing Purchases.ManageBills permission to save recurring bills.", Severity.Error);
+                            return;
+                        }
+                        AccountingService.SaveRecurringExpense(updated, actor);
                     }
                     Refresh();
                 }
@@ -934,29 +1196,68 @@
 
     private async Task MarkPaid(AccountingItem item)
     {
-        if (item.Type == "Expense" || item.Type == "Commission" || item.Type == "Clawback")
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null)
         {
+            Snackbar.Add("Authentication is required.", Severity.Error);
+            return;
+        }
+        var userName = actor.FullName ?? actor.Email ?? "User";
+
+        if (item.Type is "Expense" or "Commission" or "Clawback" or "Payroll Net" or "Payroll DAS" or "Sales Tax")
+        {
+            if (item.Type == "Sales Tax")
+            {
+                UpdateActiveTab("taxes");
+                return;
+            }
+
+            if (item.Type is "Payroll Net" or "Payroll DAS")
+            {
+                if (!actor.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false))
+                {
+                    Snackbar.Add("Missing Hr.ManageSalaries permission to record payroll disbursements.", Severity.Error);
+                    return;
+                }
+            }
+            else if (!actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false))
+            {
+                Snackbar.Add("Missing active accounting permission to record payments.", Severity.Error);
+                return;
+            }
+
             var parameters = new DialogParameters<ConfirmPaymentDateDialog>
             {
-                { x => x.Message, $"Are you sure you want to mark this {item.Type} ({item.Number}) as paid?" }
+                { x => x.Message, $"Confirm payment/remittance date for {item.Type} ({item.Number} — {item.Balance:C2}):" }
             };
             var dialog = await DialogService.ShowAsync<ConfirmPaymentDateDialog>("Confirm Payment", parameters);
             var result = await dialog.Result;
 
             if (result is { Canceled: false, Data: DateTime datePaid })
             {
-                if (item.Type == "Expense")
+                actor = await UserService.GetEmployeeAsync();
+                if (actor == null) return;
+
+                var defaultBankCode = Db.GlAccounts?.GetBySystemRole(GlSystemRole.OperatingBank)?.Code ?? "1020";
+                if (item.Type == "Expense" && item.OriginalItem is ExpenseReport r)
                 {
-                    var r = (ExpenseReport)item.OriginalItem;
-                    r.DatePaid = datePaid;
-                    Db.ExpenseReports.Save(r);
+                    if (!actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false)) return;
+                    AccountingService.MarkExpenseReportPaid(r, datePaid, defaultBankCode, userName, actor);
                 }
-                else
+                else if (item.Type is "Commission" or "Clawback" && item.OriginalItem is CommissionLedgerRecord record)
                 {
-                    var record = (CommissionLedgerRecord)item.OriginalItem;
-                    record.Status = CommissionStatus.Paid;
-                    record.DatePaid = datePaid;
-                    Db.CommissionLedgerRecords.Save(record);
+                    if (!actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false)) return;
+                    AccountingService.MarkCommissionPaid(record, datePaid, defaultBankCode, userName, actor);
+                }
+                else if (item.Type == "Payroll Net" && item.OriginalItem is PayRun payRunNet)
+                {
+                    if (!actor.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false)) return;
+                    PayrollEngine.MarkPayRunPaid(payRunNet, datePaid, defaultBankCode, actor: actor);
+                }
+                else if (item.Type == "Payroll DAS" && item.OriginalItem is PayRun payRunDas)
+                {
+                    if (!actor.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false)) return;
+                    PayrollEngine.RecordDasRemittance(payRunDas, datePaid, defaultBankCode, actor: actor);
                 }
                 Snackbar.Add($"{item.Type} marked as paid on {datePaid.ToShortDateString()}", Severity.Success);
                 Refresh();
@@ -964,6 +1265,27 @@
         }
         else
         {
+            if (item.Type is "Bill" or "PO")
+            {
+                if (!actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false))
+                {
+                    Snackbar.Add("Missing Purchases.ManageBills permission to record bill payments.", Severity.Error);
+                    return;
+                }
+            }
+            else if (item.Type == "Invoice")
+            {
+                if (!actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false))
+                {
+                    Snackbar.Add("Missing active accounting permission to record invoice payments.", Severity.Error);
+                    return;
+                }
+            }
+            else
+            {
+                return;
+            }
+
             List<PaymentRecord>? existingPayments = null;
             if (item.OriginalItem is Bill b) existingPayments = b.Payments;
             else if (item.OriginalItem is Invoice inv) existingPayments = inv.Payments;
@@ -979,15 +1301,21 @@
 
             if (result is { Canceled: false, Data: PaymentRecord payment })
             {
+                actor = await UserService.GetEmployeeAsync();
+                if (actor == null) return;
+                userName = actor.FullName ?? actor.Email ?? userName;
+
                 if (item.Type == "Bill" || item.Type == "PO")
                 {
+                    if (!actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false)) return;
                     var bill = (Bill)item.OriginalItem;
-                    AccountingService.RecordBillPayment(bill, payment);
+                    AccountingService.RecordBillPayment(bill, payment, userName, actor);
                 }
                 else if (item.Type == "Invoice")
                 {
+                    if (!actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false)) return;
                     var inv = (Invoice)item.OriginalItem;
-                    AccountingService.RecordInvoicePayment(inv, payment);
+                    AccountingService.RecordInvoicePayment(inv, payment, userName, actor);
                 }
                 Snackbar.Add($"Payment of {payment.Amount:C} recorded on {payment.Date.ToShortDateString()}", Severity.Success);
                 Refresh();
@@ -995,9 +1323,108 @@
         }
     }
 
+    private static string FormatWriteOffTooltip(List<BalanceWriteOff>? writeOffs)
+    {
+        if (writeOffs == null || writeOffs.Count == 0) return string.Empty;
+        var total = writeOffs.Sum(w => w.Amount);
+        var reasons = string.Join("; ", writeOffs.Select(w => $"{w.Amount:C2} ({w.Date:yyyy-MM-dd}): {w.Reason}"));
+        return $"Written off {total:C2} — {reasons}";
+    }
+
+    private async Task CloseBalance(AccountingItem item)
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null)
+        {
+            Snackbar.Add("Authentication is required.", Severity.Error);
+            return;
+        }
+
+        if (item.Type == "Invoice")
+        {
+            if (!actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false) &&
+                !actor.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices, allowSuspended: false))
+            {
+                Snackbar.Add(BizLoc["Missing active accounting permission to close invoice balances."].Value, Severity.Error);
+                return;
+            }
+        }
+        else if (item.Type is "Bill" or "Recurring" or "One-Time")
+        {
+            if (!actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false))
+            {
+                Snackbar.Add(BizLoc["Missing Purchases.ManageBills permission to close payable balances."].Value, Severity.Error);
+                return;
+            }
+        }
+        else
+        {
+            return;
+        }
+
+        decimal amountPaid = 0m;
+        if (item.OriginalItem is Invoice inv0) amountPaid = inv0.AmountPaid;
+        else if (item.OriginalItem is Bill b0) amountPaid = b0.AmountPaid;
+        else if (item.RecurringRecord != null) amountPaid = item.RecurringRecord.AmountPaid;
+
+        var parameters = new DialogParameters<WriteOffBalanceDialog>
+        {
+            { x => x.DocumentTypeLabel, item.Type },
+            { x => x.DocumentNumber, item.Number },
+            { x => x.PartyLabel, item.Type == "Invoice" ? BizLoc["Client"].Value : BizLoc["Supplier"].Value },
+            { x => x.PartyName, item.Type == "Invoice" ? item.ClientName : item.Entity },
+            { x => x.TotalAmount, item.Total },
+            { x => x.AmountPaid, amountPaid },
+            { x => x.RemainingBalance, item.Balance },
+            { x => x.IsReceivable, item.Type == "Invoice" }
+        };
+
+        var dialog = await DialogService.ShowAsync<WriteOffBalanceDialog>(
+            BizLoc["Close / Write Off Balance"].Value,
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: BalanceWriteOff writeOff })
+        {
+            try
+            {
+                actor = await UserService.GetEmployeeAsync();
+                if (actor == null) return;
+                var userName = actor.FullName ?? actor.Email ?? "User";
+
+                if (item.Type == "Invoice" && item.OriginalItem is Invoice inv)
+                {
+                    AccountingService.RecordInvoiceWriteOff(inv, writeOff, userName, actor);
+                }
+                else if (item.Type == "Bill" && item.OriginalItem is Bill bill)
+                {
+                    AccountingService.RecordBillWriteOff(bill, writeOff, userName, actor);
+                }
+                else if (item.Type is "Recurring" or "One-Time" && item.OriginalItem is RecurringExpense expense && item.RecurringRecord != null)
+                {
+                    AccountingService.RecordRecurringBillWriteOff(expense, item.RecurringRecord, writeOff, userName, actor);
+                }
+
+                Snackbar.Add(string.Format(BizLoc["Closed balance of {0} without creating a bank transaction."].Value, writeOff.Amount.ToString("C2")), Severity.Success);
+                Refresh();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Warning);
+            }
+        }
+    }
+
     private async Task VoidBill(AccountingItem item)
     {
         if (item.OriginalItem is not Bill bill) return;
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false))
+        {
+            Snackbar.Add("Missing Purchases.ManageBills permission to void bills.", Severity.Error);
+            return;
+        }
 
         var parameters = new DialogParameters<VoidBillDialog>
         {
@@ -1008,9 +1435,10 @@
 
         if (result is { Canceled: false, Data: string reason })
         {
-            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-            var userName = auth.User.Identity?.Name ?? "User";
-            AccountingService.VoidBill(bill, reason, userName);
+            actor = await UserService.GetEmployeeAsync();
+            if (actor == null || !actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false)) return;
+            var userName = actor.FullName ?? actor.Email ?? "User";
+            AccountingService.VoidBill(bill, reason, userName, actor);
             Snackbar.Add("Bill voided successfully", Severity.Normal);
             Refresh();
         }
@@ -1019,11 +1447,15 @@
     private async Task ApproveBill(AccountingItem item)
     {
         if (item.OriginalItem is not Bill bill) return;
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Purchases.ApproveBills, allowSuspended: false))
+        {
+            Snackbar.Add("Missing Purchases.ApproveBills permission to approve bills.", Severity.Error);
+            return;
+        }
 
-        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-        var userName = auth.User.Identity?.Name ?? "User";
-
-        AccountingService.ApproveBill(bill, userName);
+        var userName = actor.FullName ?? actor.Email ?? "User";
+        AccountingService.ApproveBill(bill, userName, actor);
         Snackbar.Add($"Bill for {bill.SupplierName} approved successfully.", Severity.Success);
         Refresh();
     }
@@ -1043,57 +1475,15 @@
         return false;
     }
 
-    // --- Recurring Expense Helpers ---
-    private DateTime GetCurrentPeriodStart(RecurringExpense expense)
-    {
-        var start = expense.CreatedDate;
-        var today = DateTime.Today;
-        var current = start;
-
-        while (true)
-        {
-            var next = GetNextPeriodDate(expense, current);
-            if (next > today) return current;
-            current = next;
-        }
-    }
-
-    private DateTime GetNextPeriodDate(RecurringExpense expense, DateTime current) => expense.Frequency switch
-    {
-        RecurringExpenseFrequency.Weekly => current.AddDays(7),
-        RecurringExpenseFrequency.BiWeekly => current.AddDays(14),
-        RecurringExpenseFrequency.Monthly => current.AddMonths(1),
-        RecurringExpenseFrequency.Yearly => current.AddYears(1),
-        _ => current.AddMonths(1)
-    };
-
-    private async Task UploadRecurringBill(AccountingItem item)
-    {
-        if (item.OriginalItem is not RecurringExpense expense) return;
-
-        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
-        var parameters = new DialogParameters<RecurringExpenseDialog>
-{
-{ x => x.Expense, expense },
-{ x => x.IsNew, false },
-{ x => x.ActiveTabIndex, 1 }
-};
-
-        var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>(
-        "Upload Bill - " + expense.Name, parameters, options);
-        var result = await dialog.Result;
-
-        if (result != null && !result.Canceled && result.Data is RecurringExpense updated)
-        {
-            Db.RecurringExpenses.Save(updated);
-            Snackbar.Add("Bill uploaded", Severity.Success);
-            Refresh();
-        }
-    }
-
     private async Task MarkRecurringPaid(AccountingItem item)
     {
         if (item.OriginalItem is not RecurringExpense expense || item.RecurringRecord == null) return;
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false))
+        {
+            Snackbar.Add("Missing Purchases.ManageBills permission to record recurring bill payments.", Severity.Error);
+            return;
+        }
 
         var parameters = new DialogParameters<RecordPaymentDialog>
         {
@@ -1106,14 +1496,26 @@
 
         if (result is { Canceled: false, Data: PaymentRecord payment })
         {
+            actor = await UserService.GetEmployeeAsync();
+            if (actor == null || !actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false)) return;
+            var userName = actor.FullName ?? actor.Email ?? "User";
             item.RecurringRecord.Payments.Add(payment);
             if (item.RecurringRecord.BalanceDue <= 0)
             {
-                item.RecurringRecord.IsPaid = true;
-                item.RecurringRecord.DatePaid = payment.Date;
+                AccountingService.MarkRecurringBillRecordPaid(expense, item.RecurringRecord, payment.Date, payment.BankGlAccountCode, userName, actor);
+            }
+            else
+            {
+                DocumentHistoryHelper.RecordPaymentAction(
+                    item.RecurringRecord,
+                    DocumentHistoryActions.PaymentRecorded,
+                    item.RecurringRecord.Status,
+                    item.RecurringRecord.Status,
+                    $"Partial payment of {payment.Amount:C2} recorded on {payment.Date:yyyy-MM-dd}",
+                    userName);
+                AccountingService.SaveRecurringExpense(expense, actor);
             }
 
-            Db.RecurringExpenses.Save(expense);
             Snackbar.Add($"Payment of {payment.Amount:C} recorded", Severity.Success);
             Refresh();
         }
@@ -1121,17 +1523,23 @@
 
 
 
-    private void HandleBillUploadCompleted(AccountingItem item, List<ApiFileUpload.UploadResult> results)
+    private async Task HandleBillUploadCompleted(AccountingItem item, List<ApiFileUpload.UploadResult> results)
     {
         if (results == null || results.Count == 0 || item.OriginalItem is not RecurringExpense expense || item.RecurringRecord == null) return;
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false))
+        {
+            Snackbar.Add("Missing Purchases.ManageBills permission to attach recurring bill files.", Severity.Error);
+            return;
+        }
         
         try
         {
             var result = results.First();
-            item.RecurringRecord.AttachmentPath = $"/spokesapi/files/download/{result.FilePath}";
+            item.RecurringRecord.AttachmentPath = result.FilePath;
             item.RecurringRecord.AttachmentName = result.FileName;
             
-            Db.RecurringExpenses.Save(expense);
+            AccountingService.SaveRecurringExpense(expense, actor);
             Snackbar.Add("File uploaded successfully", Severity.Success);
             Refresh();
         }
@@ -1142,21 +1550,64 @@
     }
 
     [SupplyParameterFromQuery] public string? Tab { get; set; }
+    [SupplyParameterFromQuery] public string? SubTab { get; set; }
     private string currentTab = "receivables";
+    private string? _effectiveSubTab;
+
+    private int ActiveTabIndex => Math.Max(0, AvailableTabs.ToList().IndexOf(currentTab));
+
+    private void OnTabIndexChanged(int index)
+    {
+        if (index >= 0 && index < AvailableTabs.Count)
+        {
+            UpdateActiveTab(AvailableTabs[index]);
+        }
+    }
 
     protected override void OnParametersSet()
     {
+        _effectiveSubTab = SubTab;
+
         if (!string.IsNullOrEmpty(Tab))
         {
-            currentTab = Tab.ToLower() switch
+            var lower = Tab.ToLowerInvariant();
+            if (lower == "manage" || lower == "add-bills")
+            {
+                try
+                {
+                    Nav.NavigateTo("/business/operating-costs?tab=recurring", replace: true);
+                }
+                catch (Microsoft.AspNetCore.Components.NavigationException)
+                {
+                }
+                return;
+            }
+
+            if (lower is "migration" or "cutover")
+            {
+                currentTab = "ledger";
+                _effectiveSubTab = "migration";
+                return;
+            }
+
+            var resolved = lower switch
             {
                 "receivables" => "receivables",
                 "payables" => "payables",
+                "transactions" or "other" or "direct" or "directtransactions" => "transactions",
+                "payroll" or "payruns" => "payroll",
+                "reconciliation" or "bankreconciliation" => "reconciliation",
+                "taxes" or "salestax" => "taxes",
+                "ledger" or "gl" or "generalledger" => "ledger",
+                "cpa" or "accountant" or "export" => "cpa",
                 "history" => "history",
-                "manage" => "manage",
-                "export" => "export",
                 _ => "receivables"
             };
+            if (resolved == "payroll" && _isInitialized && !_canReadPayroll)
+            {
+                resolved = "receivables";
+            }
+            currentTab = resolved;
         }
     }
 
@@ -1178,7 +1629,12 @@
 
         try
         {
-            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+            var url = Nav.GetUriWithQueryParameters(new Dictionary<string, object?>
+            {
+                ["tab"] = tabName,
+                ["subtab"] = tabName == "ledger" ? SubTab : null
+            });
+            Nav.NavigateTo(url, replace: true);
         }
         catch (Microsoft.AspNetCore.Components.NavigationException)
         {

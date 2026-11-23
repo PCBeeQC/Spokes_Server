@@ -151,6 +151,73 @@ public class MarkdownSanitizerService
         }
     }
 
+    private (HashSet<int> IndicesToEscape, bool HasValidOrDangerousHtmlTag) FindTagsToEscape(
+        IReadOnlyList<(int Index, string TagName, bool IsClosing, bool IsSelfClosing)> tags)
+    {
+        Dictionary<string, Stack<int>> openTagStacks = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<int> indicesToEscape = [];
+        bool hasValidOrDangerousHtmlTag = false;
+
+        foreach (var (index, tagName, isClosing, isSelfClosing) in tags)
+        {
+            // Leave dangerous HTML tags untouched so HtmlSanitizer removes the tag and its executable payload.
+            if (DangerousHtmlTags.Contains(tagName))
+            {
+                hasValidOrDangerousHtmlTag = true;
+                continue;
+            }
+
+            // Unknown tag names (e.g. <machine-id>, <id>, <wan-ip>, <string>) are placeholders, not HTML.
+            if (!_sanitizer.AllowedTags.Contains(tagName))
+            {
+                indicesToEscape.Add(index);
+                continue;
+            }
+
+            if (VoidHtmlTags.Contains(tagName) || isSelfClosing)
+            {
+                if (isClosing)
+                {
+                    indicesToEscape.Add(index);
+                }
+                else
+                {
+                    hasValidOrDangerousHtmlTag = true;
+                }
+                continue;
+            }
+
+            if (!isClosing)
+            {
+                if (!openTagStacks.TryGetValue(tagName, out var stack))
+                {
+                    stack = new Stack<int>();
+                    openTagStacks[tagName] = stack;
+                }
+                stack.Push(index);
+            }
+            else if (openTagStacks.TryGetValue(tagName, out var stack) && stack.Count > 0)
+            {
+                stack.Pop();
+                hasValidOrDangerousHtmlTag = true;
+            }
+            else
+            {
+                indicesToEscape.Add(index);
+            }
+        }
+
+        foreach (var stack in openTagStacks.Values)
+        {
+            while (stack.Count > 0)
+            {
+                indicesToEscape.Add(stack.Pop());
+            }
+        }
+
+        return (indicesToEscape, hasValidOrDangerousHtmlTag);
+    }
+
     private void EscapeInvalidHtmlInInlineTree(ContainerInline rootInline)
     {
         List<HtmlInline> htmlInlines = [];
@@ -158,12 +225,12 @@ public class MarkdownSanitizerService
         if (htmlInlines.Count == 0)
             return;
 
-        Dictionary<string, Stack<HtmlInline>> openTagStacks = new(StringComparer.OrdinalIgnoreCase);
-        HashSet<HtmlInline> toEscape = [];
+        HashSet<int> directEscapes = [];
+        List<(int Index, string TagName, bool IsClosing, bool IsSelfClosing)> parsedTags = [];
 
-        foreach (var htmlInline in htmlInlines)
+        for (int i = 0; i < htmlInlines.Count; i++)
         {
-            var rawTag = htmlInline.Tag;
+            var rawTag = htmlInlines[i].Tag;
             if (string.IsNullOrEmpty(rawTag))
                 continue;
 
@@ -174,67 +241,22 @@ public class MarkdownSanitizerService
             var match = HtmlTagPrefixRegex.Match(trimmed);
             if (!match.Success)
             {
-                toEscape.Add(htmlInline);
+                directEscapes.Add(i);
                 continue;
             }
 
             bool isClosing = match.Groups[1].Success;
             string tagName = match.Groups[2].Value;
             bool isSelfClosing = !isClosing && trimmed.EndsWith("/>", StringComparison.Ordinal);
-
-            // Leave dangerous HTML tags untouched so HtmlSanitizer removes the tag and its executable payload.
-            if (DangerousHtmlTags.Contains(tagName))
-                continue;
-
-            // Unknown tag names (e.g. <machine-id>, <id>, <wan-ip>, <string>) are placeholders, not HTML.
-            if (!_sanitizer.AllowedTags.Contains(tagName))
-            {
-                toEscape.Add(htmlInline);
-                continue;
-            }
-
-            if (VoidHtmlTags.Contains(tagName) || isSelfClosing)
-            {
-                if (isClosing)
-                {
-                    toEscape.Add(htmlInline);
-                }
-                continue;
-            }
-
-            if (!isClosing)
-            {
-                if (!openTagStacks.TryGetValue(tagName, out var stack))
-                {
-                    stack = new Stack<HtmlInline>();
-                    openTagStacks[tagName] = stack;
-                }
-                stack.Push(htmlInline);
-            }
-            else
-            {
-                if (openTagStacks.TryGetValue(tagName, out var stack) && stack.Count > 0)
-                {
-                    stack.Pop();
-                }
-                else
-                {
-                    toEscape.Add(htmlInline);
-                }
-            }
+            parsedTags.Add((i, tagName, isClosing, isSelfClosing));
         }
 
-        foreach (var stack in openTagStacks.Values)
-        {
-            while (stack.Count > 0)
-            {
-                toEscape.Add(stack.Pop());
-            }
-        }
+        var (balancedEscapes, _) = FindTagsToEscape(parsedTags);
+        directEscapes.UnionWith(balancedEscapes);
 
-        foreach (var htmlInline in toEscape)
+        foreach (var idx in directEscapes)
         {
-            htmlInline.Tag = WebUtility.HtmlEncode(htmlInline.Tag);
+            htmlInlines[idx].Tag = WebUtility.HtmlEncode(htmlInlines[idx].Tag);
         }
     }
 
@@ -273,73 +295,17 @@ public class MarkdownSanitizerService
         if (matches.Count == 0)
             return;
 
-        Dictionary<string, Stack<int>> openTagStacks = new(StringComparer.OrdinalIgnoreCase);
-        HashSet<int> indicesToEscape = [];
-        bool hasValidOrDangerousHtmlTag = false;
-
+        List<(int Index, string TagName, bool IsClosing, bool IsSelfClosing)> parsedTags = new(matches.Count);
         for (int i = 0; i < matches.Count; i++)
         {
             var match = matches[i];
             bool isClosing = match.Groups[1].Success;
             string tagName = match.Groups[2].Value;
             bool isSelfClosing = !isClosing && match.Value.TrimEnd().EndsWith("/>", StringComparison.Ordinal);
-
-            if (DangerousHtmlTags.Contains(tagName))
-            {
-                hasValidOrDangerousHtmlTag = true;
-                continue;
-            }
-
-            if (!_sanitizer.AllowedTags.Contains(tagName))
-            {
-                indicesToEscape.Add(i);
-                continue;
-            }
-
-            if (VoidHtmlTags.Contains(tagName) || isSelfClosing)
-            {
-                if (isClosing)
-                {
-                    indicesToEscape.Add(i);
-                }
-                else
-                {
-                    hasValidOrDangerousHtmlTag = true;
-                }
-                continue;
-            }
-
-            if (!isClosing)
-            {
-                if (!openTagStacks.TryGetValue(tagName, out var stack))
-                {
-                    stack = new Stack<int>();
-                    openTagStacks[tagName] = stack;
-                }
-                stack.Push(i);
-            }
-            else
-            {
-                if (openTagStacks.TryGetValue(tagName, out var stack) && stack.Count > 0)
-                {
-                    stack.Pop();
-                    hasValidOrDangerousHtmlTag = true;
-                }
-                else
-                {
-                    indicesToEscape.Add(i);
-                }
-            }
+            parsedTags.Add((i, tagName, isClosing, isSelfClosing));
         }
 
-        foreach (var stack in openTagStacks.Values)
-        {
-            while (stack.Count > 0)
-            {
-                indicesToEscape.Add(stack.Pop());
-            }
-        }
-
+        var (indicesToEscape, hasValidOrDangerousHtmlTag) = FindTagsToEscape(parsedTags);
         if (indicesToEscape.Count == 0)
             return;
 

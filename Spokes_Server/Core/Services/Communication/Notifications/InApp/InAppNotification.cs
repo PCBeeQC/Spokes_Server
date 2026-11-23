@@ -5,7 +5,7 @@ namespace Spokes_Server.Core.Services.Communication.Notifications.InApp;
 /// <summary>
 /// Represents a normalized in-app notification payload to be presented to an active user session (e.g. snackbar and audio).
 /// </summary>
-public class InAppNotification
+public record InAppNotification
 {
     public required string RecipientUserId { get; init; }
     public required string Title { get; init; }

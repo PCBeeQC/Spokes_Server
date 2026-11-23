@@ -12,14 +12,6 @@ public class SpokesControllerBaseTests
     }
 
     [Fact]
-    public void SpokesControllerBase_InheritsFromControllerBase()
-    {
-        var controller = new TestController();
-        Assert.NotNull(controller);
-        Assert.IsAssignableFrom<ControllerBase>(controller);
-    }
-
-    [Fact]
     public void SpokesControllerBase_HasIgnoreAntiforgeryTokenAttribute()
     {
         var attr = typeof(SpokesControllerBase).GetCustomAttribute<IgnoreAntiforgeryTokenAttribute>();

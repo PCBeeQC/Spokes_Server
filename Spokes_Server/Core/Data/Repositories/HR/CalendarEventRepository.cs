@@ -12,10 +12,4 @@ public class CalendarEventRepository : JsonRepository<CalendarEvent>
     protected override string GetFilePath(CalendarEvent item) =>
         // Path: /Data/CalendarEvents/{Year}/event_{EmpId}_{Id}.json
         Path.Combine(_basePath, item.Start.Year.ToString(), $"event_{item.EmployeeId}_{item.Id}.json");
-
-    public IEnumerable<CalendarEvent> GetByEmployeeAndDateRange(string employeeId, DateTime start, DateTime end)
-    {
-        EnsureLoaded();
-        return _cache.Values.Where(e => e.EmployeeId == employeeId && e.Start < end && e.End > start);
-    }
 }

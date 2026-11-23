@@ -17,7 +17,7 @@
                 <MudItem xs="12" sm="6">
                     <MudTextField @bind-Value="Identity.DisplayName"
                                   Label="@Loc["Sender Display Name"]"
-                                  Placeholder="e.g. Support Team or Mats Dallaire"
+                                  Placeholder="@Loc["e.g. Support or Jane Doe"]"
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
                                   Required="true" />
@@ -69,7 +69,7 @@
                     <MudItem xs="12" sm="6">
                         <MudTextField @bind-Value="Identity.Domain"
                                       Label="@Loc["Sending Domain"]"
-                                      Placeholder="example.com"
+                                      Placeholder="@_domainPlaceholder"
                                       Adornment="Adornment.Start"
                                       AdornmentText="@("@")"
                                       Variant="Variant.Outlined"
@@ -108,7 +108,7 @@
             {
                 <MudGrid Spacing="2">
                     <MudItem xs="12" sm="6">
-                        <MudTextField @bind-Value="Identity.CustomSmtpUsername"
+                        <MudTextField @bind-Value="Identity.SmtpUsername"
                                       Label="@Loc["SMTP Username"]"
                                       Placeholder="@Loc["Leave blank if same as email address"]"
                                       Variant="Variant.Outlined"
@@ -116,8 +116,8 @@
                     </MudItem>
                     <MudItem xs="12" sm="6">
                         <MudTextField @bind-Value="_plainSmtpPassword"
-                                      Label="@(!string.IsNullOrEmpty(Identity.EncryptedCustomSmtpPassword) ? Loc["SMTP Password (Saved - enter to change)"].Value : Loc["SMTP Password"].Value)"
-                                      Placeholder="@(!string.IsNullOrEmpty(Identity.EncryptedCustomSmtpPassword) ? "••••••••" : "")"
+                                      Label="@(!string.IsNullOrEmpty(Identity.EncryptedSmtpPassword) ? Loc["SMTP Password (Saved - enter to change)"].Value : Loc["SMTP Password"].Value)"
+                                      Placeholder="@(!string.IsNullOrEmpty(Identity.EncryptedSmtpPassword) ? "••••••••" : "")"
                                       InputType="InputType.Password"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
@@ -163,6 +163,7 @@
 
     private List<SendingServerConfig> _sendingServers = [];
     private string _plainSmtpPassword = string.Empty;
+    private string _domainPlaceholder = "example.com";
 
     private SendingServerConfig? SelectedServer =>
         !string.IsNullOrEmpty(Identity.SendingServerConfigId)
@@ -183,6 +184,13 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _domainPlaceholder = Db.CompanyProfile.Get().GetPrimaryDomainOrDefault("example.com");
+
+        if (!string.IsNullOrEmpty(Identity.EncryptedSmtpPassword) && !EncryptionService.CanDecrypt(Identity.EncryptedSmtpPassword))
+        {
+            Identity.EncryptedSmtpPassword = string.Empty;
+        }
+
         var currentUser = await UserService.GetEmployeeAsync();
         var userId = CurrentUserId ?? currentUser?.Id ?? Identity.OwnerEmployeeId ?? string.Empty;
         var isAdmin = IsAdmin || (currentUser?.IsAdmin ?? false);
@@ -249,7 +257,7 @@
 
         if (!string.IsNullOrWhiteSpace(_plainSmtpPassword))
         {
-            Identity.EncryptedCustomSmtpPassword = EncryptionService.Encrypt(_plainSmtpPassword);
+            Identity.EncryptedSmtpPassword = EncryptionService.Encrypt(_plainSmtpPassword);
         }
 
         MudDialog.Close(DialogResult.Ok(Identity));

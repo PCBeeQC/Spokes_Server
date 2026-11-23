@@ -1082,9 +1082,9 @@ public class AcousticRoomProcessorTests
         string matsId = "mats";
         processor.SyncParticipants([adminId, matsId]);
 
-        // Provide client pipeline telemetry (admin=rnnoise 20ms, mats=webrtc 150ms Android pipeline)
-        processor.SetParticipantClientPipelineInfo(adminId, "rnnoise", 20.0);
-        processor.SetParticipantClientPipelineInfo(matsId, "webrtc", 150.0);
+        // Provide client pipeline telemetry matching Sentence 1 below (admin=150ms slow capture, mats=20ms fast rnnoise capture -> admin->mats lag = -130ms)
+        processor.SetParticipantClientPipelineInfo(adminId, 150.0);
+        processor.SetParticipantClientPipelineInfo(matsId, 20.0);
 
         // Seed persistent room calibration from previous call: admin -> mats is -130.0ms (-6240 samples)
         int trueLagSamples = -6240; // -130.0ms
@@ -1186,9 +1186,9 @@ public class AcousticRoomProcessorTests
         string agcPhone = "340555a5-a468-477f-870f-3b49a4d09679";
 
         processor.SyncParticipants([headset1, headset2, agcPhone]);
-        processor.SetParticipantClientPipelineInfo(headset1, "rnnoise", 30.0, 10.5);
-        processor.SetParticipantClientPipelineInfo(headset2, "rnnoise", 30.0, 9.5);
-        processor.SetParticipantClientPipelineInfo(agcPhone, "rnnoise", 80.3, 11.5);
+        processor.SetParticipantClientPipelineInfo(headset1, 30.0, 10.5);
+        processor.SetParticipantClientPipelineInfo(headset2, 30.0, 9.5);
+        processor.SetParticipantClientPipelineInfo(agcPhone, 80.3, 11.5);
 
         int lagHeadset2Samples = 4300; // +89.6ms
         int lagPhoneSamples = 6806;    // +141.8ms
@@ -1583,8 +1583,8 @@ public class AcousticRoomProcessorTests
         double totalGainDuringSilence = lateSilenceOutRms / Math.Max(1.0, lateSilenceInRms);
         Assert.True(driftRatio <= 1.05,
             $"Expected silence freeze to hold gain constant across pause without upward pumping (driftRatio <= 1.05x), got {driftRatio:F3}x");
-        Assert.True(totalGainDuringSilence < 2.0,
-            $"Expected pause noise not to pump toward +15 dB (5.62x) max boost, got {totalGainDuringSilence:F2}x");
+        Assert.True(totalGainDuringSilence < 3.6,
+            $"Expected pause noise to stay frozen near speech gain (~2.9x for -15 dBFS target) and not pump toward +18 dB (7.94x) max boost, got {totalGainDuringSilence:F2}x");
     }
 
     [Fact]
@@ -1599,8 +1599,8 @@ public class AcousticRoomProcessorTests
         const string adminId = "6f30c05d-c9d6-4cbb-bdbb-b2f8f3b3c9c3";
         const string matsId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
         processor.SyncParticipants([adminId, matsId]);
-        processor.SetParticipantClientPipelineInfo(adminId, "webrtc", 20.0, 17.0);
-        processor.SetParticipantClientPipelineInfo(matsId, "webrtc", 20.0, 9.0);
+        processor.SetParticipantClientPipelineInfo(adminId, 20.0, 17.0);
+        processor.SetParticipantClientPipelineInfo(matsId, 20.0, 9.0);
 
         int totalFrames = 240; // 2.4s
         int totalSamples = totalFrames * FrameSamples;
@@ -1681,8 +1681,8 @@ public class AcousticRoomProcessorTests
         const string adminId = "6f30c05d-c9d6-4cbb-bdbb-b2f8f3b3c9c3";
         const string matsId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
         processor.SyncParticipants([adminId, matsId]);
-        processor.SetParticipantClientPipelineInfo(adminId, "webrtc", 20.0, 17.0);
-        processor.SetParticipantClientPipelineInfo(matsId, "webrtc", 20.0, 9.0);
+        processor.SetParticipantClientPipelineInfo(adminId, 20.0, 17.0);
+        processor.SetParticipantClientPipelineInfo(matsId, 20.0, 9.0);
 
         var silentFrame = new short[FrameSamples];
         long frameCursor = 0;
@@ -1852,9 +1852,9 @@ public class AcousticRoomProcessorTests
         string mats2Id = "340555a5-a468-477f-870f-3b49a4d09679";
 
         processor.SyncParticipants([adminId, matsId, mats2Id]);
-        processor.SetParticipantClientPipelineInfo(adminId, "webrtc", 20.0, 17.0);
-        processor.SetParticipantClientPipelineInfo(matsId, "webrtc", 20.0, 9.0);
-        processor.SetParticipantClientPipelineInfo(mats2Id, "webrtc", 75.0, 60.0);
+        processor.SetParticipantClientPipelineInfo(adminId, 20.0, 17.0);
+        processor.SetParticipantClientPipelineInfo(matsId, 20.0, 9.0);
+        processor.SetParticipantClientPipelineInfo(mats2Id, 75.0, 60.0);
 
         int frameCursor = 0;
         var silentFrame = new short[FrameSamples];
@@ -2144,9 +2144,9 @@ public class AcousticRoomProcessorTests
         const string userC = "node-c-mobile";
 
         processor.SyncParticipants([userA, userB, userC]);
-        processor.SetParticipantClientPipelineInfo(userA, "webrtc", 20.0, 12.0);
-        processor.SetParticipantClientPipelineInfo(userB, "webrtc", 20.0, 14.0);
-        processor.SetParticipantClientPipelineInfo(userC, "webrtc", 75.0, 60.0);
+        processor.SetParticipantClientPipelineInfo(userA, 20.0, 12.0);
+        processor.SetParticipantClientPipelineInfo(userB, 20.0, 14.0);
+        processor.SetParticipantClientPipelineInfo(userC, 75.0, 60.0);
 
         int frameCursor = 0;
         var silentFrame = new short[FrameSamples];
@@ -2309,8 +2309,8 @@ public class AcousticRoomProcessorTests
         int dtAfterModPhase = snapFinal.Participants.First(p => p.UserId == userC).DoubleTalkSubFrames;
         Assert.True(dtAfterModPhase - dtBeforeModPhase >= 15,
             $"Expected userC to engage DoubleTalkSubtraction (not stay gated by inflated PeakBleedGain), got {dtAfterModPhase - dtBeforeModPhase} double-talk sub-frames");
-        Assert.True(modCOut >= modCCleanIn * 0.62,
-            $"Expected AGC-pair PeakBleedGain not to inflate during double-talk (retaining >= 62% speech across 0.54x STFT subtraction), got out={modCOut:F1} / cleanIn={modCCleanIn:F1}");
+        Assert.True(modCOut >= modCCleanIn * 0.55,
+            $"Expected AGC-pair PeakBleedGain not to inflate during double-talk (retaining >= 55% speech at -16.5 dBFS target across 0.54x STFT subtraction), got out={modCOut:F1} / cleanIn={modCCleanIn:F1}");
     }
 
     [Fact]
@@ -2327,8 +2327,8 @@ public class AcousticRoomProcessorTests
         const string matsId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
 
         processor.SyncParticipants([adminId, matsId]);
-        processor.SetParticipantClientPipelineInfo(adminId, "rnnoise", 30.0, 9.0);
-        processor.SetParticipantClientPipelineInfo(matsId, "rnnoise", 30.0, 9.5);
+        processor.SetParticipantClientPipelineInfo(adminId, 30.0, 9.0);
+        processor.SetParticipantClientPipelineInfo(matsId, 30.0, 9.5);
 
         int frameCursor = 0;
         var silentFrame = new short[FrameSamples];
@@ -2396,7 +2396,7 @@ public class AcousticRoomProcessorTests
         var calMatsToAdminFinal = finalSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == matsId && c.TargetUserId == adminId);
         var calAdminToMatsFinal = finalSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == matsId);
 
-        Assert.Equal(50, matsDiag.EffectiveLookaheadMs);
+        Assert.InRange(matsDiag.EffectiveLookaheadMs, AcousticRoomProcessor.MinCalibratedLookaheadMs, 50);
         Assert.NotNull(calMatsToAdminFinal);
         Assert.False(calMatsToAdminFinal!.IsReciprocalPrior, "Expected mats -> admin live DirectLock never to be wiped by a low-WaveCorr envelope alias");
         Assert.DoesNotContain(finalSnap.Warnings, w => w.Contains(matsId, StringComparison.Ordinal) && w.Contains("not been directly calibrated", StringComparison.OrdinalIgnoreCase));
@@ -2407,7 +2407,7 @@ public class AcousticRoomProcessorTests
     }
 
     [Fact]
-    public void ThreeDevices_BureauStewie_Sub40MsNodeSlipAndAgcGatedRoommate_PropagatesNodeOffsetAndPreventsFalseDoubleTalk()
+    public void ThreeDevices_Sub40MsNodeSlipAndAgcGatedRoommate_PropagatesNodeOffsetAndPreventsFalseDoubleTalk()
     {
         // Reproduces Log 2 from "Bureau Stewie" (2 Windows Chrome PCs + 1 Android AGC device):
         // 1. All 3 participants calibrate:
@@ -2425,9 +2425,9 @@ public class AcousticRoomProcessorTests
         const string mats2Id = "340555a5-a468-477f-870f-3b49a4d09679";
 
         processor.SyncParticipants([adminId, matsId, mats2Id]);
-        processor.SetParticipantClientPipelineInfo(adminId, "rnnoise", 30.0, 9.0);
-        processor.SetParticipantClientPipelineInfo(matsId, "rnnoise", 30.0, 9.5);
-        processor.SetParticipantClientPipelineInfo(mats2Id, "rnnoise", 80.3, 11.0);
+        processor.SetParticipantClientPipelineInfo(adminId, 30.0, 9.0);
+        processor.SetParticipantClientPipelineInfo(matsId, 30.0, 9.5);
+        processor.SetParticipantClientPipelineInfo(mats2Id, 80.3, 11.0);
 
         int frameCursor = 0;
         var silentFrame = new short[FrameSamples];
@@ -2609,7 +2609,7 @@ public class AcousticRoomProcessorTests
         var p3BleedCont = AcousticRoomSimulator.ApplyRoomImpulseResponse(p3LoudCont, 240, 0.25, 140.0, true);
         var p3QuietBursts = AcousticRoomSimulator.GenerateNaturalSpeech(p3Frames * FrameSamples, 245.0, 4200.0, includeSyllablePauses: false);
 
-        int lookaheadFrames = AcousticRoomProcessor.LookaheadSamples / FrameSamples;
+        int lookaheadFrames = processor.GetDiagnosticSnapshot().Participants.First(p => p.UserId == quietLocal).EffectiveLookaheadMs / 10;
         var bleedHistory = new List<short[]>();
         var quietPresentHistory = new List<bool>();
         double gapEchoInEnergy = 0.0;
@@ -2658,5 +2658,584 @@ public class AcousticRoomProcessorTests
         var snap32s = processor.GetDiagnosticSnapshot();
         Assert.True(snap32s.TimelineBuckets.Count >= 125,
             $"Expected rolling diagnostic history to retain >= 125 buckets (> 31s) for 30s captures, got {snap32s.TimelineBuckets.Count} buckets");
+    }
+
+    [Fact]
+    public void TwoDesktopRnnoisePeers_SanitizesStaleSavedQueueDelayAndDropsLookaheadTo12MsOnBidirectionalLock()
+    {
+        var processor = new AcousticRoomProcessor();
+        const string peerAId = "peer-desktop-a";
+        const string peerBId = "peer-desktop-b";
+
+        processor.SyncParticipants([peerAId, peerBId]);
+        processor.SetParticipantClientPipelineInfo(peerAId, 30.0, 9.0);
+        processor.SetParticipantClientPipelineInfo(peerBId, 30.0, 9.0);
+
+        // 1. Seed stale saved calibrations from a prior session that had a -145.6ms (-6987 smp) / +165.5ms (+7945 smp) queue backlog:
+        //    Since both devices are 30ms desktop RNNoise pipelines (expected DSP diff = 0ms), SeedSavedPairCalibration must
+        //    sanitize the stale -145.6ms queue lag to the +4.0ms hardware prior while preserving learned BleedGain (0.134 & 0.073),
+        //    preventing Peer B's lookahead from inflating to 161ms at startup!
+        processor.SeedSavedPairCalibration(peerAId, peerBId, delaySamples: -6987, bleedGain: 0.134f, confidence: 0.95);
+        processor.SeedSavedPairCalibration(peerBId, peerAId, delaySamples: 7945, bleedGain: 0.073f, confidence: 0.77);
+
+        var initialSnap = processor.GetDiagnosticSnapshot();
+        var initialPeerB = initialSnap.Participants.First(p => p.UserId == peerBId);
+        var initialPeerA = initialSnap.Participants.First(p => p.UserId == peerAId);
+        Assert.Equal(50, initialPeerB.EffectiveLookaheadMs);
+        Assert.Equal(50, initialPeerA.EffectiveLookaheadMs);
+
+        int frameCursor = 0;
+        int airDelaySamples = 150; // +3.12ms (~1.07m mic separation)
+        var silentFrame = new short[FrameSamples];
+
+        // 2. Turn 1 (1.5s): Peer A speaks solo (+3.12ms air delay into Peer B, 0.211 = -13.5 dB bleed)
+        int turnFrames = 150;
+        var peerASpeech = AcousticRoomSimulator.GenerateNaturalSpeech(turnFrames * FrameSamples, 235.0, 4800.0, includeSyllablePauses: true);
+        var bleedOnPeerB = AcousticRoomSimulator.ApplyRoomImpulseResponse(peerASpeech, directDelaySamples: airDelaySamples, directBleedGain: 0.211, rt60Ms: 125.0, applyHeadShadowLowPass: true);
+        for (int f = 0; f < turnFrames; f++, frameCursor++)
+        {
+            int idx = f * FrameSamples;
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [peerAId] = peerASpeech.AsSpan(idx, FrameSamples).ToArray(),
+                [peerBId] = bleedOnPeerB.AsSpan(idx, FrameSamples).ToArray()
+            }, frameCursor * 10);
+        }
+
+        // 3. Turn 2 (1.5s): Peer B speaks solo (+3.12ms air delay into Peer A, 0.067 = -23.4 dB bleed)
+        var peerBSpeech = AcousticRoomSimulator.GenerateNaturalSpeech(turnFrames * FrameSamples, 175.0, 9500.0, includeSyllablePauses: true);
+        var bleedOnPeerA = AcousticRoomSimulator.ApplyRoomImpulseResponse(peerBSpeech, directDelaySamples: airDelaySamples, directBleedGain: 0.067, rt60Ms: 125.0, applyHeadShadowLowPass: true);
+        for (int f = 0; f < turnFrames; f++, frameCursor++)
+        {
+            int idx = f * FrameSamples;
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [peerAId] = bleedOnPeerA.AsSpan(idx, FrameSamples).ToArray(),
+                [peerBId] = peerBSpeech.AsSpan(idx, FrameSamples).ToArray()
+            }, frameCursor * 10);
+        }
+
+        // 4. Brief 100ms pause so both streams can apply their newly lowered target lookahead cleanly outside active speech
+        for (int f = 0; f < 10; f++, frameCursor++)
+        {
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [peerAId] = silentFrame,
+                [peerBId] = silentFrame
+            }, frameCursor * 10);
+        }
+
+        var lockedSnap = processor.GetDiagnosticSnapshot();
+        var lockedPeerA = lockedSnap.Participants.First(p => p.UserId == peerAId);
+        var lockedPeerB = lockedSnap.Participants.First(p => p.UserId == peerBId);
+
+        // Both directions are now BidirectionallyDirectLocked at ~ +3.12ms (+150 samples),
+        // so EffectiveLookaheadMs drops from 50ms down to ~12ms (10..15ms) while maintaining >= 20 dB ERLE!
+        Assert.InRange(lockedPeerA.EffectiveLookaheadMs, AcousticRoomProcessor.MinCalibratedLookaheadMs, 15);
+        Assert.InRange(lockedPeerB.EffectiveLookaheadMs, AcousticRoomProcessor.MinCalibratedLookaheadMs, 15);
+        Assert.True(lockedPeerA.AchievedBleedSuppressionDb >= 20.0,
+            $"Expected Peer A ERLE >= 20 dB, got {lockedPeerA.AchievedBleedSuppressionDb:F1} dB");
+        Assert.True(lockedPeerB.AchievedBleedSuppressionDb >= 20.0,
+            $"Expected Peer B ERLE >= 20 dB, got {lockedPeerB.AchievedBleedSuppressionDb:F1} dB");
+    }
+
+    [Fact]
+    public void AndroidBluetoothAndDesktopPeers_SeedSavedCalibration_PreservesBluetoothLagAndSanitizesWhenSwitchedToWired()
+    {
+        const string androidBtId = "340555a5-a468-477f-870f-3b49a4d09679";
+        const string desktopPcId = "6f30c05d-c9d6-4cbb-bdbb-b2f8f3b3c9c3";
+
+        // 1. Reconnect while Android is still on Bluetooth (~230.3ms capture) and Windows PC is on RNNoise (30.0ms capture):
+        //    Expected delay for Android -> PC is (30.0 - 230.3) + 0.5*(4.0 - 7.0) + 4.0 = -197.8ms (-9494 samples),
+        //    which is within +/-45ms of the saved -215.4ms (-10337 samples) Bluetooth calibration!
+        var btProcessor = new AcousticRoomProcessor();
+        btProcessor.SyncParticipants([androidBtId, desktopPcId]);
+        btProcessor.SetParticipantClientPipelineInfo(androidBtId, 230.3, 7.0);
+        btProcessor.SetParticipantClientPipelineInfo(desktopPcId, 30.0, 4.0);
+
+        btProcessor.SeedSavedPairCalibration(androidBtId, desktopPcId, delaySamples: -10337, bleedGain: 0.264f, confidence: 0.79);
+        btProcessor.SeedSavedPairCalibration(desktopPcId, androidBtId, delaySamples: 10848, bleedGain: 0.036f, confidence: 0.75);
+
+        var btSnap = btProcessor.GetDiagnosticSnapshot();
+        var btFwd = btSnap.Calibrations.First(c => c.SourceUserId == androidBtId && c.TargetUserId == desktopPcId);
+        var btRev = btSnap.Calibrations.First(c => c.SourceUserId == desktopPcId && c.TargetUserId == androidBtId);
+        Assert.False(btFwd.IsReciprocalPrior);
+        Assert.False(btRev.IsReciprocalPrior);
+        Assert.Equal(-10337, btFwd.DelaySamples48k);
+        Assert.Equal(10848, btRev.DelaySamples48k);
+
+        var btDesktopDiag = btSnap.Participants.First(p => p.UserId == desktopPcId);
+        Assert.InRange(btDesktopDiag.EffectiveLookaheadMs, 225, 235);
+
+        // 2. Next session: Android user disconnects Bluetooth and joins on built-in Speaker/Wired (80.3ms capture).
+        //    Saved -215.4ms Bluetooth calibration now deviates by ~168ms (> 45ms) from expected -47.8ms wired hardware lag,
+        //    so SeedSavedPairCalibration must sanitize both pairs to low-confidence hardware priors!
+        var wiredProcessor = new AcousticRoomProcessor();
+        wiredProcessor.SyncParticipants([androidBtId, desktopPcId]);
+        wiredProcessor.SetParticipantClientPipelineInfo(androidBtId, 80.3, 7.0);
+        wiredProcessor.SetParticipantClientPipelineInfo(desktopPcId, 30.0, 4.0);
+
+        wiredProcessor.SeedSavedPairCalibration(androidBtId, desktopPcId, delaySamples: -10337, bleedGain: 0.264f, confidence: 0.79);
+        wiredProcessor.SeedSavedPairCalibration(desktopPcId, androidBtId, delaySamples: 10848, bleedGain: 0.036f, confidence: 0.75);
+
+        var wiredSnap = wiredProcessor.GetDiagnosticSnapshot();
+        var wiredFwd = wiredSnap.Calibrations.First(c => c.SourceUserId == androidBtId && c.TargetUserId == desktopPcId);
+        var wiredRev = wiredSnap.Calibrations.First(c => c.SourceUserId == desktopPcId && c.TargetUserId == androidBtId);
+        Assert.True(wiredFwd.IsReciprocalPrior);
+        Assert.True(wiredRev.IsReciprocalPrior);
+        Assert.InRange(wiredFwd.DelayMs, -52.0, -43.0);
+        Assert.InRange(wiredRev.DelayMs, 51.0, 60.0);
+
+        var wiredDesktopDiag = wiredSnap.Participants.First(p => p.UserId == desktopPcId);
+        Assert.True(wiredDesktopDiag.EffectiveLookaheadMs <= 70,
+            $"Expected sanitized wired prior to avoid 230ms Bluetooth lookahead inflation, got {wiredDesktopDiag.EffectiveLookaheadMs}ms");
+    }
+
+    [Fact]
+    public void PostCancellationLeveler_DiscordMatchedMinus16Point5DbFs_NormalizesQuietAndLoudSpeechWithoutClipping()
+    {
+        var processor = new AcousticRoomProcessor();
+        const string quietUser = "quiet-speaker";
+        const string loudUser = "loud-speaker";
+        processor.SyncParticipants([quietUser, loudUser]);
+
+        int frames = 140; // 1.4s
+        var quietIn = AcousticRoomSimulator.GenerateNaturalSpeech(frames * FrameSamples, fundamentalHz: 225.0, amplitude: 2100.0, includeSyllablePauses: false);
+        var loudIn = AcousticRoomSimulator.GenerateNaturalSpeech(frames * FrameSamples, fundamentalHz: 185.0, amplitude: 26000.0, includeSyllablePauses: false);
+        var silence = new short[FrameSamples];
+
+        var quietSettledOut = new List<short>();
+        for (int f = 0; f < frames; f++)
+        {
+            var step = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [quietUser] = quietIn.AsSpan(f * FrameSamples, FrameSamples).ToArray(),
+                [loudUser] = silence
+            }, f * 10);
+
+            if (f >= 60)
+            {
+                quietSettledOut.AddRange(step[quietUser]);
+            }
+        }
+
+        var loudSettledOut = new List<short>();
+        int peakAbsLoudSample = 0;
+        for (int f = 0; f < frames; f++)
+        {
+            var step = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [quietUser] = silence,
+                [loudUser] = loudIn.AsSpan(f * FrameSamples, FrameSamples).ToArray()
+            }, (frames + f) * 10);
+
+            if (f >= 60)
+            {
+                foreach (short s in step[loudUser])
+                {
+                    peakAbsLoudSample = Math.Max(peakAbsLoudSample, Math.Abs((int)s));
+                }
+                loudSettledOut.AddRange(step[loudUser]);
+            }
+        }
+
+        double quietOutDbFs = 20.0 * Math.Log10(ComputeRms(quietSettledOut.ToArray()) / 32768.0);
+        double loudOutDbFs = 20.0 * Math.Log10(ComputeRms(loudSettledOut.ToArray()) / 32768.0);
+
+        Assert.InRange(quietOutDbFs, -20.5, -14.5);
+        Assert.InRange(loudOutDbFs, -19.5, -13.5);
+        Assert.True(peakAbsLoudSample <= 29350,
+            $"Expected -1.0 dBFS soft-knee peak limiter ceiling (~29205 PCM16), got peak={peakAbsLoudSample}");
+    }
+
+    [Fact]
+    public void QuietSpeakerFollowedBySustainedIdleNoise_DoesNotBoostRoomNoiseFloor_AndRecoversSpeechImmediately()
+    {
+        var processor = new AcousticRoomProcessor();
+        const string quietUser = "pc_roommate";
+        const string silentPeer = "mobile_listener";
+        processor.SyncParticipants([quietUser, silentPeer]);
+
+        int speechFrames = 140; // 1.4s quiet speech (~ -32 dBFS -> boosts TargetMakeupGain > 4x)
+        int idleFrames = 120;   // 1.2s low-level post-RNNoise room residual (~ -60 dBFS)
+        int resumeFrames = 80;  // 0.8s resumed quiet speech
+        var quietSpeech = AcousticRoomSimulator.GenerateNaturalSpeech((speechFrames + resumeFrames) * FrameSamples, fundamentalHz: 220.0, amplitude: 2100.0, includeSyllablePauses: false);
+        var silence = new short[FrameSamples];
+        var rng = new Random(12345);
+
+        for (int f = 0; f < speechFrames; f++)
+        {
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [quietUser] = quietSpeech.AsSpan(f * FrameSamples, FrameSamples).ToArray(),
+                [silentPeer] = silence
+            }, f * 10);
+        }
+
+        var settledIdleOut = new List<short>();
+        for (int f = 0; f < idleFrames; f++)
+        {
+            var residualFrame = new short[FrameSamples];
+            for (int i = 0; i < FrameSamples; i++)
+            {
+                residualFrame[i] = (short)rng.Next(-32, 33); // ~ -64.7 dBFS post-RNNoise ambient floor
+            }
+
+            var step = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [quietUser] = residualFrame,
+                [silentPeer] = silence
+            }, (speechFrames + f) * 10);
+
+            if (f >= 60)
+            {
+                settledIdleOut.AddRange(step[quietUser]);
+            }
+        }
+
+        var resumedSpeechOut = new List<short>();
+        for (int f = 0; f < resumeFrames; f++)
+        {
+            var step = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [quietUser] = quietSpeech.AsSpan((speechFrames + f) * FrameSamples, FrameSamples).ToArray(),
+                [silentPeer] = silence
+            }, (speechFrames + idleFrames + f) * 10);
+
+            if (f >= 25)
+            {
+                resumedSpeechOut.AddRange(step[quietUser]);
+            }
+        }
+
+        double idleRms = Math.Max(1e-6, ComputeRms(settledIdleOut.ToArray()));
+        double idleOutDbFs = 20.0 * Math.Log10(idleRms / 32768.0);
+        double resumedOutDbFs = 20.0 * Math.Log10(ComputeRms(resumedSpeechOut.ToArray()) / 32768.0);
+
+        // Without speech-presence makeup gating & idle silence expansion, +13 dB makeup would boost -64.7 dBFS up to ~ -51 dBFS.
+        // With speech-presence gating + -16 dB idle silence gate, settled idle floor stays crisp below -72 dBFS.
+        Assert.True(idleOutDbFs < -72.0, $"Expected crisp idle silence floor < -72 dBFS, got {idleOutDbFs:F1} dBFS");
+        Assert.InRange(resumedOutDbFs, -21.0, -14.5);
+    }
+
+    [Fact]
+    public void UnverifiedLongLagReciprocalPrior_CapsTargetLookaheadAt180Ms_PreventingSpeakerphoneEchoLatencyRunaway()
+    {
+        var processor = new AcousticRoomProcessor();
+        const string pcUser = "pc_roommate";
+        const string phoneUser = "android_speakerphone";
+        processor.SyncParticipants([pcUser, phoneUser]);
+
+        // Seed a +312 ms (+14976 samples) calibration on pc -> phone, which automatically creates an
+        // unverified -304 ms IsReciprocalPrior on phone -> pc.
+        processor.SeedSavedPairCalibration(pcUser, phoneUser, 14976, bleedGain: 0.25f, confidence: 0.72f);
+
+        var snap = processor.GetDiagnosticSnapshot();
+        var reciprocal = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == phoneUser && c.TargetUserId == pcUser);
+        Assert.NotNull(reciprocal);
+        Assert.True(reciprocal!.IsReciprocalPrior);
+        Assert.True(reciprocal.DelayMs < -290.0);
+
+        // Unverified reciprocal prior must never inflate pcUser's lookahead buffer to 355 ms; it is capped at <= 180 ms
+        var pcDiag = snap.Participants.First(p => p.UserId == pcUser);
+        Assert.InRange(pcDiag.EffectiveLookaheadMs, 50, 180);
+
+        // Reasonable unverified reciprocal priors (e.g., +94 ms -> -86 ms prior -> ~101 ms lookahead) remain completely unaffected
+        var normalProcessor = new AcousticRoomProcessor();
+        normalProcessor.SyncParticipants([pcUser, phoneUser]);
+        normalProcessor.SeedSavedPairCalibration(pcUser, phoneUser, 94 * 48, bleedGain: 0.20f, confidence: 0.72f);
+        var normalSnap = normalProcessor.GetDiagnosticSnapshot();
+        var normalPcDiag = normalSnap.Participants.First(p => p.UserId == pcUser);
+        Assert.InRange(normalPcDiag.EffectiveLookaheadMs, 98, 105);
+    }
+
+    [Fact]
+    public void NegligibleBleedNegativeLagCalibration_DoesNotInflateLookaheadBuffer()
+    {
+        var processor = new AcousticRoomProcessor();
+        const string pcUser = "pc_roommate";
+        const string phoneUser = "android_native_phone";
+        processor.SyncParticipants([pcUser, phoneUser]);
+
+        // Negligible directly-measured bleed (< 0.015) even with large negative lag must not inflate target lookahead beyond default floor (50 ms)
+        processor.SeedSavedPairCalibration(phoneUser, pcUser, -120 * 48, bleedGain: 0.008f, confidence: 0.75f);
+
+        var snap = processor.GetDiagnosticSnapshot();
+        var pcDiag = snap.Participants.First(p => p.UserId == pcUser);
+        Assert.Equal(50, pcDiag.EffectiveLookaheadMs);
+    }
+
+    [Fact]
+    public void ClosedBackHeadsetsWithNegligibleBleed_SingleSpeaker_CalibratesAndDropsLookaheadTo10MsFloor()
+    {
+        var processor = new AcousticRoomProcessor();
+        const string headsetA = "headset_user_a";
+        const string headsetB = "headset_user_b";
+
+        processor.SyncParticipants([headsetA, headsetB]);
+        processor.SetParticipantClientPipelineInfo(headsetA, 30.0, 6.0);
+        processor.SetParticipantClientPipelineInfo(headsetB, 30.0, 6.0);
+
+        int speechFrames = 80; // 0.8s solo speech on Headset A while Headset B has closed-back negligible bleed (~ -52 dB)
+        var speechA = AcousticRoomSimulator.GenerateNaturalSpeech(speechFrames * FrameSamples, 220.0, 12000.0, includeSyllablePauses: true);
+        var silentFrame = new short[FrameSamples];
+
+        for (int f = 0; f < speechFrames; f++)
+        {
+            int idx = f * FrameSamples;
+            var frameA = speechA.AsSpan(idx, FrameSamples).ToArray();
+            var frameB = new short[FrameSamples];
+            for (int i = 0; i < FrameSamples; i++)
+            {
+                frameB[i] = (short)Math.Round(frameA[i] * 0.0025); // -52 dB negligible bleed
+            }
+
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [headsetA] = frameA,
+                [headsetB] = frameB
+            }, f * 10);
+        }
+
+        // Brief 50ms inter-phrase pause so Headset A applies its newly lowered lookahead target
+        for (int f = 0; f < 5; f++)
+        {
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [headsetA] = silentFrame,
+                [headsetB] = silentFrame
+            }, (speechFrames + f) * 10);
+        }
+
+        var snap = processor.GetDiagnosticSnapshot();
+        var calAB = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == headsetA && c.TargetUserId == headsetB);
+        Assert.NotNull(calAB);
+        Assert.True(calAB!.IsLiveVerified);
+        Assert.False(calAB.IsReciprocalPrior);
+        Assert.True(calAB.BleedGainLinear < AcousticRoomProcessor.NegligibleBleedGainThreshold);
+
+        // No false warning claiming headset_user_a hasn't been calibrated yet
+        Assert.DoesNotContain(snap.Warnings, w => w.Contains($"Direction from {headsetA}", StringComparison.Ordinal));
+
+        var diagA = snap.Participants.First(p => p.UserId == headsetA);
+        var diagB = snap.Participants.First(p => p.UserId == headsetB);
+        Assert.InRange(diagA.EffectiveLookaheadMs, AcousticRoomProcessor.MinCalibratedLookaheadMs, 12);
+        Assert.InRange(diagB.EffectiveLookaheadMs, AcousticRoomProcessor.MinCalibratedLookaheadMs, 12);
+    }
+
+    [Fact]
+    public void ClosedBackHeadsetsWithZeroOrAmbientUncorrelatedNoise_TwoSpeakers_CalibratesBothDirectionsAndDropsLookaheadTo10Ms()
+    {
+        var processor = new AcousticRoomProcessor();
+        const string headsetA = "headset_user_a";
+        const string headsetB = "headset_user_b";
+
+        processor.SyncParticipants([headsetA, headsetB]);
+        processor.SetParticipantClientPipelineInfo(headsetA, 30.0, 5.0);
+        processor.SetParticipantClientPipelineInfo(headsetB, 30.0, 5.0);
+
+        int turnFrames = 75; // 0.75s per turn
+        var speechA = AcousticRoomSimulator.GenerateNaturalSpeech(turnFrames * FrameSamples, 210.0, 12500.0, includeSyllablePauses: true);
+        var speechB = AcousticRoomSimulator.GenerateNaturalSpeech(turnFrames * FrameSamples, 175.0, 12500.0, includeSyllablePauses: true);
+        var silentFrame = new short[FrameSamples];
+        var rng = new Random(42);
+
+        int frameCursor = 0;
+        // Turn 1: Headset A speaks while Headset B only has uncorrelated -68 dBFS post-RNNoise ambient floor (no correlated bleed)
+        for (int f = 0; f < turnFrames; f++, frameCursor++)
+        {
+            int idx = f * FrameSamples;
+            var ambientB = new short[FrameSamples];
+            for (int i = 0; i < FrameSamples; i++) ambientB[i] = (short)rng.Next(-14, 15);
+
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [headsetA] = speechA.AsSpan(idx, FrameSamples).ToArray(),
+                [headsetB] = ambientB
+            }, frameCursor * 10);
+        }
+
+        // Turn 2: Headset B speaks while Headset A is completely silent (zero bleed)
+        for (int f = 0; f < turnFrames; f++, frameCursor++)
+        {
+            int idx = f * FrameSamples;
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [headsetA] = silentFrame,
+                [headsetB] = speechB.AsSpan(idx, FrameSamples).ToArray()
+            }, frameCursor * 10);
+        }
+
+        for (int f = 0; f < 5; f++, frameCursor++)
+        {
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [headsetA] = silentFrame,
+                [headsetB] = silentFrame
+            }, frameCursor * 10);
+        }
+
+        var snap = processor.GetDiagnosticSnapshot();
+        var calAB = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == headsetA && c.TargetUserId == headsetB);
+        var calBA = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == headsetB && c.TargetUserId == headsetA);
+        Assert.NotNull(calAB);
+        Assert.NotNull(calBA);
+        Assert.False(calAB!.IsReciprocalPrior);
+        Assert.False(calBA!.IsReciprocalPrior);
+        Assert.True(calAB.BleedGainLinear < AcousticRoomProcessor.NegligibleBleedGainThreshold);
+        Assert.True(calBA.BleedGainLinear < AcousticRoomProcessor.NegligibleBleedGainThreshold);
+        Assert.Empty(snap.Warnings);
+
+        var diagA = snap.Participants.First(p => p.UserId == headsetA);
+        var diagB = snap.Participants.First(p => p.UserId == headsetB);
+        Assert.InRange(diagA.EffectiveLookaheadMs, AcousticRoomProcessor.MinCalibratedLookaheadMs, 12);
+        Assert.InRange(diagB.EffectiveLookaheadMs, AcousticRoomProcessor.MinCalibratedLookaheadMs, 12);
+    }
+
+    [Fact]
+    public void NegligibleBleedHeadsetLock_InstantlyUpgradesToNegativeLagLock_WhenAudibleBleedStarts()
+    {
+        var processor = new AcousticRoomProcessor();
+        const string userA = "user_a";
+        const string userB = "user_b";
+        processor.SyncParticipants([userA, userB]);
+
+        int phase1Frames = 70; // 0.7s isolated headset speech (zero bleed on B)
+        var p1SpeechA = AcousticRoomSimulator.GenerateNaturalSpeech(phase1Frames * FrameSamples, 230.0, 13000.0, includeSyllablePauses: true);
+        var silentFrame = new short[FrameSamples];
+
+        int frameCursor = 0;
+        for (int f = 0; f < phase1Frames; f++, frameCursor++)
+        {
+            int idx = f * FrameSamples;
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [userA] = p1SpeechA.AsSpan(idx, FrameSamples).ToArray(),
+                [userB] = silentFrame
+            }, frameCursor * 10);
+        }
+
+        for (int f = 0; f < 5; f++, frameCursor++)
+        {
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [userA] = silentFrame,
+                [userB] = silentFrame
+            }, frameCursor * 10);
+        }
+
+        var p1Snap = processor.GetDiagnosticSnapshot();
+        Assert.InRange(p1Snap.Participants.First(p => p.UserId == userB).EffectiveLookaheadMs, AcousticRoomProcessor.MinCalibratedLookaheadMs, 12);
+
+        // Phase 2: User B unplugs closed-back headset / switches mic so User A's voice now bleeds into B at -30ms (-1440 samples)
+        int phase2Frames = 110;
+        int advanceSamples = 30 * 48; // -30ms negative lag on A -> B
+        var rawVoiceA = AcousticRoomSimulator.GenerateNaturalSpeech(phase2Frames * FrameSamples + advanceSamples, 220.0, 14500.0, includeSyllablePauses: true);
+        double lateBleedIn = 0;
+        double lateBleedOut = 0;
+
+        for (int f = 0; f < phase2Frames; f++, frameCursor++)
+        {
+            int idx = f * FrameSamples;
+            var frameA = rawVoiceA.AsSpan(idx, FrameSamples).ToArray();
+            var frameB = new short[FrameSamples];
+            for (int i = 0; i < FrameSamples; i++)
+            {
+                frameB[i] = (short)Math.Round(rawVoiceA[idx + i + advanceSamples] * 0.22);
+            }
+
+            var outputs = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [userA] = frameA,
+                [userB] = frameB
+            }, frameCursor * 10);
+
+            if (f >= 45)
+            {
+                lateBleedIn += ComputeRms(frameB);
+                lateBleedOut += ComputeRms(outputs[userB]);
+            }
+        }
+
+        var p2Snap = processor.GetDiagnosticSnapshot();
+        var calAB = p2Snap.Calibrations.First(c => c.SourceUserId == userA && c.TargetUserId == userB);
+        Assert.InRange(calAB.DelayMs, -32.5, -27.5);
+        Assert.True(p2Snap.Participants.First(p => p.UserId == userB).EffectiveLookaheadMs >= 42);
+        Assert.True(lateBleedOut < lateBleedIn * 0.15,
+            $"Expected upgraded negative-lag bleed to be suppressed by >85%, got in={lateBleedIn:F1}, out={lateBleedOut:F1}");
+    }
+
+    [Fact]
+    public void PostCancellationLeveler_CoughOrBumpBeforeSilence_DoesNotCrushFirstSentenceAfterSilence()
+    {
+        var processor = new AcousticRoomProcessor();
+        const string quietSpeaker = "quiet_speaker";
+        const string silentPeer = "silent_peer";
+        processor.SyncParticipants([quietSpeaker, silentPeer]);
+
+        var silence = new short[FrameSamples];
+        int frameCursor = 0;
+
+        // 1. Warm up quiet speaker (~-30 dBFS) for 2.0s
+        var warmSpeech = AcousticRoomSimulator.GenerateNaturalSpeech(200 * FrameSamples, fundamentalHz: 205.0, amplitude: 2400.0, includeSyllablePauses: false);
+        for (int f = 0; f < 200; f++, frameCursor++)
+        {
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [quietSpeaker] = warmSpeech.AsSpan(f * FrameSamples, FrameSamples).ToArray(),
+                [silentPeer] = silence
+            }, frameCursor * 10);
+        }
+
+        // 2. 50ms loud cough/bump (~0.85 peak)
+        var bumpFrame = new short[FrameSamples];
+        int maxBumpPeak = 0;
+        for (int f = 0; f < 5; f++, frameCursor++)
+        {
+            for (int i = 0; i < FrameSamples; i++)
+            {
+                double t = (f * FrameSamples + i) / 48000.0;
+                bumpFrame[i] = (short)Math.Round(28000.0 * Math.Sin(2.0 * Math.PI * 260.0 * t));
+            }
+            var step = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [quietSpeaker] = bumpFrame.ToArray(),
+                [silentPeer] = silence
+            }, frameCursor * 10);
+            foreach (short s in step[quietSpeaker])
+            {
+                maxBumpPeak = Math.Max(maxBumpPeak, Math.Abs((int)s));
+            }
+        }
+
+        // 3. 4.0s period of silence
+        for (int f = 0; f < 400; f++, frameCursor++)
+        {
+            processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [quietSpeaker] = silence,
+                [silentPeer] = silence
+            }, frameCursor * 10);
+        }
+
+        // 4. Resume normal quiet speech and verify Sec 1 is immediately at normal loudness (no 1-2 sentence whisper)
+        var resumeSpeech = AcousticRoomSimulator.GenerateNaturalSpeech(100 * FrameSamples, fundamentalHz: 205.0, amplitude: 2400.0, includeSyllablePauses: false);
+        var sec1Out = new List<short>();
+        for (int f = 0; f < 100; f++, frameCursor++)
+        {
+            var step = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
+            {
+                [quietSpeaker] = resumeSpeech.AsSpan(f * FrameSamples, FrameSamples).ToArray(),
+                [silentPeer] = silence
+            }, frameCursor * 10);
+            if (f >= 10)
+            {
+                sec1Out.AddRange(step[quietSpeaker]);
+            }
+        }
+
+        double sec1OutDbfs = 20.0 * Math.Log10(ComputeRms(sec1Out.ToArray()) / 32768.0);
+        Assert.True(maxBumpPeak <= 29350, $"Expected 50ms bump capped <= -1.0 dBFS, got peak={maxBumpPeak}");
+        Assert.InRange(sec1OutDbfs, -21.0, -13.5);
     }
 }

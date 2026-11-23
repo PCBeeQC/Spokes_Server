@@ -35,11 +35,11 @@
                     <MudList T="string" Dense="true" Class="px-2 py-2">
                         @foreach (var channel in _channels)
                         {
-                            <div class="d-flex align-center justify-space-between py-2 px-2 rounded hover-bg">
-                                <div class="d-flex align-center gap-3">
-                                    <MudAvatar Size="Size.Medium" Color="Color.Dark">#</MudAvatar>
-                                    <div class="d-flex flex-column">
-                                        <MudText Typo="Typo.body1" Style="font-weight: 600;">@channel.Name</MudText>
+                            <div class="d-flex align-center justify-space-between gap-2 py-2 px-2 rounded hover-bg">
+                                <div class="d-flex align-center gap-3" style="min-width: 0;">
+                                    <MudAvatar Size="Size.Medium" Color="Color.Dark" Class="flex-shrink-0">#</MudAvatar>
+                                    <div class="d-flex flex-column" style="min-width: 0;">
+                                        <MudText Typo="Typo.body1" Style="font-weight: 600; overflow-wrap: anywhere;">@channel.Name</MudText>
                                         <MudText Typo="Typo.caption" Color="Color.Secondary">
                                             @(channel.IsAnnouncementOnly ? Loc["Announcement Channel"] : (channel.IsPublicChannel ? Loc["Public Channel"] : Loc["Channel"]))
                                         </MudText>
@@ -47,7 +47,7 @@
                                 </div>
                                 @if (!IsReadOnly && _album?.OwnerId == CurrentUserId)
                                 {
-                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Error" Size="Size.Small" OnClick="@(() => UnshareChannel(channel.Id))" title="@Loc["Unshare from channel"]" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Error" Size="Size.Small" Class="flex-shrink-0" OnClick="@(() => UnshareChannel(channel.Id))" title="@Loc["Unshare from channel"]" />
                                 }
                             </div>
                         }
@@ -92,11 +92,11 @@
                         {
                             <div class="d-flex align-center gap-3 py-2 px-2 rounded hover-bg">
                                 <EmployeeAvatar Employee="@emp" Size="Size.Medium" />
-                                <div class="d-flex flex-column">
-                                    <MudText Typo="Typo.body1" Style="font-weight: 600;">@emp.FullName</MudText>
+                                <div class="d-flex flex-column" style="min-width: 0;">
+                                    <MudText Typo="Typo.body1" Style="font-weight: 600; overflow-wrap: anywhere;">@emp.FullName</MudText>
                                     @if (!string.IsNullOrWhiteSpace(emp.Position))
                                     {
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@emp.Position</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="overflow-wrap: anywhere;">@emp.Position</MudText>
                                     }
                                 </div>
                             </div>
@@ -141,54 +141,48 @@
     private void LoadData()
     {
         _album = Db.Albums.GetById(AlbumId);
-        if (_album == null) return;
+        var caller = !string.IsNullOrWhiteSpace(CurrentUserId) ? Db.Employees.GetById(CurrentUserId) : null;
+        if (_album == null || caller is not { IsActiveUnsuspended: true } || !AlbumService.CanUserViewAlbum(_album, caller.Id))
+        {
+            _channels = [];
+            _users = [];
+            _hasPublicAudience = false;
+            return;
+        }
 
-        var caller = Db.Employees.GetById(CurrentUserId);
         var allSharedChannels = Db.ChatChannels.GetAll()
             .Where(c => _album.SharedWithChannelIds.Contains(c.Id))
             .ToList();
 
         // Channel confidentiality: Viewers only see channels they have permission to access
         _channels = allSharedChannels
-            .Where(c => caller != null && ChatAuth.CanUserAccessChannel(c, caller))
+            .Where(c => ChatAuth.CanUserAccessChannel(c, caller))
             .ToList();
 
         bool isAudienceRestricted = PrivacyService.ShouldRestrictAlbumAudience(_album, caller);
-        bool hasPublicOrAnnouncement = allSharedChannels.Any(c => c.IsPublicChannel || c.IsAnnouncementOnly);
+        bool IsRestrictedOrHiddenRosterChannel(ChatChannel c) =>
+            (isAudienceRestricted && (c.IsPublicChannel || c.IsAnnouncementOnly)) ||
+            PrivacyService.ShouldHideMemberList(c, caller);
 
-        if (isAudienceRestricted && hasPublicOrAnnouncement)
-        {
-            _hasPublicAudience = true;
+        // Only inspect accessible channels so unauthorized channel types cannot be inferred
+        _hasPublicAudience = _channels.Any(IsRestrictedOrHiddenRosterChannel);
 
-            // Only enumerate members from private / non-public channels that the caller can access
-            var privateChannelIds = _channels
-                .Where(c => !c.IsPublicChannel && !c.IsAnnouncementOnly)
-                .Select(c => c.Id)
-                .ToList();
+        var enumerableChannelIds = _channels
+            .Where(c => !IsRestrictedOrHiddenRosterChannel(c))
+            .Select(c => c.Id)
+            .ToList();
 
-            var privateUserIds = privateChannelIds
-                .SelectMany(cId => ChatAccess.GetUsersForChannel(cId))
-                .Distinct()
-                .ToList();
+        var userIds = enumerableChannelIds
+            .SelectMany(cId => ChatAccess.GetUsersForChannel(cId))
+            .Distinct()
+            .ToList();
 
-            _users = Db.Employees.GetAll()
-                .Where(e => privateUserIds.Contains(e.Id) && PrivacyService.CanDiscoverUser(caller, e))
-                .ToList();
-        }
-        else
-        {
-            _hasPublicAudience = false;
-
-            var userIds = _channels
-                .Select(c => c.Id)
-                .SelectMany(cId => ChatAccess.GetUsersForChannel(cId))
-                .Distinct()
-                .ToList();
-
-            _users = Db.Employees.GetAll()
-                .Where(e => userIds.Contains(e.Id) && (caller == null || PrivacyService.CanDiscoverUser(caller, e)))
-                .ToList();
-        }
+        _users = Db.Employees.GetActiveEmployees()
+            .Where(e => e is { IsActive: true, IsBanned: false, IsSystem: false } &&
+                        userIds.Contains(e.Id) &&
+                        PrivacyService.CanDiscoverUser(caller, e))
+            .OrderBy(e => e.FullName, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
     }
 
     private void UnshareChannel(string channelId)

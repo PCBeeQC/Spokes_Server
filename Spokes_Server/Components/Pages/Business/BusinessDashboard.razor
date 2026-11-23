@@ -1,312 +1,370 @@
 @page "/business-dashboard"
 @attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Projects
 @inject NavigationManager Nav
 @inject Database Db
-<PageTitle>Business Dashboard</PageTitle>
+@inject ILedgerService LedgerService
+@inject IFinancialAccountService FinancialAccountService
+@inject IJurisdictionTemplateService JurisdictionService
+@inject UserService UserService
+
+<PageTitle>@BizLoc["Financial Dashboard"]</PageTitle>
 
 <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4 pb-16">
-    <div class="d-flex justify-space-between align-center mb-4">
-        <MudText Typo="Typo.h5"><b>Business Dashboard</b></MudText>
-        <MudText Typo="Typo.subtitle2" Color="Color.Secondary">@DateTime.Now.ToString("MMMM yyyy")</MudText>
+    <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-4">
+        <div>
+            <MudText Typo="Typo.h5"><b>@BizLoc["Financial Dashboard & Bookkeeping Pulse"]</b></MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                @BizLoc["Real-time cash position, government tax reserves, and daily bookkeeping checklist."]
+            </MudText>
+        </div>
+        <MudChip T="string" Icon="@Icons.Material.Filled.CalendarToday" Color="Color.Default" Variant="Variant.Outlined">
+            @DateTime.Now.ToString("MMMM yyyy")
+        </MudChip>
     </div>
 
-    @* --- 1. TOP KPI CARDS --- *@
-    <MudGrid Class="mb-6">
-        <MudItem xs="12" sm="6" md="3">
-            <StatCard Title="Revenue (MTD)" Value="@TotalInvoicedThisMonth.ToString("C0")" Subtitle="Total Sales"
-                Icon="@Icons.Material.Filled.AttachMoney" IconColor="Color.Success"
-                Trend="@(GetGrowth(TotalInvoicedThisMonth, TotalInvoicedLastMonth))"
-                TrendColor="@(TotalInvoicedThisMonth >= TotalInvoicedLastMonth ? Color.Success : Color.Error)" />
-        </MudItem>
-        <MudItem xs="12" sm="6" md="3">
-            <StatCard Title="Accounts Receivable" Value="@TotalARDue.ToString("C0")"
-                Subtitle="@($"{UnpaidInvoicesCount} unpaid invoice(s)")" Icon="@Icons.Material.Filled.Receipt"
-                IconColor="Color.Warning" />
-        </MudItem>
-        <MudItem xs="12" sm="6" md="3">
-            <StatCard Title="Active Projects" Value="@ActiveProjectsCount.ToString()" Subtitle="In Production"
-                Icon="@Icons.Material.Filled.Work" IconColor="Color.Info" />
-        </MudItem>
-        <MudItem xs="12" sm="6" md="3">
-            <StatCard Title="Pipeline Value" Value="@PipelineValue.ToString("C0")"
-                Subtitle="@($"{PendingQuotesCount} pending quote(s)")" Icon="@Icons.Material.Filled.TrendingUp"
-                IconColor="Color.Primary" />
-        </MudItem>
-    </MudGrid>
-
-    @* --- 2. COMPREHENSIVE CASH FLOW ANALYSIS --- *@
-    <MudPaper Elevation="0" Outlined="true" Class="pa-6 mb-6">
-        <div class="d-flex align-center gap-3 mb-6">
-            <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Large" Color="Color.Primary" />
-            <div>
-                <MudText Typo="Typo.h6"><b>Cash Flow Analysis</b></MudText>
-                <MudText Typo="Typo.caption" Color="Color.Secondary">Comprehensive breakdown for
-                    @DateTime.Now.ToString("MMMM")</MudText>
+    @* --- 1. TRUE AVAILABLE CASH EQUATION --- *@
+    <MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-6" Style="border-left: 4px solid var(--mud-palette-primary);">
+        <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-3">
+            <div class="d-flex align-center gap-2">
+                <MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" Color="Color.Primary" />
+                <MudText Typo="Typo.subtitle1"><b>@BizLoc["True Available Cash Equation"]</b></MudText>
             </div>
-            <MudSpacer />
-
-            @* Top Level Summary Stats *@
-            <MudPaper Elevation="0" Class="d-flex gap-6 pa-3"
-                Style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
-                <div class="d-flex flex-column align-center px-4"
-                    style="border-right: 1px solid var(--mud-palette-divider);">
-                    <MudText Typo="Typo.caption" Style="font-weight:bold; color:var(--mud-palette-success);">TOTAL IN
-                    </MudText>
-                    <MudText Typo="Typo.h6">@MoneyInTotal.ToString("C0")</MudText>
-                </div>
-                <div class="d-flex flex-column align-center px-4"
-                    style="border-right: 1px solid var(--mud-palette-divider);">
-                    <MudText Typo="Typo.caption" Style="font-weight:bold; color:var(--mud-palette-error);">TOTAL OUT
-                        (ACTUAL)</MudText>
-                    <MudText Typo="Typo.h6">@MoneyOutTotal.ToString("C0")</MudText>
-                </div>
-                <div class="d-flex flex-column align-center px-4">
-                    <MudText Typo="Typo.caption" Style="font-weight:bold;">NET FLOW</MudText>
-                    <MudText Typo="Typo.h6" Color="@(NetCashFlow >= 0 ? Color.Success : Color.Error)">
-                        @NetCashFlow.ToString("C0")</MudText>
-                </div>
-            </MudPaper>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                @BizLoc["Bank cash minus money alreadyspoken for (Sales Taxes, Payroll DAS, and immediate 14-day payables)"]
+            </MudText>
         </div>
 
-        <MudGrid>
-            @* COLUMN 1: MONEY OUT *@
-            <MudItem xs="12" md="6">
-                <MudText Typo="Typo.subtitle1" Class="mb-3"><b>Money Out (Current Month)</b></MudText>
-                <MudPaper Elevation="0" Outlined="true" Class="pa-4">
-                    
-                    @* Recurring & One-Time *@
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <MudText Typo="Typo.body2"><b>Recurring Bills</b></MudText>
-                        <MudText Typo="Typo.body2"><b>@RecurringBillsThisMonth.ToString("C0")</b></MudText>
-                    </div>
-                    
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <MudText Typo="Typo.body2"><b>One-Time Bills</b></MudText>
-                        <MudText Typo="Typo.body2"><b>@OneTimeBillsThisMonth.ToString("C0")</b></MudText>
-                    </div>
-
-                    <MudDivider Class="my-3" />
-
-                    @* Standard Bills & Expenses *@
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <MudText Typo="Typo.body2"><b>Standard Bills</b></MudText>
-                        <MudText Typo="Typo.body2"><b>@StandardBillsThisMonth.ToString("C0")</b></MudText>
-                    </div>
-                    
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <MudText Typo="Typo.body2"><b>PO Bills</b></MudText>
-                        <MudText Typo="Typo.body2"><b>@PoBillsThisMonth.ToString("C0")</b></MudText>
-                    </div>
-                    
-                    <div class="d-flex justify-space-between align-center mb-1">
-                        <MudText Typo="Typo.body2"><b>Employee Expenses</b></MudText>
-                        <MudText Typo="Typo.body2"><b>@ExpensesThisMonth.ToString("C0")</b></MudText>
-                    </div>
-
-                    <MudDivider Class="my-3" />
-
-                    @* Commissions *@
-                    <div class="d-flex justify-space-between align-center mb-4">
-                        <MudText Typo="Typo.body2"><b>Commissions Payable</b></MudText>
-                        <MudText Typo="Typo.body2"><b>@CommissionsThisMonth.ToString("C0")</b></MudText>
-                    </div>
-
-                    <MudDivider Class="my-3" />
-                    
-                    <div class="d-flex justify-space-between align-center">
-                        <MudText Typo="Typo.body2" Style="font-weight:bold;">Total Projected Out</MudText>
-                        <MudText Typo="Typo.body1" Color="Color.Error"><b>@MoneyOutTotal.ToString("C0")</b></MudText>
-                    </div>
-                </MudPaper>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="6" md="3">
+                <StatCard Title="@BizLoc["Cash in Bank"]"
+                          Value="@BankCashBalance.ToString("C0")"
+                          Subtitle="@(TotalAttachedCreditLineLimit > 0m ? $"{BizLoc["Available w/ credit line:"].Value} {AvailableBankLiquidity:C0}" : BizLoc["Active bank & cash accounts"].Value)"
+                          Icon="@Icons.Material.Filled.AccountBalance"
+                          IconColor="Color.Info" />
             </MudItem>
-
-            @* COLUMN 2: MONEY IN *@
-            <MudItem xs="12" md="6">
-                <MudText Typo="Typo.subtitle1" Class="mb-3"><b>Money In (Current Month)</b></MudText>
-                <MudPaper Elevation="0" Outlined="true" Class="pa-4">
-
-                    @* Received *@
-                    <div class="d-flex align-center gap-3 mb-4">
-                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
-                        <div class="flex-grow-1">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">RECEIVED</MudText>
-                            <MudText Typo="Typo.h6"><b>@MoneyInReceived.ToString("C0")</b></MudText>
-                        </div>
-                    </div>
-
-                    @* Pending *@
-                    <div class="d-flex align-center gap-3 mb-4">
-                        <MudIcon Icon="@Icons.Material.Filled.AccessTime" Color="Color.Warning" />
-                        <div class="flex-grow-1">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">PENDING (DUE + OVERDUE)</MudText>
-                            <MudText Typo="Typo.h6"><b>@MoneyInPending.ToString("C0")</b></MudText>
-                        </div>
-                    </div>
-
-                    <MudDivider Class="my-3" />
-                    <div class="d-flex justify-space-between align-center">
-                        <MudText Typo="Typo.body2" Style="font-weight:bold;">Total Projected In</MudText>
-                        <MudText Typo="Typo.body1" Color="Color.Success"><b>@MoneyInTotal.ToString("C0")</b></MudText>
-                    </div>
-
-                </MudPaper>
+            <MudItem xs="12" sm="6" md="3">
+                <StatCard Title="@BizLoc["Less: Gov. & Tax Reserve"]"
+                          Value="@($"-{GovernmentReserveTotal:C0}")"
+                          Subtitle="@($"{BizLoc["Sales Tax:"].Value} {NetSalesTaxReserve:C0} · {BizLoc["DAS:"].Value} {PayrollDasReserve:C0}")"
+                          Icon="@Icons.Material.Filled.Gavel"
+                          IconColor="Color.Warning" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <StatCard Title="@BizLoc["Less: Due in 14 Days"]"
+                          Value="@($"-{PayablesDueNext14Days:C0}")"
+                          Subtitle="@($"{DueSoonBillsCount} {BizLoc["payables & net payroll due"].Value}")"
+                          Icon="@Icons.Material.Filled.EventBusy"
+                          IconColor="Color.Error" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <StatCard Title="@BizLoc["= True Available Cash"]"
+                          Value="@TrueAvailableCash.ToString("C0")"
+                          Subtitle="@($"{BizLoc["Plus Open AR:"].Value} {TotalARDue:C0} ({OverdueARAmount:C0} {BizLoc["Overdue"].Value.ToLower()})")"
+                          Icon="@Icons.Material.Filled.CheckCircle"
+                          IconColor="@(TrueAvailableCash >= 0 ? Color.Success : Color.Error)" />
             </MudItem>
         </MudGrid>
     </MudPaper>
 
-    @* --- 3. ACTION REQUIRED + PROJECT STATUS --- *@
+    @* --- 2. GOVERNMENT & PAYROLL DEADLINES + BOOKKEEPING HEALTH CHECKLIST --- *@
     <MudGrid Class="mb-6">
-        @* Action Required This Week *@
-        <MudItem xs="12" lg="8">
+        @* LEFT: Government & Payroll Remittances *@
+        <MudItem xs="12" lg="6">
             <MudPaper Elevation="0" Outlined="true" Class="pa-4" Style="height: 100%;">
-                <MudText Typo="Typo.h6" Class="mb-4">
-                    <MudIcon Icon="@Icons.Material.Filled.NotificationsActive" Class="mr-2" Size="Size.Small" />
-                    <b>Action Required This Week</b>
-                </MudText>
-
-                @if (!InvoicesDueSoon.Any() && !StaleQuotes.Any() && DraftQuotesCount == 0)
-                {
-                    <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Outlined">
-                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Class="mr-2" />
-                        All caught up! No immediate actions required.
-                    </MudAlert>
-                }
-                else
-                {
-                    <div class="d-flex flex-column gap-3">
-                        @* Invoices Due Soon *@
-                        @foreach (var inv in InvoicesDueSoon.Take(3))
-                        {
-                            var daysUntilDue = (inv.DueDate - DateTime.Today).Days;
-                            var urgencyColor = daysUntilDue < 0 ? Color.Error : (daysUntilDue <= 3 ? Color.Warning :
-                            Color.Info);
-                            <MudPaper Elevation="0" Class="pa-3 d-flex justify-space-between align-center"
-                                Style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
-                                <div class="d-flex align-center gap-3">
-                                    <MudIcon Icon="@Icons.Material.Filled.Payment" Color="@urgencyColor" />
-                                    <div>
-                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@inv.InvoiceNumber</MudText>
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                            @GetProjectName(inv.ProjectId) • @inv.BalanceDue.ToString("C0") due
-                                        </MudText>
-                                    </div>
-                                </div>
-                                <div class="d-flex align-center gap-2">
-                                    <MudChip T="string" Size="Size.Small" Color="@urgencyColor" Variant="Variant.Filled">
-                                        @if (daysUntilDue < 0)
-                                        {
-                                            @($"{Math.Abs(daysUntilDue)}d overdue")
-                                        }
-                                        else if (daysUntilDue == 0)
-                                        {
-                                            @("Due today")
-                                        }
-                                        else
-                                        {
-                                            @($"{daysUntilDue}d left")
-                                        }
-                                    </MudChip>
-                                    <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
-                                        OnClick="@(() => Nav.NavigateTo($"/projects/{inv.ProjectId}/invoice/{inv.Id}"))" />
-                                </div>
-                            </MudPaper>
-                        }
-
-                        @* Stale Quotes *@
-                        @foreach (var quote in StaleQuotes.Take(2))
-                        {
-                            var daysSinceSent = (DateTime.Today - quote.Date).Days;
-                            <MudPaper Elevation="0" Class="pa-3 d-flex justify-space-between align-center"
-                                Style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
-                                <div class="d-flex align-center gap-3">
-                                    <MudIcon Icon="@Icons.Material.Filled.Description" Color="Color.Warning" />
-                                    <div>
-                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@quote.QuoteNumber - @quote.Title
-                                        </MudText>
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                            @GetProjectName(quote.ProjectId) • @quote.GrandTotal.ToString("C0")
-                                        </MudText>
-                                    </div>
-                                </div>
-                                <div class="d-flex align-center gap-2">
-                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
-                                        Sent @daysSinceSent days ago
-                                    </MudChip>
-                                    <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
-                                        OnClick="@(() => Nav.NavigateTo($"/projects/{quote.ProjectId}/quote/{quote.Id}"))" />
-                                </div>
-                            </MudPaper>
-                        }
-
-                        @* Draft Quotes Summary *@
-                        @if (DraftQuotesCount > 0)
-                        {
-                            <MudPaper Elevation="0" Class="pa-3 d-flex justify-space-between align-center"
-                                Style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
-                                <div class="d-flex align-center gap-3">
-                                    <MudIcon Icon="@Icons.Material.Filled.Edit" Color="Color.Default" />
-                                    <MudText Typo="Typo.body2"><b>@DraftQuotesCount</b> draft quote(s) need finalization
-                                    </MudText>
-                                </div>
-                                <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
-                                    OnClick="@(() => Nav.NavigateTo("/projects"))">Review</MudButton>
-                            </MudPaper>
-                        }
+                <div class="d-flex justify-space-between align-center mb-3">
+                    <div class="d-flex align-center gap-2">
+                        <MudIcon Icon="@Icons.Material.Filled.AccountBalance" Color="Color.Warning" />
+                        <MudText Typo="Typo.h6"><b>@BizLoc["Government & Payroll Obligations"]</b></MudText>
                     </div>
-                }
+                    <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                               EndIcon="@Icons.Material.Filled.ArrowForward"
+                               OnClick="@(() => Nav.NavigateTo("/business/accounting?tab=Payables"))">
+                        @BizLoc["Pay & Remit"]
+                    </MudButton>
+                </div>
+
+                <MudStack Spacing="3">
+                    @* 1. Payroll Net Pay Disbursement *@
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-3 d-flex justify-space-between align-center flex-wrap gap-2">
+                        <div>
+                            <MudText Typo="Typo.body2"><b>@BizLoc["Employee Net Payroll Payable"]</b></MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @if (UnpaidFinalizedPayRuns.Count > 0)
+                                {
+                                    @($"{UnpaidFinalizedPayRuns.Count} {BizLoc["finalized pay run(s) awaiting disbursement"].Value}")
+                                }
+                                else
+                                {
+                                    @BizLoc["All finalized pay runs have been disbursed."]
+                                }
+                            </MudText>
+                        </div>
+                        <div class="d-flex align-center gap-2">
+                            <MudChip T="string" Size="Size.Small" Color="@(UnpaidNetPayrollTotal > 0 ? Color.Warning : Color.Success)" Variant="Variant.Filled">
+                                @UnpaidNetPayrollTotal.ToString("C2")
+                            </MudChip>
+                            <MudIconButton Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small"
+                                           OnClick="@(() => Nav.NavigateTo("/business/accounting?tab=Payroll"))" />
+                        </div>
+                    </MudPaper>
+
+                    @* 2. Payroll Source Deductions (DAS) *@
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-3 d-flex justify-space-between align-center flex-wrap gap-2">
+                        <div>
+                            <MudText Typo="Typo.body2"><b>@BizLoc["Payroll Source Deductions / DAS"]</b></MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @BizLoc["Next remittance deadline:"] <b>@NextDasDueDate.ToString("yyyy-MM-dd")</b> (@UnremittedDasRunsCount @BizLoc["run(s) unremitted"])
+                            </MudText>
+                        </div>
+                        <div class="d-flex align-center gap-2">
+                            <MudChip T="string" Size="Size.Small" Color="@(PayrollDasReserve > 0 ? Color.Warning : Color.Success)" Variant="Variant.Filled">
+                                @PayrollDasReserve.ToString("C2")
+                            </MudChip>
+                            <MudIconButton Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small"
+                                           OnClick="@(() => Nav.NavigateTo("/business/accounting?tab=Payables"))" />
+                        </div>
+                    </MudPaper>
+
+                    @* 3. Sales Tax Net Remittance *@
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-3 d-flex justify-space-between align-center flex-wrap gap-2">
+                        <div>
+                            <MudText Typo="Typo.body2"><b>@BizLoc["Net Sales Tax Reserve (Collected minus ITC/ITR)"]</b></MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @BizLoc["Collected on Invoices minus Input Tax Credits on Bills & Expenses"]
+                            </MudText>
+                        </div>
+                        <div class="d-flex align-center gap-2">
+                            <MudChip T="string" Size="Size.Small" Color="@(NetSalesTaxReserve > 0 ? Color.Info : Color.Success)" Variant="Variant.Filled">
+                                @NetSalesTaxReserve.ToString("C2")
+                            </MudChip>
+                            <MudIconButton Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small"
+                                           OnClick="@(() => Nav.NavigateTo("/business/accounting?tab=GeneralLedger"))" />
+                        </div>
+                    </MudPaper>
+                </MudStack>
             </MudPaper>
         </MudItem>
 
-        @* Project Status Overview *@
-        <MudItem xs="12" lg="4">
+        @* RIGHT: Bookkeeping Health & Action Checklist *@
+        <MudItem xs="12" lg="6">
             <MudPaper Elevation="0" Outlined="true" Class="pa-4" Style="height: 100%;">
-                <MudText Typo="Typo.h6" Class="mb-4"><b>Project Status</b></MudText>
-                <div class="d-flex flex-wrap gap-2">
-                    @foreach (var status in ProjectStatusCounts)
+                <div class="d-flex justify-space-between align-center mb-3">
+                    <div class="d-flex align-center gap-2">
+                        <MudIcon Icon="@Icons.Material.Filled.FactCheck" Color="Color.Primary" />
+                        <MudText Typo="Typo.h6"><b>@BizLoc["Bookkeeping Health Checklist"]</b></MudText>
+                    </div>
+                    @if (TotalBookkeepingTasks == 0)
                     {
-                        <MudChip T="string" Size="Size.Medium" Variant="Variant.Filled" Color="@GetStatusColor(status.Key)"
-                            OnClick="@(() => Nav.NavigateTo($"/projects"))">
-                            @status.Key: <b>@status.Value</b>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Icon="@Icons.Material.Filled.Verified">
+                            @BizLoc["Books 100% Up to Date"]
+                        </MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">
+                            @TotalBookkeepingTasks @BizLoc["item(s) need review"]
                         </MudChip>
                     }
                 </div>
+
+                <MudStack Spacing="2">
+                    @* Unreconciled Bank Lines *@
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-3 d-flex justify-space-between align-center">
+                        <div class="d-flex align-center gap-3">
+                            <MudIcon Icon="@(UnmatchedBankLinesCount > 0 ? Icons.Material.Filled.CompareArrows : Icons.Material.Filled.CheckCircle)"
+                                     Color="@(UnmatchedBankLinesCount > 0 ? Color.Warning : Color.Success)" />
+                            <div>
+                                <MudText Typo="Typo.body2"><b>@BizLoc["Unmatched Bank Statement Lines"]</b></MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @(UnmatchedBankLinesCount > 0
+                                        ? $"{UnmatchedBankLinesCount} {BizLoc["imported bank line(s) waiting to be matched or categorized"].Value}"
+                                        : BizLoc["All imported bank statement lines are reconciled."].Value)
+                                </MudText>
+                            </div>
+                        </div>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                                   OnClick="@(() => Nav.NavigateTo("/business/accounting?tab=BankReconciliation"))">
+                            @BizLoc["Reconcile"]
+                        </MudButton>
+                    </MudPaper>
+
+                    @* Bills Awaiting Approval *@
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-3 d-flex justify-space-between align-center">
+                        <div class="d-flex align-center gap-3">
+                            <MudIcon Icon="@(BillsAwaitingApprovalCount > 0 ? Icons.Material.Filled.ReceiptLong : Icons.Material.Filled.CheckCircle)"
+                                     Color="@(BillsAwaitingApprovalCount > 0 ? Color.Warning : Color.Success)" />
+                            <div>
+                                <MudText Typo="Typo.body2"><b>@BizLoc["Supplier Bills Awaiting Approval"]</b></MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @(BillsAwaitingApprovalCount > 0
+                                        ? $"{BillsAwaitingApprovalCount} {BizLoc["bill(s) in queue waiting for approval"].Value}"
+                                        : BizLoc["No supplier bills waiting for approval."].Value)
+                                </MudText>
+                            </div>
+                        </div>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                                   OnClick="@(() => Nav.NavigateTo("/business/accounting?tab=Payables"))">
+                            @BizLoc["Review"]
+                        </MudButton>
+                    </MudPaper>
+
+                    @* Employee Expense Reports *@
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-3 d-flex justify-space-between align-center">
+                        <div class="d-flex align-center gap-3">
+                            <MudIcon Icon="@(SubmittedExpenseReportsCount > 0 ? Icons.Material.Filled.Badge : Icons.Material.Filled.CheckCircle)"
+                                     Color="@(SubmittedExpenseReportsCount > 0 ? Color.Info : Color.Success)" />
+                            <div>
+                                <MudText Typo="Typo.body2"><b>@BizLoc["Employee Expense Reimbursements"]</b></MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @(SubmittedExpenseReportsCount > 0
+                                        ? $"{SubmittedExpenseReportsCount} {BizLoc["submitted expense report(s) awaiting reimbursement"].Value}"
+                                        : BizLoc["All submitted employee expenses reimbursed."].Value)
+                                </MudText>
+                            </div>
+                        </div>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                                   OnClick="@(() => Nav.NavigateTo("/business/accounting?tab=Payables"))">
+                            @BizLoc["Payables"]
+                        </MudButton>
+                    </MudPaper>
+
+                    @* Overdue Client Invoices *@
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-3 d-flex justify-space-between align-center">
+                        <div class="d-flex align-center gap-3">
+                            <MudIcon Icon="@(OverdueInvoicesCount > 0 ? Icons.Material.Filled.WarningAmber : Icons.Material.Filled.CheckCircle)"
+                                     Color="@(OverdueInvoicesCount > 0 ? Color.Error : Color.Success)" />
+                            <div>
+                                <MudText Typo="Typo.body2"><b>@BizLoc["Overdue Client Invoices"]</b></MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @(OverdueInvoicesCount > 0
+                                        ? $"{OverdueInvoicesCount} {BizLoc["overdue invoice(s) totaling"].Value} {OverdueARAmount:C2}"
+                                        : BizLoc["No overdue client invoices."].Value)
+                                </MudText>
+                            </div>
+                        </div>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                                   OnClick="@(() => Nav.NavigateTo("/business/accounting?tab=Receivables"))">
+                            @BizLoc["Receivables"]
+                        </MudButton>
+                    </MudPaper>
+
+                    @* Pending Timesheets *@
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-3 d-flex justify-space-between align-center">
+                        <div class="d-flex align-center gap-3">
+                            <MudIcon Icon="@(PendingTimesheetsCount > 0 ? Icons.Material.Filled.Schedule : Icons.Material.Filled.CheckCircle)"
+                                     Color="@(PendingTimesheetsCount > 0 ? Color.Warning : Color.Success)" />
+                            <div>
+                                <MudText Typo="Typo.body2"><b>@BizLoc["Timesheets Awaiting Approval"]</b></MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @(PendingTimesheetsCount > 0
+                                        ? $"{PendingTimesheetsCount} {BizLoc["submitted timesheet(s) ready for approval before payroll"].Value}"
+                                        : BizLoc["All submitted timesheets approved."].Value)
+                                </MudText>
+                            </div>
+                        </div>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                                   OnClick="@(() => Nav.NavigateTo("/hr/management"))">
+                            @BizLoc["HR Approvals"]
+                        </MudButton>
+                    </MudPaper>
+                </MudStack>
             </MudPaper>
         </MudItem>
     </MudGrid>
 
-    @* --- 4. PROJECTS NEEDING ATTENTION --- *@
+    @* --- 3. MONTHLY OPERATING PULSE & PROJECTS NEEDING ATTENTION --- *@
     <MudGrid>
-        @* Projects Needing Attention *@
-        <MudItem xs="12">
-            <MudPaper Elevation="0" Outlined="true" Class="pa-4">
-                <div class="d-flex justify-space-between align-center mb-4">
-                    <MudText Typo="Typo.h6"><b>Projects Needing Attention</b></MudText>
-                    <MudButton Variant="Variant.Text" Color="Color.Primary"
-                        EndIcon="@Icons.Material.Filled.ArrowForward" OnClick="@(() => Nav.NavigateTo("/projects"))">
-                        View All</MudButton>
+        <MudItem xs="12" lg="5">
+            <MudPaper Elevation="0" Outlined="true" Class="pa-4" Style="height: 100%;">
+                <div class="d-flex justify-space-between align-center mb-3">
+                    <MudText Typo="Typo.h6"><b>@BizLoc["Current Month Operating Pulse"]</b></MudText>
+                    <MudChip T="string" Size="Size.Small" Color="@(NetCashFlow >= 0 ? Color.Success : Color.Error)" Variant="Variant.Filled">
+                        @(NetCashFlow >= 0 ? "+" : "")@NetCashFlow.ToString("C0") @BizLoc["Net"]
+                    </MudChip>
+                </div>
+
+                <MudStack Spacing="2">
+                    <div class="d-flex justify-space-between align-center">
+                        <MudText Typo="Typo.body2">@BizLoc["Invoiced Revenue (MTD)"]</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Success"><b>@TotalInvoicedThisMonth.ToString("C2")</b></MudText>
+                    </div>
+                    @if (DirectMoneyInThisMonth > 0m)
+                    {
+                        <div class="d-flex justify-space-between align-center">
+                            <MudText Typo="Typo.body2">@BizLoc["Other Direct Income (MTD)"]</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Success"><b>@DirectMoneyInThisMonth.ToString("C2")</b></MudText>
+                        </div>
+                    }
+                    <div class="d-flex justify-space-between align-center">
+                        <MudText Typo="Typo.body2">@BizLoc["Cash Collected (MTD)"]</MudText>
+                        <MudText Typo="Typo.body2"><b>@MoneyInReceived.ToString("C2")</b></MudText>
+                    </div>
+                    <MudDivider />
+                    <div class="d-flex justify-space-between align-center">
+                        <MudText Typo="Typo.body2">@BizLoc["Recurring & Overhead Bills (MTD)"]</MudText>
+                        <MudText Typo="Typo.body2">@((RecurringBillsThisMonth + OneTimeBillsThisMonth + StandardBillsThisMonth).ToString("C2"))</MudText>
+                    </div>
+                    <div class="d-flex justify-space-between align-center">
+                        <MudText Typo="Typo.body2">@BizLoc["Project PO Bills & Expenses (MTD)"]</MudText>
+                        <MudText Typo="Typo.body2">@((PoBillsThisMonth + ExpensesThisMonth).ToString("C2"))</MudText>
+                    </div>
+                    @if (DirectMoneyOutThisMonth > 0m)
+                    {
+                        <div class="d-flex justify-space-between align-center">
+                            <MudText Typo="Typo.body2">@BizLoc["Other Direct Payments (MTD)"]</MudText>
+                            <MudText Typo="Typo.body2">@DirectMoneyOutThisMonth.ToString("C2")</MudText>
+                        </div>
+                    }
+                    <div class="d-flex justify-space-between align-center">
+                        <MudText Typo="Typo.body2">@BizLoc["Payroll Cost (Gross + Employer Burden MTD)"]</MudText>
+                        <MudText Typo="Typo.body2">@PayrollCostThisMonth.ToString("C2")</MudText>
+                    </div>
+                    <MudDivider />
+                    <div class="d-flex justify-space-between align-center">
+                        <MudText Typo="Typo.subtitle2"><b>@BizLoc["Active Projects in Production"]</b></MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info">@ActiveProjectsCount</MudChip>
+                    </div>
+                </MudStack>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" lg="7">
+            <MudPaper Elevation="0" Outlined="true" Class="pa-4" Style="height: 100%;">
+                <div class="d-flex justify-space-between align-center mb-3">
+                    <MudText Typo="Typo.h6"><b>@BizLoc["Projects Needing Attention"]</b></MudText>
+                    @if (_canViewProjects)
+                    {
+                        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                                   EndIcon="@Icons.Material.Filled.ArrowForward" OnClick="@(() => Nav.NavigateTo("/projects"))">
+                            @BizLoc["All Projects"]
+                        </MudButton>
+                    }
                 </div>
 
                 @if (!ProjectAlerts.Any())
                 {
                     <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Outlined">
-                        All projects are on track!
+                        @BizLoc["All active projects are within budget and up to date."]
                     </MudAlert>
                 }
                 else
                 {
-                    <MudTable Items="@ProjectAlerts.Take(5)" Dense="true" Hover="true" Elevation="0">
+                    <MudTable Items="@ProjectAlerts.Take(5)" Dense="true" Hover="true" Elevation="0" Outlined="true">
                         <HeaderContent>
-                            <MudTh>Project</MudTh>
-                            <MudTh>Issue</MudTh>
-                            <MudTh>Action</MudTh>
+                            <MudTh>@BizLoc["Project"]</MudTh>
+                            <MudTh>@BizLoc["Alert"]</MudTh>
+                            <MudTh Style="width: 60px;"></MudTh>
                         </HeaderContent>
                         <RowTemplate>
                             <MudTd>
-                                <div class="d-flex flex-column">
-                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.ProjectName</MudText>
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@context.ClientName</MudText>
-                                </div>
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.ProjectName</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@context.ClientName</MudText>
                             </MudTd>
                             <MudTd>
                                 <MudChip T="string" Size="Size.Small" Color="@context.Severity" Variant="Variant.Filled">
@@ -314,8 +372,11 @@
                                 </MudChip>
                             </MudTd>
                             <MudTd>
-                                <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
-                                    OnClick="@(() => Nav.NavigateTo($"/projects/{context.ProjectId}"))" />
+                                @if (context.CanOpenProject)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                                                   OnClick="@(() => Nav.NavigateTo($"/projects/{context.ProjectId}"))" />
+                                }
                             </MudTd>
                         </RowTemplate>
                     </MudTable>
@@ -326,143 +387,254 @@
 </MudContainer>
 
 @code {
-    // --- KPI Data ---
-    private decimal TotalInvoicedThisMonth;
-    private decimal TotalInvoicedLastMonth;
+    // --- True Available Cash Equation ---
+    private decimal BankCashBalance;
+    private decimal TotalAttachedCreditLineLimit;
+    private decimal AvailableBankLiquidity => BankCashBalance + TotalAttachedCreditLineLimit;
+    private decimal NetSalesTaxReserve;
+    private decimal PayrollDasReserve;
+    private decimal UnpaidNetPayrollTotal;
+    private decimal GovernmentReserveTotal => Math.Max(0m, NetSalesTaxReserve) + PayrollDasReserve;
+    private decimal PayablesDueNext14Days;
+    private int DueSoonBillsCount;
+    private decimal TrueAvailableCash => BankCashBalance - GovernmentReserveTotal - PayablesDueNext14Days;
+
+    // --- Receivables ---
     private decimal TotalARDue;
-    private int UnpaidInvoicesCount;
-    private int ActiveProjectsCount;
-    private decimal PipelineValue;
-    private int PendingQuotesCount;
+    private decimal OverdueARAmount;
+    private int OverdueInvoicesCount;
 
-    // --- Action Required ---
-    private List<Invoice> InvoicesDueSoon = [];
-    private List<Quote> StaleQuotes = [];
-    private int DraftQuotesCount;
+    // --- Government & Payroll Obligations ---
+    private List<PayRun> UnpaidFinalizedPayRuns = [];
+    private int UnremittedDasRunsCount;
+    private DateTime NextDasDueDate;
 
-    // --- Project Status ---
-    private Dictionary<string, int> ProjectStatusCounts = [];
+    // --- Bookkeeping Health Checklist ---
+    private int UnmatchedBankLinesCount;
+    private int BillsAwaitingApprovalCount;
+    private int SubmittedExpenseReportsCount;
+    private int PendingTimesheetsCount;
+    private int TotalBookkeepingTasks =>
+        UnmatchedBankLinesCount + BillsAwaitingApprovalCount + SubmittedExpenseReportsCount + OverdueInvoicesCount + PendingTimesheetsCount;
 
-    // --- Projects Needing Attention ---
-    private List<ProjectAlert> ProjectAlerts = [];
-
-    // --- Cash Flow Details ---
-    // Money In
+    // --- Operating Pulse ---
+    private decimal TotalInvoicedThisMonth;
+    private decimal DirectMoneyInThisMonth;
+    private decimal DirectMoneyOutThisMonth;
     private decimal MoneyInReceived;
-    private decimal MoneyInPending;
-    private decimal MoneyInTotal => MoneyInReceived + MoneyInPending;
-
-    // Money Out Details
     private decimal RecurringBillsThisMonth;
     private decimal OneTimeBillsThisMonth;
     private decimal StandardBillsThisMonth;
     private decimal PoBillsThisMonth;
     private decimal ExpensesThisMonth;
-    private decimal CommissionsThisMonth;
+    private decimal PayrollCostThisMonth;
+    private int ActiveProjectsCount;
+    private decimal MoneyOutTotal =>
+        RecurringBillsThisMonth + OneTimeBillsThisMonth + StandardBillsThisMonth + PoBillsThisMonth + ExpensesThisMonth + DirectMoneyOutThisMonth + PayrollCostThisMonth;
+    private decimal NetCashFlow => (TotalInvoicedThisMonth + DirectMoneyInThisMonth) - MoneyOutTotal;
 
-    // Summary
-    private decimal MoneyOutTotal => RecurringBillsThisMonth + OneTimeBillsThisMonth + StandardBillsThisMonth + PoBillsThisMonth + ExpensesThisMonth + CommissionsThisMonth;
-    private decimal NetCashFlow => MoneyInTotal - MoneyOutTotal;
+    private Employee? _currentUser;
+    private bool _canViewProjects;
+    private List<ProjectAlert> ProjectAlerts = [];
 
-    // --- Helpers ---
-    private Dictionary<string, string> ProjectNames = [];
-
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        LoadKPIs();
-        LoadActionItems();
-        LoadProjectStatus();
-        LoadProjectAlerts();
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canViewProjects = _currentUser?.HasEffectivePermission(AppPermissions.Projects.View, allowSuspended: true) == true;
+        LoadCashAndTaxPulse();
+        LoadBookkeepingChecklist();
         LoadDetailedCashFlow();
+        LoadProjectAlerts();
     }
 
-    private void LoadKPIs()
+    private void LoadCashAndTaxPulse()
+    {
+        var today = DateTime.Today;
+        var next14Days = today.AddDays(14);
+
+        // 1. Bank Cash Balance across all active Bank SubType GL accounts
+        JurisdictionService.EnsureChartOfAccountsSeeded();
+        var trialBalance = LedgerService.CalculateTrialBalance(new DateTime(2000, 1, 1), today.AddDays(1));
+        var bankAccountCodes = (Db.GlAccounts?.GetActive() ?? [])
+            .Where(a => string.Equals(a.SubType, GlAccountSubType.Bank, StringComparison.OrdinalIgnoreCase))
+            .Select(a => a.Code)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (bankAccountCodes.Count == 0) bankAccountCodes.Add("1020");
+
+        BankCashBalance = Math.Round(trialBalance.Rows
+            .Where(l => bankAccountCodes.Contains(l.AccountCode))
+            .Sum(l => l.EndingBalance), 2);
+
+        TotalAttachedCreditLineLimit = Math.Round(
+            FinancialAccountService.GetActiveAccounts([FinancialAccountType.Chequing])
+                .Where(a => a.HasAttachedCreditLine)
+                .Sum(a => a.CreditLimit ?? 0m), 2);
+
+        // 2. Sales Tax Reserve dynamically derived from active Jurisdiction Template GL codes
+        var template = JurisdictionService.GetActiveTemplate();
+        var collectedCodes = template.SalesTaxes
+            .Select(t => t.CollectedLiabilityGlCode)
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var recoverableCodes = template.SalesTaxes
+            .Where(t => t.IsRecoverable)
+            .Select(t => t.RecoverableAssetGlCode)
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var taxCollected = trialBalance.Rows
+            .Where(l => collectedCodes.Contains(l.AccountCode))
+            .Sum(l => l.EndingBalance);
+        var taxInputCredits = trialBalance.Rows
+            .Where(l => recoverableCodes.Contains(l.AccountCode))
+            .Sum(l => l.EndingBalance);
+        NetSalesTaxReserve = Math.Round(taxCollected - taxInputCredits, 2);
+
+        // 3. Payroll Obligations (Unpaid Finalized PayRuns & Unremitted DAS)
+        var allPayRuns = Db.PayRuns?.GetAll() ?? [];
+        UnpaidFinalizedPayRuns = allPayRuns
+            .Where(r => r.Status == PayRunStatus.Finalized && !r.DatePaid.HasValue)
+            .OrderBy(r => r.PayDate)
+            .ToList();
+        UnpaidNetPayrollTotal = UnpaidFinalizedPayRuns.Sum(r => r.TotalNetPay);
+
+        var unremittedDasRuns = allPayRuns
+            .Where(r => (r.Status == PayRunStatus.Finalized || r.Status == PayRunStatus.Paid) && !r.IsDasRemitted)
+            .ToList();
+        UnremittedDasRunsCount = unremittedDasRuns.Count;
+        PayrollDasReserve = unremittedDasRuns.Sum(r => r.TotalEmployeeDeductions + r.TotalEmployerContributions);
+
+        // Next 15th of the following month for monthly DAS remittance
+        var nextMonth = new DateTime(today.Year, today.Month, 1).AddMonths(1);
+        NextDasDueDate = today.Day <= 15
+            ? new DateTime(today.Year, today.Month, 15)
+            : new DateTime(nextMonth.Year, nextMonth.Month, 15);
+
+        // 4. Payables Due in Next 14 Days
+        var unpaidBillsDueSoon = Db.Bills.GetAll()
+            .Where(b => !BillStatus.IsSettled(b.Status) && b.Status != BillStatus.Void && b.BalanceDue > 0 && b.DueDate.Date <= next14Days)
+            .ToList();
+
+        var unpaidRecurringDueSoon = Db.RecurringExpenses.GetAll()
+            .SelectMany(r => r.History)
+            .Where(h => !h.IsPaid && h.BalanceDue > 0 && (h.DueDate ?? h.Date).Date <= next14Days)
+            .ToList();
+
+        var unpaidExpenses = Db.ExpenseReports.GetAll()
+            .Where(e => e.Status == ExpenseReportStatus.Submitted)
+            .ToList();
+
+        PayablesDueNext14Days =
+            unpaidBillsDueSoon.Sum(b => b.BalanceDue) +
+            unpaidRecurringDueSoon.Sum(h => h.BalanceDue) +
+            unpaidExpenses.Sum(e => e.TotalAmount) +
+            UnpaidNetPayrollTotal;
+
+        DueSoonBillsCount = unpaidBillsDueSoon.Count + unpaidRecurringDueSoon.Count + unpaidExpenses.Count + UnpaidFinalizedPayRuns.Count;
+
+        // 5. Open & Overdue AR
+        var unpaidInvoices = Db.Invoices.GetAll()
+            .Where(i => !InvoiceStatus.IsSettled(i.Status) && i.Status != InvoiceStatus.Void && i.Status != InvoiceStatus.Draft && i.BalanceDue > 0)
+            .ToList();
+        TotalARDue = unpaidInvoices.Sum(i => i.BalanceDue);
+
+        var overdueInvoices = unpaidInvoices.Where(i => i.DueDate.Date < today).ToList();
+        OverdueInvoicesCount = overdueInvoices.Count;
+        OverdueARAmount = overdueInvoices.Sum(i => i.BalanceDue);
+    }
+
+    private void LoadBookkeepingChecklist()
+    {
+        UnmatchedBankLinesCount = Db.BankStatements?.GetAll()
+            .SelectMany(s => s.Lines)
+            .Count(l => !l.IsMatchedOrCategorized) ?? 0;
+
+        BillsAwaitingApprovalCount = Db.Bills.GetAll()
+            .Count(b => b.Status == BillStatus.AwaitingApproval);
+
+        SubmittedExpenseReportsCount = Db.ExpenseReports.GetAll()
+            .Count(e => e.Status == ExpenseReportStatus.Submitted);
+
+        PendingTimesheetsCount = Db.Timesheets.GetAll()
+            .Count(t => t.Status == TimesheetStatus.Submitted);
+    }
+
+    private void LoadDetailedCashFlow()
     {
         var now = DateTime.Today;
         var startOfMonth = new DateTime(now.Year, now.Month, 1);
-        var startOfLastMonth = startOfMonth.AddMonths(-1);
-        var endOfLastMonth = startOfMonth.AddDays(-1);
+        var endOfMonth = startOfMonth.AddMonths(1).AddDays(-1);
 
         var allInvoices = Db.Invoices.GetAll();
-        var allProjects = Db.Projects.GetAll();
-        var allQuotes = Db.Quotes.GetAll();
-
-        // Cache project names
-        ProjectNames = allProjects.ToDictionary(p => p.Id, p => p.Name);
-
-        // Revenue MTD
         TotalInvoicedThisMonth = allInvoices
-        .Where(i => i.Date >= startOfMonth && i.Status != InvoiceStatus.Draft && i.Status != InvoiceStatus.Void)
-        .Sum(i => i.GrandTotal);
+            .Where(i => i.Date >= startOfMonth && i.Date <= endOfMonth && i.Status != InvoiceStatus.Draft && i.Status != InvoiceStatus.Void)
+            .Sum(i => i.SubTotal);
 
-        TotalInvoicedLastMonth = allInvoices
-        .Where(i => i.Date >= startOfLastMonth && i.Date <= endOfLastMonth && i.Status != InvoiceStatus.Draft && i.Status != InvoiceStatus.Void)
-        .Sum(i => i.GrandTotal);
+        MoneyInReceived = allInvoices
+            .SelectMany(i => i.Payments)
+            .Where(p => p.Date >= startOfMonth && p.Date <= endOfMonth)
+            .Sum(p => p.Amount);
 
-        // AR Due
-        var unpaidInvoices = allInvoices.Where(i => i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void && i.BalanceDue > 0).ToList();
-        TotalARDue = unpaidInvoices.Sum(i => i.BalanceDue);
-        UnpaidInvoicesCount = unpaidInvoices.Count;
+        ActiveProjectsCount = Db.Projects.GetAll().Count(p => p.Status == ProjectStatus.InProduction && !p.IsInternal);
 
-        // Active Projects
-        ActiveProjectsCount = allProjects.Count(p => p.Status == ProjectStatus.InProduction);
+        var reports = Db.ExpenseReports.GetAll()
+            .Where(x => x.Status != ExpenseReportStatus.Draft && x.DateCreated >= startOfMonth && x.DateCreated <= endOfMonth)
+            .ToList();
+        ExpensesThisMonth = reports.Sum(r => r.SubTotal);
 
-        // Pipeline (Sent quotes not yet accepted)
-        var pendingQuotes = allQuotes.Where(q => q.Status == QuoteStatus.Final).ToList();
-        PipelineValue = pendingQuotes.Sum(q => q.GrandTotal);
-        PendingQuotesCount = pendingQuotes.Count;
-    }
+        var bills = Db.Bills.GetAll()
+            .Where(b => b.Status != BillStatus.Void && b.Date >= startOfMonth && b.Date <= endOfMonth)
+            .ToList();
+        foreach (var b in bills)
+        {
+            if (!string.IsNullOrEmpty(b.PurchaseOrderId))
+                PoBillsThisMonth += b.SubTotal > 0 ? b.SubTotal : b.Amount;
+            else
+                StandardBillsThisMonth += b.SubTotal > 0 ? b.SubTotal : b.Amount;
+        }
 
-    private void LoadActionItems()
-    {
-        var today = DateTime.Today;
-        var sevenDaysFromNow = today.AddDays(7);
-        var thirtyDaysAgo = today.AddDays(-30);
+        var allRecurring = Db.RecurringExpenses.GetAll().Where(e => !e.IsEstimate).ToList();
+        foreach (var re in allRecurring)
+        {
+            var billsThisMonth = re.History.Where(h => h.Date >= startOfMonth && h.Date <= endOfMonth);
+            if (re.Frequency == RecurringExpenseFrequency.OneTime)
+                OneTimeBillsThisMonth += billsThisMonth.Sum(h => h.SubTotal > 0 ? h.SubTotal : h.Amount);
+            else
+                RecurringBillsThisMonth += billsThisMonth.Sum(h => h.SubTotal > 0 ? h.SubTotal : h.Amount);
+        }
 
-        var allInvoices = Db.Invoices.GetAll();
-        var allQuotes = Db.Quotes.GetAll();
+        PayrollCostThisMonth = (Db.PayRuns?.GetAll() ?? [])
+            .Where(r => r.Status != PayRunStatus.Void && r.PayDate >= startOfMonth && r.PayDate <= endOfMonth)
+            .Sum(r => r.TotalEmployerCost);
 
-        // Invoices due within 7 days (or overdue) with balance
-        InvoicesDueSoon = allInvoices
-        .Where(i => i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void && i.BalanceDue > 0 && i.DueDate <= sevenDaysFromNow)
-        .OrderBy(i => i.DueDate)
-        .ToList();
-
-        // Stale quotes (Sent more than 30 days ago)
-        StaleQuotes = allQuotes
-        .Where(q => q.Status == QuoteStatus.Final && q.Date < thirtyDaysAgo)
-        .OrderBy(q => q.Date)
-        .ToList();
-
-        // Draft quotes count
-        DraftQuotesCount = allQuotes.Count(q => q.Status == QuoteStatus.Draft);
-    }
-
-    private void LoadProjectStatus()
-    {
-        var allProjects = Db.Projects.GetAll();
-
-        // Group by common statuses
-        var statusOrder = new[] {
-ProjectStatus.Discovery,
-ProjectStatus.Quoted,
-ProjectStatus.InProduction,
-ProjectStatus.Completed
-};
-
-        ProjectStatusCounts = statusOrder
-        .ToDictionary(
-        s => s.Split('/')[0].Trim(),
-        s => allProjects.Count(p => p.Status == s)
-        )
-        .Where(kvp => kvp.Value > 0)
-        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+        var directTxThisMonth = (Db.DirectTransactions?.GetByDateRange(startOfMonth, endOfMonth) ?? [])
+            .Where(t => !t.IsVoid && !string.Equals(t.Direction, DirectTransactionDirection.Transfer, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        DirectMoneyInThisMonth = directTxThisMonth
+            .Where(t => string.Equals(t.Direction, DirectTransactionDirection.MoneyIn, StringComparison.OrdinalIgnoreCase))
+            .Sum(t => FinancialCalculationEngine.RoundCurrency(t.SubTotal * (t.ExchangeRate > 0m ? t.ExchangeRate : 1.0m)));
+        var directCashInThisMonth = directTxThisMonth
+            .Where(t => string.Equals(t.Direction, DirectTransactionDirection.MoneyIn, StringComparison.OrdinalIgnoreCase))
+            .Sum(t => FinancialCalculationEngine.RoundCurrency(t.GrandTotal * (t.ExchangeRate > 0m ? t.ExchangeRate : 1.0m)));
+        MoneyInReceived += directCashInThisMonth;
+        DirectMoneyOutThisMonth = directTxThisMonth
+            .Where(t => string.Equals(t.Direction, DirectTransactionDirection.MoneyOut, StringComparison.OrdinalIgnoreCase))
+            .Sum(t => FinancialCalculationEngine.RoundCurrency(t.SubTotal * (t.ExchangeRate > 0m ? t.ExchangeRate : 1.0m)));
     }
 
     private void LoadProjectAlerts()
     {
-        var allProjects = Db.Projects.GetAll().Where(p => p.Status == ProjectStatus.InProduction).ToList();
-        var allTimesheets = Db.Timesheets.GetAll();
+        ProjectAlerts.Clear();
+        if (_currentUser == null) return;
+
+        var allProjects = Db.Projects.GetAll()
+            .Where(p => p.Status == ProjectStatus.InProduction && !p.IsInternal &&
+                        ProjectAccessHelper.CanAccess(_currentUser, p, Db.Teams, allowAccountingFinancialRead: true))
+            .ToList();
+        var allTimesheets = Db.Timesheets.GetAll()
+            .Where(t => !string.Equals(t.Status, TimesheetStatus.Rejected, StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(t.Status, TimesheetStatus.Draft, StringComparison.OrdinalIgnoreCase))
+            .ToList();
         var allInvoices = Db.Invoices.GetAll();
         var allQuotes = Db.Quotes.GetAll();
         var today = DateTime.Today;
@@ -470,7 +642,7 @@ ProjectStatus.Completed
 
         foreach (var project in allProjects)
         {
-            // Check for Over Budget
+            var canOpenProject = ProjectAccessHelper.CanAccess(_currentUser, project, Db.Teams, allowAccountingFinancialRead: false);
             var projectTimesheets = allTimesheets.SelectMany(t => t.Entries).Where(e => e.ProjectId == project.Id);
             var actualHours = projectTimesheets.Sum(e => e.Hours);
             var acceptedQuote = allQuotes.FirstOrDefault(q => q.ProjectId == project.Id && q.Status == QuoteStatus.Accepted);
@@ -480,164 +652,64 @@ ProjectStatus.Completed
             {
                 var burnPercent = (actualHours / quotedHours) * 100;
                 ProjectAlerts.Add(new ProjectAlert
-                    {
-                        ProjectId = project.Id,
-                        ProjectName = project.Name,
-                        ClientName = project.Client?.BusinessName ?? "",
-                        Issue = $"Labor {burnPercent:N0}% of budget",
-                        Severity = Color.Error
-                    });
+                {
+                    ProjectId = project.Id,
+                    ProjectName = project.Name,
+                    ClientName = project.Client?.BusinessName ?? "",
+                    Issue = $"Labor {burnPercent:N0}% of budget",
+                    Severity = Color.Error,
+                    CanOpenProject = canOpenProject
+                });
                 continue;
             }
 
-            // Check for Aging AR
-            var projectInvoices = allInvoices.Where(i => i.ProjectId == project.Id && i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void &&
-            i.BalanceDue > 0);
+            var projectInvoices = allInvoices.Where(i => i.ProjectId == project.Id && !InvoiceStatus.IsSettled(i.Status) && i.Status != InvoiceStatus.Void && i.BalanceDue > 0);
             var oldestUnpaid = projectInvoices.OrderBy(i => i.Date).FirstOrDefault();
             if (oldestUnpaid != null && (today - oldestUnpaid.Date).Days > 30)
             {
                 ProjectAlerts.Add(new ProjectAlert
-                    {
-                        ProjectId = project.Id,
-                        ProjectName = project.Name,
-                        ClientName = project.Client?.BusinessName ?? "",
-                        Issue = $"AR aging {(today - oldestUnpaid.Date).Days}d",
-                        Severity = Color.Warning
-                    });
+                {
+                    ProjectId = project.Id,
+                    ProjectName = project.Name,
+                    ClientName = project.Client?.BusinessName ?? "",
+                    Issue = $"AR aging {(today - oldestUnpaid.Date).Days}d",
+                    Severity = Color.Warning,
+                    CanOpenProject = canOpenProject
+                });
                 continue;
             }
 
-            // Check for Stalled
             var recentEntries = allTimesheets
-            .SelectMany(t => t.Entries)
-            .Where(e => e.ProjectId == project.Id && e.Date >= fourteenDaysAgo);
+                .SelectMany(t => t.Entries)
+                .Where(e => e.ProjectId == project.Id && e.Date >= fourteenDaysAgo);
 
             if (!recentEntries.Any() && actualHours > 0)
             {
                 ProjectAlerts.Add(new ProjectAlert
-                    {
-                        ProjectId = project.Id,
-                        ProjectName = project.Name,
-                        ClientName = project.Client?.BusinessName ?? "",
-                        Issue = "No activity 14d",
-                        Severity = Color.Default
-                    });
+                {
+                    ProjectId = project.Id,
+                    ProjectName = project.Name,
+                    ClientName = project.Client?.BusinessName ?? "",
+                    Issue = "No activity 14d",
+                    Severity = Color.Default,
+                    CanOpenProject = canOpenProject
+                });
             }
         }
 
         ProjectAlerts = ProjectAlerts
-        .OrderByDescending(a => a.Severity == Color.Error)
-        .ThenByDescending(a => a.Severity == Color.Warning)
-        .ToList();
+            .OrderByDescending(a => a.Severity == Color.Error)
+            .ThenByDescending(a => a.Severity == Color.Warning)
+            .ToList();
     }
 
-    private void LoadDetailedCashFlow()
-    {
-        var now = DateTime.Today;
-        var startOfMonth = new DateTime(now.Year, now.Month, 1);
-        var endOfMonth = startOfMonth.AddMonths(1).AddDays(-1);
-
-        // --- 1. Money In ---
-        var allInvoices = Db.Invoices.GetAll();
-
-        // Received: Paid this month
-        MoneyInReceived = allInvoices
-        .Where(i => i.Status == InvoiceStatus.Paid && i.Date >= startOfMonth && i.Date <= endOfMonth)
-        .Sum(i => i.AmountPaid);
-
-        // Pending: Due by end of this month (includes overdue)
-        MoneyInPending = allInvoices
-        .Where(i => i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void && i.DueDate <= endOfMonth)
-        .Sum(i => i.BalanceDue);
-
-        // --- 2. Money Out ---
-        RecurringBillsThisMonth = 0;
-        OneTimeBillsThisMonth = 0;
-        StandardBillsThisMonth = 0;
-        PoBillsThisMonth = 0;
-        ExpensesThisMonth = 0;
-        CommissionsThisMonth = 0;
-
-        // 2a. Expense Reports
-        var reports = Db.ExpenseReports.GetAll().Where(x => x.Status != ExpenseReportStatus.Draft
-            && x.DateCreated >= startOfMonth && x.DateCreated <= endOfMonth).ToList();
-        ExpensesThisMonth = reports.Sum(r => r.TotalAmount);
-
-        // 2b. Bills (Standard and POs)
-        var bills = Db.Bills.GetAll().Where(b => b.Status != BillStatus.Void && b.Date >= startOfMonth && b.Date <= endOfMonth).ToList();
-        foreach (var b in bills)
-        {
-            if (!string.IsNullOrEmpty(b.PurchaseOrderId))
-                PoBillsThisMonth += b.Amount;
-            else
-                StandardBillsThisMonth += b.Amount;
-        }
-
-        // 2c. Recurring and One-Time Expenses (Actual Bills)
-        var allRecurring = Db.RecurringExpenses.GetAll().Where(e => !e.IsEstimate).ToList();
-        foreach (var re in allRecurring)
-        {
-            var billsThisMonth = re.History.Where(h => h.Date >= startOfMonth && h.Date <= endOfMonth);
-            if (re.Frequency == RecurringExpenseFrequency.OneTime)
-                OneTimeBillsThisMonth += billsThisMonth.Sum(h => h.Amount);
-            else
-                RecurringBillsThisMonth += billsThisMonth.Sum(h => h.Amount);
-        }
-
-        // 2d. Commissions (From Ledger)
-        var ledgers = Db.CommissionLedgerRecords.GetAll();
-        foreach (var record in ledgers)
-        {
-            if (record.Status == CommissionStatus.Paid || record.DatePaid.HasValue)
-            {
-                var paidDate = record.DatePaid ?? record.DateGenerated;
-                if (paidDate >= startOfMonth && paidDate <= endOfMonth)
-                {
-                    CommissionsThisMonth += record.CommissionAmount;
-                }
-            }
-            else if (record.Status == CommissionStatus.Payable)
-            {
-                CommissionsThisMonth += record.CommissionAmount;
-            }
-            else if (record.Status == CommissionStatus.Clawback) // Negative amount, deducts from cash out
-            {
-                if (record.DatePaid is not { } clawbackDate || (clawbackDate >= startOfMonth && clawbackDate <= endOfMonth))
-                {
-                    CommissionsThisMonth += record.CommissionAmount; // CommissionAmount is negative for clawbacks
-                }
-            }
-        }
-    }
-
-    private string GetProjectName(string projectId) => ProjectNames.GetValueOrDefault(projectId, "Unknown");
-
-    private string GetGrowth(decimal current, decimal last)
-    {
-        if (last == 0) return current > 0 ? "+100%" : "0%";
-        var growth = ((current - last) / last) * 100;
-        return (growth > 0 ? "+" : "") + growth.ToString("F0") + "%";
-    }
-
-    private Color GetStatusColor(string statusName)
-    {
-        return statusName switch
-        {
-            "Discovery" => Color.Warning,
-            "Quoted" => Color.Info,
-            "Quote Accepted" => Color.Success,
-            "Completed" => Color.Default,
-            _ => Color.Primary
-        };
-    }
-
-    class ProjectAlert
+    private class ProjectAlert
     {
         public string ProjectId { get; set; } = "";
         public string ProjectName { get; set; } = "";
         public string ClientName { get; set; } = "";
         public string Issue { get; set; } = "";
         public Color Severity { get; set; } = Color.Default;
+        public bool CanOpenProject { get; set; }
     }
 }
-

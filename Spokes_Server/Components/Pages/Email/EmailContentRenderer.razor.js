@@ -4,8 +4,10 @@
 // and Smart Dark Mode adaptation.
 
 const TRANSPARENT_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-const REMOTE_URL_REGEX = /^(https?:)?\/\//i;
-const CSS_REMOTE_URL_REGEX = /url\s*\(\s*(['"]?)\s*(https?:)?\/\/[^)'"]*\1\s*\)/gi;
+const DANGEROUS_ELEMENTS_SELECTOR = 'script, object, embed, applet, iframe, frame, frameset, form, base, meta[http-equiv], link, video, audio';
+const DANGEROUS_URL_ATTRS = ['href', 'src', 'action', 'formaction', 'xlink:href', 'poster', 'background'];
+const EMAIL_CSP_BLOCK_REMOTE = "default-src 'none'; img-src 'self' data: cid:; style-src 'unsafe-inline'; font-src data:; media-src 'none'; connect-src 'none'; form-action 'none'";
+const EMAIL_CSP_ALLOW_REMOTE = "default-src 'none'; img-src 'self' https: http: data: cid:; style-src 'unsafe-inline'; font-src data: https:; media-src 'none'; connect-src 'none'; form-action 'none'";
 const SKIP_DARK_MODE_TAGS = new Set([
     'IMG', 'VIDEO', 'PICTURE', 'CANVAS', 'SVG', 'SCRIPT', 'STYLE',
     'HEAD', 'META', 'LINK', 'TITLE', 'BR', 'WBR', 'IFRAME', 'OBJECT', 'EMBED'
@@ -167,59 +169,193 @@ function applyDarkModeToDocument(doc, win) {
     }
 }
 
-function sanitizeRemoteImages(htmlContent) {
+function isDangerousScheme(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return false;
+    const normalized = rawUrl.replace(/[\u0000-\u0020]+/g, '').toLowerCase();
+    return normalized.startsWith('javascript:')
+        || normalized.startsWith('vbscript:')
+        || normalized.startsWith('data:text/html')
+        || normalized.startsWith('data:image/svg+xml');
+}
+
+function isAllowedLocalResourceUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return true;
+    const trimmed = rawUrl.trim();
+    if (!trimmed) return true;
+    if (isDangerousScheme(trimmed)) return false;
+
+    const lower = trimmed.toLowerCase();
+    if (trimmed.startsWith('#')) return true;
+    if (lower.startsWith('cid:')) return true;
+    if (lower.startsWith('data:image/')) return true;
+    if (trimmed.startsWith('//')) return false;
+    if (trimmed.startsWith('/spokesapi/files/')) return true;
+    return false;
+}
+
+function scrubCssText(cssText, allowRemoteImages) {
+    if (!cssText) return { css: cssText, blocked: false };
+    let blocked = false;
+    let updated = cssText;
+
+    if (!allowRemoteImages) {
+        const importReplaced = updated.replace(/@import\b[^;]*(?:;|$)/gi, () => {
+            blocked = true;
+            return '';
+        });
+        updated = importReplaced;
+
+        updated = updated.replace(/url\s*\(\s*(['"]?)([^)'"]*)\1\s*\)/gi, (match, _quote, innerUrl) => {
+            if (!isAllowedLocalResourceUrl(innerUrl)) {
+                blocked = true;
+                return 'none';
+            }
+            return match;
+        });
+
+        updated = updated.replace(/(?:-webkit-)?image-set\s*\(([^)]*)\)/gi, (match, inner) => {
+            if (/https?:|\/\//i.test(inner)) {
+                blocked = true;
+                return 'none';
+            }
+            return match;
+        });
+    } else {
+        updated = updated.replace(/@import\b[^;]*(?:;|$)/gi, '');
+        updated = updated.replace(/url\s*\(\s*(['"]?)([^)'"]*)\1\s*\)/gi, (match, _quote, innerUrl) => {
+            return isDangerousScheme(innerUrl) ? 'none' : match;
+        });
+    }
+
+    return { css: updated, blocked };
+}
+
+function sanitizeEmailHtml(htmlContent, allowRemoteImages) {
     let blocked = false;
     try {
         const parser = new DOMParser();
         const doc = parser.parseFromString(htmlContent, 'text/html');
 
-        doc.querySelectorAll('img').forEach(img => {
-            const src = (img.getAttribute('src') || '').trim();
-            if (REMOTE_URL_REGEX.test(src)) {
-                img.setAttribute('data-blocked-src', src);
-                img.setAttribute('src', TRANSPARENT_PIXEL);
-                blocked = true;
-            }
-            const srcset = (img.getAttribute('srcset') || '').trim();
-            if (srcset && /(https?:)?\/\//i.test(srcset)) {
-                img.removeAttribute('srcset');
-                blocked = true;
+        if (!allowRemoteImages) {
+            doc.querySelectorAll('link, video, audio, object, embed, iframe, frame').forEach(el => {
+                for (const attrName of ['href', 'src', 'poster', 'data']) {
+                    const val = (el.getAttribute(attrName) || '').trim();
+                    if (val && !isAllowedLocalResourceUrl(val)) {
+                        blocked = true;
+                        break;
+                    }
+                }
+            });
+        }
+
+        doc.querySelectorAll(DANGEROUS_ELEMENTS_SELECTOR).forEach(el => el.remove());
+
+        doc.querySelectorAll('*').forEach(el => {
+            for (const attr of Array.from(el.attributes)) {
+                const nameLower = attr.name.toLowerCase();
+                if (nameLower.startsWith('on')) {
+                    el.removeAttribute(attr.name);
+                    continue;
+                }
+                if (DANGEROUS_URL_ATTRS.includes(nameLower) && isDangerousScheme(attr.value)) {
+                    el.removeAttribute(attr.name);
+                }
             }
         });
 
-        doc.querySelectorAll('[background]').forEach(el => {
-            const bg = (el.getAttribute('background') || '').trim();
-            if (REMOTE_URL_REGEX.test(bg)) {
-                el.removeAttribute('background');
-                blocked = true;
-            }
-        });
+        if (!allowRemoteImages) {
+            doc.querySelectorAll('img').forEach(img => {
+                const src = (img.getAttribute('src') || '').trim();
+                if (src && !isAllowedLocalResourceUrl(src)) {
+                    img.setAttribute('data-blocked-src', src);
+                    img.setAttribute('src', TRANSPARENT_PIXEL);
+                    blocked = true;
+                }
+                const srcset = (img.getAttribute('srcset') || '').trim();
+                if (srcset) {
+                    img.removeAttribute('srcset');
+                    blocked = true;
+                }
+            });
+
+            doc.querySelectorAll('source').forEach(source => {
+                const src = (source.getAttribute('src') || '').trim();
+                if (src && !isAllowedLocalResourceUrl(src)) {
+                    source.removeAttribute('src');
+                    blocked = true;
+                }
+                if (source.hasAttribute('srcset')) {
+                    source.removeAttribute('srcset');
+                    blocked = true;
+                }
+            });
+
+            doc.querySelectorAll('input[type="image"][src]').forEach(input => {
+                const src = (input.getAttribute('src') || '').trim();
+                if (src && !isAllowedLocalResourceUrl(src)) {
+                    input.removeAttribute('src');
+                    blocked = true;
+                }
+            });
+
+            doc.querySelectorAll('image').forEach(svgImg => {
+                for (const attrName of ['href', 'xlink:href']) {
+                    const val = (svgImg.getAttribute(attrName) || '').trim();
+                    if (val && !isAllowedLocalResourceUrl(val)) {
+                        svgImg.removeAttribute(attrName);
+                        blocked = true;
+                    }
+                }
+            });
+
+            doc.querySelectorAll('[poster], [background]').forEach(el => {
+                for (const attrName of ['poster', 'background']) {
+                    const val = (el.getAttribute(attrName) || '').trim();
+                    if (val && !isAllowedLocalResourceUrl(val)) {
+                        el.removeAttribute(attrName);
+                        blocked = true;
+                    }
+                }
+            });
+        }
 
         doc.querySelectorAll('[style]').forEach(el => {
             const styleVal = el.getAttribute('style') || '';
-            if (CSS_REMOTE_URL_REGEX.test(styleVal)) {
-                CSS_REMOTE_URL_REGEX.lastIndex = 0;
-                el.setAttribute('style', styleVal.replace(CSS_REMOTE_URL_REGEX, 'none'));
-                blocked = true;
+            const res = scrubCssText(styleVal, allowRemoteImages);
+            if (res.css !== styleVal) {
+                el.setAttribute('style', res.css);
             }
+            if (res.blocked) blocked = true;
         });
 
         doc.querySelectorAll('style').forEach(styleEl => {
             const css = styleEl.textContent || '';
-            if (CSS_REMOTE_URL_REGEX.test(css)) {
-                CSS_REMOTE_URL_REGEX.lastIndex = 0;
-                styleEl.textContent = css.replace(CSS_REMOTE_URL_REGEX, 'none');
-                blocked = true;
+            const res = scrubCssText(css, allowRemoteImages);
+            if (res.css !== css) {
+                styleEl.textContent = res.css;
             }
+            if (res.blocked) blocked = true;
         });
 
-        if (blocked) {
-            return { html: '<!DOCTYPE html>' + doc.documentElement.outerHTML, blocked: true };
+        let head = doc.head;
+        if (!head) {
+            head = doc.createElement('head');
+            doc.documentElement.insertBefore(head, doc.body || doc.documentElement.firstChild);
         }
+        const cspMeta = doc.createElement('meta');
+        cspMeta.setAttribute('http-equiv', 'Content-Security-Policy');
+        cspMeta.setAttribute('content', allowRemoteImages ? EMAIL_CSP_ALLOW_REMOTE : EMAIL_CSP_BLOCK_REMOTE);
+        const referrerMeta = doc.createElement('meta');
+        referrerMeta.setAttribute('name', 'referrer');
+        referrerMeta.setAttribute('content', 'no-referrer');
+        head.insertBefore(referrerMeta, head.firstChild);
+        head.insertBefore(cspMeta, head.firstChild);
+
+        return { html: '<!DOCTYPE html>' + doc.documentElement.outerHTML, blocked };
     } catch (e) {
-        console.warn('Error sanitizing remote images:', e);
+        console.warn('Error sanitizing email HTML:', e);
+        return { html: '<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="' + EMAIL_CSP_BLOCK_REMOTE + '"></head><body></body></html>', blocked: true };
     }
-    return { html: htmlContent, blocked: false };
 }
 
 export function cleanupContent(container) {
@@ -250,14 +386,9 @@ export function renderContent(container, htmlContent, dotNetHelper, allowRemoteI
             return;
         }
 
-        let finalHtml = htmlContent;
-        let blocked = false;
-
-        if (!allowRemoteImages) {
-            const result = sanitizeRemoteImages(htmlContent);
-            finalHtml = result.html;
-            blocked = result.blocked;
-        }
+        const result = sanitizeEmailHtml(htmlContent, Boolean(allowRemoteImages));
+        const finalHtml = result.html;
+        const blocked = result.blocked;
 
         if (dotNetHelper) {
             dotNetHelper.invokeMethodAsync('NotifyRemoteImagesBlocked', blocked);
@@ -270,6 +401,7 @@ export function renderContent(container, htmlContent, dotNetHelper, allowRemoteI
         // allow-same-origin lets us access contentDocument for auto-sizing
         // No allow-scripts, allow-forms, allow-popups — blocks all dangerous behavior
         iframe.sandbox = 'allow-same-origin';
+        iframe.referrerPolicy = 'no-referrer';
         iframe.style.cssText = `width: 100%; border: none; overflow: hidden; min-height: 200px; background: ${useDarkMode ? 'transparent' : 'white'}; border-radius: 8px; display: block;`;
 
         let isSetup = false;

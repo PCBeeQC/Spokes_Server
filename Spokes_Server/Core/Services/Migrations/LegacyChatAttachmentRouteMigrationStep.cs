@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
@@ -55,24 +54,13 @@ public class LegacyChatAttachmentRouteMigrationStep : IMigrationStep
                 }
             }
 
-            if (!string.IsNullOrEmpty(message.Content))
+            if (!string.IsNullOrEmpty(message.Content) &&
+                (message.Content.Contains("/internal/attachments/") || message.Content.Contains("/spokesapi/attachments/")))
             {
-                var originalContent = message.Content;
-                bool contentModified = false;
-                if (originalContent.Contains("/internal/attachments/"))
-                {
-                    message.Content = message.Content.Replace("/internal/attachments/", "/spokesapi/files/chat/");
-                    contentModified = true;
-                }
-                if (originalContent.Contains("/spokesapi/attachments/"))
-                {
-                    message.Content = message.Content.Replace("/spokesapi/attachments/", "/spokesapi/files/chat/");
-                    contentModified = true;
-                }
-                if (contentModified)
-                {
-                    modified = true;
-                }
+                message.Content = message.Content
+                    .Replace("/internal/attachments/", "/spokesapi/files/chat/")
+                    .Replace("/spokesapi/attachments/", "/spokesapi/files/chat/");
+                modified = true;
             }
 
             if (modified)
@@ -99,26 +87,18 @@ public class LegacyChatAttachmentRouteMigrationStep : IMigrationStep
         const string internalPrefix = "/internal/attachments/";
         const string spokesapiPrefix = "/spokesapi/attachments/";
 
-        if (path.StartsWith(internalPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            var relative = path.Substring(internalPrefix.Length).TrimStart('/');
-            if (relative.StartsWith("thumb/", StringComparison.OrdinalIgnoreCase))
-            {
-                relative = relative.Substring("thumb/".Length).TrimStart('/');
-            }
-            return $"/spokesapi/files/chat/{relative}";
-        }
+        var matchedPrefix = path.StartsWith(internalPrefix, StringComparison.OrdinalIgnoreCase)
+            ? internalPrefix
+            : path.StartsWith(spokesapiPrefix, StringComparison.OrdinalIgnoreCase)
+                ? spokesapiPrefix
+                : null;
+        if (matchedPrefix == null) return null;
 
-        if (path.StartsWith(spokesapiPrefix, StringComparison.OrdinalIgnoreCase))
+        var relative = path[matchedPrefix.Length..].TrimStart('/');
+        if (relative.StartsWith("thumb/", StringComparison.OrdinalIgnoreCase))
         {
-            var relative = path.Substring(spokesapiPrefix.Length).TrimStart('/');
-            if (relative.StartsWith("thumb/", StringComparison.OrdinalIgnoreCase))
-            {
-                relative = relative.Substring("thumb/".Length).TrimStart('/');
-            }
-            return $"/spokesapi/files/chat/{relative}";
+            relative = relative["thumb/".Length..].TrimStart('/');
         }
-
-        return null;
+        return $"/spokesapi/files/chat/{relative}";
     }
 }

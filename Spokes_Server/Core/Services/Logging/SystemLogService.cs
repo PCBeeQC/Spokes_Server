@@ -108,19 +108,25 @@ public class SystemLogService : ISystemLogService, IAsyncDisposable, IDisposable
         }
     }
 
+    private (string FilePath, string Line) PrepareLogLine(SystemLogEntry entry)
+    {
+        if (!Directory.Exists(_logDirectory))
+        {
+            Directory.CreateDirectory(_logDirectory);
+        }
+
+        var fileName = $"log_{entry.TimestampUtc:yyyy-MM-dd}.jsonl";
+        var filePath = Path.Combine(_logDirectory, fileName);
+        var jsonLine = JsonSerializer.Serialize(entry, _jsonOptions);
+        return (filePath, jsonLine + Environment.NewLine);
+    }
+
     private async Task WriteEntryToFileAsync(SystemLogEntry entry)
     {
         try
         {
-            if (!Directory.Exists(_logDirectory))
-            {
-                Directory.CreateDirectory(_logDirectory);
-            }
-
-            var fileName = $"log_{entry.TimestampUtc:yyyy-MM-dd}.jsonl";
-            var filePath = Path.Combine(_logDirectory, fileName);
-            var jsonLine = JsonSerializer.Serialize(entry, _jsonOptions);
-            await File.AppendAllTextAsync(filePath, jsonLine + Environment.NewLine);
+            var (filePath, line) = PrepareLogLine(entry);
+            await File.AppendAllTextAsync(filePath, line);
         }
         catch (Exception ex)
         {
@@ -210,10 +216,7 @@ public class SystemLogService : ISystemLogService, IAsyncDisposable, IDisposable
         catch (Exception) { }
 
         await FlushAsync();
-        _cts.Cancel();
-        _cts.Dispose();
-        _writeLock.Dispose();
-        GC.SuppressFinalize(this);
+        CleanupResources();
     }
 
     public void Dispose()
@@ -233,15 +236,8 @@ public class SystemLogService : ISystemLogService, IAsyncDisposable, IDisposable
         {
             while (_channel.Reader.TryRead(out var entry))
             {
-                if (!Directory.Exists(_logDirectory))
-                {
-                    Directory.CreateDirectory(_logDirectory);
-                }
-
-                var fileName = $"log_{entry.TimestampUtc:yyyy-MM-dd}.jsonl";
-                var filePath = Path.Combine(_logDirectory, fileName);
-                var jsonLine = JsonSerializer.Serialize(entry, _jsonOptions);
-                File.AppendAllText(filePath, jsonLine + Environment.NewLine);
+                var (filePath, line) = PrepareLogLine(entry);
+                File.AppendAllText(filePath, line);
             }
         }
         catch (Exception ex)
@@ -253,6 +249,11 @@ public class SystemLogService : ISystemLogService, IAsyncDisposable, IDisposable
             _writeLock.Release();
         }
 
+        CleanupResources();
+    }
+
+    private void CleanupResources()
+    {
         _cts.Cancel();
         _cts.Dispose();
         _writeLock.Dispose();

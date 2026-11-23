@@ -23,19 +23,15 @@ public interface IModerationReportService
 {
     bool CanModerate(Employee? employee);
 
-    ModerationReportCounts GetCounts();
-
-    IReadOnlyList<ReportedMessage> GetReports(
-        ModerationQueueTab tab = ModerationQueueTab.Open,
-        string? historyStatusFilter = null,
-        string? searchQuery = null);
+    ModerationReportCounts GetCounts(string? viewerEmployeeId = null);
 
     IReadOnlyList<ModerationReportItem> GetReportItems(
         ModerationQueueTab tab = ModerationQueueTab.Open,
         string? historyStatusFilter = null,
         string? searchQuery = null,
         string unknownUserLabel = "Unknown",
-        Func<string, string>? localize = null);
+        Func<string, string>? localize = null,
+        string? viewerEmployeeId = null);
 
     Task<SpokesResult<ReportedMessage>> SubmitReportAsync(
         ReportedMessage report,

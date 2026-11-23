@@ -23,7 +23,6 @@ public sealed class EncryptedJsonEnvelope
 /// Global server master-password encryption service.
 /// Derives a cached 256-bit Master Key-Derivation Key (KDK) from SPOKES_MASTER_PASSWORD using 100,000-iteration
 /// PBKDF2-SHA256 with a random per-instance salt, then derives unique per-ciphertext 256-bit AES-GCM keys via HKDF-SHA256.
-/// Transparently decrypts legacy v1 (PBKDF2 + AES-256-CBC) ciphertexts for backwards compatibility.
 /// Never stores an encryption key file on disk or in backups.
 /// </summary>
 public class EncryptionService
@@ -35,7 +34,6 @@ public class EncryptionService
     private const string V2StringPrefix = "v2:";
     private const int MagicSize = 8;
     private const int SaltSize = 16;
-    private const int LegacyIvSize = 16;
     private const int NonceSize = 12;
     private const int TagSize = 16;
     private const int KeySize = 32; // 256-bit AES
@@ -43,7 +41,6 @@ public class EncryptionService
     private const int V2AadSize = MagicSize + SaltSize + SaltSize + NonceSize; // 52 bytes
     private const int V2HeaderSize = V2AadSize + TagSize; // 68 bytes
     private const int MaxCachedKdks = 32;
-    private const string FallbackTestMasterPassword = "Spokes-Internal-Test-Master-Password";
 
     private readonly IConfiguration? _configuration;
     private readonly byte[] _instanceKdfSalt = RandomNumberGenerator.GetBytes(SaltSize);
@@ -56,26 +53,35 @@ public class EncryptionService
         _configuration = configuration;
     }
 
-    public bool IsUsingFallbackKey
+    public static bool TryResolveConfiguredMasterPassword(
+        IConfiguration? configuration,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? masterPassword)
     {
-        get
+        var configured = configuration?["SPOKES_MASTER_PASSWORD"];
+        if (string.IsNullOrEmpty(configured))
         {
-            var masterPassword = _configuration?["SPOKES_MASTER_PASSWORD"]
-                ?? Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD");
-            var masterKey = _configuration?["Spokes_MasterKey"]
-                ?? Environment.GetEnvironmentVariable("Spokes_MasterKey");
-            return string.IsNullOrEmpty(masterPassword) && string.IsNullOrEmpty(masterKey);
+            configured = Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD");
         }
+
+        if (!string.IsNullOrEmpty(configured))
+        {
+            masterPassword = configured;
+            return true;
+        }
+
+        masterPassword = null;
+        return false;
     }
 
     private string ResolveMasterPassword()
     {
-        var masterPassword = _configuration?["SPOKES_MASTER_PASSWORD"]
-            ?? Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD");
+        if (TryResolveConfiguredMasterPassword(_configuration, out var masterPassword))
+        {
+            return masterPassword;
+        }
 
-        return !string.IsNullOrEmpty(masterPassword)
-            ? masterPassword
-            : FallbackTestMasterPassword;
+        throw new InvalidOperationException(
+            "SPOKES_MASTER_PASSWORD is not configured. Refusing to encrypt or decrypt server secrets without a master password.");
     }
 
     /// <summary>
@@ -199,14 +205,18 @@ public class EncryptionService
 
         try
         {
-            if (cipherText.StartsWith(V2StringPrefix, StringComparison.Ordinal))
+            if (!cipherText.StartsWith(V2StringPrefix, StringComparison.Ordinal))
             {
-                var cipherBytes = Convert.FromBase64String(cipherText.Substring(V2StringPrefix.Length));
-                var plainBytes = DecryptBytes(cipherBytes);
-                return StrictUtf8.GetString(plainBytes);
+                throw new CryptographicException("Ciphertext is missing a valid v2: prefix.");
             }
 
-            return DecryptLegacyV1(cipherText);
+            var cipherBytes = Convert.FromBase64String(cipherText.Substring(V2StringPrefix.Length));
+            var plainBytes = DecryptBytes(cipherBytes);
+            return StrictUtf8.GetString(plainBytes);
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
         }
         catch (CryptographicException)
         {
@@ -221,6 +231,9 @@ public class EncryptionService
             throw new CryptographicException("Decryption failed.", ex);
         }
     }
+
+    public bool CanDecrypt(string? cipherText) =>
+        !string.IsNullOrEmpty(cipherText) && TryDecrypt(cipherText, out _);
 
     public bool TryDecrypt(string? cipherText, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? plainText)
     {
@@ -240,6 +253,10 @@ public class EncryptionService
         {
             plainText = Decrypt(cipherText);
             return true;
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
         }
         catch (Exception)
         {
@@ -311,38 +328,6 @@ public class EncryptionService
 
         wasLegacyUnwrapped = true;
         return JsonSerializer.Deserialize<T>(fileBytes, options);
-    }
-
-    private string DecryptLegacyV1(string cipherText)
-    {
-        var fullCipher = Convert.FromBase64String(cipherText);
-        var headerLength = SaltSize + LegacyIvSize;
-        if (fullCipher.Length <= headerLength)
-        {
-            throw new CryptographicException("Ciphertext is too short to contain a valid salt and initialization vector.");
-        }
-
-        var salt = fullCipher.AsSpan(0, SaltSize);
-        var iv = fullCipher.AsSpan(SaltSize, LegacyIvSize);
-        var masterPassword = ResolveMasterPassword();
-        var key = Rfc2898DeriveBytes.Pbkdf2(masterPassword, salt, Pbkdf2Iterations, HashAlgorithmName.SHA256, KeySize);
-        try
-        {
-            using var aes = Aes.Create();
-            aes.Key = key;
-            aes.IV = iv.ToArray();
-
-            using var decryptor = aes.CreateDecryptor(aes.Key, aes.IV);
-            using var ms = new MemoryStream(fullCipher, headerLength, fullCipher.Length - headerLength);
-            using var cs = new CryptoStream(ms, decryptor, CryptoStreamMode.Read);
-            using var sr = new StreamReader(cs, StrictUtf8);
-
-            return sr.ReadToEnd();
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(key);
-        }
     }
 
     private byte[] GetOrDeriveCachedKdk(string masterPassword, ReadOnlySpan<byte> kdfSalt)

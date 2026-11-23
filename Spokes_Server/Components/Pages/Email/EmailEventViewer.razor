@@ -1,7 +1,10 @@
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Core.Helpers
 @using Spokes_Server.Core.Services.Communication.Email
+@using Spokes_Server.Core.Services.HR
 @inject IEmailCacheMaintenanceService CacheMaintenance
+@inject CalendarService CalendarService
+@inject UserService UserService
 @inject IDialogService DialogService
 @inject Database Db
 @inject ISnackbar Snackbar
@@ -25,14 +28,17 @@
                     }
                     else
                     {
-                        @_event.Start.ToString("g") <span> @Loc["to"] </span> @_event.End.ToString("t")
+                        @_event.Start.ToString("g") <span> @Loc["To"].Value.ToLower() </span> @_event.End.ToString("t")
                     }
                 </MudText>
             </CardHeaderContent>
             <CardHeaderActions>
-                <MudButton Color="Color.Primary" Variant="Variant.Filled" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add" OnClick="AddToCalendar" Class="mt-2 text-nowrap">
-                    @Loc["Add to Calendar"]
-                </MudButton>
+                @if (_canAddToCalendar)
+                {
+                    <MudButton Color="Color.Primary" Variant="Variant.Filled" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add" OnClick="AddToCalendar" Class="mt-2 text-nowrap">
+                        @Loc["Add to Calendar"]
+                    </MudButton>
+                }
             </CardHeaderActions>
         </MudCardHeader>
         <MudCardContent Class="pt-0">
@@ -79,10 +85,22 @@
     private CalendarEvent? _event;
     private string? _organizer;
     private bool _hasError;
+    private bool _canAddToCalendar;
     private string? _lastAttachmentId;
+
+    private async Task<Employee?> ResolveLiveActingEmployeeAsync()
+    {
+        var user = await UserService.GetEmployeeAsync();
+        if (user != null) return Db.Employees.GetById(user.Id);
+        return !string.IsNullOrEmpty(EmployeeId) ? Db.Employees.GetById(EmployeeId) : null;
+    }
 
     protected override async Task OnParametersSetAsync()
     {
+        var currentEmp = await ResolveLiveActingEmployeeAsync();
+        _canAddToCalendar = CalendarService.CanCreateOrParticipateInCalendar(currentEmp)
+            || CalendarService.HasCalendarAdminOverride(currentEmp);
+
         var effectiveAccountId = !string.IsNullOrEmpty(AccountId) ? AccountId : EmployeeId;
         if (Attachment == null || string.IsNullOrEmpty(effectiveAccountId)) return;
         if (Attachment.Id == _lastAttachmentId) return;
@@ -125,6 +143,13 @@
     {
         if (_event == null) return;
 
+        var liveEmp = await ResolveLiveActingEmployeeAsync();
+        if (liveEmp == null || (!CalendarService.CanCreateOrParticipateInCalendar(liveEmp) && !CalendarService.HasCalendarAdminOverride(liveEmp)))
+        {
+            Snackbar.Add(Loc["You do not have permission to create calendar events."].Value, Severity.Warning);
+            return;
+        }
+
         var parameters = new DialogParameters { ["Event"] = _event, ["IsNew"] = true };
         var options = new DialogOptions
         {
@@ -138,8 +163,22 @@
 
         if (result != null && !result.Canceled && result.Data is CalendarEvent resultEvent)
         {
-            Db.CalendarEvents.Save(resultEvent);
-            Snackbar.Add(Loc["Event added to calendar"], Severity.Success);
+            var saveEmp = await ResolveLiveActingEmployeeAsync();
+            if (saveEmp == null || (!CalendarService.CanCreateOrParticipateInCalendar(saveEmp) && !CalendarService.HasCalendarAdminOverride(saveEmp)))
+            {
+                Snackbar.Add(Loc["You do not have permission to create calendar events."].Value, Severity.Warning);
+                return;
+            }
+
+            try
+            {
+                CalendarService.SaveEvent(resultEvent, saveEmp.Id);
+                Snackbar.Add(Loc["Event added to calendar"], Severity.Success);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Snackbar.Add(Loc["You do not have permission to create calendar events."].Value, Severity.Warning);
+            }
         }
     }
 }

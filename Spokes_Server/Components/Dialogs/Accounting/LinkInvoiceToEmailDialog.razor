@@ -1,0 +1,502 @@
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Projects
+@inject Database Db
+@inject UserService UserService
+@inject IStringLocalizer<BusinessResources> BizLoc
+@inject IStringLocalizer<AppResources> Loc
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3 text-muted">
+            @BizLoc["Select an existing invoice in Spokes to link with this incoming payment receipt. The payment receipt will be recorded and the email will be marked as dealt with."]
+        </MudText>
+
+        @if (Email != null)
+        {
+            <MudPaper Elevation="0" Outlined="true" Class="pa-3 mb-3" Style="background-color: var(--mud-palette-background-grey);">
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 700; text-transform: uppercase;">
+                    @BizLoc["Incoming Payment Receipt"]
+                </MudText>
+                <div class="d-flex align-center justify-space-between flex-wrap gap-2 mt-1">
+                    <div>
+                        <MudText Typo="Typo.body2"><b>@(!string.IsNullOrWhiteSpace(Email.FromName) ? Email.FromName : Email.FromAddress)</b></MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@Email.Subject</MudText>
+                    </div>
+                    <div class="text-right">
+                        @if (Email.DetectedAmount.HasValue)
+                        {
+                            <MudChip T="string" Color="Color.Primary" Size="Size.Small" Variant="Variant.Outlined">
+                                @Email.DetectedAmount.Value.ToString("C2") @(!string.IsNullOrEmpty(Email.DetectedCurrency) ? Email.DetectedCurrency : "CAD")
+                            </MudChip>
+                        }
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">@Email.Date.LocalDateTime.ToShortDateString()</MudText>
+                    </div>
+                </div>
+            </MudPaper>
+        }
+
+        <!-- Status Filter Chips and Suggested Filter -->
+        <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
+            <div class="d-flex align-center gap-1">
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(_statusFilter == "all" ? Color.Primary : Color.Default)"
+                         Variant="@(_statusFilter == "all" ? Variant.Filled : Variant.Outlined)"
+                         OnClick='() => _statusFilter = "all"'>
+                    @BizLoc["All Invoices"] (@_allItems.Count)
+                </MudChip>
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(_statusFilter == "unpaid" ? Color.Warning : Color.Default)"
+                         Variant="@(_statusFilter == "unpaid" ? Variant.Filled : Variant.Outlined)"
+                         OnClick='() => _statusFilter = "unpaid"'>
+                    @BizLoc["Unpaid / Open"] (@_allItems.Count(i => !InvoiceStatus.IsSettled(i.Status) && i.BalanceDue > 0))
+                </MudChip>
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(_statusFilter == "paid" ? Color.Success : Color.Default)"
+                         Variant="@(_statusFilter == "paid" ? Variant.Filled : Variant.Outlined)"
+                         OnClick='() => _statusFilter = "paid"'>
+                    @BizLoc["Paid"] (@_allItems.Count(i => InvoiceStatus.IsSettled(i.Status) || i.BalanceDue <= 0))
+                </MudChip>
+            </div>
+            @if (Email != null && !string.IsNullOrWhiteSpace(Email.FromName) && _searchQuery != Email.FromName.Trim())
+            {
+                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary"
+                           StartIcon="@Icons.Material.Filled.FilterList"
+                           OnClick="ApplySuggestedSearch">
+                    @string.Format(BizLoc["Filter by '{0}'"].Value, Email.FromName.Trim())
+                </MudButton>
+            }
+        </div>
+
+        <div class="mb-3">
+            <MudTextField @bind-Value="_searchQuery" Placeholder="@BizLoc["Search client, project, invoice #, amount..."]" Immediate="true"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" />
+        </div>
+
+        <MudTable Elevation="0" Outlined="true" T="ExistingInvoiceItem" Items="FilteredInvoices" Dense="true" Hover="true" FixedHeader="true" Height="260px"
+                  SelectedItem="_selectedItem" SelectedItemChanged="@((ExistingInvoiceItem? i) => OnInvoiceSelected(i))"
+                  OnRowClick="@((TableRowClickEventArgs<ExistingInvoiceItem> args) => OnInvoiceSelected(args.Item))"
+                  RowClassFunc="@((item, i) => _selectedItem?.Id == item?.Id ? "mud-selected-item" : "")"
+                  RowStyleFunc="@((item, i) => GetRowStyle(item))">
+            <HeaderContent>
+                <MudTh Style="width: 46px; text-align: center; padding: 4px;"></MudTh>
+                <MudTh>@BizLoc["Invoice #"]</MudTh>
+                <MudTh>@BizLoc["Client"]</MudTh>
+                <MudTh>@BizLoc["Project"]</MudTh>
+                <MudTh>@BizLoc["Date"]</MudTh>
+                <MudTh>@BizLoc["Total"]</MudTh>
+                <MudTh>@BizLoc["Balance Due"]</MudTh>
+                <MudTh>@BizLoc["Status"]</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd Style="width: 46px; text-align: center; padding: 4px;">
+                    @if (_selectedItem?.Id == context.Id)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.RadioButtonChecked" Color="Color.Primary" Size="Size.Small" />
+                    }
+                    else
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.RadioButtonUnchecked" Color="Color.Default" Size="Size.Small" />
+                    }
+                </MudTd>
+                <MudTd DataLabel="Invoice #">
+                    <MudText Typo="Typo.body2" Style="@(_selectedItem?.Id == context.Id ? "font-weight: 700; color: var(--mud-palette-primary);" : "font-weight: 600;")">
+                        @context.InvoiceNumber
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="Client">
+                    <MudText Typo="Typo.body2">@context.ClientName</MudText>
+                </MudTd>
+                <MudTd DataLabel="Project">
+                    <MudText Typo="Typo.body2">@context.ProjectName</MudText>
+                </MudTd>
+                <MudTd DataLabel="Date">
+                    <MudText Typo="Typo.caption">@context.Date.ToShortDateString()</MudText>
+                </MudTd>
+                <MudTd DataLabel="Total">
+                    <MudText Typo="Typo.body2">@context.GrandTotal.ToString("C2")</MudText>
+                </MudTd>
+                <MudTd DataLabel="Balance Due">
+                    @if (context.BalanceDue > 0)
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Warning" Style="font-weight: 600;">
+                            @context.BalanceDue.ToString("C2")
+                        </MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
+                            @BizLoc["Paid in Full"]
+                        </MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Status">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                             Color="@(context.Status == InvoiceStatus.Paid ? Color.Success : (context.Status == InvoiceStatus.Partial ? Color.Warning : Color.Default))"
+                             Style="height: 20px; font-size: 0.7rem;">
+                        @context.Status
+                    </MudChip>
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <div class="pa-4 text-center text-muted">
+                    <MudText Typo="Typo.body2">@BizLoc["No matching invoices found."]</MudText>
+                </div>
+            </NoRecordsContent>
+        </MudTable>
+
+        @if (_selectedItem != null)
+        {
+            <!-- Visual Feedback Card for Currently Selected Invoice -->
+            <MudPaper Elevation="0" Outlined="true" Class="pa-3 mt-3" Style="background-color: var(--mud-palette-primary-hover); border: 2px solid var(--mud-palette-primary); border-radius: 8px;">
+                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                    <div class="d-flex align-center gap-2">
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Primary" Size="Size.Medium" />
+                        <div>
+                            <div class="d-flex align-center gap-2">
+                                <MudText Typo="Typo.subtitle1" Color="Color.Primary" Style="font-weight: 700;">
+                                    @BizLoc["Selected:"] #@_selectedItem.InvoiceNumber
+                                </MudText>
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled"
+                                         Color="@(_selectedItem.Status == InvoiceStatus.Paid ? Color.Success : (_selectedItem.Status == InvoiceStatus.Partial ? Color.Warning : Color.Default))"
+                                         Style="height: 20px; font-size: 0.7rem; font-weight: 600;">
+                                    @_selectedItem.Status
+                                </MudChip>
+                            </div>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                <b>@_selectedItem.ClientName</b> • @_selectedItem.ProjectName
+                            </MudText>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">
+                            @BizLoc["Date:"] @_selectedItem.Date.ToShortDateString() | @BizLoc["Due:"] @_selectedItem.DueDate.ToShortDateString()
+                        </MudText>
+                        <MudText Typo="Typo.body2">
+                            @BizLoc["Total:"] <b>@_selectedItem.GrandTotal.ToString("C2")</b> |
+                            @BizLoc["Balance Due:"] <b class="@(_selectedItem.BalanceDue > 0 ? "text-warning" : "text-success")">@_selectedItem.BalanceDue.ToString("C2")</b>
+                        </MudText>
+                    </div>
+                </div>
+            </MudPaper>
+
+            @if (_selectedItem.BalanceDue > 0)
+            {
+                <MudPaper Elevation="0" Outlined="true" Class="pa-3 mt-2" Style="background-color: var(--mud-palette-background-grey);">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
+                        <MudCheckBox @bind-Value="_recordPayment" Color="Color.Primary" Dense="true">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@BizLoc["Record payment on this invoice"]</MudText>
+                        </MudCheckBox>
+                        @if (_recordPayment)
+                        {
+                            @if (Math.Round(_selectedItem.BalanceDue - _paymentAmount, 2, MidpointRounding.AwayFromZero) <= 0)
+                            {
+                                <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Filled" Icon="@Icons.Material.Filled.CheckCircle">
+                                    @BizLoc["Will mark invoice as Paid in Full"]
+                                </MudChip>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Outlined">
+                                    @string.Format(BizLoc["Remaining balance after payment: {0}"].Value, Math.Round(_selectedItem.BalanceDue - _paymentAmount, 2, MidpointRounding.AwayFromZero).ToString("C2"))
+                                </MudChip>
+                            }
+                        }
+                    </div>
+                    @if (_recordPayment)
+                    {
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12" sm="4">
+                                <MudNumericField @bind-Value="_paymentAmount" Label="@BizLoc["Payment Amount"]"
+                                                 Format="F2" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0.01m" />
+                            </MudItem>
+                            <MudItem xs="12" sm="4">
+                                <MudDatePicker @bind-Date="_paymentDate" Label="@BizLoc["Payment Date"]"
+                                               Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            </MudItem>
+                            <MudItem xs="12" sm="4">
+                                <MudSelect @bind-Value="_paymentMethod" Label="@BizLoc["Payment Method"]"
+                                           Variant="Variant.Outlined" Margin="Margin.Dense">
+                                    <MudSelectItem Value="@("Electronic")">@BizLoc["Electronic / EFT"]</MudSelectItem>
+                                    <MudSelectItem Value="@("Credit Card")">@BizLoc["Credit Card"]</MudSelectItem>
+                                    <MudSelectItem Value="@("Wire")">@BizLoc["Wire Transfer"]</MudSelectItem>
+                                    <MudSelectItem Value="@("Interac")">@BizLoc["Interac e-Transfer"]</MudSelectItem>
+                                    <MudSelectItem Value="@("Check")">@BizLoc["Check"]</MudSelectItem>
+                                    <MudSelectItem Value="@("Cash")">@BizLoc["Cash"]</MudSelectItem>
+                                    <MudSelectItem Value="@("Other")">@BizLoc["Other"]</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12">
+                                <MudTextField @bind-Value="_paymentReference" Label="@BizLoc["Reference / Notes"]"
+                                              Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            </MudItem>
+                        </MudGrid>
+                    }
+                </MudPaper>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.Link"
+                   OnClick="Submit" Disabled="@(_selectedItem == null || (_recordPayment && _paymentAmount <= 0))">
+            @if (_selectedItem != null)
+            {
+                @string.Format(BizLoc["Link to Invoice #{0}"].Value, _selectedItem.InvoiceNumber)
+            }
+            else
+            {
+                @BizLoc["Select an Invoice to Link"]
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public EmailMessage? Email { get; set; }
+
+    public class ExistingInvoiceItem
+    {
+        public string Id { get; set; } = "";
+        public string InvoiceNumber { get; set; } = "";
+        public string ClientName { get; set; } = "";
+        public string ProjectName { get; set; } = "";
+        public DateTime Date { get; set; }
+        public DateTime DueDate { get; set; }
+        public decimal GrandTotal { get; set; }
+        public decimal AmountPaid { get; set; }
+        public decimal AmountWrittenOff { get; set; }
+        public decimal BalanceDue => Math.Round(GrandTotal - AmountPaid - AmountWrittenOff, 2, MidpointRounding.AwayFromZero);
+        public string Status { get; set; } = "";
+        public Invoice Invoice { get; set; } = default!;
+    }
+
+    public class LinkInvoiceResult
+    {
+        public Invoice Invoice { get; set; } = default!;
+        public bool RecordPayment { get; set; }
+        public PaymentRecord? Payment { get; set; }
+    }
+
+    private List<ExistingInvoiceItem> _allItems = [];
+    private ExistingInvoiceItem? _selectedItem;
+    private string _searchQuery = "";
+    private string _statusFilter = "unpaid"; // default to unpaid to make linking easiest
+
+    private bool _recordPayment = false;
+    private decimal _paymentAmount;
+    private DateTime? _paymentDate;
+    private string _paymentMethod = "Electronic";
+    private string _paymentReference = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _allItems.Clear();
+
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || emp.IsSuspended ||
+            (!emp.HasEffectivePermission(AppPermissions.Finance.AccessAccounting) &&
+             !emp.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices)))
+        {
+            return;
+        }
+
+        var projects = Db.Projects.GetAll().ToDictionary(p => p.Id, p => p);
+        var projectGroups = Db.ProjectGroups.GetAll().ToDictionary(g => g.Id, g => g);
+        var invoices = Db.Invoices.GetAll()
+            .Where(i => i.Status != InvoiceStatus.Void)
+            .Where(i =>
+            {
+                if (!string.IsNullOrEmpty(i.ProjectId))
+                {
+                    return ProjectAccessHelper.CanAccess(emp, projects.GetValueOrDefault(i.ProjectId), Db.Teams, allowAccountingFinancialRead: true);
+                }
+
+                if (!string.IsNullOrEmpty(i.ProjectGroupId))
+                {
+                    return projectGroups.TryGetValue(i.ProjectGroupId, out var grp) &&
+                           grp.ProjectIds.Count > 0 &&
+                           grp.ProjectIds.All(pid => !string.IsNullOrWhiteSpace(pid) &&
+                                                     ProjectAccessHelper.CanAccess(emp, projects.GetValueOrDefault(pid), Db.Teams, allowAccountingFinancialRead: true));
+                }
+
+                return true;
+            })
+            .ToList();
+
+        foreach (var inv in invoices)
+        {
+            string projectName = "—";
+            string clientName = "—";
+
+            if (!string.IsNullOrEmpty(inv.ProjectId) && projects.TryGetValue(inv.ProjectId, out var proj))
+            {
+                projectName = !string.IsNullOrWhiteSpace(proj.DisplayName) ? proj.DisplayName : proj.Name;
+                clientName = !string.IsNullOrWhiteSpace(proj.Client?.BusinessName)
+                    ? proj.Client.BusinessName
+                    : (!string.IsNullOrWhiteSpace(proj.Client?.ContactPersonName) ? proj.Client.ContactPersonName : "—");
+            }
+            else if (!string.IsNullOrEmpty(inv.ProjectGroupId) && projectGroups.TryGetValue(inv.ProjectGroupId, out var group))
+            {
+                projectName = group.Name;
+                clientName = !string.IsNullOrWhiteSpace(group.Client?.BusinessName)
+                    ? group.Client.BusinessName
+                    : (!string.IsNullOrWhiteSpace(group.Client?.ContactPersonName) ? group.Client.ContactPersonName : "—");
+            }
+
+            _allItems.Add(new ExistingInvoiceItem
+            {
+                Id = inv.Id,
+                InvoiceNumber = !string.IsNullOrWhiteSpace(inv.InvoiceNumber) ? inv.InvoiceNumber : inv.Id,
+                ClientName = clientName,
+                ProjectName = projectName,
+                Date = inv.Date,
+                DueDate = inv.DueDate,
+                GrandTotal = inv.GrandTotal,
+                AmountPaid = inv.AmountPaid,
+                AmountWrittenOff = inv.AmountWrittenOff,
+                Status = inv.BalanceDue <= 0
+                    ? (inv.AmountPaid <= 0 && inv.HasWriteOffs ? InvoiceStatus.WrittenOff : InvoiceStatus.Paid)
+                    : ((inv.AmountPaid > 0 || inv.HasWriteOffs) ? InvoiceStatus.Partial : inv.Status),
+                Invoice = inv
+            });
+        }
+
+        _allItems = _allItems.OrderByDescending(i => i.Date).ThenByDescending(i => i.DueDate).ToList();
+
+        // If there are no unpaid invoices, fallback to "all" filter
+        if (!_allItems.Any(i => !InvoiceStatus.IsSettled(i.Status) && i.BalanceDue > 0))
+        {
+            _statusFilter = "all";
+        }
+
+        // Auto-select if there is an exact single unpaid match with the detected amount
+        if (Email?.DetectedAmount.HasValue == true && Email.DetectedAmount.Value > 0)
+        {
+            var match = _allItems.FirstOrDefault(i => i.BalanceDue > 0 && Math.Abs(i.BalanceDue - Email.DetectedAmount.Value) < 0.01m);
+            if (match != null)
+            {
+                OnInvoiceSelected(match);
+            }
+        }
+    }
+
+    private void ApplySuggestedSearch()
+    {
+        if (Email != null && !string.IsNullOrWhiteSpace(Email.FromName))
+        {
+            _searchQuery = Email.FromName.Trim();
+        }
+    }
+
+    private IEnumerable<ExistingInvoiceItem> FilteredInvoices
+    {
+        get
+        {
+            var items = _allItems.AsEnumerable();
+
+            if (_statusFilter == "unpaid")
+            {
+                items = items.Where(i => !InvoiceStatus.IsSettled(i.Status) && i.BalanceDue > 0);
+            }
+            else if (_statusFilter == "paid")
+            {
+                items = items.Where(i => InvoiceStatus.IsSettled(i.Status) || i.BalanceDue <= 0);
+            }
+
+            if (!string.IsNullOrWhiteSpace(_searchQuery))
+            {
+                var terms = _searchQuery.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                items = items.Where(inv =>
+                    terms.All(term =>
+                        (!string.IsNullOrEmpty(inv.InvoiceNumber) && inv.InvoiceNumber.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                        (!string.IsNullOrEmpty(inv.ClientName) && inv.ClientName.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                        (!string.IsNullOrEmpty(inv.ProjectName) && inv.ProjectName.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                        inv.GrandTotal.ToString("F2").Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                        inv.BalanceDue.ToString("F2").Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                        (!string.IsNullOrEmpty(inv.Status) && inv.Status.Contains(term, StringComparison.OrdinalIgnoreCase))));
+            }
+
+            return items;
+        }
+    }
+
+    private string GetRowStyle(ExistingInvoiceItem? item)
+    {
+        if (_selectedItem?.Id == item?.Id)
+        {
+            return "background-color: var(--mud-palette-primary-hover) !important; font-weight: 600; cursor: pointer; border-left: 4px solid var(--mud-palette-primary);";
+        }
+        return "cursor: pointer;";
+    }
+
+    private void OnInvoiceSelected(ExistingInvoiceItem? item)
+    {
+        _selectedItem = item;
+        if (item != null && item.BalanceDue > 0)
+        {
+            _recordPayment = true;
+            var exactBalance = Math.Round(item.BalanceDue, 2, MidpointRounding.AwayFromZero);
+            if (Email?.DetectedAmount.HasValue == true && Email.DetectedAmount.Value > 0)
+            {
+                var detected = Math.Round(Email.DetectedAmount.Value, 2, MidpointRounding.AwayFromZero);
+                _paymentAmount = detected >= exactBalance ? exactBalance : detected;
+            }
+            else
+            {
+                _paymentAmount = exactBalance;
+            }
+            _paymentDate = Email?.Date.LocalDateTime.Date ?? DateTime.Today;
+            _paymentReference = !string.IsNullOrWhiteSpace(Email?.Subject) ? Email.Subject : "";
+        }
+        else
+        {
+            _recordPayment = false;
+            _paymentAmount = 0;
+        }
+        StateHasChanged();
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (_selectedItem != null)
+        {
+            PaymentRecord? payment = null;
+            if (_recordPayment && _paymentAmount > 0)
+            {
+                var amountToPay = Math.Round(_paymentAmount, 2, MidpointRounding.AwayFromZero);
+                var exactBalance = Math.Round(_selectedItem.BalanceDue, 2, MidpointRounding.AwayFromZero);
+                if (Math.Abs(amountToPay - exactBalance) <= 0.01m || amountToPay >= exactBalance)
+                {
+                    amountToPay = exactBalance;
+                }
+
+                payment = new PaymentRecord
+                {
+                    Amount = amountToPay,
+                    Date = _paymentDate ?? DateTime.Today,
+                    Method = _paymentMethod,
+                    Reference = _paymentReference,
+                    Notes = !string.IsNullOrWhiteSpace(_paymentReference) ? _paymentReference : $"Payment receipt from {Email?.FromAddress ?? "email"}"
+                };
+            }
+
+            var result = new LinkInvoiceResult
+            {
+                Invoice = _selectedItem.Invoice,
+                RecordPayment = _recordPayment,
+                Payment = payment
+            };
+
+            MudDialog.Close(DialogResult.Ok(result));
+        }
+    }
+}

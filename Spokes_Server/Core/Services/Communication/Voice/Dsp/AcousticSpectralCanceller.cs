@@ -17,13 +17,367 @@ internal struct RoommateBleedReferencePair
 }
 
 /// <summary>
+/// Decoupled two-stage log-domain (dB) speech loudness normalizer + independent fast peak/shout guard
+/// for server-side Physical Room streams (matching Direct LAN and client AudioWorklet levelers).
+/// </summary>
+internal sealed class AcousticSpeechLeveler
+{
+    private const float TargetSpeechDb = -16.5f;
+    private const float MaxBoostDb = 15.0f;
+    private const float MinAttenDb = -12.0f;
+    private const float SpeechGateFloorDb = -45.0f;
+    private const float MaxNoiseFloorDb = -44.0f;
+    private const float NoiseMarginDb = 8.0f;
+    private const float MaxCrestFactor = 6.5f;
+    private const float EnvRiseTauSec = 0.55f;
+    private const float EnvFallTauSec = 0.45f;
+    private const float MaxRiseStepDb = 0.55f;
+    private const float RelativeGateDb = -10.0f;
+    private const int SoftUnlockWindows = 12;
+    private const int ConfirmWindows = 3;
+    private const float IdleRelaxDelaySec = 1.5f;
+    private const float IdleRelaxTauSec = 2.0f;
+    private const float BaselineUpTauSec = 8.0f;
+    private const float BaselineDownTauSec = 16.0f;
+    private const float LimiterThreshold = 0.78f;
+    private const int WindowSamples = 960; // 20 ms @ 48 kHz
+    private const int NfRingSize = 75;     // 1.5 s rolling minimum-statistics window
+
+    private static readonly float MinMakeupGain = DbToLinear(MinAttenDb);
+    private static readonly float MaxMakeupGain = DbToLinear(MaxBoostDb);
+    private static readonly float ShoutRmsCeiling = DbToLinear(TargetSpeechDb + 2.0f);
+    private static readonly float MakeupUpAlpha = 1.0f - MathF.Exp(-1.0f / (SampleRate * 0.120f));
+    private static readonly float MakeupDownAlpha = 1.0f - MathF.Exp(-1.0f / (SampleRate * 0.035f));
+    private static readonly float DuckAttackAlpha = 1.0f - MathF.Exp(-1.0f / (SampleRate * 0.002f));
+    private static readonly float DuckReleaseAlpha = 1.0f - MathF.Exp(-1.0f / (SampleRate * 0.120f));
+    private static readonly float FastEnvAlpha = 1.0f - MathF.Exp(-1.0f / (SampleRate * 0.010f));
+    private static readonly int FastDuckHoldSamples = (SampleRate * 20) / 1000;
+
+    private readonly float[] _nfRing = new float[NfRingSize];
+    private readonly float[] _seedBuf = new float[ConfirmWindows];
+    private int _nfIdx;
+    private float _noiseFloorDb = -60.0f;
+
+    private double _winSumSq;
+    private float _winPeak;
+    private int _winSamples;
+    private int _winConfirmedSamples;
+    private bool _winDoubleTalk;
+
+    private float _speechLevelDb = TargetSpeechDb;
+    private float _baselineGainDb;
+    private bool _hasSeeded;
+    private int _confirmCount;
+    private int _seedCount;
+    private int _softBelowCount;
+    private float _silenceSec;
+
+    private float _fastPowerEnv;
+    private int _fastDuckHoldRemaining;
+    private float _heldDuckTarget = 1.0f;
+
+    public float TargetMakeupGain { get; private set; } = 1.0f;
+    public float CurrentMakeupGain { get; private set; } = 1.0f;
+    public float CurrentFastDuckGain { get; private set; } = 1.0f;
+    public float EffectiveGain => CurrentMakeupGain * CurrentFastDuckGain;
+    public float NoiseFloorRms => DbToLinear(_noiseFloorDb);
+
+    public bool IsIdleSettled =>
+        MathF.Abs(CurrentMakeupGain - TargetMakeupGain) < 1e-4f &&
+        MathF.Abs(CurrentFastDuckGain - 1.0f) < 1e-4f &&
+        (!_hasSeeded || (20.0f * MathF.Log10(MathF.Max(TargetMakeupGain, 1e-4f))) >= Math.Clamp(_baselineGainDb, MinAttenDb, MaxBoostDb) - 0.05f);
+
+    public AcousticSpeechLeveler()
+    {
+        Array.Fill(_nfRing, -60.0f);
+    }
+
+    public void Reset()
+    {
+        Array.Fill(_nfRing, -60.0f);
+        _nfIdx = 0;
+        _noiseFloorDb = -60.0f;
+        _winSumSq = 0.0;
+        _winPeak = 0.0f;
+        _winSamples = 0;
+        _winConfirmedSamples = 0;
+        _winDoubleTalk = false;
+        _speechLevelDb = TargetSpeechDb;
+        _baselineGainDb = 0.0f;
+        _hasSeeded = false;
+        _confirmCount = 0;
+        _seedCount = 0;
+        _softBelowCount = 0;
+        _silenceSec = 0.0f;
+        _fastPowerEnv = 0.0f;
+        _fastDuckHoldRemaining = 0;
+        _heldDuckTarget = 1.0f;
+        TargetMakeupGain = 1.0f;
+        CurrentMakeupGain = 1.0f;
+        CurrentFastDuckGain = 1.0f;
+    }
+
+    public void AdvancePureSilenceSubBlock(int sampleCount)
+    {
+        if (sampleCount <= 0) return;
+        float dt = sampleCount / (float)SampleRate;
+        _winSumSq = 0.0;
+        _winPeak = 0.0f;
+        _winSamples = 0;
+        _winConfirmedSamples = 0;
+        _winDoubleTalk = false;
+        _confirmCount = 0;
+        _softBelowCount = 0;
+        if (!_hasSeeded) _seedCount = 0;
+
+        AdvanceIdleSilence(dt);
+
+        float makeupAlpha = TargetMakeupGain < CurrentMakeupGain ? MakeupDownAlpha : MakeupUpAlpha;
+        float stepMakeup = 1.0f - MathF.Pow(1.0f - makeupAlpha, sampleCount);
+        CurrentMakeupGain += stepMakeup * (TargetMakeupGain - CurrentMakeupGain);
+
+        _fastPowerEnv *= MathF.Pow(1.0f - FastEnvAlpha, sampleCount);
+        _fastDuckHoldRemaining = 0;
+        _heldDuckTarget = 1.0f;
+        float stepDuck = 1.0f - MathF.Pow(1.0f - DuckReleaseAlpha, sampleCount);
+        CurrentFastDuckGain += stepDuck * (1.0f - CurrentFastDuckGain);
+        if (MathF.Abs(CurrentFastDuckGain - 1.0f) < 1e-4f)
+        {
+            CurrentFastDuckGain = 1.0f;
+        }
+    }
+
+    public float ComputeSubBlockDesiredDuck(
+        float cleanedMeanSq,
+        float cleanedPeak,
+        int subLen,
+        bool isGatedBleed,
+        bool isPercussiveClick,
+        bool allowSpeechUpdate,
+        bool isDoubleTalk,
+        out bool seededThisBlock)
+    {
+        seededThisBlock = false;
+
+        if (isGatedBleed)
+        {
+            _winSumSq = 0.0;
+            _winPeak = 0.0f;
+            _winSamples = 0;
+            _winConfirmedSamples = 0;
+            _winDoubleTalk = false;
+            _confirmCount = 0;
+            _softBelowCount = 0;
+            if (!_hasSeeded) _seedCount = 0;
+            AdvanceIdleSilence(subLen / (float)SampleRate);
+            _fastPowerEnv *= MathF.Pow(1.0f - FastEnvAlpha, subLen);
+            _fastDuckHoldRemaining = 0;
+            _heldDuckTarget = 1.0f;
+            return 1.0f;
+        }
+
+        _winSumSq += cleanedMeanSq * subLen;
+        if (cleanedPeak > _winPeak) _winPeak = cleanedPeak;
+        if (allowSpeechUpdate) _winConfirmedSamples += subLen;
+        if (isDoubleTalk) _winDoubleTalk = true;
+        _winSamples += subLen;
+
+        if (_winSamples >= WindowSamples)
+        {
+            float meanSq = (float)(_winSumSq / _winSamples);
+            bool winConfirmed = _winConfirmedSamples * 2 >= _winSamples;
+            seededThisBlock = EvaluateWindow(meanSq, _winPeak, winConfirmed, _winDoubleTalk);
+            _winSumSq = 0.0;
+            _winPeak = 0.0f;
+            _winSamples = 0;
+            _winConfirmedSamples = 0;
+            _winDoubleTalk = false;
+        }
+
+        float blockFastAlpha = 1.0f - MathF.Pow(1.0f - FastEnvAlpha, subLen);
+        _fastPowerEnv += blockFastAlpha * (cleanedMeanSq - _fastPowerEnv);
+        float fastRms = MathF.Sqrt(MathF.Max(_fastPowerEnv, 0.0f));
+
+        float instDuck = 1.0f;
+        if (!isPercussiveClick)
+        {
+            float maxSafeTotal = MaxMakeupGain;
+            if (cleanedPeak * CurrentMakeupGain > LimiterThreshold)
+            {
+                maxSafeTotal = MathF.Min(
+                    maxSafeTotal,
+                    Math.Clamp(LimiterThreshold / (cleanedPeak + 1e-6f), MinMakeupGain, MaxMakeupGain));
+            }
+            if (fastRms * CurrentMakeupGain > ShoutRmsCeiling)
+            {
+                maxSafeTotal = MathF.Min(
+                    maxSafeTotal,
+                    Math.Clamp(ShoutRmsCeiling / (fastRms + 1e-6f), MinMakeupGain, MaxMakeupGain));
+            }
+            if (maxSafeTotal < CurrentMakeupGain)
+            {
+                instDuck = Math.Clamp(maxSafeTotal / MathF.Max(CurrentMakeupGain, 1e-4f), 0.05f, 1.0f);
+            }
+        }
+
+        float desiredDuck = 1.0f;
+        if (instDuck < 0.999f)
+        {
+            if (instDuck <= _heldDuckTarget || _fastDuckHoldRemaining <= 0)
+            {
+                _heldDuckTarget = instDuck;
+            }
+            _fastDuckHoldRemaining = FastDuckHoldSamples;
+            desiredDuck = MathF.Min(instDuck, _heldDuckTarget);
+        }
+        else if (_fastDuckHoldRemaining > 0)
+        {
+            _fastDuckHoldRemaining = Math.Max(0, _fastDuckHoldRemaining - subLen);
+            desiredDuck = _heldDuckTarget;
+        }
+        else
+        {
+            _heldDuckTarget = 1.0f;
+        }
+
+        return desiredDuck;
+    }
+
+    public void StepSample(bool isGatedBleed, float desiredDuck)
+    {
+        if (!isGatedBleed)
+        {
+            float makeupAlpha = TargetMakeupGain < CurrentMakeupGain ? MakeupDownAlpha : MakeupUpAlpha;
+            CurrentMakeupGain += makeupAlpha * (TargetMakeupGain - CurrentMakeupGain);
+        }
+        float duckAlpha = desiredDuck < CurrentFastDuckGain ? DuckAttackAlpha : DuckReleaseAlpha;
+        CurrentFastDuckGain += duckAlpha * (desiredDuck - CurrentFastDuckGain);
+    }
+
+    private bool EvaluateWindow(float meanSq, float peak, bool externalSpeechConfirmed, bool isDoubleTalk)
+    {
+        float dt = WindowSamples / (float)SampleRate;
+        float rms = MathF.Sqrt(MathF.Max(meanSq, 0.0f));
+        float db = 10.0f * MathF.Log10(MathF.Max(meanSq, 1e-12f));
+        float crest = peak / (rms + 1e-7f);
+
+        if (meanSq > 1e-10f)
+        {
+            _nfRing[_nfIdx] = Math.Clamp(db, -65.0f, MaxNoiseFloorDb);
+            _nfIdx = (_nfIdx + 1) % NfRingSize;
+            float minVal = MaxNoiseFloorDb;
+            for (int i = 0; i < NfRingSize; i++)
+            {
+                if (_nfRing[i] < minVal) minVal = _nfRing[i];
+            }
+            _noiseFloorDb = 0.90f * _noiseFloorDb + 0.10f * minVal;
+        }
+
+        float gateDb = MathF.Max(SpeechGateFloorDb, _noiseFloorDb + NoiseMarginDb);
+        bool isImpulsive = crest > MaxCrestFactor;
+        bool passesGate = externalSpeechConfirmed && db >= gateDb && !isImpulsive;
+
+        if (passesGate)
+        {
+            _silenceSec = 0.0f;
+            _confirmCount++;
+
+            if (!_hasSeeded)
+            {
+                _seedBuf[_seedCount++] = Math.Clamp(db, -45.0f, -8.0f);
+                if (_seedCount >= ConfirmWindows)
+                {
+                    Array.Sort(_seedBuf, 0, _seedCount);
+                    _speechLevelDb = _seedBuf[_seedCount / 2];
+                    _hasSeeded = true;
+                    _seedCount = 0;
+
+                    float desiredDb = Math.Clamp(TargetSpeechDb - _speechLevelDb, MinAttenDb, MaxBoostDb);
+                    _baselineGainDb = desiredDb;
+                    TargetMakeupGain = DbToLinear(desiredDb);
+                    if (!isDoubleTalk && TargetMakeupGain > 1.0f)
+                    {
+                        CurrentMakeupGain = MathF.Sqrt(TargetMakeupGain);
+                    }
+                    return true;
+                }
+                return false;
+            }
+
+            if (_confirmCount >= ConfirmWindows)
+            {
+                float dtScale = isDoubleTalk ? 0.25f : 1.0f;
+                float diff = db - _speechLevelDb;
+                if (diff >= 0.0f)
+                {
+                    _softBelowCount = 0;
+                    float riseAlpha = (1.0f - MathF.Exp(-dt / EnvRiseTauSec)) * dtScale;
+                    float step = MathF.Min(MaxRiseStepDb * dtScale, riseAlpha * diff);
+                    _speechLevelDb += step;
+                }
+                else if (diff >= RelativeGateDb)
+                {
+                    _softBelowCount = 0;
+                    float fallAlpha = (1.0f - MathF.Exp(-dt / EnvFallTauSec)) * dtScale;
+                    _speechLevelDb += fallAlpha * diff;
+                }
+                else
+                {
+                    _softBelowCount++;
+                    if (_softBelowCount >= SoftUnlockWindows)
+                    {
+                        float unlockAlpha = (1.0f - MathF.Exp(-dt / 0.30f)) * dtScale;
+                        _speechLevelDb += unlockAlpha * diff;
+                    }
+                }
+
+                _speechLevelDb = Math.Clamp(_speechLevelDb, -45.0f, -4.0f);
+                float desiredDb = Math.Clamp(TargetSpeechDb - _speechLevelDb, MinAttenDb, MaxBoostDb);
+                TargetMakeupGain = DbToLinear(desiredDb);
+
+                float baseTau = desiredDb < _baselineGainDb ? BaselineDownTauSec : BaselineUpTauSec;
+                float baseAlpha = (1.0f - MathF.Exp(-dt / baseTau)) * dtScale;
+                _baselineGainDb += baseAlpha * (desiredDb - _baselineGainDb);
+            }
+            return false;
+        }
+
+        _confirmCount = 0;
+        _softBelowCount = 0;
+        if (!_hasSeeded) _seedCount = 0;
+        if (!externalSpeechConfirmed || db < gateDb)
+        {
+            AdvanceIdleSilence(dt);
+        }
+        return false;
+    }
+
+    private void AdvanceIdleSilence(float dt)
+    {
+        _silenceSec += dt;
+        if (!_hasSeeded || _silenceSec <= IdleRelaxDelaySec) return;
+
+        float curTargetDb = 20.0f * MathF.Log10(MathF.Max(TargetMakeupGain, 1e-4f));
+        float relaxTargetDb = Math.Clamp(_baselineGainDb, MinAttenDb, MaxBoostDb);
+        if (curTargetDb < relaxTargetDb - 0.05f)
+        {
+            float relaxAlpha = 1.0f - MathF.Exp(-dt / IdleRelaxTauSec);
+            float nextDb = curTargetDb + relaxAlpha * (relaxTargetDb - curTargetDb);
+            TargetMakeupGain = DbToLinear(nextDb);
+            _speechLevelDb = Math.Clamp(TargetSpeechDb - nextDb, -45.0f, -4.0f);
+        }
+    }
+
+    private static float DbToLinear(float db) => MathF.Pow(10.0f, db * 0.05f);
+}
+
+/// <summary>
 /// Real-time 50%-overlapped Hann (COLA) SIR-adaptive temporally-smoothed multi-reference Power Wiener bleed subtractor
 /// powered by NWaves <see cref="NWaves.Transforms.RealFft"/>, causal room-reverb tail estimator, smoothed noise-gate envelope,
-/// echo-restrained speech loudness normalizer (-20 dBFS), and -1.0 dBFS soft-knee peak limiter.
+/// echo-restrained decoupled dB-domain speech loudness normalizer (-16.5 dBFS), and -1.0 dBFS soft-knee peak limiter.
 /// </summary>
 internal static class AcousticSpectralCanceller
 {
-    private const float PostLevelerMaxMakeupGain = 5.6234133f;  // +15.0 dB max upward makeup gain
     private const float PostLevelerSpeechFloorRms = 0.0056234f; // -45.0 dBFS post-cancellation speech gate floor
     private const float SoftLimiterThreshold = 0.78f;           // ~ -2.15 dBFS soft-knee onset
     private const float SoftLimiterCeiling = 0.8912509f;        // -1.0 dBFS true peak ceiling
@@ -38,6 +392,28 @@ internal static class AcousticSpectralCanceller
         Span<short> outPcm)
     {
         self.RelaxSpectralCancellerState();
+
+        if (subStartSample > self.LastNonZeroSampleIndex &&
+            self.LastGateState == AcousticGateState.Open &&
+            selfVocalRms == 0f &&
+            !isPercussiveClick &&
+            self.LevelerSpeechHoldSubFrames == 0 &&
+            MathF.Abs(self.CurrentGain - self.TargetGain) < 1e-5f &&
+            MathF.Abs(self.LevelerSpeechPresence) < 1e-4f &&
+            MathF.Abs(self.IdleSilenceGateGain - 0.25f) < 1e-4f &&
+            MathF.Abs(self.CurrentDoubleTalkMakeupScale - 1.0f) < 1e-4f)
+        {
+            self.Leveler.AdvancePureSilenceSubBlock(subLen);
+            if (self.Leveler.IsIdleSettled)
+            {
+                self.CurrentGain = self.TargetGain;
+                self.LevelerSpeechPresence = 0f;
+                self.IdleSilenceGateGain = 0.25f;
+                self.CurrentDoubleTalkMakeupScale = 1.0f;
+                outPcm.Clear();
+                return;
+            }
+        }
 
         Span<float> cleaned = subLen <= 1024 ? stackalloc float[subLen] : new float[subLen];
         Span<float> gateEnv = subLen <= 1024 ? stackalloc float[subLen] : new float[subLen];
@@ -270,77 +646,100 @@ internal static class AcousticSpectralCanceller
         int len = cleanedSamples.Length;
         if (len == 0) return;
 
-        float targetDtMakeupScale = self.LastGateState == AcousticGateState.GatedBleed ? 0.0f : 1.0f;
-
-        if (self.LastGateState != AcousticGateState.GatedBleed)
+        bool isGatedBleed = self.LastGateState == AcousticGateState.GatedBleed;
+        bool isDoubleTalk = self.LastGateState == AcousticGateState.DoubleTalkSubtraction;
+        float targetDtMakeupScale = isGatedBleed ? 0.0f : 1.0f;
+        float targetSpeechPresence = 0.0f;
+        float targetIdleGateGain = 1.0f;
+        float cleanedPeak = 0.0f;
+        for (int i = 0; i < len; i++)
         {
-            float cleanedRms = (float)Math.Sqrt(AcousticDspMath.ComputeMeanSquareSimd(cleanedSamples));
-            float postWienerRetention = (self.LastGateState == AcousticGateState.DoubleTalkSubtraction && rawPreCancelRms > 1e-5f)
+            float absVal = MathF.Abs(cleanedSamples[i]);
+            if (absVal > cleanedPeak) cleanedPeak = absVal;
+        }
+
+        float cleanedMeanSq = 0.0f;
+        bool isActiveNearFieldSpeech = false;
+
+        if (isGatedBleed)
+        {
+            self.LevelerSpeechHoldSubFrames = 0;
+        }
+        else
+        {
+            cleanedMeanSq = (float)AcousticDspMath.ComputeMeanSquareSimd(cleanedSamples);
+            float cleanedRms = MathF.Sqrt(cleanedMeanSq);
+            float postWienerRetention = (isDoubleTalk && rawPreCancelRms > 1e-5f)
                 ? Math.Clamp(cleanedRms / rawPreCancelRms, 0f, 1f)
                 : 1.0f;
 
-            if (self.LastGateState == AcousticGateState.DoubleTalkSubtraction)
+            if (isDoubleTalk)
             {
-                targetDtMakeupScale = Math.Clamp((postWienerRetention - 0.28f) / 0.42f, 0.0f, 1.0f);
+                targetDtMakeupScale = Math.Clamp((postWienerRetention - 0.30f) / 0.42f, 0.0f, 1.0f);
             }
 
-            if (!isPercussiveClick && cleanedRms > 1e-6f)
-            {
-                if (cleanedRms < self.LevelerNoiseFloorRms)
-                {
-                    self.LevelerNoiseFloorRms = 0.88f * self.LevelerNoiseFloorRms + 0.12f * cleanedRms;
-                }
-                else if (selfVocalRms < VocalActivityFloorRms * 0.85f && cleanedRms < self.LevelerSpeechRmsEnv * 0.35f)
-                {
-                    self.LevelerNoiseFloorRms = Math.Min(0.015f, 0.998f * self.LevelerNoiseFloorRms + 0.002f * cleanedRms);
-                }
-            }
-
-            float dynamicSpeechGate = Math.Max(PostLevelerSpeechFloorRms, self.LevelerNoiseFloorRms * 2.8f);
-            bool isActiveNearFieldSpeech = !isPercussiveClick &&
-                                           selfVocalRms >= VocalActivityFloorRms &&
-                                           cleanedRms >= dynamicSpeechGate &&
-                                           (self.LastGateState != AcousticGateState.DoubleTalkSubtraction || postWienerRetention >= 0.50f);
+            float dynamicSpeechGate = MathF.Max(PostLevelerSpeechFloorRms, self.Leveler.NoiseFloorRms * 2.5f);
+            isActiveNearFieldSpeech = !isPercussiveClick &&
+                                      selfVocalRms >= VocalActivityFloorRms * 0.85f &&
+                                      cleanedRms >= dynamicSpeechGate &&
+                                      (!isDoubleTalk || postWienerRetention >= 0.50f);
 
             if (isActiveNearFieldSpeech)
             {
-                if (!self.HasSeededLevelerSpeechEnv)
-                {
-                    self.LevelerSpeechRmsEnv = Math.Clamp(cleanedRms, 0.006f, 0.35f);
-                    self.HasSeededLevelerSpeechEnv = true;
-                }
-                else
-                {
-                    float baseAlpha = cleanedRms > self.LevelerSpeechRmsEnv ? 0.14f : 0.045f;
-                    if (self.LastGateState == AcousticGateState.DoubleTalkSubtraction)
-                    {
-                        baseAlpha *= 0.25f;
-                    }
-                    self.LevelerSpeechRmsEnv += baseAlpha * (cleanedRms - self.LevelerSpeechRmsEnv);
-                }
-
-                self.TargetMakeupGain = self.LevelerSpeechRmsEnv < PostLevelerTargetSpeechRms
-                    ? Math.Clamp(PostLevelerTargetSpeechRms / Math.Max(self.LevelerSpeechRmsEnv, 1e-4f), 1.0f, PostLevelerMaxMakeupGain)
-                    : 1.0f;
+                self.LevelerSpeechHoldSubFrames = 42; // 420ms hangover bridges short breaths & inter-word pauses without pumping
+                targetSpeechPresence = 1.0f;
+            }
+            else if (self.LevelerSpeechHoldSubFrames > 0)
+            {
+                self.LevelerSpeechHoldSubFrames--;
+                targetSpeechPresence = 1.0f;
+            }
+            else if (self.LastGateState == AcousticGateState.Open &&
+                     !isPercussiveClick &&
+                     selfVocalRms < VocalActivityFloorRms * 0.75f &&
+                     cleanedRms <= MathF.Max(PostLevelerSpeechFloorRms * 0.80f, self.Leveler.NoiseFloorRms * 2.4f))
+            {
+                // Gentle downward expansion (-12 dB) during sustained room silence keeps post-RNNoise idle hiss crisp & silent
+                targetIdleGateGain = 0.25f;
             }
         }
 
-        float makeupAlpha = self.TargetMakeupGain < self.CurrentMakeupGain ? 0.0014f : 0.00014f;
-        float dtScaleAlpha = targetDtMakeupScale < self.CurrentDoubleTalkMakeupScale ? 0.018f : 0.006f;
+        float desiredDuck = self.Leveler.ComputeSubBlockDesiredDuck(
+            cleanedMeanSq,
+            cleanedPeak,
+            len,
+            isGatedBleed,
+            isPercussiveClick,
+            isActiveNearFieldSpeech,
+            isDoubleTalk,
+            out bool seededThisBlock);
+
+        if (seededThisBlock && self.LastGateState == AcousticGateState.Open && self.Leveler.TargetMakeupGain > 1.0f)
+        {
+            self.LevelerSpeechPresence = 1.0f;
+        }
+
+        float dtScaleAlpha = targetDtMakeupScale < self.CurrentDoubleTalkMakeupScale ? 0.024f : 0.006f;
+        float speechPresenceAlpha = targetSpeechPresence > self.LevelerSpeechPresence ? 0.040f : 0.00035f;
+        float idleGateAlpha = targetIdleGateGain > self.IdleSilenceGateGain ? 0.050f : 0.00040f;
         bool isClosingGate = self.TargetGain <= 0.01f;
 
         for (int i = 0; i < len; i++)
         {
-            if (self.LastGateState != AcousticGateState.GatedBleed)
-            {
-                self.CurrentMakeupGain += makeupAlpha * (self.TargetMakeupGain - self.CurrentMakeupGain);
-            }
+            self.Leveler.StepSample(isGatedBleed, desiredDuck);
             self.CurrentDoubleTalkMakeupScale += dtScaleAlpha * (targetDtMakeupScale - self.CurrentDoubleTalkMakeupScale);
+            self.LevelerSpeechPresence += speechPresenceAlpha * (targetSpeechPresence - self.LevelerSpeechPresence);
+            self.IdleSilenceGateGain += idleGateAlpha * (targetIdleGateGain - self.IdleSilenceGateGain);
 
             float g = gateEnvelope[i];
             float gateSq = g * g;
             float gateWeight = isClosingGate ? (gateSq * gateSq) : gateSq;
-            float appliedMakeup = 1.0f + (self.CurrentMakeupGain - 1.0f) * gateWeight * self.CurrentDoubleTalkMakeupScale;
+            float effectiveTotalGain = self.Leveler.EffectiveGain;
+            float makeupDelta = effectiveTotalGain - 1.0f;
+            float effectiveScale = makeupDelta > 0f
+                ? (gateWeight * self.CurrentDoubleTalkMakeupScale * self.LevelerSpeechPresence)
+                : gateWeight;
+            float appliedMakeup = (1.0f + makeupDelta * effectiveScale) * self.IdleSilenceGateGain;
             outPcm[i] = AcousticDspMath.FloatToPcm16(ApplySoftKneeLimiterMinus1DbFs(cleanedSamples[i] * appliedMakeup));
         }
     }

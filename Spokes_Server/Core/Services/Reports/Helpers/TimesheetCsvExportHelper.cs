@@ -10,7 +10,11 @@ using Spokes_Server.Core.Models.Reports;
 /// </summary>
 public static class TimesheetCsvExportHelper
 {
-    public static string GenerateSummaryCsv(List<TimesheetGroupSummary> groups, TimeDisplayFormat format)
+    public static string GenerateSummaryCsv(
+        List<TimesheetGroupSummary> groups,
+        TimeDisplayFormat format,
+        bool includeBillingRates = true,
+        bool includeCostRates = true)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Title,Subtitle,Duration,Billable Hours,Billable Amount,Cost Amount,Entries Count");
@@ -21,8 +25,8 @@ public static class TimesheetCsvExportHelper
             var subtitle = CsvSanitizer.EscapeCsv(group.Subtitle);
             var duration = CsvSanitizer.EscapeCsv(TimesheetFormatHelper.FormatDuration(group.TotalHours, format));
             var billable = CsvSanitizer.EscapeCsv(TimesheetFormatHelper.FormatDuration(group.BillableHours, format));
-            var amount = $"{group.BillableAmount:0.00}";
-            var cost = $"{group.CostAmount:0.00}";
+            var amount = includeBillingRates ? $"{group.BillableAmount:0.00}" : "0.00";
+            var cost = includeCostRates ? $"{group.CostAmount:0.00}" : "0.00";
             sb.AppendLine($"{title},{subtitle},{duration},{billable},{amount},{cost},{group.EntryCount}");
 
             foreach (var sub in group.Subgroups)
@@ -30,8 +34,8 @@ public static class TimesheetCsvExportHelper
                 var subTitle = CsvSanitizer.EscapeCsv($"  - {sub.Key}");
                 var subDuration = CsvSanitizer.EscapeCsv(TimesheetFormatHelper.FormatDuration(sub.TotalHours, format));
                 var subBillable = CsvSanitizer.EscapeCsv(TimesheetFormatHelper.FormatDuration(sub.BillableHours, format));
-                var subAmount = $"{sub.BillableAmount:0.00}";
-                var subCost = $"{sub.CostAmount:0.00}";
+                var subAmount = includeBillingRates ? $"{sub.BillableAmount:0.00}" : "0.00";
+                var subCost = includeCostRates ? $"{sub.CostAmount:0.00}" : "0.00";
                 sb.AppendLine($"{subTitle},,{subDuration},{subBillable},{subAmount},{subCost},{sub.EntryCount}");
             }
         }
@@ -39,7 +43,10 @@ public static class TimesheetCsvExportHelper
         return sb.ToString();
     }
 
-    public static string GenerateDetailedCsv(List<TimesheetReportEntry> entries, TimeDisplayFormat format)
+    public static string GenerateDetailedCsv(
+        List<TimesheetReportEntry> entries,
+        TimeDisplayFormat format,
+        bool includeBillingRates = true)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Date,Employee,Project,Client,Task,Description,Is Billable,Rate,Hours,Amount");
@@ -53,9 +60,9 @@ public static class TimesheetCsvExportHelper
             var task = CsvSanitizer.EscapeCsv(item.TaskName);
             var description = CsvSanitizer.EscapeCsv(item.Entry.Description);
             var billable = item.Entry.IsBillable ? "Yes" : "No";
-            var rate = $"{item.HourlyRate:0.00}";
+            var rate = includeBillingRates ? $"{item.HourlyRate:0.00}" : "0.00";
             var hours = CsvSanitizer.EscapeCsv(TimesheetFormatHelper.FormatDuration(item.Entry.Hours, format));
-            var amount = $"{item.BillableAmount:0.00}";
+            var amount = includeBillingRates ? $"{item.BillableAmount:0.00}" : "0.00";
 
             sb.AppendLine($"{date},{employee},{project},{client},{task},{description},{billable},{rate},{hours},{amount}");
         }
@@ -63,7 +70,10 @@ public static class TimesheetCsvExportHelper
         return sb.ToString();
     }
 
-    public static string GenerateWeeklyCsv(TimesheetWeeklyMatrix matrix, TimeDisplayFormat format)
+    public static string GenerateWeeklyCsv(
+        TimesheetWeeklyMatrix matrix,
+        TimeDisplayFormat format,
+        bool includeBillingRates = true)
     {
         var sb = new StringBuilder();
         sb.Append("Entity,Subtitle,");
@@ -76,7 +86,7 @@ public static class TimesheetCsvExportHelper
             var subtitle = CsvSanitizer.EscapeCsv(row.Subtitle);
             var cells = string.Join(",", row.Cells.Select(c => CsvSanitizer.EscapeCsv(TimesheetFormatHelper.FormatDuration(c.Hours, format))));
             var totalDuration = CsvSanitizer.EscapeCsv(TimesheetFormatHelper.FormatDuration(row.TotalHours, format));
-            var totalAmount = $"{row.TotalBillableAmount:0.00}";
+            var totalAmount = includeBillingRates ? $"{row.TotalBillableAmount:0.00}" : "0.00";
 
             sb.AppendLine($"{name},{subtitle},{cells},{totalDuration},{totalAmount}");
         }
@@ -84,7 +94,7 @@ public static class TimesheetCsvExportHelper
         // Summary row
         var dayTotals = string.Join(",", matrix.DayTotals.Select(h => CsvSanitizer.EscapeCsv(TimesheetFormatHelper.FormatDuration(h, format))));
         var grandTotalDuration = CsvSanitizer.EscapeCsv(TimesheetFormatHelper.FormatDuration(matrix.GrandTotalHours, format));
-        var grandTotalAmount = $"{matrix.GrandTotalBillableAmount:0.00}";
+        var grandTotalAmount = includeBillingRates ? $"{matrix.GrandTotalBillableAmount:0.00}" : "0.00";
         sb.AppendLine($"Total,,{dayTotals},{grandTotalDuration},{grandTotalAmount}");
 
         return sb.ToString();

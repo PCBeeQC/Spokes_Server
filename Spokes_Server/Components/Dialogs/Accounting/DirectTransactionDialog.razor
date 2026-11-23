@@ -1,0 +1,878 @@
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Extensions
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Core.Services.Storage
+@inject Database Db
+@inject IDirectTransactionService TransactionService
+@inject IFinancialAccountService FinancialAccountService
+@inject IJurisdictionTemplateService JurisdictionService
+@inject IFileService FileService
+@inject UserService UserService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+            <div class="d-flex align-center gap-2">
+                <MudIcon Icon="@GetDirectionIcon(_tx.Direction)" Color="@GetDirectionColor(_tx.Direction)" />
+                <MudText Typo="Typo.h6">
+                    @if (ExistingTransaction != null)
+                    {
+                        @($"{_tx.TransactionNumber} — {GetDirectionTitle(_tx.Direction)}")
+                    }
+                    else
+                    {
+                        @GetDirectionTitle(_tx.Direction)
+                    }
+                </MudText>
+            </div>
+            @if (_tx.IsVoid)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">@BizLoc["Void"]</MudChip>
+            }
+            else if (_isLocked)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Info" Icon="@Icons.Material.Filled.Lock">@BizLoc["Locked"]</MudChip>
+            }
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_tx.IsVoid)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                <b>@BizLoc["Voided"]</b>
+                @if (!string.IsNullOrWhiteSpace(_tx.VoidReason))
+                {
+                    <span> — @_tx.VoidReason</span>
+                }
+            </MudAlert>
+        }
+        else if (_isLocked)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                @_lockReason
+            </MudAlert>
+        }
+
+        @* Mode Switcher *@
+        @if (!IsReadOnly)
+        {
+            <div class="d-flex flex-wrap gap-2 mb-4">
+                <MudButton Variant="@(_tx.Direction == DirectTransactionDirection.MoneyIn ? Variant.Filled : Variant.Outlined)"
+                           Color="Color.Success"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.SouthWest"
+                           OnClick="@(() => SetDirection(DirectTransactionDirection.MoneyIn))">
+                    @BizLoc["Money Received"]
+                </MudButton>
+                <MudButton Variant="@(_tx.Direction == DirectTransactionDirection.MoneyOut ? Variant.Filled : Variant.Outlined)"
+                           Color="Color.Error"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.NorthEast"
+                           OnClick="@(() => SetDirection(DirectTransactionDirection.MoneyOut))">
+                    @BizLoc["Payment Made"]
+                </MudButton>
+                <MudButton Variant="@(_tx.Direction == DirectTransactionDirection.Transfer ? Variant.Filled : Variant.Outlined)"
+                           Color="Color.Info"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.SwapHoriz"
+                           OnClick="@(() => SetDirection(DirectTransactionDirection.Transfer))">
+                    @BizLoc["Account Transfer"]
+                </MudButton>
+            </div>
+        }
+
+        <MudGrid Spacing="2">
+            @* Financial Account(s) *@
+            <MudItem xs="12" sm="6">
+                <FinancialAccountSelect Value="@_tx.AccountGlCode"
+                                        ValueChanged="OnAccountChanged"
+                                        Label="@GetPrimaryAccountLabel()"
+                                        Variant="Variant.Outlined"
+                                        Margin="Margin.Dense"
+                                        ReadOnly="@IsReadOnly" />
+            </MudItem>
+
+            @if (_tx.Direction == DirectTransactionDirection.Transfer)
+            {
+                <MudItem xs="12" sm="6">
+                    <FinancialAccountSelect Value="@_tx.DestinationAccountGlCode"
+                                            ValueChanged="OnDestinationAccountChanged"
+                                            Label="@BizLoc["To Account"]"
+                                            Variant="Variant.Outlined"
+                                            Margin="Margin.Dense"
+                                            ReadOnly="@IsReadOnly" />
+                </MudItem>
+            }
+            else
+            {
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_tx.PartyName"
+                                  Label="@(_tx.Direction == DirectTransactionDirection.MoneyIn ? BizLoc["Received From"] : BizLoc["Paid To"])"
+                                  Placeholder="@BizLoc["Company, person, or institution"]"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  ReadOnly="@IsReadOnly" />
+                </MudItem>
+            }
+
+            @* Date, Payment Method & Reference *@
+            <MudItem xs="12" sm="4">
+                <MudDatePicker Date="_tx.Date"
+                               DateChanged="OnDateChanged"
+                               Label="@BizLoc["Date"]"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               DateFormat="yyyy-MM-dd"
+                               ReadOnly="@IsReadOnly" />
+            </MudItem>
+
+            <MudItem xs="12" sm="4">
+                <MudSelect T="string"
+                           Value="_tx.PaymentMethod"
+                           ValueChanged="OnPaymentMethodChanged"
+                           Label="@BizLoc["Payment Method"]"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Dense="true"
+                           ReadOnly="@IsReadOnly">
+                    <MudSelectItem Value="@("EFT / Wire")">@BizLoc["EFT / Wire"]</MudSelectItem>
+                    <MudSelectItem Value="@("Interac e-Transfer")">@BizLoc["Interac e-Transfer"]</MudSelectItem>
+                    <MudSelectItem Value="@("Check")">@BizLoc["Check"]</MudSelectItem>
+                    <MudSelectItem Value="@("Cash")">@BizLoc["Cash"]</MudSelectItem>
+                    <MudSelectItem Value="@("Credit Card")">@BizLoc["Credit Card"]</MudSelectItem>
+                    <MudSelectItem Value="@("Debit Card")">@BizLoc["Debit Card"]</MudSelectItem>
+                    <MudSelectItem Value="@("Other")">@BizLoc["Other"]</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" sm="4">
+                <MudTextField @bind-Value="_tx.Reference"
+                              Label="@BizLoc["Reference # (Optional)"]"
+                              Placeholder="@BizLoc["Check #, Receipt #, Slip #"]"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              ReadOnly="@IsReadOnly" />
+            </MudItem>
+
+            @if (_tx.Direction == DirectTransactionDirection.Transfer)
+            {
+                <MudItem xs="12" sm="6">
+                    <MudNumericField T="decimal"
+                                     Value="_tx.GrandTotal"
+                                     ValueChanged="OnTransferAmountChanged"
+                                     Label="@BizLoc["Transfer Amount"]"
+                                     Format="N2"
+                                     Min="0m"
+                                     Variant="Variant.Outlined"
+                                     Margin="Margin.Dense"
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.AttachMoney"
+                                     ReadOnly="@IsReadOnly" />
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_tx.Description"
+                                  Label="@BizLoc["Description"]"
+                                  Placeholder="@BizLoc["e.g. Monthly corporate credit card payment"]"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  ReadOnly="@IsReadOnly" />
+                </MudItem>
+            }
+            else
+            {
+
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_tx.Description"
+                                  Label="@BizLoc["Description"]"
+                                  Placeholder="@BizLoc["What was this payment for?"]"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  ReadOnly="@IsReadOnly" />
+                </MudItem>
+
+                @* Optional General-Purpose Quick Category Shortcuts (Non-Constraining) *@
+                @if (!IsReadOnly)
+                {
+                    <MudItem xs="12">
+                        <div class="d-flex align-center flex-wrap gap-1">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mr-1">@BizLoc["Quick Category:"]</MudText>
+                            @foreach (var preset in GetQuickPresets())
+                            {
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Variant="Variant.Outlined"
+                                         Color="Color.Primary"
+                                         OnClick="@(() => ApplyQuickPreset(preset))">
+                                    @preset.Label
+                                </MudChip>
+                            }
+                        </div>
+                    </MudItem>
+                }
+
+                @* Category & Amount Lines *@
+                <MudItem xs="12">
+                    <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+                        <div class="d-flex justify-space-between align-center mb-2">
+                            <MudText Typo="Typo.subtitle2"><b>@BizLoc["Category & Amount"]</b></MudText>
+                            @if (!IsReadOnly)
+                            {
+                                <MudButton Variant="Variant.Text"
+                                           Size="Size.Small"
+                                           Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.Add"
+                                           OnClick="AddSplitLine">
+                                    @BizLoc["Add Split Line"]
+                                </MudButton>
+                            }
+                        </div>
+
+                        @for (int i = 0; i < _tx.Lines.Count; i++)
+                        {
+                            var idx = i;
+                            var line = _tx.Lines[idx];
+                            <MudGrid Spacing="2" Class="align-center mb-1">
+                                <MudItem xs="12" sm="@(_tx.Lines.Count > 1 ? 4 : 7)">
+                                    <GlAccountSelect Value="@line.GlAccountCode"
+                                                     ValueChanged="@((string? code) => OnLineAccountChanged(line, code))"
+                                                     Label="@BizLoc["Category"]"
+                                                     Variant="Variant.Outlined"
+                                                     Margin="Margin.Dense"
+                                                     Clearable="false"
+                                                     ReadOnly="@IsReadOnly" />
+                                </MudItem>
+
+                                @if (_tx.Lines.Count > 1)
+                                {
+                                    <MudItem xs="12" sm="4">
+                                        <MudTextField @bind-Value="line.Description"
+                                                      Label="@BizLoc["Line Memo (Optional)"]"
+                                                      Variant="Variant.Outlined"
+                                                      Margin="Margin.Dense"
+                                                      ReadOnly="@IsReadOnly" />
+                                    </MudItem>
+                                }
+
+                                <MudItem xs="10" sm="@(_tx.Lines.Count > 1 ? 3 : 5)">
+                                    <MudNumericField T="decimal"
+                                                     Value="@line.EnteredAmount"
+                                                     ValueChanged="@((decimal val) => OnLineAmountChanged(line, val))"
+                                                     Label="@(_tx.TaxMode == DirectTransactionTaxMode.TaxIncluded ? BizLoc["Amount (Tax Included)"] : BizLoc["Amount"])"
+                                                     Format="N2"
+                                                     Min="0m"
+                                                     Variant="Variant.Outlined"
+                                                     Margin="Margin.Dense"
+                                                     Adornment="Adornment.Start"
+                                                     AdornmentIcon="@Icons.Material.Filled.AttachMoney"
+                                                     ReadOnly="@IsReadOnly" />
+                                </MudItem>
+
+                                @if (_tx.Lines.Count > 1 && !IsReadOnly)
+                                {
+                                    <MudItem xs="2" sm="1" Class="d-flex justify-end">
+                                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                                       Color="Color.Error"
+                                                       Size="Size.Small"
+                                                       OnClick="@(() => RemoveSplitLine(idx))" />
+                                    </MudItem>
+                                }
+                            </MudGrid>
+                        }
+                    </MudPaper>
+                </MudItem>
+
+                @* Sales Tax Handling *@
+                <MudItem xs="12">
+                    <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+                        <MudGrid Spacing="2" Class="align-center">
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="string"
+                                           Value="_tx.TaxMode"
+                                           ValueChanged="OnTaxModeChanged"
+                                           Label="@BizLoc["Sales Tax Treatment"]"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Dense="true"
+                                           ReadOnly="@IsReadOnly">
+                                    <MudSelectItem Value="@DirectTransactionTaxMode.NoTax">@BizLoc["No Tax / Exempt"]</MudSelectItem>
+                                    <MudSelectItem Value="@DirectTransactionTaxMode.TaxIncluded">@BizLoc["Tax Included in Amount"]</MudSelectItem>
+                                    <MudSelectItem Value="@DirectTransactionTaxMode.PlusTax">@BizLoc["Plus Sales Tax"]</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+
+                            <MudItem xs="12" sm="6">
+                                @if (_tx.TaxMode != DirectTransactionTaxMode.NoTax && !IsReadOnly)
+                                {
+                                    <MudSwitch T="bool"
+                                               Value="_tx.IsManualTaxOverride"
+                                               ValueChanged="OnManualTaxOverrideChanged"
+                                               Color="Color.Primary"
+                                               Label="@BizLoc["Adjust tax amounts manually"]" />
+                                }
+                            </MudItem>
+
+                            @if (_tx.TaxMode != DirectTransactionTaxMode.NoTax && _tx.IsManualTaxOverride && _tx.TaxComponents.Count > 0)
+                            {
+                                @foreach (var comp in _tx.TaxComponents)
+                                {
+                                    var taxComp = comp;
+                                    <MudItem xs="6" sm="4">
+                                        <MudNumericField T="decimal"
+                                                         Value="@taxComp.Amount"
+                                                         ValueChanged="@((decimal v) => OnManualTaxComponentChanged(taxComp, v))"
+                                                         Label="@($"{taxComp.Code} ({FinancialCalculationEngine.FormatTaxRatePercent(taxComp.Rate)}%)")"
+                                                         Format="N2"
+                                                         Min="0m"
+                                                         Variant="Variant.Outlined"
+                                                         Margin="Margin.Dense"
+                                                         ReadOnly="@IsReadOnly" />
+                                    </MudItem>
+                                }
+                            }
+                        </MudGrid>
+
+                        @* Live Totals Breakdown *@
+                        <MudDivider Class="my-2" />
+                        <div class="d-flex flex-column gap-1">
+                            <div class="d-flex justify-space-between">
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">@BizLoc["Net Amount (Pre-Tax)"]</MudText>
+                                <MudText Typo="Typo.body2">@FormatCurrency(_tx.SubTotal)</MudText>
+                            </div>
+                            @foreach (var tc in _tx.TaxComponents)
+                            {
+                                <div class="d-flex justify-space-between">
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                        @tc.Name @(tc.Rate > 0m ? $"({FinancialCalculationEngine.FormatTaxRatePercent(tc.Rate)}%)" : "")
+                                    </MudText>
+                                    <MudText Typo="Typo.body2">@FormatCurrency(tc.Amount)</MudText>
+                                </div>
+                            }
+                            <div class="d-flex justify-space-between mt-1 pt-1" style="border-top: 1px solid var(--mud-palette-lines-default);">
+                                <MudText Typo="Typo.subtitle1">
+                                    <b>@(_tx.Direction == DirectTransactionDirection.MoneyIn ? BizLoc["Total Received"] : BizLoc["Total Paid"])</b>
+                                </MudText>
+                                <MudText Typo="Typo.subtitle1" Color="@GetDirectionColor(_tx.Direction)">
+                                    <b>@FormatCurrency(_tx.GrandTotal)</b>
+                                </MudText>
+                            </div>
+                        </div>
+                    </MudPaper>
+                </MudItem>
+            }
+
+            @* Optional Details: Project, Currency/FX, Notes, Supporting Receipt/Slip *@
+            <MudItem xs="12">
+                <MudExpansionPanels Elevation="0" Outlined="true">
+                    <MudExpansionPanel Text="@BizLoc["Optional Details (Project, Currency, Proof / Receipt)"]"
+                                       Expanded="@(!string.IsNullOrWhiteSpace(_tx.ProjectId) || !string.IsNullOrWhiteSpace(_tx.AttachmentPath) || !string.IsNullOrWhiteSpace(_tx.Notes) || !string.Equals(_tx.Currency, _functionalCurrency, StringComparison.OrdinalIgnoreCase))">
+                        <MudGrid Spacing="2">
+                            @if (_tx.Direction != DirectTransactionDirection.Transfer)
+                            {
+                                <MudItem xs="12" sm="6">
+                                    <MudSelect T="string"
+                                               @bind-Value="_tx.ProjectId"
+                                               Label="@BizLoc["Link to Project (Optional)"]"
+                                               Variant="Variant.Outlined"
+                                               Margin="Margin.Dense"
+                                               Clearable="true"
+                                               Dense="true"
+                                               ReadOnly="@IsReadOnly">
+                                        @foreach (var proj in _projects)
+                                        {
+                                            <MudSelectItem Value="@proj.Id">@($"{proj.ProjectNumber} — {proj.Name}")</MudSelectItem>
+                                        }
+                                    </MudSelect>
+                                </MudItem>
+                            }
+
+                            <MudItem xs="6" sm="3">
+                                <MudSelect T="string"
+                                           Value="_tx.Currency"
+                                           ValueChanged="OnCurrencyChanged"
+                                           Label="@BizLoc["Currency"]"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Dense="true"
+                                           ReadOnly="@IsReadOnly">
+                                    <MudSelectItem Value="@("CAD")">CAD</MudSelectItem>
+                                    <MudSelectItem Value="@("USD")">USD</MudSelectItem>
+                                    <MudSelectItem Value="@("EUR")">EUR</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+
+                            @if (!string.Equals(_tx.Currency, _functionalCurrency, StringComparison.OrdinalIgnoreCase))
+                            {
+                                <MudItem xs="6" sm="3">
+                                    <MudNumericField T="decimal"
+                                                     Value="_tx.ExchangeRate"
+                                                     ValueChanged="OnExchangeRateChanged"
+                                                     Label="@string.Format(BizLoc["FX Rate (to {0})"].Value, _functionalCurrency)"
+                                                     Format="N4"
+                                                     Min="0.0001m"
+                                                     Variant="Variant.Outlined"
+                                                     Margin="Margin.Dense"
+                                                     ReadOnly="@IsReadOnly" />
+                                </MudItem>
+                            }
+
+                            <MudItem xs="12">
+                                <MudTextField @bind-Value="_tx.Notes"
+                                              Label="@BizLoc["Internal Notes"]"
+                                              Lines="2"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              ReadOnly="@IsReadOnly" />
+                            </MudItem>
+
+                            <MudItem xs="12">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-1">
+                                    @BizLoc["Supporting Document (Receipt, Weight Slip, Wire Confirmation)"]
+                                </MudText>
+                                @if (!string.IsNullOrWhiteSpace(_tx.AttachmentPath))
+                                {
+                                    <FileAttachmentChip FileName="@_tx.AttachmentName"
+                                                        FilePath="@_tx.AttachmentPath"
+                                                        OnRemove="@(IsReadOnly ? default : EventCallback.Factory.Create(this, RemoveAttachmentAsync))" />
+                                }
+                                else if (!IsReadOnly)
+                                {
+                                    <ApiFileUpload Category="directtransactions"
+                                                   ContextId="@_tx.Id"
+                                                   MaximumFileCount="1"
+                                                   OnUploadCompleted="HandleAttachmentUploadedAsync"
+                                                   OnUploadError="@(e => Snackbar.Add($"Upload failed: {e}", Severity.Error))">
+                                        <CustomContent>
+                                            <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                                @BizLoc["Attach Proof / Receipt"]
+                                            </MudButton>
+                                        </CustomContent>
+                                    </ApiFileUpload>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                                }
+                            </MudItem>
+                        </MudGrid>
+                    </MudExpansionPanel>
+
+                    @* Optional Accounting Preview (Hidden by Default) *@
+                    <MudExpansionPanel Text="@BizLoc["Accounting Preview (Auto-Ledger)"]">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-2">
+                            @BizLoc["Spokes automatically posts these balanced General Ledger lines when you save."]
+                        </MudText>
+                        @if (_previewLines.Count >= 2)
+                        {
+                            <MudSimpleTable Dense="true" Elevation="0" Outlined="true" Bordered="true">
+                                <thead>
+                                    <tr>
+                                        <th>@BizLoc["Account"]</th>
+                                        <th style="text-align: right;">@BizLoc["Debit"]</th>
+                                        <th style="text-align: right;">@BizLoc["Credit"]</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var jl in _previewLines)
+                                    {
+                                        <tr>
+                                            <td>@FinancialAccountService.GetDisplayLabelByGlCode(jl.GlAccountCode)</td>
+                                            <td style="text-align: right;">@(jl.Debit > 0m ? jl.Debit.ToString("C2") : "")</td>
+                                            <td style="text-align: right;">@(jl.Credit > 0m ? jl.Credit.ToString("C2") : "")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @BizLoc["Enter an amount and category to preview the automatic journal entry."]
+                            </MudText>
+                        }
+                    </MudExpansionPanel>
+                </MudExpansionPanels>
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel">@(IsReadOnly ? Loc["Close"] : Loc["Cancel"])</MudButton>
+        @if (!IsReadOnly)
+        {
+            <MudButton Color="@GetDirectionColor(_tx.Direction)"
+                       Variant="Variant.Filled"
+                       StartIcon="@Icons.Material.Filled.Check"
+                       Disabled="@(!CanSubmit)"
+                       OnClick="SubmitAsync">
+                @(ExistingTransaction != null ? Loc["Save"] : BizLoc["Record Transaction"])
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public DirectTransaction? ExistingTransaction { get; set; }
+    [Parameter] public string InitialDirection { get; set; } = DirectTransactionDirection.MoneyIn;
+
+    private sealed record QuickPreset(string Label, string SystemRoleOrCode, string FallbackCode, string DefaultTaxMode);
+
+    private DirectTransaction _tx = new();
+    private Employee? _currentUser;
+    private List<Project> _projects = [];
+    private List<JournalLine> _previewLines = [];
+    private string _functionalCurrency = "CAD";
+    private bool _isLocked;
+    private string? _lockReason;
+    private bool _canWrite;
+
+    private bool IsReadOnly => !_canWrite || _isLocked || _tx.IsVoid;
+
+    private bool CanSubmit =>
+        !IsReadOnly &&
+        !string.IsNullOrWhiteSpace(_tx.AccountGlCode) &&
+        _tx.GrandTotal > 0m &&
+        (_tx.Direction == DirectTransactionDirection.Transfer
+            ? (!string.IsNullOrWhiteSpace(_tx.DestinationAccountGlCode) &&
+               !string.Equals(_tx.AccountGlCode, _tx.DestinationAccountGlCode, StringComparison.OrdinalIgnoreCase))
+            : (_tx.Lines.Count > 0 && _tx.Lines.All(l => !string.IsNullOrWhiteSpace(l.GlAccountCode) && l.EnteredAmount > 0m)));
+
+    protected override async Task OnInitializedAsync()
+    {
+        JurisdictionService.EnsureChartOfAccountsSeeded();
+        var activeTemplate = JurisdictionService.GetActiveTemplate();
+        _functionalCurrency = string.IsNullOrWhiteSpace(activeTemplate.DefaultCurrency) ? "CAD" : activeTemplate.DefaultCurrency;
+
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canWrite = _currentUser?.IsActiveUnsuspended == true &&
+                    _currentUser.HasPermission(AppPermissions.Finance.AccessAccounting);
+
+        _projects = (Db.Projects?.GetAll() ?? [])
+            .Where(p => !string.Equals(p.Status, ProjectStatus.Archived, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(p => p.IsInternal ? 0 : 1)
+            .ThenBy(p => p.ProjectNumber, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (ExistingTransaction != null)
+        {
+            _tx = ExistingTransaction.DeepClone() ?? new DirectTransaction();
+            (_isLocked, _lockReason) = TransactionService.IsTransactionLocked(_tx);
+            if (_tx.Direction != DirectTransactionDirection.Transfer && _tx.Lines.Count == 0)
+            {
+                _tx.Lines.Add(new DirectTransactionLine
+                {
+                    GlAccountCode = ResolveDefaultOffsetAccount(_tx.Direction),
+                    EnteredAmount = _tx.GrandTotal
+                });
+            }
+        }
+        else
+        {
+            var dir = DirectTransactionDirection.All.Contains(InitialDirection)
+                ? InitialDirection
+                : DirectTransactionDirection.MoneyIn;
+
+            var defaultFrom = FinancialAccountService.ResolveDefaultGlCodeForMethod(null);
+            var defaultTo = dir == DirectTransactionDirection.Transfer
+                ? ResolveDefaultTransferDestination(defaultFrom)
+                : null;
+
+            _tx = new DirectTransaction
+            {
+                Direction = dir,
+                Date = DateTime.Today,
+                Currency = _functionalCurrency,
+                ExchangeRate = 1.0m,
+                PaymentMethod = FinancialAccountService.ResolveDefaultPaymentMethodForAccount(defaultFrom, "EFT / Wire"),
+                AccountGlCode = defaultFrom,
+                DestinationAccountGlCode = defaultTo,
+                TaxMode = DirectTransactionTaxMode.NoTax,
+                Lines = dir == DirectTransactionDirection.Transfer
+                    ? []
+                    : [new DirectTransactionLine { GlAccountCode = ResolveDefaultOffsetAccount(dir) }]
+            };
+        }
+
+        RecalculateAndPreview();
+    }
+
+    private void SetDirection(string newDirection)
+    {
+        if (IsReadOnly || string.Equals(_tx.Direction, newDirection, StringComparison.OrdinalIgnoreCase)) return;
+
+        var previousTotal = _tx.GrandTotal;
+        _tx.Direction = newDirection;
+        _tx.IsManualTaxOverride = false;
+
+        if (newDirection == DirectTransactionDirection.Transfer)
+        {
+            _tx.TaxMode = DirectTransactionTaxMode.NoTax;
+            _tx.GrandTotal = previousTotal;
+            if (string.IsNullOrWhiteSpace(_tx.DestinationAccountGlCode) ||
+                string.Equals(_tx.DestinationAccountGlCode, _tx.AccountGlCode, StringComparison.OrdinalIgnoreCase))
+            {
+                _tx.DestinationAccountGlCode = ResolveDefaultTransferDestination(_tx.AccountGlCode);
+            }
+        }
+        else
+        {
+            var defaultGl = ResolveDefaultOffsetAccount(newDirection);
+            if (_tx.Lines.Count == 0)
+            {
+                _tx.Lines.Add(new DirectTransactionLine { GlAccountCode = defaultGl, EnteredAmount = previousTotal });
+            }
+            else if (_tx.Lines.Count == 1)
+            {
+                _tx.Lines[0].GlAccountCode = defaultGl;
+            }
+        }
+
+        RecalculateAndPreview();
+    }
+
+    private IReadOnlyList<QuickPreset> GetQuickPresets() =>
+        _tx.Direction == DirectTransactionDirection.MoneyIn
+            ? [
+                new(BizLoc["Miscellaneous Income"].Value, GlSystemRole.InterestAndOtherIncome, "4800", DirectTransactionTaxMode.NoTax),
+                new(BizLoc["Interest / Rebate"].Value, GlSystemRole.InterestAndOtherIncome, "4800", DirectTransactionTaxMode.NoTax),
+                new(BizLoc["Grant / Subsidy"].Value, GlSystemRole.InterestAndOtherIncome, "4800", DirectTransactionTaxMode.NoTax),
+                new(BizLoc["Owner Contribution"].Value, GlSystemRole.OwnerEquity, "3000", DirectTransactionTaxMode.NoTax)
+            ]
+            : [
+                new(BizLoc["Bank Fees & Interest"].Value, GlSystemRole.BankChargesAndInterest, "5800", DirectTransactionTaxMode.NoTax),
+                new(BizLoc["Direct Expense"].Value, GlSystemRole.OfficeAndOverheadExpense, "5600", DirectTransactionTaxMode.TaxIncluded),
+                new(BizLoc["Professional Fees"].Value, "5640", "5640", DirectTransactionTaxMode.TaxIncluded),
+                new(BizLoc["Owner Draw"].Value, GlSystemRole.OwnerEquity, "3000", DirectTransactionTaxMode.NoTax)
+            ];
+
+    private void ApplyQuickPreset(QuickPreset preset)
+    {
+        if (IsReadOnly) return;
+
+        var resolvedCode = Db.GlAccounts?.GetBySystemRole(preset.SystemRoleOrCode)?.Code
+            ?? Db.GlAccounts?.GetByCode(preset.SystemRoleOrCode)?.Code
+            ?? preset.FallbackCode;
+
+        if (_tx.Lines.Count == 0)
+        {
+            _tx.Lines.Add(new DirectTransactionLine { GlAccountCode = resolvedCode });
+        }
+        else
+        {
+            _tx.Lines[0].GlAccountCode = resolvedCode;
+        }
+
+        _tx.TaxMode = preset.DefaultTaxMode;
+        _tx.IsManualTaxOverride = false;
+        RecalculateAndPreview();
+    }
+
+    private void OnDateChanged(DateTime? d)
+    {
+        if (d.HasValue) _tx.Date = d.Value;
+        RecalculateAndPreview();
+    }
+
+    private void OnPaymentMethodChanged(string method)
+    {
+        _tx.PaymentMethod = method;
+        RecalculateAndPreview();
+    }
+
+    private void OnAccountChanged(string? code)
+    {
+        _tx.AccountGlCode = code ?? string.Empty;
+        _tx.PaymentMethod = FinancialAccountService.ResolveDefaultPaymentMethodForAccount(code, "EFT / Wire");
+        RecalculateAndPreview();
+    }
+
+    private void OnDestinationAccountChanged(string? code)
+    {
+        _tx.DestinationAccountGlCode = code;
+        RecalculateAndPreview();
+    }
+
+    private void OnTransferAmountChanged(decimal amount)
+    {
+        _tx.GrandTotal = amount;
+        RecalculateAndPreview();
+    }
+
+    private void OnLineAccountChanged(DirectTransactionLine line, string? code)
+    {
+        line.GlAccountCode = code ?? string.Empty;
+        RecalculateAndPreview();
+    }
+
+    private void OnLineAmountChanged(DirectTransactionLine line, decimal amount)
+    {
+        line.EnteredAmount = amount;
+        RecalculateAndPreview();
+    }
+
+    private void AddSplitLine()
+    {
+        _tx.Lines.Add(new DirectTransactionLine
+        {
+            GlAccountCode = ResolveDefaultOffsetAccount(_tx.Direction)
+        });
+        RecalculateAndPreview();
+    }
+
+    private void RemoveSplitLine(int index)
+    {
+        if (index >= 0 && index < _tx.Lines.Count && _tx.Lines.Count > 1)
+        {
+            _tx.Lines.RemoveAt(index);
+            RecalculateAndPreview();
+        }
+    }
+
+    private void OnTaxModeChanged(string mode)
+    {
+        _tx.TaxMode = mode;
+        _tx.IsManualTaxOverride = false;
+        RecalculateAndPreview();
+    }
+
+    private void OnManualTaxOverrideChanged(bool manual)
+    {
+        _tx.IsManualTaxOverride = manual;
+        RecalculateAndPreview();
+    }
+
+    private void OnManualTaxComponentChanged(DocumentTaxLine comp, decimal value)
+    {
+        comp.Amount = value;
+        RecalculateAndPreview();
+    }
+
+    private void OnCurrencyChanged(string currency)
+    {
+        _tx.Currency = currency;
+        if (string.Equals(currency, _functionalCurrency, StringComparison.OrdinalIgnoreCase))
+        {
+            _tx.ExchangeRate = 1.0m;
+        }
+        RecalculateAndPreview();
+    }
+
+    private void OnExchangeRateChanged(decimal fx)
+    {
+        _tx.ExchangeRate = fx > 0m ? fx : 1.0m;
+        RecalculateAndPreview();
+    }
+
+    private async Task HandleAttachmentUploadedAsync(List<ApiFileUpload.UploadResult> results)
+    {
+        var result = results?.FirstOrDefault();
+        if (result == null) return;
+
+        if (!string.IsNullOrWhiteSpace(_tx.AttachmentPath) && _tx.AttachmentPath != result.FilePath)
+        {
+            await FileService.DeleteAsync(_tx.AttachmentPath);
+        }
+
+        _tx.AttachmentPath = result.FilePath;
+        _tx.AttachmentName = result.FileName;
+        StateHasChanged();
+    }
+
+    private async Task RemoveAttachmentAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_tx.AttachmentPath))
+        {
+            await FileService.DeleteAsync(_tx.AttachmentPath);
+        }
+        _tx.AttachmentPath = string.Empty;
+        _tx.AttachmentName = string.Empty;
+        StateHasChanged();
+    }
+
+    private void RecalculateAndPreview()
+    {
+        TransactionService.RecalculateTotals(_tx);
+        _previewLines = TransactionService.BuildLedgerPreview(_tx);
+    }
+
+    private async Task SubmitAsync()
+    {
+        var liveUser = await UserService.GetEmployeeAsync();
+        if (liveUser == null || !liveUser.IsActiveUnsuspended || !liveUser.HasPermission(AppPermissions.Finance.AccessAccounting))
+        {
+            Snackbar.Add(BizLoc["Active Finance.AccessAccounting permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        try
+        {
+            var saved = TransactionService.SaveTransaction(_tx, liveUser);
+            MudDialog.Close(DialogResult.Ok(saved));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private string? ResolveDefaultTransferDestination(string? sourceGlCode)
+    {
+        var active = FinancialAccountService.GetActiveAccounts();
+        var other = active.FirstOrDefault(a =>
+            !string.Equals(a.LinkedGlAccountCode, sourceGlCode, StringComparison.OrdinalIgnoreCase));
+        return other?.LinkedGlAccountCode;
+    }
+
+    private string ResolveDefaultOffsetAccount(string direction) =>
+        direction == DirectTransactionDirection.MoneyIn
+            ? (Db.GlAccounts?.GetBySystemRole(GlSystemRole.InterestAndOtherIncome)?.Code ?? "4800")
+            : (Db.GlAccounts?.GetBySystemRole(GlSystemRole.OfficeAndOverheadExpense)?.Code ?? "5600");
+
+    private string GetPrimaryAccountLabel() => _tx.Direction switch
+    {
+        DirectTransactionDirection.MoneyIn => BizLoc["Deposited Into"].Value,
+        DirectTransactionDirection.MoneyOut => BizLoc["Paid From"].Value,
+        DirectTransactionDirection.Transfer => BizLoc["From Account"].Value,
+        _ => BizLoc["Account"].Value
+    };
+
+    private string GetDirectionTitle(string dir) => dir switch
+    {
+        DirectTransactionDirection.MoneyIn => BizLoc["Record Money Received"].Value,
+        DirectTransactionDirection.MoneyOut => BizLoc["Record Payment Made"].Value,
+        DirectTransactionDirection.Transfer => BizLoc["Record Account Transfer"].Value,
+        _ => BizLoc["Direct Transaction"].Value
+    };
+
+    private static string GetDirectionIcon(string dir) => dir switch
+    {
+        DirectTransactionDirection.MoneyIn => Icons.Material.Filled.SouthWest,
+        DirectTransactionDirection.MoneyOut => Icons.Material.Filled.NorthEast,
+        DirectTransactionDirection.Transfer => Icons.Material.Filled.SwapHoriz,
+        _ => Icons.Material.Filled.SwapHoriz
+    };
+
+    private static Color GetDirectionColor(string dir) => dir switch
+    {
+        DirectTransactionDirection.MoneyIn => Color.Success,
+        DirectTransactionDirection.MoneyOut => Color.Error,
+        DirectTransactionDirection.Transfer => Color.Info,
+        _ => Color.Primary
+    };
+
+    private string FormatCurrency(decimal amount) =>
+        string.Equals(_tx.Currency, _functionalCurrency, StringComparison.OrdinalIgnoreCase)
+            ? amount.ToString("C2")
+            : $"{amount:N2} {_tx.Currency}";
+}

@@ -12,6 +12,16 @@ using Spokes_Server.Core.Models.Core;
 
 namespace Spokes_Server.Core.Services.Communication.Voice;
 
+public sealed record LiveKitParticipantSnapshot(
+    string Identity,
+    string Sid,
+    string Metadata,
+    bool? IsMicMuted,
+    bool IsConnected,
+    bool IsCameraOn = false,
+    bool IsScreenSharing = false,
+    bool HasScreenAudio = false);
+
 public class LiveKitService
 {
     private readonly ILogger<LiveKitService> _logger;
@@ -104,6 +114,17 @@ public class LiveKitService
     api: warn"
         };
 
+        var webhookYaml = string.Empty;
+        if (!string.IsNullOrWhiteSpace(systemConfig.LiveKitApiKey))
+        {
+            var webhookUrl = ResolveInternalWebhookUrl();
+            webhookYaml = $@"webhook:
+  api_key: {systemConfig.LiveKitApiKey}
+  urls:
+    - {webhookUrl}
+";
+        }
+
         return $@"
 port: {voicePort}
 rtc:
@@ -113,13 +134,43 @@ rtc:
   use_external_ip: true
 keys:
   {systemConfig.LiveKitApiKey}: {systemConfig.LiveKitApiSecret}
-{loggingYaml}
-audio:
-  active_level: 36
-  min_percentile: 20
-  update_interval: 100
-  smooth_intervals: 2
-";
+{webhookYaml}{loggingYaml}";
+    }
+
+    internal string ResolveInternalWebhookUrl()
+    {
+        var explicitUrl = GetSetting("Spokes_LiveKit_Webhook_Url");
+        if (!string.IsNullOrWhiteSpace(explicitUrl))
+        {
+            return explicitUrl.Trim();
+        }
+
+        var port = GetSetting("Spokes_HOST_PORT") ?? GetSetting("Spokes_Host_Port");
+        if (!int.TryParse(port, out var parsedPort) || parsedPort <= 0)
+        {
+            parsedPort = TryParsePortFromUrls(GetSetting("ASPNETCORE_URLS")) ?? 8080;
+        }
+
+        return $"http://127.0.0.1:{parsedPort}/spokesapi/voice/livekit-webhook";
+    }
+
+    private static int? TryParsePortFromUrls(string? urls)
+    {
+        if (string.IsNullOrWhiteSpace(urls))
+        {
+            return null;
+        }
+
+        foreach (var raw in urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var normalized = raw.Replace("://+", "://127.0.0.1").Replace("://*", "://127.0.0.1");
+            if (Uri.TryCreate(normalized, UriKind.Absolute, out var uri) && uri.Port > 0)
+            {
+                return uri.Port;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -161,6 +212,28 @@ audio:
 
     public static string GetRoomName(string channelId) => $"channel-{channelId}";
 
+    public static bool TryExtractChannelIdFromRoomName(string? roomName, out string channelId)
+    {
+        const string prefix = "channel-";
+        if (!string.IsNullOrWhiteSpace(roomName) &&
+            roomName.StartsWith(prefix, StringComparison.Ordinal) &&
+            roomName.Length > prefix.Length)
+        {
+            channelId = roomName[prefix.Length..];
+            return true;
+        }
+
+        channelId = string.Empty;
+        return false;
+    }
+
+    /// <summary>
+    /// Identifies LiveKit service identities (bots) that are not human caller slots.
+    /// </summary>
+    public static bool IsSyntheticParticipantIdentity(string? identity) =>
+        !string.IsNullOrEmpty(identity) &&
+        identity.StartsWith("bot:", StringComparison.OrdinalIgnoreCase);
+
     private RoomServiceClient CreateRoomServiceClient(string apiKey, string apiSecret)
     {
         var voicePort = GetSetting("Spokes_Voice_Port") ?? "7880";
@@ -196,10 +269,94 @@ audio:
     }
 
     /// <summary>
-    /// Queries the LiveKit daemon for the active participant identities in a channel's room.
+    /// Converts a protobuf <see cref="ParticipantInfo"/> from LiveKit Server SDK or webhooks
+    /// into a normalized <see cref="LiveKitParticipantSnapshot"/>.
+    /// </summary>
+    public static LiveKitParticipantSnapshot ToParticipantSnapshot(ParticipantInfo participant)
+    {
+        ArgumentNullException.ThrowIfNull(participant);
+
+        var tracks = participant.Tracks?.ToList() ?? [];
+        var micTracks = tracks
+            .Where(t => t.Type == TrackType.Audio && (t.Source == TrackSource.Microphone || t.Source == TrackSource.Unknown))
+            .ToList();
+
+        bool? isMicMuted = micTracks.Count == 0
+            ? null
+            : micTracks.All(t => t.Muted);
+
+        bool isCameraOn = tracks.Any(t =>
+            t.Type == TrackType.Video &&
+            (t.Source == TrackSource.Camera || t.Source == TrackSource.Unknown) &&
+            !t.Muted);
+
+        bool isScreenSharing = tracks.Any(t =>
+            t.Type == TrackType.Video &&
+            t.Source == TrackSource.ScreenShare &&
+            !t.Muted);
+
+        bool hasScreenAudio = tracks.Any(t =>
+            t.Type == TrackType.Audio &&
+            t.Source == TrackSource.ScreenShareAudio &&
+            !t.Muted);
+
+        bool isConnected = participant.State != ParticipantInfo.Types.State.Disconnected;
+        return new LiveKitParticipantSnapshot(
+            participant.Identity ?? string.Empty,
+            participant.Sid ?? string.Empty,
+            participant.Metadata ?? string.Empty,
+            isMicMuted,
+            isConnected,
+            isCameraOn,
+            isScreenSharing,
+            hasScreenAudio);
+    }
+
+    /// <summary>
+    /// Queries the LiveKit daemon for all active rooms with prefix <c>channel-</c> that currently have participants.
+    /// Returns an empty list if no rooms are active or if a transient error prevented querying LiveKit.
+    /// </summary>
+    public virtual async Task<IReadOnlyList<string>> GetActiveVoiceChannelIdsAsync(
+        string apiKey,
+        string apiSecret,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(apiSecret))
+        {
+            return [];
+        }
+
+        try
+        {
+            var roomServiceClient = CreateRoomServiceClient(apiKey, apiSecret);
+            var listResponse = await roomServiceClient.ListRooms(new ListRoomsRequest());
+            var channelIds = new List<string>();
+            if (listResponse?.Rooms != null)
+            {
+                foreach (var room in listResponse.Rooms)
+                {
+                    if (room != null &&
+                        room.NumParticipants > 0 &&
+                        TryExtractChannelIdFromRoomName(room.Name, out var channelId))
+                    {
+                        channelIds.Add(channelId);
+                    }
+                }
+            }
+            return channelIds;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("[LiveKit] Transient error listing active rooms: {Message}", ex.Message);
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Queries the LiveKit daemon for full participant state snapshots (identity, metadata, mic mute state) in a channel's room.
     /// Returns an empty list if the room does not exist, or <c>null</c> if a transient error prevented querying LiveKit.
     /// </summary>
-    public virtual async Task<IReadOnlyList<string>?> GetRoomParticipantIdentitiesAsync(
+    public virtual async Task<IReadOnlyList<LiveKitParticipantSnapshot>?> GetRoomParticipantStatesAsync(
         string channelId,
         string apiKey,
         string apiSecret,
@@ -215,7 +372,10 @@ audio:
         {
             var roomServiceClient = CreateRoomServiceClient(apiKey, apiSecret);
             var listResponse = await roomServiceClient.ListParticipants(new ListParticipantsRequest { Room = roomName });
-            return listResponse.Participants.Select(p => p.Identity).ToList();
+            return listResponse.Participants
+                .Select(ToParticipantSnapshot)
+                .Where(p => p.IsConnected && !string.IsNullOrWhiteSpace(p.Identity))
+                .ToList();
         }
         catch (Exception ex) when (IsParticipantOrRoomAbsentError(ex))
         {
@@ -243,11 +403,13 @@ audio:
         {
             var roomServiceClient = CreateRoomServiceClient(apiKey, apiSecret);
             var roomName = GetRoomName(channelId);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
             await roomServiceClient.RemoveParticipant(new RoomParticipantIdentity
             {
                 Room = roomName,
                 Identity = userId
-            });
+            }).WaitAsync(timeoutCts.Token);
         }
         catch (Exception ex) when (IsParticipantOrRoomAbsentError(ex))
         {
@@ -260,42 +422,29 @@ audio:
     }
 
     /// <summary>
-    /// Updates track subscriptions at the LiveKit SFU level for a participant in a voice channel.
-    /// Used by server-side media pipelines (such as Physical Rooms) to unsubscribe human participants
-    /// from raw microphone tracks while cleaned replacement tracks ("processed-mic:{userId}") are active.
+    /// Resolves the browser/client WebSocket URL for LiveKit signaling from configuration,
+    /// persisted system settings, or the current navigation base URI.
     /// </summary>
-    public virtual async Task UpdateParticipantSubscriptionsAsync(
-        string channelId,
-        string participantIdentity,
-        IEnumerable<string> trackSids,
-        bool subscribe,
-        string apiKey,
-        string apiSecret,
-        CancellationToken cancellationToken = default)
+    public static string ResolveClientWebSocketUrl(
+        IConfiguration? configuration,
+        SystemConfig? systemConfig,
+        string? fallbackBaseUri)
     {
-        if (string.IsNullOrWhiteSpace(channelId) || string.IsNullOrWhiteSpace(participantIdentity))
+        var configuredUrl = configuration?["LiveKit:ServerUrl"];
+        if (!string.IsNullOrWhiteSpace(configuredUrl))
         {
-            return;
+            return configuredUrl.Trim();
         }
 
-        try
+        var baseUriString = !string.IsNullOrWhiteSpace(systemConfig?.ServerPublicUrl)
+            ? systemConfig.ServerPublicUrl
+            : (fallbackBaseUri ?? "http://localhost/");
+        if (!Uri.TryCreate(baseUriString, UriKind.Absolute, out var baseUri))
         {
-            var roomServiceClient = CreateRoomServiceClient(apiKey, apiSecret);
-            var req = new UpdateSubscriptionsRequest
-            {
-                Room = GetRoomName(channelId),
-                Identity = participantIdentity,
-                Subscribe = subscribe
-            };
-            req.TrackSids.AddRange(trackSids);
-            if (req.TrackSids.Count > 0)
-            {
-                await roomServiceClient.UpdateSubscriptions(req);
-            }
+            return "ws://localhost";
         }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "[LiveKit] Failed to update subscriptions for {Participant} in channel-{ChannelId}: {Message}", participantIdentity, channelId, ex.Message);
-        }
+
+        var wsScheme = string.Equals(baseUri.Scheme, "https", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
+        return $"{wsScheme}://{baseUri.Authority}";
     }
 }

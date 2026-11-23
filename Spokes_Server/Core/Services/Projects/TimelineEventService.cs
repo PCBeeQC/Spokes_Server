@@ -119,4 +119,23 @@ public class TimelineEventService : ITimelineEventService
             RemoveSystemEvent(doc.ProjectId, $"Doc_Final_{doc.Id}");
         }
     }
+
+    public void SyncProjectReportStatusTimelineEvent(ProjectReport report, string oldStatus, string newStatus, string? user = null)
+    {
+        if (report == null || string.IsNullOrEmpty(report.ProjectId) || oldStatus == newStatus) return;
+
+        if (oldStatus == ProjectReportStatus.Draft && newStatus == ProjectReportStatus.Final)
+        {
+            AddSystemEvent(
+                report.ProjectId,
+                $"Report #{report.ReportNumber} Finalized",
+                $"Project report '{report.Title}' (#{report.ReportNumber}, as of {report.AsOfDate:yyyy-MM-dd}) was finalized.",
+                $"Report_Final_{report.Id}",
+                user);
+        }
+        else if (oldStatus == ProjectReportStatus.Final && newStatus == ProjectReportStatus.Draft)
+        {
+            RemoveSystemEvent(report.ProjectId, $"Report_Final_{report.Id}");
+        }
+    }
 }

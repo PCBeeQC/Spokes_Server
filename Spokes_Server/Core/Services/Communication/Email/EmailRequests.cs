@@ -17,15 +17,32 @@ public class SendEmailRequest
     public List<EmailAttachmentMeta>? ExistingAttachments { get; set; }
     public string? DraftId { get; set; }
     public List<(string FilePath, string FileName)>? FileAttachmentPaths { get; set; }
+    public List<OutboundDocumentAttachmentRef>? DocumentAttachments { get; set; }
+    public List<ForwardedEmailAttachmentRef>? ForwardedEmailAttachments { get; set; }
     public string? InReplyTo { get; set; }
     public List<string>? References { get; set; }
-
-    /// <summary>
-    /// Internal marker for non-interactive automated system sends (e.g. CompanyBillInboxService background ingestion replies).
-    /// Must never be set by interactive UI requests.
-    /// </summary>
-    internal bool IsSystemAutomatedSend { get; init; }
 }
+
+public enum OutboundDocumentKind
+{
+    Quote,
+    Invoice,
+    ProjectDocument,
+    BusinessDocument,
+    ProjectReport,
+    PurchaseOrder
+}
+
+public sealed record OutboundDocumentAttachmentRef(
+    OutboundDocumentKind Kind,
+    string DocumentId,
+    string? DisplayFileName = null);
+
+public sealed record ForwardedEmailAttachmentRef(
+    string SourceAccountId,
+    string SourceMessageId,
+    string AttachmentId,
+    string? DisplayFileName = null);
 
 public class SaveDraftRequest
 {

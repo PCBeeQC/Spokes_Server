@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Spokes_Server.Core.Services.Security;
 
@@ -18,6 +20,73 @@ public class GlobalKeystoreService
 {
     // Dictionary mapping EmployeeId -> Plaintext Private Key XML
     private readonly ConcurrentDictionary<string, string> _unlockedPrivateKeys = new();
+
+    // Per-process secret used to compute constant-time HMAC-SHA256 password verifiers so
+    // session-authenticated ScopedKeystoreService instances holding a valid vault cookie
+    // do not re-run 100,000 PBKDF2-SHA256 iterations on every Blazor circuit creation.
+    private readonly byte[] _verifierSecret = RandomNumberGenerator.GetBytes(32);
+    private readonly ConcurrentDictionary<string, (byte[] VerifierHash, string PlainPrivateKey)> _verifiedEntries = new();
+
+    private byte[] ComputeVerifierHash(string employeeId, string encryptedPrivateKey, string vaultPassword)
+    {
+        var inputBytes = Encoding.UTF8.GetBytes($"{employeeId}\0{encryptedPrivateKey}\0{vaultPassword}");
+        return HMACSHA256.HashData(_verifierSecret, inputBytes);
+    }
+
+    /// <summary>
+    /// Verifies in constant time whether the provided password and encrypted private key match
+    /// an already-unlocked vault entry in memory, returning the plaintext private key without
+    /// re-running 100,000 PBKDF2 iterations.
+    /// </summary>
+    internal bool TryGetVerifiedPrivateKey(
+        string employeeId,
+        string encryptedPrivateKey,
+        string vaultPassword,
+        out string? plainTextPrivateKey)
+    {
+        plainTextPrivateKey = null;
+        if (string.IsNullOrEmpty(employeeId) ||
+            string.IsNullOrEmpty(encryptedPrivateKey) ||
+            string.IsNullOrEmpty(vaultPassword))
+        {
+            return false;
+        }
+
+        if (!_verifiedEntries.TryGetValue(employeeId, out var entry) ||
+            !_unlockedPrivateKeys.ContainsKey(employeeId))
+        {
+            return false;
+        }
+
+        var candidateHash = ComputeVerifierHash(employeeId, encryptedPrivateKey, vaultPassword);
+        if (!CryptographicOperations.FixedTimeEquals(entry.VerifierHash, candidateHash))
+        {
+            return false;
+        }
+
+        plainTextPrivateKey = entry.PlainPrivateKey;
+        return true;
+    }
+
+    internal void StoreVerifiedPrivateKey(
+        string employeeId,
+        string encryptedPrivateKey,
+        string vaultPassword,
+        string plainTextPrivateKey)
+    {
+        if (string.IsNullOrEmpty(employeeId) ||
+            string.IsNullOrEmpty(encryptedPrivateKey) ||
+            string.IsNullOrEmpty(vaultPassword) ||
+            string.IsNullOrEmpty(plainTextPrivateKey) ||
+            !plainTextPrivateKey.Contains("<RSAKeyValue>", System.StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var verifierHash = ComputeVerifierHash(employeeId, encryptedPrivateKey, vaultPassword);
+        _unlockedPrivateKeys[employeeId] = plainTextPrivateKey;
+        _verifiedEntries[employeeId] = (verifierHash, plainTextPrivateKey);
+    }
 
     /// <summary>
     /// Checks if the user's private key is currently unlocked in memory.
@@ -43,6 +112,11 @@ public class GlobalKeystoreService
     {
         try
         {
+            if (TryGetVerifiedPrivateKey(employeeId, encryptedPrivateKey, vaultPassword, out _))
+            {
+                return true;
+            }
+
             // The password must match what was used to encrypt the private key
             var kek = cryptoService.DeriveKeyFromPassword(vaultPassword, employeeId); // Using employeeId as salt
 
@@ -51,7 +125,7 @@ public class GlobalKeystoreService
             // Basic validation that it's an XML key
             if (plainTextPrivateKey.Contains("<RSAKeyValue>"))
             {
-                _unlockedPrivateKeys[employeeId] = plainTextPrivateKey;
+                StoreVerifiedPrivateKey(employeeId, encryptedPrivateKey, vaultPassword, plainTextPrivateKey);
                 return true;
             }
             return false;
@@ -70,6 +144,7 @@ public class GlobalKeystoreService
         if (!string.IsNullOrEmpty(employeeId))
         {
             _unlockedPrivateKeys.TryRemove(employeeId, out _);
+            _verifiedEntries.TryRemove(employeeId, out _);
         }
     }
 }

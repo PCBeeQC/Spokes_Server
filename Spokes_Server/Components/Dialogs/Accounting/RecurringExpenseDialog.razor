@@ -1,16 +1,23 @@
 @using System.IO
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Services.Accounting
 @using Spokes_Server.Core.Services.Accounting.InvoiceExtraction
+@using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Core.Services.Storage
 @inject ISnackbar Snackbar
 @inject Database Db
+@inject UserService UserService
 @inject PdfInvoiceInspectionService PdfInspectionService
 @inject IFileService FileService
+@inject IAccountingService AccountingService
+@inject IDialogService DialogService
+@inject FileUrlSigner FileUrls
 
 <MudDialog>
     <DialogContent>
-        <MudTabs @bind-ActivePanelIndex="ActiveTabIndex" Elevation="0" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-2">
+        <MudTabs @bind-ActivePanelIndex="ActiveTabIndex" Elevation="0" Outlined="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-2">
             <MudTabPanel Text="Details">
                 <MudGrid>
                     <MudItem xs="12">
@@ -48,6 +55,7 @@
                             <MudSelectItem Value="@RecurringExpenseFrequency.Weekly">Weekly</MudSelectItem>
                             <MudSelectItem Value="@RecurringExpenseFrequency.BiWeekly">Bi-Weekly</MudSelectItem>
                             <MudSelectItem Value="@RecurringExpenseFrequency.Monthly">Monthly</MudSelectItem>
+                            <MudSelectItem Value="@RecurringExpenseFrequency.Quarterly">Quarterly</MudSelectItem>
                             <MudSelectItem Value="@RecurringExpenseFrequency.Yearly">Yearly</MudSelectItem>
                             <MudSelectItem Value="@RecurringExpenseFrequency.OneTime">One-Time</MudSelectItem>
                             <MudSelectItem Value="@RecurringExpenseFrequency.AsNeeded">As Needed</MudSelectItem>
@@ -59,10 +67,13 @@
                             Variant="Variant.Outlined" />
                     </MudItem>
 
-                    <MudItem xs="12" sm="6">
-                        <SageGlAccountSelect @bind-Value="Expense.GlAccountCode" Label="Accounting Category / GL (Optional)" Clearable="true"
-                            Placeholder="Auto-inherited from Supplier" Variant="Variant.Outlined" />
-                    </MudItem>
+                    @if (_canReadAccounting)
+                    {
+                        <MudItem xs="12" sm="6">
+                            <GlAccountSelect @bind-Value="Expense.GlAccountCode" Label="@BizLoc["Category (Optional)"]" Clearable="true"
+                                Placeholder="@BizLoc["Auto-inherited from Supplier"]" Variant="Variant.Outlined" ReadOnly="@(!_canManage)" />
+                        </MudItem>
+                    }
 
                     <MudItem xs="12">
                         <MudCheckBox T="bool" @bind-Value="Expense.IsTaxExempt"
@@ -139,7 +150,7 @@
 
                         @if (Expense.History.Any())
                         {
-                            <MudTable Items="@Expense.History.OrderByDescending(h => h.Date).ToList()" Dense="true" Hover="true" Striped="true">
+                            <MudTable Elevation="0" Outlined="true" Items="@Expense.History.OrderByDescending(h => h.Date).ToList()" Dense="true" Hover="true" Striped="true">
                                 <HeaderContent>
                                     <MudTh>Date Received</MudTh>
                                     <MudTh>Invoice #</MudTh>
@@ -165,7 +176,7 @@
                                     <MudTd>
                                         @if (!string.IsNullOrEmpty(context.AttachmentPath))
                                         {
-                                            <MudLink Href="@context.AttachmentPath" Target="_blank">
+                                            <MudLink Href="@FileUrls.SignUrl(context.AttachmentPath)" Target="_blank">
                                                 <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small"
                                                     Color="Color.Secondary" />
                                             </MudLink>
@@ -202,7 +213,7 @@
                             Upload invoices for each billing period. Periods are generated based on the start date and frequency.
                         </MudText>
 
-                        <MudTable Items="@GetBillingPeriods()" Dense="true" Hover="true" Striped="true">
+                        <MudTable Elevation="0" Outlined="true" Items="@GetBillingPeriods()" Dense="true" Hover="true" Striped="true">
                             <HeaderContent>
                                 <MudTh>Period</MudTh>
                                 <MudTh>Invoice #</MudTh>
@@ -249,7 +260,7 @@
                                 <MudTd>
                                 @if (context.Record != null && !string.IsNullOrEmpty(context.Record.AttachmentPath))
                                 {
-                                    <MudLink Href="@context.Record.AttachmentPath" Target="_blank">
+                                    <MudLink Href="@FileUrls.SignUrl(context.Record.AttachmentPath)" Target="_blank">
                                         <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" 
                                             Color="Color.Secondary" />
                                     </MudLink>
@@ -292,21 +303,94 @@
                 }
                 </MudTabPanel>
             }
+
+            @if (!IsNew)
+            {
+                <MudTabPanel Text="@BizLoc["Merge Duplicates"]" Icon="@Icons.Material.Filled.Merge">
+                    <MudText Typo="Typo.body2" Class="mb-3 mud-text-secondary">
+                        @string.Format(BizLoc["Select duplicate recurring profiles below to merge their bill history, standalone bills, and Bill Inbox links into '{0}'. Merged profiles will be deleted."].Value, Expense.Name)
+                    </MudText>
+
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-3">
+                        <MudTextField @bind-Value="_mergeSearch"
+                                      Placeholder="@BizLoc["Search recurring profiles by name or supplier..."]"
+                                      Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.Search"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true"
+                                      Clearable="true"
+                                      Style="min-width: 260px; max-width: 420px;" />
+
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Warning"
+                                   StartIcon="@Icons.Material.Filled.Merge"
+                                   Disabled="@(_selectedMergeSources.Count == 0)"
+                                   OnClick="MergeSelectedProfiles">
+                            @string.Format(BizLoc["Merge {0} Selected Into This Profile"].Value, _selectedMergeSources.Count)
+                        </MudButton>
+                    </div>
+
+                    @if (_mergeCandidates.Count == 0)
+                    {
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary">@BizLoc["No other recurring profiles found to merge."]</MudText>
+                    }
+                    else
+                    {
+                        <MudTable Items="@FilteredMergeCandidates"
+                                  MultiSelection="true"
+                                  @bind-SelectedItems="_selectedMergeSources"
+                                  Dense="true"
+                                  Hover="true"
+                                  Striped="true"
+                                  Outlined="true"
+                                  Elevation="0">
+                            <HeaderContent>
+                                <MudTh>@Loc["Name"]</MudTh>
+                                <MudTh>@BizLoc["Supplier"]</MudTh>
+                                <MudTh>@BizLoc["Frequency"]</MudTh>
+                                <MudTh Style="text-align: right;">@BizLoc["Default Amount"]</MudTh>
+                                <MudTh Style="text-align: right;">@BizLoc["Bills / History"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="candidate">
+                                <MudTd>
+                                    <div class="d-flex align-center gap-2">
+                                        <b>@candidate.Name</b>
+                                        @if (IsLikelyDuplicate(candidate))
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">@BizLoc["Possible Duplicate"]</MudChip>
+                                        }
+                                    </div>
+                                </MudTd>
+                                <MudTd>@(string.IsNullOrWhiteSpace(candidate.Supplier) ? "—" : candidate.Supplier)</MudTd>
+                                <MudTd>@candidate.Frequency</MudTd>
+                                <MudTd Style="text-align: right;">@candidate.Amount.ToString("C2")</MudTd>
+                                <MudTd Style="text-align: right;">
+                                    @($"{GetLinkedBillsCount(candidate.Id)} {BizLoc["Bills"].Value.ToLower()} · {candidate.History.Count} {BizLoc["History"].Value.ToLower()}")
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+                </MudTabPanel>
+            }
         </MudTabs>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
-        @if (IsNew)
+        @if (IsNew && _canManage)
         {
-            <MudButton Color="Color.Primary" Variant="Variant.Outlined" OnClick="Apply"
+            <MudButton Color="Color.Primary" Variant="Variant.Outlined" OnClick="ApplyAsync"
                 Disabled="@(string.IsNullOrWhiteSpace(Expense.Name))">
                 Apply (Save & Continue)
             </MudButton>
         }
-        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" 
-            Disabled="@(string.IsNullOrWhiteSpace(Expense.Name))">
-            @(IsNew ? "Add Expense" : "Save Changes")
-        </MudButton>
+        @if (_canManage)
+        {
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SubmitAsync" 
+                Disabled="@(string.IsNullOrWhiteSpace(Expense.Name))">
+                @(IsNew ? "Add Expense" : "Save Changes")
+            </MudButton>
+        }
     </DialogActions>
 </MudDialog>
 
@@ -318,23 +402,34 @@
     [Parameter] public int ActiveTabIndex { get; set; }
 
     private DateTime? _createdDate;
+    private string _mergeSearch = string.Empty;
+    private List<RecurringExpense> _mergeCandidates = [];
+    private Dictionary<string, int> _linkedBillsCountByProfile = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<RecurringExpense> _selectedMergeSources = [];
+    private bool _hasMergedDuplicates;
+
+    private Employee? _currentUser;
+    private bool _canManage;
+    private bool _canViewAddressBook;
+    private bool _canReadAccounting;
+
+    private bool CanManageExpense(Employee? emp) =>
+        emp != null && (Expense.IsEstimate
+            ? emp.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false)
+            : emp.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false));
 
     private Task<IEnumerable<string>> SearchSupplierNames(string? value, CancellationToken token)
     {
+        if (!_canViewAddressBook)
+        {
+            return Task.FromResult(Enumerable.Empty<string>());
+        }
+
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var s in Db.Suppliers.GetAll())
         {
             if (!string.IsNullOrWhiteSpace(s.ContactInfo.BusinessName))
                 names.Add(s.ContactInfo.BusinessName.Trim());
-        }
-        var sageVendors = Db.CompanyProfile.GetAccounting().SageSettings?.ImportedVendors;
-        if (sageVendors != null)
-        {
-            foreach (var v in sageVendors)
-            {
-                if (!string.IsNullOrWhiteSpace(v.Name))
-                    names.Add(v.Name.Trim());
-            }
         }
 
         var ordered = names.OrderBy(n => n);
@@ -354,54 +449,190 @@
             return;
         }
 
+        if (!_canViewAddressBook)
+        {
+            return;
+        }
+
         var supplier = Db.Suppliers.GetAll().FirstOrDefault(s =>
-            string.Equals(s.ContactInfo.BusinessName, Expense.Supplier, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(s.ContactInfo.SageReferenceName, Expense.Supplier, StringComparison.OrdinalIgnoreCase));
+            string.Equals(s.ContactInfo.BusinessName, Expense.Supplier, StringComparison.OrdinalIgnoreCase));
 
         if (supplier != null)
         {
             Expense.SupplierId = supplier.Id;
-            if (string.IsNullOrWhiteSpace(Expense.GlAccountCode) && !string.IsNullOrWhiteSpace(supplier.ContactInfo.DefaultGlAccountCode))
+            if (_canReadAccounting && string.IsNullOrWhiteSpace(Expense.GlAccountCode) && !string.IsNullOrWhiteSpace(supplier.ContactInfo.DefaultGlAccountCode))
             {
                 Expense.GlAccountCode = supplier.ContactInfo.DefaultGlAccountCode;
             }
         }
-        else if (string.IsNullOrWhiteSpace(Expense.GlAccountCode))
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _createdDate = Expense.CreatedDate;
+        _currentUser = await UserService.GetEmployeeAsync();
+        _canManage = CanManageExpense(_currentUser);
+        _canViewAddressBook = _currentUser != null && (_currentUser.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: false)
+            || _currentUser.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false));
+        _canReadAccounting = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false);
+        if (_canManage)
         {
-            var sageSettings = Db.CompanyProfile.GetAccounting().SageSettings;
-            if (sageSettings != null && sageSettings.VendorDefaultGlMappings.TryGetValue(Expense.Supplier, out var mappedGl) && !string.IsNullOrWhiteSpace(mappedGl))
-            {
-                Expense.GlAccountCode = mappedGl;
-            }
+            LoadMergeCandidates();
         }
     }
 
-    protected override void OnInitialized()
+    private void LoadMergeCandidates()
     {
-        _createdDate = Expense.CreatedDate;
+        _linkedBillsCountByProfile = Db.Bills.GetAll()
+            .Where(b => !string.IsNullOrWhiteSpace(b.LinkedRecurringExpenseId))
+            .GroupBy(b => b.LinkedRecurringExpenseId!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+        _mergeCandidates = Db.RecurringExpenses.GetAll()
+            .Where(r => !string.Equals(r.Id, Expense.Id, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(IsLikelyDuplicate)
+            .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
-    private void Cancel() => MudDialog.Cancel();
+    private IEnumerable<RecurringExpense> FilteredMergeCandidates =>
+        string.IsNullOrWhiteSpace(_mergeSearch)
+            ? _mergeCandidates
+            : _mergeCandidates.Where(c =>
+                c.Name.Contains(_mergeSearch.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                c.Supplier.Contains(_mergeSearch.Trim(), StringComparison.OrdinalIgnoreCase));
 
-    private void Submit()
+    private int GetLinkedBillsCount(string profileId) =>
+        _linkedBillsCountByProfile.TryGetValue(profileId, out var count) ? count : 0;
+
+    private bool IsLikelyDuplicate(RecurringExpense candidate)
+    {
+        if (!string.IsNullOrWhiteSpace(Expense.SupplierId) &&
+            string.Equals(Expense.SupplierId, candidate.SupplierId, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (!string.IsNullOrWhiteSpace(Expense.Supplier) && !string.IsNullOrWhiteSpace(candidate.Supplier) &&
+            (candidate.Supplier.Contains(Expense.Supplier, StringComparison.OrdinalIgnoreCase) ||
+             Expense.Supplier.Contains(candidate.Supplier, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+        if (!string.IsNullOrWhiteSpace(Expense.Name) && !string.IsNullOrWhiteSpace(candidate.Name) &&
+            (candidate.Name.Contains(Expense.Name, StringComparison.OrdinalIgnoreCase) ||
+             Expense.Name.Contains(candidate.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+        return false;
+    }
+
+    private async Task MergeSelectedProfiles()
+    {
+        if (_selectedMergeSources.Count == 0) return;
+
+        var emp = await UserService.GetEmployeeAsync();
+        if (!CanManageExpense(emp))
+        {
+            Snackbar.Add("You do not have permission to merge recurring profiles.", Severity.Error);
+            return;
+        }
+
+        var namesPreview = string.Join(", ", _selectedMergeSources.Take(4).Select(x => $"'{x.Name}'"));
+        if (_selectedMergeSources.Count > 4) namesPreview += $" +{(_selectedMergeSources.Count - 4)} more";
+
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            BizLoc["Confirm Merge"].Value,
+            string.Format(BizLoc["Merge {0} ({1} profile(s)) into '{2}'? All linked bills, history records, and Bill Inbox links will be moved to '{2}', and the selected duplicate profiles will be permanently deleted."].Value,
+                namesPreview, _selectedMergeSources.Count, Expense.Name),
+            yesText: BizLoc["Merge"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirm != true) return;
+
+        try
+        {
+            emp = await UserService.GetEmployeeAsync();
+            if (!CanManageExpense(emp))
+            {
+                Snackbar.Add("You do not have permission to merge recurring profiles.", Severity.Error);
+                return;
+            }
+            if (_createdDate.HasValue)
+                Expense.CreatedDate = _createdDate.Value;
+            Expense.IsEstimate = false;
+            AccountingService.SaveRecurringExpense(Expense, emp);
+
+            var merged = AccountingService.MergeRecurringExpenses(Expense.Id, _selectedMergeSources.Select(x => x.Id), emp);
+            var reloaded = Db.RecurringExpenses.GetById(Expense.Id);
+            if (reloaded != null)
+            {
+                Expense.History = reloaded.History;
+                Expense.Supplier = reloaded.Supplier;
+                Expense.SupplierId = reloaded.SupplierId;
+                Expense.GlAccountCode = reloaded.GlAccountCode;
+                Expense.Amount = reloaded.Amount;
+            }
+
+            _selectedMergeSources.Clear();
+            _hasMergedDuplicates = true;
+            LoadMergeCandidates();
+            Snackbar.Add(string.Format(BizLoc["Merged {0} duplicate recurring profile(s)."].Value, merged), Severity.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private void Cancel()
+    {
+        if (_hasMergedDuplicates)
+        {
+            MudDialog.Close(DialogResult.Ok(Expense));
+        }
+        else
+        {
+            MudDialog.Cancel();
+        }
+    }
+
+    private async Task SubmitAsync()
     {
         if (string.IsNullOrWhiteSpace(Expense.Name)) return;
+
+        var emp = await UserService.GetEmployeeAsync();
+        if (!CanManageExpense(emp))
+        {
+            Snackbar.Add("You do not have permission to modify this recurring expense.", Severity.Error);
+            return;
+        }
 
         if (_createdDate.HasValue)
             Expense.CreatedDate = _createdDate.Value;
 
+        Expense.IsEstimate = false;
         MudDialog.Close(DialogResult.Ok(Expense));
     }
 
-    private void Apply()
+    private async Task ApplyAsync()
     {
         if (string.IsNullOrWhiteSpace(Expense.Name)) return;
+
+        var emp = await UserService.GetEmployeeAsync();
+        if (!CanManageExpense(emp))
+        {
+            Snackbar.Add("You do not have permission to save this recurring expense.", Severity.Error);
+            return;
+        }
 
         if (_createdDate.HasValue)
             Expense.CreatedDate = _createdDate.Value;
 
         // Save without closing, so user can access Bill History tab (if enabled)
-        Db.RecurringExpenses.Save(Expense);
+        Expense.IsEstimate = false;
+        AccountingService.SaveRecurringExpense(Expense, emp);
         IsNew = false;
         Snackbar.Add("Expense saved.", Severity.Success);
         StateHasChanged();
@@ -445,6 +676,7 @@
                 RecurringExpenseFrequency.Weekly => $"Week of {current:MMM dd}",
                 RecurringExpenseFrequency.BiWeekly => $"{current:MMM dd} - {periodEnd.AddDays(-1):MMM dd}",
                 RecurringExpenseFrequency.Monthly => current.ToString("MMMM yyyy"),
+                RecurringExpenseFrequency.Quarterly => $"{current:MMM yyyy} - {periodEnd.AddDays(-1):MMM yyyy}",
                 RecurringExpenseFrequency.Yearly => current.ToString("yyyy"),
                 _ => current.ToString("MMM dd, yyyy")
             };
@@ -473,6 +705,7 @@
         RecurringExpenseFrequency.Weekly => current.AddDays(7),
         RecurringExpenseFrequency.BiWeekly => current.AddDays(14),
         RecurringExpenseFrequency.Monthly => current.AddMonths(1),
+        RecurringExpenseFrequency.Quarterly => current.AddMonths(3),
         RecurringExpenseFrequency.Yearly => current.AddYears(1),
         _ => current.AddMonths(1)
     };
@@ -482,6 +715,7 @@
         RecurringExpenseFrequency.Weekly => 7,
         RecurringExpenseFrequency.BiWeekly => 14,
         RecurringExpenseFrequency.Monthly => 31,
+        RecurringExpenseFrequency.Quarterly => 92,
         RecurringExpenseFrequency.Yearly => 365,
         _ => 31
     };
@@ -527,8 +761,10 @@
         }
     }
 
-    private void HandleBillForPeriodUploaded(DateTime periodStart, List<ApiFileUpload.UploadResult> results)
+    private async Task HandleBillForPeriodUploaded(DateTime periodStart, List<ApiFileUpload.UploadResult> results)
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (!CanManageExpense(emp)) return;
         var result = results.FirstOrDefault();
         if (result == null) return;
 
@@ -551,6 +787,8 @@
 
     private async Task HandleUploadToExisting(RecurringBillRecord record, List<ApiFileUpload.UploadResult> results)
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (!CanManageExpense(emp)) return;
         var result = results.FirstOrDefault();
         if (result == null) return;
 
@@ -566,8 +804,10 @@
         StateHasChanged();
     }
 
-    private void TogglePaid(RecurringBillRecord record)
+    private async Task TogglePaid(RecurringBillRecord record)
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (!CanManageExpense(emp)) return;
         record.IsPaid = !record.IsPaid;
         record.DatePaid = record.IsPaid ? DateTime.Today : null;
         StateHasChanged();
@@ -622,9 +862,11 @@
         }
     }
 
-    private void AddManualBill()
+    private async Task AddManualBill()
     {
         if (!_newBillDateReceived.HasValue || _newBillAmount <= 0) return;
+        var emp = await UserService.GetEmployeeAsync();
+        if (!CanManageExpense(emp)) return;
 
         var record = new RecurringBillRecord
         {
@@ -669,6 +911,8 @@
 
     private async Task DeleteBillRecord(RecurringBillRecord record)
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (!CanManageExpense(emp)) return;
         await FileService.DeleteAssociatedFilesAsync(record);
         Expense.History.Remove(record);
         StateHasChanged();

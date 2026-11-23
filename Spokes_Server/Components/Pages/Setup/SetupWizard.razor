@@ -17,19 +17,18 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
-@inject IFileService FileService
 @inject LicenseValidationService LicenseService
 @inject AppLabelService AppLabels
 @inject IHttpClientFactory HttpClientFactory
-@inject IDialogService DialogService
 @inject IHostApplicationLifetime AppLifetime
 @inject ICompanyBrandingService BrandingService
 @inject ILogger<SetupWizard> Logger
-@inject BackupService BackupSvc
 @inject IStringLocalizer<AppResources> Loc
 
 <PageTitle>@Loc["Spokes Setup"]</PageTitle>
 
+@if (!_isLockedPostSetup)
+{
 <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-16">
     <MudPaper Class="pa-8" Elevation="0" Outlined="true">
         <div class="d-flex align-center justify-center mb-4">
@@ -43,7 +42,7 @@
 
             <MudGrid>
                 <MudItem xs="12" sm="6">
-                    <MudCard @onclick="() => _step = 1" Outlined="true" Class="cursor-pointer hover-effect pa-4" Style="height: 100%;">
+                    <MudCard @onclick="() => GoToStep(1)" Outlined="true" Class="cursor-pointer hover-effect pa-4" Style="height: 100%;">
                         <MudCardContent Class="d-flex flex-column align-center text-center">
                             <MudIcon Icon="@Icons.Material.Filled.AddCircleOutline" Color="Color.Primary" Size="Size.Large" Class="mb-3" />
                             <MudText Typo="Typo.h6" Class="mb-1">@Loc["New Installation"]</MudText>
@@ -55,7 +54,7 @@
                 </MudItem>
 
                 <MudItem xs="12" sm="6">
-                    <MudCard @onclick="() => _step = -1" Outlined="true" Class="cursor-pointer hover-effect pa-4" Style="height: 100%;">
+                    <MudCard @onclick="() => GoToStep(-1)" Outlined="true" Class="cursor-pointer hover-effect pa-4" Style="height: 100%;">
                         <MudCardContent Class="d-flex flex-column align-center text-center">
                             <MudIcon Icon="@Icons.Material.Filled.RestorePage" Color="Color.Secondary" Size="Size.Large" Class="mb-3" />
                             <MudText Typo="Typo.h6" Class="mb-1">@Loc["Restore from Backup"]</MudText>
@@ -118,7 +117,7 @@
             <div style="@((!_isRestoringBackup && !_backupRestoreSuccess) ? "" : "display: none;")">
                 @if (!string.IsNullOrEmpty(_backupRestoreError))
                 {
-                    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="() => _backupRestoreError = null">
+                    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="ClearBackupRestoreError">
                         @_backupRestoreError
                     </MudAlert>
                 }
@@ -145,7 +144,7 @@
                     </CustomContent>
                 </ApiFileUpload>
 
-                <MudButton Variant="Variant.Text" OnClick="() => { _step = 0; _backupRestoreError = null; }" FullWidth="true" Class="mt-6">
+                <MudButton Variant="Variant.Text" OnClick="() => GoToStep(0)" FullWidth="true" Class="mt-6">
                     @Loc["Back to Setup Options"]
                 </MudButton>
             </div>
@@ -166,7 +165,7 @@
             <MudCheckBox @bind-Value="_eulaAcceptedCheckbox" Label="@Loc["I have read and agree to the End User License Agreement"]" Color="Color.Primary" />
 
             <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AcceptEula" Disabled="!_eulaAcceptedCheckbox" FullWidth="true" Class="mt-6">@Loc["Continue"]</MudButton>
-            <MudButton Variant="Variant.Text" OnClick="() => _step = 0" FullWidth="true" Class="mt-2">@Loc["Back to Setup Options"]</MudButton>
+            <MudButton Variant="Variant.Text" OnClick="() => GoToStep(0)" FullWidth="true" Class="mt-2">@Loc["Back to Setup Options"]</MudButton>
         }
         else if (_step == 2)
         {
@@ -306,7 +305,7 @@
 
             <MudGrid>
                 <MudItem xs="4">
-                    <MudButton Variant="Variant.Text" OnClick="() => _step = 2" FullWidth="true" Class="mt-6">@Loc["Back"]</MudButton>
+                    <MudButton Variant="Variant.Text" OnClick="() => GoToStep(2)" FullWidth="true" Class="mt-6">@Loc["Back"]</MudButton>
                 </MudItem>
                 <MudItem xs="4">
                     <MudButton Variant="Variant.Outlined" Color="Color.Default" OnClick="SkipLicenseConfig" FullWidth="true" Class="mt-6">@Loc["Skip"]</MudButton>
@@ -349,7 +348,7 @@
 
             <MudGrid>
                 <MudItem xs="6">
-                    <MudButton Variant="Variant.Text" OnClick="() => _step = 3" FullWidth="true" Class="mt-6">@Loc["Back"]</MudButton>
+                    <MudButton Variant="Variant.Text" OnClick="() => GoToStep(3)" FullWidth="true" Class="mt-6">@Loc["Back"]</MudButton>
                 </MudItem>
                 <MudItem xs="6">
                     <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveServerConfig" FullWidth="true" Class="mt-6" Disabled="@(ValidateServerUrl(_serverPublicUrl) != null)">@Loc["Continue"]</MudButton>
@@ -399,7 +398,7 @@
                     <MudText>@Loc["Save Configuration"]</MudText>
                 }
             </MudButton>
-            <MudButton Variant="Variant.Text" OnClick="() => _step = 5" FullWidth="true" Class="mt-2" Disabled="@_isValidatingExternal">@Loc["Back"]</MudButton>
+            <MudButton Variant="Variant.Text" OnClick="() => GoToStep(5)" FullWidth="true" Class="mt-2" Disabled="@_isValidatingExternal">@Loc["Back"]</MudButton>
         }
         else if (_step == 6 && _selectedType == IdpType.BuiltInCasdoor)
         {
@@ -409,8 +408,8 @@
             <MudTextField @bind-Value="_casdoorUsername" Label="@Loc["Global Admin Username"]" ReadOnly="true" Disabled="true" Required="true" Class="mb-4" Variant="Variant.Outlined" />
             <MudTextField @bind-Value="_casdoorPassword" Label="@Loc["Global Admin Password"]" Required="true" Class="mb-4" Variant="Variant.Outlined" HelperText="@Loc["You can use the suggested secure password or enter your own."]" />
             
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => _step = 7" FullWidth="true">@Loc["Next"]</MudButton>
-            <MudButton Variant="Variant.Text" OnClick="() => _step = 5" FullWidth="true" Class="mt-2">@Loc["Back"]</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => GoToStep(7)" FullWidth="true">@Loc["Next"]</MudButton>
+            <MudButton Variant="Variant.Text" OnClick="() => GoToStep(5)" FullWidth="true" Class="mt-2">@Loc["Back"]</MudButton>
         }
         else if (_step == 7 && _selectedType == IdpType.BuiltInCasdoor)
         {
@@ -431,7 +430,7 @@
                 <MudTextField @bind-Value="_spokesAdminPassword" Label="@Loc["Spokes Admin Password"]" Required="true" Class="mb-4" Variant="Variant.Outlined" HelperText="@Loc["You can use the suggested secure password or enter your own."]" />
                 
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ProvisionCasdoor" FullWidth="true">@Loc["Provision Server"]</MudButton>
-                <MudButton Variant="Variant.Text" OnClick="() => _step = 6" FullWidth="true" Class="mt-2">@Loc["Back"]</MudButton>
+                <MudButton Variant="Variant.Text" OnClick="() => GoToStep(6)" FullWidth="true" Class="mt-2">@Loc["Back"]</MudButton>
             }
         }
         else if (_step == 8)
@@ -497,6 +496,7 @@
 
     </MudPaper>
 </MudContainer>
+}
 
 <style>
     .hover-effect {
@@ -522,6 +522,8 @@
     private bool _hasSavedCrendentials;
     private bool _eulaAcceptedCheckbox;
     private bool _enableAutoUpdate;
+    private bool _isLockedPostSetup;
+    private bool _completedInCurrentCircuit;
 
     private string _companyName = "";
     private string _logoBase64 = "";
@@ -562,11 +564,40 @@
         return null;
     }
 
+    private bool RejectIfPostSetup()
+    {
+        if (_isLockedPostSetup || Db.SystemConfigs.Get().IsSetupComplete)
+        {
+            _isLockedPostSetup = true;
+            Nav.NavigateTo("/");
+            return true;
+        }
+
+        return false;
+    }
+
+    private void GoToStep(int targetStep)
+    {
+        if (RejectIfPostSetup()) return;
+        _step = targetStep;
+        if (targetStep == 0)
+        {
+            _backupRestoreError = null;
+        }
+    }
+
+    private void ClearBackupRestoreError()
+    {
+        if (RejectIfPostSetup()) return;
+        _backupRestoreError = null;
+    }
+
     protected override void OnInitialized()
     {
         var config = Db.SystemConfigs.Get();
         if (config.IsSetupComplete)
         {
+            _isLockedPostSetup = true;
             Nav.NavigateTo("/");
             return;
         }
@@ -600,6 +631,7 @@
 
     private void HandleBackupUploadStarted()
     {
+        if (RejectIfPostSetup()) return;
         _isRestoringBackup = true;
         _backupRestoreError = null;
         _backupUploadProgress = 0;
@@ -608,19 +640,28 @@
 
     private void HandleBackupUploadProgress(double progress)
     {
+        if (_isLockedPostSetup || !_isRestoringBackup) return;
         _backupUploadProgress = progress;
         StateHasChanged();
     }
 
     private void HandleBackupUploadCompleted(List<ApiFileUpload.UploadResult> results)
     {
+        if (_isLockedPostSetup || !_isRestoringBackup)
+        {
+            _isLockedPostSetup = true;
+            Nav.NavigateTo("/");
+            return;
+        }
         _isRestoringBackup = false;
         _backupRestoreSuccess = true;
+        _completedInCurrentCircuit = true;
         StateHasChanged();
     }
 
     private void HandleBackupUploadError(string errorMessage)
     {
+        if (_isLockedPostSetup || !_isRestoringBackup) return;
         _isRestoringBackup = false;
         _backupRestoreError = errorMessage;
         StateHasChanged();
@@ -628,6 +669,7 @@
 
     private void AcceptEula()
     {
+        if (RejectIfPostSetup()) return;
         var config = Db.SystemConfigs.Get();
         config.EulaAccepted = true;
         Db.SystemConfigs.Save(config);
@@ -636,6 +678,7 @@
 
     private void SaveProfileConfig()
     {
+        if (RejectIfPostSetup()) return;
         if (string.IsNullOrWhiteSpace(_companyName))
         {
             Snackbar.Add(string.Format(Loc["{0} name is required"].Value, AppLabels.Company), Severity.Error);
@@ -653,6 +696,7 @@
 
     private void SkipLicenseConfig()
     {
+        if (RejectIfPostSetup()) return;
         _licensePayload = "";
         _selectedEdition = "Family";
         SaveLicenseConfig();
@@ -660,6 +704,7 @@
 
     private void SaveLicenseConfig()
     {
+        if (RejectIfPostSetup()) return;
         if (string.IsNullOrEmpty(_licensePayload))
         {
             // Optionally allow skipping or force licensing
@@ -709,6 +754,7 @@
 
     private void SaveServerConfig()
     {
+        if (RejectIfPostSetup()) return;
         if (string.IsNullOrWhiteSpace(_serverPublicUrl)) return;
         
         var pubUrl = _serverPublicUrl.Trim();
@@ -737,26 +783,41 @@
 
     private void SelectIdp(IdpType type)
     {
+        if (RejectIfPostSetup()) return;
         _selectedType = type;
         _step = 6;
     }
 
     private async Task ProvisionCasdoor()
     {
+        if (RejectIfPostSetup()) return;
         if (string.IsNullOrWhiteSpace(_casdoorUsername) || string.IsNullOrWhiteSpace(_casdoorPassword) || string.IsNullOrWhiteSpace(_spokesAdminUsername) || string.IsNullOrWhiteSpace(_spokesAdminPassword)) return;
 
         _isProvisioning = true;
         StateHasChanged();
         await Task.Delay(500); // Give UI time to show spinner
-        
-        var result = await CasdoorService.ProvisionAsync(_serverPublicUrl, _casdoorUsername, _casdoorPassword, _spokesAdminUsername, _spokesAdminPassword);
-        _isProvisioning = false;
-        _step = 8;
-        StateHasChanged();
+        if (RejectIfPostSetup())
+        {
+            _isProvisioning = false;
+            return;
+        }
+
+        try
+        {
+            var result = await CasdoorService.ProvisionAsync(_serverPublicUrl, _casdoorUsername, _casdoorPassword, _spokesAdminUsername, _spokesAdminPassword);
+            _completedInCurrentCircuit = true;
+            _step = 8;
+        }
+        finally
+        {
+            _isProvisioning = false;
+            StateHasChanged();
+        }
     }
 
     private async Task SaveExternal()
     {
+        if (RejectIfPostSetup()) return;
         if (string.IsNullOrWhiteSpace(_authority) || string.IsNullOrWhiteSpace(_clientId) || string.IsNullOrWhiteSpace(_clientSecret))
             return;
 
@@ -795,6 +856,7 @@
                 return;
             }
 
+            if (RejectIfPostSetup()) return;
             _authority = authUrl; // Update UI with sanitized value
             
             var config = Db.SystemConfigs.Get();
@@ -803,6 +865,7 @@
             config.ClientId = _clientId;
             config.ClientSecret = _clientSecret;
             config.IsSetupComplete = true;
+            _completedInCurrentCircuit = true;
             
             Db.SystemConfigs.Save(config);
 
@@ -821,6 +884,13 @@
 
     private async Task RestartServer()
     {
+        if (_isLockedPostSetup || (!_completedInCurrentCircuit && !_backupRestoreSuccess))
+        {
+            _isLockedPostSetup = true;
+            Nav.NavigateTo("/");
+            return;
+        }
+
         _isRestarting = true;
         StateHasChanged();
 
@@ -840,16 +910,19 @@
 
     private async Task CopyCasdoorPassword()
     {
+        if (_isLockedPostSetup || !_completedInCurrentCircuit) return;
         await JSRuntime.InvokeVoidAsync("spokesCopyText", _casdoorPassword);
     }
 
     private async Task CopySpokesPassword()
     {
+        if (_isLockedPostSetup || !_completedInCurrentCircuit) return;
         await JSRuntime.InvokeVoidAsync("spokesCopyText", _spokesAdminPassword);
     }
 
     private async Task HandleLogoUploaded(IBrowserFile file)
     {
+        if (RejectIfPostSetup()) return;
         if (file == null) return;
         
         try
@@ -871,6 +944,7 @@
 
     private async Task HandleIconUploaded(IBrowserFile file)
     {
+        if (RejectIfPostSetup()) return;
         if (file == null) return;
         
         try
@@ -893,6 +967,7 @@
 
     private async Task HandleLicenseUploaded(IBrowserFile file)
     {
+        if (RejectIfPostSetup()) return;
         if (file == null) return;
         
         try
@@ -905,7 +980,6 @@
             var validationResult = LicenseService.ValidateLicense(json, config);
 
             if (validationResult.Status == LicenseStatus.Valid || 
-                validationResult.Status == LicenseStatus.Tolerated ||
                 validationResult.Status == LicenseStatus.Expired)
             {
                 if (validationResult.ParsedLicense != null)
@@ -947,27 +1021,12 @@
         }
         catch (Exception ex)
         {
-            Snackbar.Add(string.Format(Loc["Upload Failed: {0}"].Value, ex.Message), Severity.Error);
+            Snackbar.Add(string.Format(Loc["Upload failed: {0}"].Value, ex.Message), Severity.Error);
         }
     }
 
-    private string GetTimeUntilExpiry(DateTime expiry)
-    {
-        if (LicenseValidationService.IsLifetimeExpiry(expiry))
-            return Loc["Lifetime"].Value;
-
-        var span = expiry - DateTime.UtcNow;
-        if (span.TotalDays < 0) return string.Format(Loc["Expired {0} days ago"].Value, (int)Math.Abs(span.TotalDays));
-        
-        int totalDays = (int)span.TotalDays;
-        int years = totalDays / 365;
-        int months = (totalDays % 365) / 30;
-        int days = (totalDays % 365) % 30;
-        
-        if (years > 0) return string.Format(Loc["{0} years, {1} months"].Value, years, months);
-        if (months > 0) return string.Format(Loc["{0} months, {1} days"].Value, months, days);
-        return string.Format(Loc["{0} days"].Value, days);
-    }
+    private string GetTimeUntilExpiry(DateTime expiry) =>
+        LicenseValidationService.FormatTimeUntilExpiry(expiry, Loc);
 
     private List<string> GetAvailableEditions()
     {

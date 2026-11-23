@@ -108,4 +108,37 @@ public class ServerUrlResolverTests
         nullOrigin.Request.Headers["Origin"] = "null";
         Assert.False(ServerUrlResolver.IsSameOriginRequest(nullOrigin));
     }
+
+    [Fact]
+    public void IsTrustedPresenceBeaconRequest_EnforcesStrictSameOriginWhenUnverified_AllowsTlsProxyAndLocalOriginWhenTokenVerified()
+    {
+        const string publicUrl = "https://spokes.example.com";
+
+        // Localhost access while ServerPublicUrl points to external domain
+        var localCtx = new DefaultHttpContext();
+        localCtx.Request.Scheme = "http";
+        localCtx.Request.Host = new HostString("localhost", 5000);
+        localCtx.Request.Headers["Origin"] = "http://localhost:5000";
+        localCtx.Request.Headers["Sec-Fetch-Site"] = "same-origin";
+
+        Assert.False(ServerUrlResolver.IsTrustedPresenceBeaconRequest(localCtx, publicUrl, hasVerifiedCapabilityToken: false));
+        Assert.True(ServerUrlResolver.IsTrustedPresenceBeaconRequest(localCtx, publicUrl, hasVerifiedCapabilityToken: true));
+
+        // TLS-terminating proxy omitting X-Forwarded-Proto
+        var tlsProxyCtx = new DefaultHttpContext();
+        tlsProxyCtx.Request.Scheme = "http";
+        tlsProxyCtx.Request.Host = new HostString("spokes.example.com");
+        tlsProxyCtx.Request.Headers["Origin"] = "https://spokes.example.com";
+        tlsProxyCtx.Request.Headers["Sec-Fetch-Site"] = "same-origin";
+
+        Assert.False(ServerUrlResolver.IsTrustedPresenceBeaconRequest(tlsProxyCtx, configuredPublicUrl: null, hasVerifiedCapabilityToken: false));
+        Assert.True(ServerUrlResolver.IsTrustedPresenceBeaconRequest(tlsProxyCtx, configuredPublicUrl: null, hasVerifiedCapabilityToken: true));
+
+        // Cross-site or foreign origin is rejected even with a verified capability token
+        var crossSiteCtx = new DefaultHttpContext();
+        crossSiteCtx.Request.Scheme = "https";
+        crossSiteCtx.Request.Host = new HostString("spokes.example.com");
+        crossSiteCtx.Request.Headers["Origin"] = "https://evil.example.com";
+        Assert.False(ServerUrlResolver.IsTrustedPresenceBeaconRequest(crossSiteCtx, publicUrl, hasVerifiedCapabilityToken: true));
+    }
 }

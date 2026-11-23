@@ -1,0 +1,448 @@
+@using System.IO
+@using System.Text
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Accounting.Export
+@using Spokes_Server.Core.Services.Security
+@inject Database Db
+@inject ILedgerService LedgerService
+@inject IAccountantExportService AccountantExportService
+@inject UserService UserService
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<MudGrid Spacing="3">
+    @* Top Action Bar: Period Selection & 1-Click CPA Package *@
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+            <MudGrid Spacing="2" Class="align-center">
+                <MudItem xs="12" md="5">
+                    <MudText Typo="Typo.h6">@BizLoc["CPA & Accountant Hand-Off"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["Export audit-ready schedules, GIFI/Sage files, and vouchers for your CPA, and import year-end adjusting journal entries back into the General Ledger."]
+                    </MudText>
+                    @if (_periodLockDate.HasValue)
+                    {
+                        <div class="mt-2">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Lock">
+                                @string.Format(BizLoc["Period Locked Through {0:yyyy-MM-dd}"].Value, _periodLockDate.Value)
+                            </MudChip>
+                        </div>
+                    }
+                </MudItem>
+
+                <MudItem xs="12" md="7">
+                    <div class="d-flex justify-end align-center flex-wrap gap-2">
+                        <div style="width: 150px; flex-shrink: 0;">
+                            <MudDatePicker @bind-Date="_startDate"
+                                           @bind-Date:after="RefreshImportedEntries"
+                                           Label="@BizLoc["From"]"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense" />
+                        </div>
+
+                        <div style="width: 150px; flex-shrink: 0;">
+                            <MudDatePicker @bind-Date="_endDate"
+                                           @bind-Date:after="RefreshImportedEntries"
+                                           Label="@BizLoc["To"]"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense" />
+                        </div>
+
+                        <MudSwitch @bind-Value="_includeVouchers"
+                                   Color="Color.Primary"
+                                   Label="@BizLoc["Include Vouchers"]"
+                                   Class="mx-1" />
+
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.FolderZip"
+                                   Disabled="@_isExporting"
+                                   OnClick="DownloadAccountantZipPackageAsync">
+                            @BizLoc["Download Accountant Package (.ZIP)"]
+                        </MudButton>
+                    </div>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    </MudItem>
+
+    @* Left Card: Individual CPA Exports *@
+    <MudItem xs="12" lg="7">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true" Style="height: 100%;">
+            <div class="d-flex align-center gap-2 mb-1">
+                <MudIcon Icon="@Icons.Material.Filled.FileUpload" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">@BizLoc["Send to Accountant — Individual Schedules & Formats"]</MudText>
+            </div>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-4">
+                @BizLoc["All schedules below are also bundled inside the .ZIP package, or can be downloaded individually for the selected period."]
+            </MudText>
+
+            <MudText Typo="Typo.subtitle2" Color="Color.Primary" Class="mb-2">@BizLoc["Core Financial Statements & Ledger"]</MudText>
+            <div class="d-flex flex-wrap gap-2 mb-4">
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.TableChart"
+                           OnClick="@(() => DownloadTextScheduleAsync($"TrialBalance_{DateStamp()}.csv", actor => AccountantExportService.GenerateTrialBalanceCsv(Start, End, actor)))">
+                    @BizLoc["Trial Balance (.CSV)"]
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.MenuBook"
+                           OnClick="@(() => DownloadTextScheduleAsync($"GeneralLedger_{DateStamp()}.csv", actor => AccountantExportService.GenerateGeneralLedgerCsv(Start, End, actor)))">
+                    @BizLoc["General Ledger (.CSV)"]
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Assessment"
+                           OnClick="@(() => DownloadTextScheduleAsync($"IncomeStatement_{DateStamp()}.csv", actor => AccountantExportService.GenerateIncomeStatementCsv(Start, End, actor)))">
+                    @BizLoc["Income Statement (.CSV)"]
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.AccountBalance"
+                           OnClick="@(() => DownloadTextScheduleAsync($"BalanceSheet_{End:yyyy-MM-dd}.csv", actor => AccountantExportService.GenerateBalanceSheetCsv(End, actor)))">
+                    @BizLoc["Balance Sheet (.CSV)"]
+                </MudButton>
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Color="Color.Primary" Class="mb-2">@BizLoc["Tax, GIFI & Accounting Software Imports"]</MudText>
+            <div class="d-flex flex-wrap gap-2 mb-4">
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Code"
+                           OnClick="@(() => DownloadTextScheduleAsync($"GIFI_TaxImport_{DateStamp()}.gff", actor => AccountantExportService.GenerateGifiTaxImportGff(Start, End, actor)))">
+                    @BizLoc["GIFI Tax Import (.GFF)"]
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.FactCheck"
+                           OnClick="@(() => DownloadTextScheduleAsync($"GIFI_Schedule_{DateStamp()}.csv", actor => AccountantExportService.GenerateGifiScheduleCsv(Start, End, actor)))">
+                    @BizLoc["GIFI Schedule (.CSV)"]
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.ImportExport"
+                           OnClick="@(() => DownloadTextScheduleAsync($"Sage50_Import_{DateStamp()}.imp", actor => AccountantExportService.GenerateSage50ImportImp(Start, End, actor)))">
+                    @BizLoc["Sage 50 Import (.IMP)"]
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Receipt"
+                           OnClick="@(() => DownloadTextScheduleAsync($"SalesTaxSummary_{DateStamp()}.csv", actor => AccountantExportService.GenerateSalesTaxSummaryCsv(Start, End, actor)))">
+                    @BizLoc["Sales Tax Summary (.CSV)"]
+                </MudButton>
+                @if (_canManageSalaries)
+                {
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Badge"
+                               OnClick="@(() => DownloadTextScheduleAsync($"PayrollAndDAS_{DateStamp()}.csv", actor => AccountantExportService.GeneratePayrollAndDasSummaryCsv(Start, End, actor)))">
+                        @BizLoc["Payroll & DAS (.CSV)"]
+                    </MudButton>
+                }
+            </div>
+
+            <MudText Typo="Typo.subtitle2" Color="Color.Primary" Class="mb-2">@BizLoc["Working Papers & Sub-Ledgers"]</MudText>
+            <div class="d-flex flex-wrap gap-2">
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Schedule"
+                           OnClick="@(() => DownloadTextScheduleAsync($"AgedReceivablesAndPayables_{End:yyyy-MM-dd}.csv", actor => AccountantExportService.GenerateAgedReceivablesAndPayablesCsv(End, actor)))">
+                    @BizLoc["Aged AR & AP (.CSV)"]
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.PrecisionManufacturing"
+                           OnClick="@(() => DownloadTextScheduleAsync($"FixedAssetsAndCapEx_{DateStamp()}.csv", actor => AccountantExportService.GenerateFixedAssetsAndCapExCsv(Start, End, actor)))">
+                    @BizLoc["Fixed Assets & CapEx (.CSV)"]
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.AccountBalanceWallet"
+                           OnClick="@(() => DownloadTextScheduleAsync($"BankReconciliation_{DateStamp()}.csv", actor => AccountantExportService.GenerateBankReconciliationSummaryCsv(Start, End, actor)))">
+                    @BizLoc["Bank Reconciliation (.CSV)"]
+                </MudButton>
+                @if (_canManageSalaries)
+                {
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Science"
+                               OnClick="@(() => DownloadTextScheduleAsync($"ProjectAndRnDLabor_{DateStamp()}.csv", actor => AccountantExportService.GenerateProjectAndRnDLaborScheduleCsv(Start, End, actor)))">
+                        @BizLoc["Projects & SR&ED Labor (.CSV)"]
+                    </MudButton>
+                }
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.PieChartOutline"
+                           OnClick="@(() => DownloadTextScheduleAsync($"OverheadAllocation_{DateStamp()}.csv", actor => AccountantExportService.GenerateBusinessOverheadAndProjectAllocationCsv(Start, End, actor)))">
+                    @BizLoc["Overhead Allocation (.CSV)"]
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Description"
+                           OnClick="@(() => DownloadTextScheduleAsync($"README_{DateStamp()}.txt", actor => AccountantExportService.GenerateCpaReadmeTxt(Start, End, actor), syncFirst: false))">
+                    @BizLoc["CPA Cover Sheet (README.txt)"]
+                </MudButton>
+            </div>
+        </MudPaper>
+    </MudItem>
+
+    @* Right Card: Receive from Accountant (Import Adjusting CSV) *@
+    <MudItem xs="12" lg="5">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true" Style="height: 100%;">
+            <div class="d-flex align-center gap-2 mb-1">
+                <MudIcon Icon="@Icons.Material.Filled.FileDownload" Color="Color.Secondary" />
+                <MudText Typo="Typo.h6">@BizLoc["Receive from Accountant — Adjusting Entries"]</MudText>
+            </div>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-3">
+                @BizLoc["Import year-end CPA adjusting journal entries (depreciation, accruals, tax provisions, reclassifications) from CSV directly into your General Ledger."]
+            </MudText>
+
+            <div class="d-flex flex-wrap align-center gap-2 mb-3">
+                @if (_canWriteAccounting)
+                {
+                    <MudButton HtmlTag="label"
+                               Variant="Variant.Filled"
+                               Color="Color.Secondary"
+                               StartIcon="@Icons.Material.Filled.UploadFile">
+                        @BizLoc["Import CPA Adjusting CSV"]
+                        <InputFile OnChange="OnCpaAdjustingCsvSelected" accept=".csv" hidden />
+                    </MudButton>
+                }
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Default"
+                           StartIcon="@Icons.Material.Filled.Download"
+                           OnClick="DownloadSampleAdjustingCsvAsync">
+                    @BizLoc["Download Sample CSV"]
+                </MudButton>
+            </div>
+
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                <MudText Typo="Typo.caption">
+                    <b>@BizLoc["Expected CSV Columns:"]</b> <code>EntryNumber, Date, AccountCode, AccountName, Description, Debit, Credit</code>.
+                    @BizLoc["Lines sharing the same EntryNumber are grouped into a balanced journal entry. Imbalanced groups or entries in a locked period are skipped with a warning."]
+                </MudText>
+            </MudAlert>
+
+            @if (_lastImportResult != null)
+            {
+                <MudAlert Severity="@(_lastImportResult.Warnings.Count > 0 ? Severity.Warning : Severity.Success)"
+                          Variant="Variant.Filled"
+                          Dense="true">
+                    <MudText Typo="Typo.body2">
+                        <b>@string.Format(BizLoc["Imported {0} journal entries ({1} lines)."].Value, _lastImportResult.ImportedEntryCount, _lastImportResult.ImportedLineCount)</b>
+                    </MudText>
+                    @if (_lastImportResult.Warnings.Count > 0)
+                    {
+                        <ul class="mt-1 mb-0 pl-4" style="font-size: 0.78rem;">
+                            @foreach (var warn in _lastImportResult.Warnings)
+                            {
+                                <li>@warn</li>
+                            }
+                        </ul>
+                    }
+                </MudAlert>
+            }
+        </MudPaper>
+    </MudItem>
+
+    @* Bottom Card: Imported CPA Adjusting Entries History *@
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+            <div class="d-flex flex-wrap justify-space-between align-center gap-2 mb-3">
+                <div>
+                    <MudText Typo="Typo.h6">@BizLoc["Imported CPA Adjusting Journal Entries"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["Adjusting entries recorded from CPA imports within the selected date range."]
+                    </MudText>
+                </div>
+                <MudSwitch @bind-Value="_showAllDates"
+                           @bind-Value:after="RefreshImportedEntries"
+                           Color="Color.Primary"
+                           Label="@BizLoc["Show All Dates"]" />
+            </div>
+
+            <MudTable Items="@_cpaAdjustingEntries" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>@BizLoc["Entry #"]</MudTh>
+                    <MudTh>@BizLoc["Date"]</MudTh>
+                    <MudTh>@BizLoc["Reference"]</MudTh>
+                    <MudTh>@BizLoc["Description"]</MudTh>
+                    <MudTh>@BizLoc["Lines"]</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Debits"]</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Credits"]</MudTh>
+                    <MudTh>@BizLoc["Imported By"]</MudTh>
+                    <MudTh Style="width: 70px;"></MudTh>
+                </HeaderContent>
+                <RowTemplate Context="entry">
+                    <MudTd><b>@entry.EntryNumber</b></MudTd>
+                    <MudTd>@entry.Date.ToString("yyyy-MM-dd")</MudTd>
+                    <MudTd>@(string.IsNullOrWhiteSpace(entry.Reference) ? "—" : entry.Reference)</MudTd>
+                    <MudTd>@entry.Description</MudTd>
+                    <MudTd>@entry.Lines.Count</MudTd>
+                    <MudTd Style="text-align: right;">@entry.TotalDebits.ToString("C2")</MudTd>
+                    <MudTd Style="text-align: right;">@entry.TotalCredits.ToString("C2")</MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.caption">@entry.CreatedBy</MudText>
+                        @if (entry.IsLocked)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">@BizLoc["Locked"]</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd Style="text-align: right;">
+                        @if (_canWriteAccounting && !entry.IsLocked)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                           Size="Size.Small"
+                                           Color="Color.Error"
+                                           OnClick="@(() => DeleteAdjustingEntryAsync(entry))" />
+                        }
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4 text-center">
+                        @BizLoc["No CPA adjusting journal entries found for this period."]
+                    </MudText>
+                </NoRecordsContent>
+                <PagerContent>
+                    <MudTablePager PageSizeOptions="new[] { 15, 25, 50 }" />
+                </PagerContent>
+            </MudTable>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private DateTime? _startDate = new DateTime(DateTime.Today.Year, 1, 1);
+    private DateTime? _endDate = DateTime.Today;
+    private bool _includeVouchers = true;
+    private bool _showAllDates;
+    private bool _isExporting;
+    private bool _canManageSalaries;
+    private bool _canWriteAccounting;
+    private Employee? _currentUser;
+    private DateTime? _periodLockDate;
+    private AccountantAdjustingImportResult? _lastImportResult;
+    private List<JournalEntry> _cpaAdjustingEntries = [];
+
+    private DateTime Start => (_startDate ?? new DateTime(DateTime.Today.Year, 1, 1)).Date;
+    private DateTime End => (_endDate ?? DateTime.Today).Date;
+    private string DateStamp() => $"{Start:yyyyMMdd}-{End:yyyyMMdd}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _periodLockDate = Db.CompanyProfile.Get()?.Accounting?.PeriodLockDate;
+        await RefreshCurrentUserAsync();
+        RefreshImportedEntries();
+    }
+
+    private async Task RefreshCurrentUserAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        _canManageSalaries = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: true);
+        _canWriteAccounting = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false);
+    }
+
+    private void RefreshImportedEntries()
+    {
+        var entries = _showAllDates
+            ? (Db.JournalEntries?.GetAll() ?? [])
+            : (Db.JournalEntries?.GetByDateRange(Start, End) ?? []);
+
+        _cpaAdjustingEntries = entries
+            .Where(e => string.Equals(e.SourceType, JournalSourceType.AccountantAdjustment, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(e => e.Date)
+            .ThenByDescending(e => e.EntryNumber, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private async Task DownloadAccountantZipPackageAsync()
+    {
+        if (_isExporting) return;
+        _isExporting = true;
+        try
+        {
+            await RefreshCurrentUserAsync();
+            DomainActorGuard.RequirePermission(_currentUser, AppPermissions.Finance.AccessAccounting, "export CPA working papers package", allowSuspended: true);
+            LedgerService.RebuildOperationalLedger();
+            var zipBytes = AccountantExportService.GenerateAccountantPackageZip(Start, End, includeVouchers: _includeVouchers, actor: _currentUser);
+            var fileName = AccountantExportService.GetSuggestedPackageFileName(Start, End);
+            await DownloadBytesAsync(fileName, zipBytes);
+            Snackbar.Add(BizLoc["Accountant hand-off package generated."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(string.Format(BizLoc["Export failed: {0}"].Value, ex.Message), Severity.Error);
+        }
+        finally
+        {
+            _isExporting = false;
+        }
+    }
+
+    private async Task DownloadTextScheduleAsync(string fileName, Func<Employee?, string> generator, bool syncFirst = true)
+    {
+        try
+        {
+            await RefreshCurrentUserAsync();
+            DomainActorGuard.RequirePermission(_currentUser, AppPermissions.Finance.AccessAccounting, $"export {fileName}", allowSuspended: true);
+            if (syncFirst)
+            {
+                LedgerService.RebuildOperationalLedger();
+            }
+
+            var content = generator(_currentUser);
+            var utf8WithBom = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(content)).ToArray();
+            await DownloadBytesAsync(fileName, utf8WithBom);
+            Snackbar.Add(string.Format(BizLoc["Downloaded {0}."].Value, fileName), Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(string.Format(BizLoc["Export failed: {0}"].Value, ex.Message), Severity.Error);
+        }
+    }
+
+    private async Task DownloadSampleAdjustingCsvAsync()
+    {
+        var sampleDate = End.ToString("yyyy-MM-dd");
+        var sampleCsv =
+            "EntryNumber,Date,AccountCode,AccountName,Description,Debit,Credit\r\n" +
+            $"AJE-001,{sampleDate},5800,Depreciation & Amortization,Annual depreciation adjustment,1250.00,0.00\r\n" +
+            $"AJE-001,{sampleDate},1590,Accumulated Depreciation,Annual depreciation adjustment,0.00,1250.00\r\n";
+
+        var utf8WithBom = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sampleCsv)).ToArray();
+        await DownloadBytesAsync("CPA_Adjusting_Entries_Sample.csv", utf8WithBom);
+    }
+
+    private async Task DownloadBytesAsync(string fileName, byte[] bytes)
+    {
+        using var streamRef = new DotNetStreamReference(new MemoryStream(bytes));
+        await JS.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+    }
+
+    private async Task OnCpaAdjustingCsvSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null) return;
+        try
+        {
+            await RefreshCurrentUserAsync();
+            DomainActorGuard.RequirePermission(_currentUser, AppPermissions.Finance.AccessAccounting, "import CPA adjusting journal entries", allowSuspended: false);
+            await using var stream = file.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            var csv = await reader.ReadToEndAsync();
+            var importResult = AccountantExportService.ImportAdjustingEntriesCsv(csv, _currentUser?.FullName ?? "CPA Import", actor: _currentUser);
+            _lastImportResult = importResult;
+            RefreshImportedEntries();
+
+            var severity = importResult.Warnings.Count > 0 ? Severity.Warning : Severity.Success;
+            Snackbar.Add(string.Format(BizLoc["Imported {0} CPA adjusting journal entries."].Value, importResult.ImportedEntryCount), severity);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task DeleteAdjustingEntryAsync(JournalEntry entry)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            Loc["Delete"],
+            string.Format(BizLoc["Delete CPA adjusting entry {0}?"].Value, entry.EntryNumber),
+            yesText: Loc["Delete"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirmed == true)
+        {
+            try
+            {
+                await RefreshCurrentUserAsync();
+                DomainActorGuard.RequirePermission(_currentUser, AppPermissions.Finance.AccessAccounting, "delete CPA adjusting journal entry", allowSuspended: false);
+                LedgerService.DeleteManualJournalEntry(entry.Id);
+                RefreshImportedEntries();
+                Snackbar.Add(BizLoc["CPA adjusting entry deleted."].Value, Severity.Info);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Error);
+            }
+        }
+    }
+}

@@ -4,9 +4,7 @@
 @inject UserService UserService
 @inject EmployeeRepository EmployeeRepo
 @inject ChatStateService ChatState
-@inject ISnackbar Snackbar
 @inject IGifSearchService GifSearchService
-@inject Microsoft.Extensions.Options.IOptions<Spokes_Server.Core.Configuration.SpokesOptions> SpokesOptions
 @inject StartupTimingService StartupTimings
 @inject ILogger<EmojiPicker> Logger
 @implements IDisposable
@@ -14,7 +12,7 @@
 @if (IsOpen)
 {
     @* Invisible backdrop for click-away *@
-    <div style="position: fixed; inset: 0; z-index: 199;" @onclick="HandleBackdropClick" @onclick:stopPropagation="true"></div>
+    <div data-spokes-back-dismiss="emoji-picker" style="position: fixed; inset: 0; z-index: 199;" @onclick="HandleBackdropClick" @onclick:stopPropagation="true"></div>
 
     <MudPaper Elevation="6" Class="@($"emoji-picker pa-2 d-flex flex-column {Class}")"
         Style="@($"{ContainerStyle}")">

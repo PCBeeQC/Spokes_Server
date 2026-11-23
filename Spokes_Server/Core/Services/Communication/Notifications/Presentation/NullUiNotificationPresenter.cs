@@ -11,7 +11,6 @@ public class NullUiNotificationPresenter : IUiNotificationPresenter
     public static readonly NullUiNotificationPresenter Instance = new();
 
     public void ShowChatNotification(InAppNotification notification) { }
-    public void ShowChatNotification(string senderName, string truncatedContent, string initials, string channelId, string channelName) { }
     public void ShowModerationAlert(string reporterName, string reason) { }
     public void ShowEmailNotification(string fromName, string subject, string snippet) { }
     public void ShowCalendarNotification(CalendarNotificationModel notification) { }

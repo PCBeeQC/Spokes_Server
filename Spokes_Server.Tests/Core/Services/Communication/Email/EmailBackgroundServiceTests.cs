@@ -55,6 +55,7 @@ public class EmailBackgroundServiceTests : IDisposable
     private readonly ServiceProvider _serviceProvider;
 
     private readonly EmailAccountRepository _accountsRepo;
+    private readonly EmailInboxRepository _inboxesRepo;
     private readonly EmailFolderRepository _foldersRepo;
     private readonly EmailMessageRepository _messagesRepo;
     private readonly CompanyProfileRepository _companyProfileRepo;
@@ -71,12 +72,13 @@ public class EmailBackgroundServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_EmailBG_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
 
         _accountsRepo = new EmailAccountRepository(_persistence, _config);
+        _inboxesRepo = new EmailInboxRepository(_persistence, _config);
         _foldersRepo = new EmailFolderRepository(_persistence, _config);
         _messagesRepo = new EmailMessageRepository(_persistence, _config);
         _companyProfileRepo = new CompanyProfileRepository(_persistence, _config);
@@ -87,6 +89,7 @@ public class EmailBackgroundServiceTests : IDisposable
 
         _services = new ServiceCollection();
         _services.AddSingleton(_accountsRepo);
+        _services.AddSingleton(_inboxesRepo);
         _services.AddSingleton(_foldersRepo);
         _services.AddSingleton(_messagesRepo);
         _services.AddSingleton(_companyProfileRepo);
@@ -271,11 +274,61 @@ public class EmailBackgroundServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task StartAndStop_DoesNotThrow()
+    public void GetSyncAccounts_SkipsUnsharedServerManagedAccounts_AndIncludesSharedOrPersonalAccounts()
     {
-        var cts = new CancellationTokenSource();
-        await _service.StartAsync(cts.Token);
-        await _service.StopAsync(CancellationToken.None);
-        Assert.True(true);
+        _accountsRepo.Save(new EmailAccount
+        {
+            Id = "acc-bill-only",
+            IsServerManaged = true,
+            EmailAddress = "accomp@poly-robotics.com",
+            EncryptedPassword = "pwd",
+            Enabled = true
+        });
+
+        _accountsRepo.Save(new EmailAccount
+        {
+            Id = "acc-shared-direct",
+            IsServerManaged = true,
+            EmailAddress = "support@poly-robotics.com",
+            EncryptedPassword = "pwd",
+            Enabled = true,
+            AllowedUserIds = ["emp-1"]
+        });
+
+        _accountsRepo.Save(new EmailAccount
+        {
+            Id = "acc-shared-via-vinbox",
+            IsServerManaged = true,
+            EmailAddress = "catchall@poly-robotics.com",
+            EncryptedPassword = "pwd",
+            Enabled = true
+        });
+        _inboxesRepo.Save(new EmailInbox
+        {
+            Id = "vinbox-sales",
+            AccountId = "acc-shared-via-vinbox",
+            IsServerManaged = true,
+            Name = "Sales",
+            TargetAddresses = ["sales@poly-robotics.com"],
+            AllowedTeamIds = ["team-sales"]
+        });
+
+        _accountsRepo.Save(new EmailAccount
+        {
+            Id = "acc-personal",
+            IsServerManaged = false,
+            OwnerEmployeeId = "emp-2",
+            EmailAddress = "mats@poly-robotics.com",
+            EncryptedPassword = "pwd",
+            Enabled = true
+        });
+
+        var syncedIds = _service.PublicGetSyncAccounts(_accountsRepo).Select(a => a.Id).ToHashSet();
+
+        Assert.DoesNotContain("acc-bill-only", syncedIds);
+        Assert.Contains("acc-shared-direct", syncedIds);
+        Assert.Contains("acc-shared-via-vinbox", syncedIds);
+        Assert.Contains("acc-personal", syncedIds);
     }
+
 }

@@ -11,7 +11,9 @@ using Moq;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Middleware;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Documents;
 using Spokes_Server.Tests.Helpers;
 
@@ -21,19 +23,33 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
 {
     private readonly DiskPersistenceService _persistence;
     private readonly DeviceSessionRepository _sessionRepo;
+    private readonly EmployeeRepository _employeeRepo;
     private readonly RenderTokenService _tokenService;
     private readonly Mock<IAuthenticationService> _authServiceMock;
     private readonly ServiceProvider _serviceProvider;
 
     public RenderTokenMiddlewareTests()
     {
-        var mockConfig = new Mock<IConfiguration>();
-        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = _testDataPath,
+                ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"
+            })
+            .Build();
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
         _persistence = new DiskPersistenceService(mockLogger.Object);
 
-        _sessionRepo = new DeviceSessionRepository(_persistence, mockConfig.Object);
+        _sessionRepo = new DeviceSessionRepository(_persistence, config);
+        _employeeRepo = new EmployeeRepository(_persistence, config);
+        _employeeRepo.Save(new Employee
+        {
+            Id = "emp-render-1",
+            FirstName = "Alice",
+            IsActive = true,
+            Permissions = [AppPermissions.Projects.View]
+        });
         _tokenService = new RenderTokenService();
 
         _authServiceMock = new Mock<IAuthenticationService>();
@@ -47,6 +63,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
 
         var services = new ServiceCollection();
         services.AddSingleton(_authServiceMock.Object);
+        services.AddSingleton(_employeeRepo);
         _serviceProvider = services.BuildServiceProvider();
     }
 
@@ -82,13 +99,16 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
     }
 
     [Fact]
-    public void ScopedPermissions_ExcludesWriteAndManagePermissions()
+    public void IsAllowedDocumentExportPermission_ExcludesWriteManageEmailAndAdminPermissions()
     {
-        Assert.Contains(AppPermissions.Projects.View, RenderTokenMiddleware.ScopedPermissions);
-        Assert.Contains(AppPermissions.Purchases.ViewPOs, RenderTokenMiddleware.ScopedPermissions);
-        Assert.Contains(AppPermissions.BusinessDocuments.View, RenderTokenMiddleware.ScopedPermissions);
-        Assert.DoesNotContain(AppPermissions.Purchases.ManagePOs, RenderTokenMiddleware.ScopedPermissions);
-        Assert.Equal(3, RenderTokenMiddleware.ScopedPermissions.Length);
+        Assert.True(RenderTokenMiddleware.IsAllowedDocumentExportPermission(AppPermissions.Projects.View));
+        Assert.True(RenderTokenMiddleware.IsAllowedDocumentExportPermission(AppPermissions.Purchases.ViewPOs));
+        Assert.True(RenderTokenMiddleware.IsAllowedDocumentExportPermission(AppPermissions.BusinessDocuments.View));
+        Assert.True(RenderTokenMiddleware.IsAllowedDocumentExportPermission(AppPermissions.Finance.AccessAccounting));
+        Assert.False(RenderTokenMiddleware.IsAllowedDocumentExportPermission(AppPermissions.Purchases.ManagePOs));
+        Assert.False(RenderTokenMiddleware.IsAllowedDocumentExportPermission(AppPermissions.Projects.Edit));
+        Assert.False(RenderTokenMiddleware.IsAllowedDocumentExportPermission(AppPermissions.Email.Use));
+        Assert.False(RenderTokenMiddleware.IsAllowedDocumentExportPermission(AppPermissions.Admin.RoleName));
     }
 
     [Fact]
@@ -173,10 +193,10 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
     }
 
     [Fact]
-    public async Task InvokeAsync_ValidLoopbackRenderToken_ConsumesTokenPersistsSessionSetsScopedReadOnlyUserAndSignsIn()
+    public async Task InvokeAsync_ValidLoopbackRenderToken_ConsumesTokenPersistsDelegatedSessionAndSignsInWithoutStaticPermissions()
     {
         const string renderPath = "/projects/proj-1/quotes/quote-1";
-        var token = _tokenService.CreateToken(renderPath);
+        var token = _tokenService.CreateToken(renderPath, "emp-render-1");
         var context = CreateHttpContext(token, IPAddress.Loopback, renderPath);
         var nextCalled = false;
         RequestDelegate next = _ =>
@@ -193,14 +213,14 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         Assert.True(nextCalled);
 
         // Single-use token is immediately consumed so it cannot be replayed
-        Assert.False(_tokenService.ValidateToken(token, out _));
+        Assert.False(_tokenService.ContainsToken(token));
 
-        // DeviceSession was persisted in the database for "system-renderer"
-        var sessions = _sessionRepo.GetByEmployeeId("system-renderer").ToList();
+        // DeviceSession was persisted in the database bound to the initiating employee
+        var sessions = _sessionRepo.GetByEmployeeId("emp-render-1").ToList();
         Assert.Single(sessions);
         var session = sessions[0];
-        Assert.Equal("system-renderer", session.EmployeeId);
-        Assert.Equal("Headless Renderer", session.DeviceName);
+        Assert.Equal("emp-render-1", session.EmployeeId);
+        Assert.Equal(RenderTokenMiddleware.HeadlessRendererName, session.DeviceName);
         Assert.True(session.CreatedAt >= beforeTime.AddSeconds(-1) && session.CreatedAt <= afterTime.AddSeconds(1));
         Assert.True(session.ExpiresAt >= beforeTime.AddMinutes(4) && session.ExpiresAt <= afterTime.AddMinutes(6));
 
@@ -208,25 +228,21 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         Assert.True(_tokenService.RevokeToken(token, out var cleanupSessionId));
         Assert.Equal(session.Id, cleanupSessionId);
 
-        // ClaimsPrincipal set on context.User with read-only permissions only
+        // ClaimsPrincipal binds strictly to the initiating employee in DocumentExport scope with zero Role or Permission claims
         var user = context.User;
         Assert.NotNull(user.Identity);
         Assert.True(user.Identity.IsAuthenticated);
         Assert.Equal(CookieAuthenticationDefaults.AuthenticationScheme, user.Identity.AuthenticationType);
-        Assert.Equal("headless-renderer", user.FindFirst(ClaimTypes.NameIdentifier)?.Value);
-        Assert.Equal("Headless Renderer", user.FindFirst(ClaimTypes.Name)?.Value);
+        Assert.Equal("emp-render-1", user.FindFirst(ClaimTypes.NameIdentifier)?.Value);
+        Assert.Equal("emp-render-1", user.FindFirst("sub")?.Value);
+        Assert.Equal(RenderTokenMiddleware.HeadlessRendererName, user.FindFirst(ClaimTypes.Name)?.Value);
         Assert.Null(user.FindFirst(ClaimTypes.Role));
         Assert.False(user.IsInRole("Admin"));
-        Assert.Equal("system-renderer", user.FindFirst("EmployeeId")?.Value);
+        Assert.Equal("emp-render-1", user.FindFirst("EmployeeId")?.Value);
         Assert.Equal(session.Id, user.FindFirst("SessionId")?.Value);
         Assert.Equal("true", user.FindFirst("Spokes_InternalRenderer")?.Value);
-        Assert.Equal("DocumentExport", user.FindFirst("RenderScope")?.Value);
-
-        var permissions = user.FindAll("Permission").Select(c => c.Value).ToList();
-        Assert.Contains(AppPermissions.Projects.View, permissions);
-        Assert.Contains(AppPermissions.Purchases.ViewPOs, permissions);
-        Assert.Contains(AppPermissions.BusinessDocuments.View, permissions);
-        Assert.DoesNotContain(AppPermissions.Purchases.ManagePOs, permissions);
+        Assert.Equal(RenderTokenMiddleware.DocumentExportScope, user.FindFirst("RenderScope")?.Value);
+        Assert.Empty(user.FindAll("Permission"));
 
         _authServiceMock.Verify(a => a.SignInAsync(
             context,
@@ -241,10 +257,44 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
     }
 
     [Fact]
+    public async Task InvokeAsync_TokenWithoutEligibleInitiator_IsRejected()
+    {
+        const string renderPath = "/projects/proj-1/quotes/quote-unscoped";
+        var middleware = new RenderTokenMiddleware(_ => Task.CompletedTask);
+
+        // Null initiator
+        var nullToken = _tokenService.CreateToken(renderPath, null);
+        var nullCtx = CreateHttpContext(nullToken, IPAddress.Loopback, renderPath);
+        await middleware.InvokeAsync(nullCtx, _tokenService, _sessionRepo);
+        Assert.False(nullCtx.User.Identity?.IsAuthenticated ?? false);
+
+        // SystemRendererId initiator
+        var sysToken = _tokenService.CreateToken(renderPath, RenderTokenMiddleware.SystemRendererId);
+        var sysCtx = CreateHttpContext(sysToken, IPAddress.Loopback, renderPath);
+        await middleware.InvokeAsync(sysCtx, _tokenService, _sessionRepo);
+        Assert.False(sysCtx.User.Identity?.IsAuthenticated ?? false);
+
+        // Inactive and banned employees
+        _employeeRepo.Save(new Employee { Id = "emp-render-inactive", IsActive = false });
+        var inactiveToken = _tokenService.CreateToken(renderPath, "emp-render-inactive");
+        var inactiveCtx = CreateHttpContext(inactiveToken, IPAddress.Loopback, renderPath);
+        await middleware.InvokeAsync(inactiveCtx, _tokenService, _sessionRepo);
+        Assert.False(inactiveCtx.User.Identity?.IsAuthenticated ?? false);
+
+        _employeeRepo.Save(new Employee { Id = "emp-render-banned", IsActive = true, IsBanned = true });
+        var bannedToken = _tokenService.CreateToken(renderPath, "emp-render-banned");
+        var bannedCtx = CreateHttpContext(bannedToken, IPAddress.Loopback, renderPath);
+        await middleware.InvokeAsync(bannedCtx, _tokenService, _sessionRepo);
+        Assert.False(bannedCtx.User.Identity?.IsAuthenticated ?? false);
+
+        Assert.Empty(_sessionRepo.GetAll());
+    }
+
+    [Fact]
     public async Task InvokeAsync_SingleUseToken_RejectsSecondReplayFromLoopback()
     {
         const string renderPath = "/projects/proj-1/invoices/inv-42";
-        var token = _tokenService.CreateToken(renderPath);
+        var token = _tokenService.CreateToken(renderPath, "emp-render-1");
         var middleware = new RenderTokenMiddleware(_ => Task.CompletedTask);
 
         var firstContext = CreateHttpContext(token, IPAddress.Loopback, renderPath);
@@ -261,7 +311,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
     [Fact]
     public async Task InvokeAsync_PathBoundToken_RejectsMismatchedPathAndAllowsBoundPath()
     {
-        var token = _tokenService.CreateToken("/projects/proj-1/quotes/quote-allowed");
+        var token = _tokenService.CreateToken("/projects/proj-1/quotes/quote-allowed", "emp-render-1");
         var middleware = new RenderTokenMiddleware(_ => Task.CompletedTask);
 
         // Probe against a different document path is rejected and does NOT consume the token
@@ -269,7 +319,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         await middleware.InvokeAsync(wrongPathContext, _tokenService, _sessionRepo);
         Assert.False(wrongPathContext.User.Identity?.IsAuthenticated ?? false);
         Assert.Empty(_sessionRepo.GetAll());
-        Assert.True(_tokenService.ValidateToken(token, out _));
+        Assert.True(_tokenService.ContainsToken(token));
 
         // Legitimate request for the exact bound path succeeds
         var matchingPathContext = CreateHttpContext(token, IPAddress.Loopback, "/projects/proj-1/quotes/quote-allowed");
@@ -282,7 +332,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
     public async Task InvokeAsync_RenderTokenInHeaderOnly_IsIgnoredEvenFromLoopback()
     {
         const string renderPath = "/projects/proj-1/quotes/quote-hdr";
-        var token = _tokenService.CreateToken(renderPath);
+        var token = _tokenService.CreateToken(renderPath, "emp-render-1");
         var context = new DefaultHttpContext { RequestServices = _serviceProvider };
         context.Connection.RemoteIpAddress = IPAddress.Loopback;
         context.Request.Path = renderPath;
@@ -300,7 +350,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         Assert.True(nextCalled);
         Assert.False(context.User.Identity?.IsAuthenticated ?? false);
         Assert.Empty(_sessionRepo.GetAll());
-        Assert.True(_tokenService.ValidateToken(token, out _));
+        Assert.True(_tokenService.ContainsToken(token));
     }
 
     [Theory]
@@ -310,7 +360,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
     public async Task InvokeAsync_RenderTokenFromNonLoopbackIp_RejectsAndDoesNotConsumeToken(string ipString)
     {
         const string renderPath = "/projects/proj-1/quotes/quote-ext";
-        var token = _tokenService.CreateToken(renderPath);
+        var token = _tokenService.CreateToken(renderPath, "emp-render-1");
         var context = CreateHttpContext(token, IPAddress.Parse(ipString), renderPath);
         var nextCalled = false;
         var mockLogger = new Mock<ILogger<RenderTokenMiddleware>>();
@@ -325,14 +375,14 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
         Assert.True(nextCalled);
         Assert.False(context.User.Identity?.IsAuthenticated ?? false);
         Assert.Empty(_sessionRepo.GetAll());
-        Assert.True(_tokenService.ValidateToken(token, out _));
+        Assert.True(_tokenService.ContainsToken(token));
     }
 
     [Fact]
     public async Task InvokeAsync_SpoofedLoopbackViaForwardedHeaders_WhenRawRemoteIpIsExternal_Rejects()
     {
         const string renderPath = "/projects/proj-1/quotes/quote-spoof";
-        var token = _tokenService.CreateToken(renderPath);
+        var token = _tokenService.CreateToken(renderPath, "emp-render-1");
         // Simulate UseForwardedHeaders overwriting Connection.RemoteIpAddress to 127.0.0.1
         // while pre-ForwardedHeaders middleware captured the real TCP peer IP (172.18.0.5).
         var context = CreateHttpContext(token, IPAddress.Loopback, renderPath);
@@ -344,14 +394,14 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
 
         Assert.False(context.User.Identity?.IsAuthenticated ?? false);
         Assert.Empty(_sessionRepo.GetAll());
-        Assert.True(_tokenService.ValidateToken(token, out _));
+        Assert.True(_tokenService.ContainsToken(token));
     }
 
     [Fact]
     public async Task InvokeAsync_RenderTokenFromIpv6Loopback_AuthenticatesSuccessfully()
     {
         const string renderPath = "/business/documents/doc-v6";
-        var token = _tokenService.CreateToken(renderPath);
+        var token = _tokenService.CreateToken(renderPath, "emp-render-1");
         var context = CreateHttpContext(token, IPAddress.IPv6Loopback, renderPath);
         var middleware = new RenderTokenMiddleware(_ => Task.CompletedTask);
 
@@ -365,7 +415,7 @@ public class RenderTokenMiddlewareTests : TestDataTestBase
     public async Task InvokeAsync_RenderTokenFromNullRemoteIp_RejectsAndProceedsUnauthenticated()
     {
         const string renderPath = "/projects/proj-1/quotes/quote-nullip";
-        var token = _tokenService.CreateToken(renderPath);
+        var token = _tokenService.CreateToken(renderPath, "emp-render-1");
         var context = new DefaultHttpContext { RequestServices = _serviceProvider };
         context.Connection.RemoteIpAddress = null;
         context.Request.Path = renderPath;

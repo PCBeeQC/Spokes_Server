@@ -51,5 +51,4 @@ public static class ChatNotificationLevel
     public const string All = "All";
     public const string Mentions = "Mentions";
     public const string None = "None";
-    public static readonly string[] AllLevels = [All, Mentions, None];
 }

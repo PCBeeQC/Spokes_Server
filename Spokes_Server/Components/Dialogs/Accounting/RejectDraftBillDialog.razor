@@ -5,6 +5,7 @@
 @using Spokes_Server.Core.Services.Accounting
 @inject Database Db
 @inject CompanyBillInboxService BillInboxService
+@inject UserService UserService
 @inject IStringLocalizer<BusinessResources> BizLoc
 @inject IStringLocalizer<AppResources> Loc
 
@@ -92,7 +93,7 @@
                             <MudTextField @bind-Value="_searchQuery" Placeholder="@BizLoc["Search supplier, invoice #, amount..."]" Immediate="true"
                                           Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start"
                                           AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" Class="mb-2" />
-                            <MudTable T="Bill" Items="FilteredSearchBills" Dense="true" Hover="true" FixedHeader="true" Height="180px"
+                            <MudTable Elevation="0" Outlined="true" T="Bill" Items="FilteredSearchBills" Dense="true" Hover="true" FixedHeader="true" Height="180px"
                                       SelectedItem="_searchedBill" SelectedItemChanged="@((Bill? b) => OnSearchedBillSelected(b))">
                                 <HeaderContent>
                                     <MudTh>@BizLoc["Supplier"]</MudTh>
@@ -171,9 +172,17 @@
     private string _searchQuery = "";
     private Bill? _searchedBill;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        _candidateDuplicateBills = BillInboxService.GetSameSupplierSameAmountBills(DraftBill);
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || emp.IsSuspended || !emp.HasEffectivePermission(AppPermissions.Purchases.ManageBills))
+        {
+            _candidateDuplicateBills = [];
+            MudDialog.Cancel();
+            return;
+        }
+
+        _candidateDuplicateBills = BillInboxService.GetSameSupplierSameAmountBills(DraftBill, emp);
 
         // Check if there is an active bill matching the exact invoice number as well
         if (!string.IsNullOrWhiteSpace(DraftBill.InvoiceNumber))
@@ -185,6 +194,7 @@
                             b.Status != BillStatus.AwaitingApproval &&
                             !string.IsNullOrWhiteSpace(b.InvoiceNumber) &&
                             b.InvoiceNumber.Trim().Equals(cleanInv, StringComparison.OrdinalIgnoreCase))
+                .Where(b => BillInboxService.IsBillAccessible(b, emp))
                 .ToList();
 
             foreach (var match in invMatches)
@@ -271,8 +281,15 @@
 
     private void Cancel() => MudDialog.Cancel();
 
-    private void Submit()
+    private async Task Submit()
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || emp.IsSuspended || !emp.HasEffectivePermission(AppPermissions.Purchases.ManageBills))
+        {
+            MudDialog.Cancel();
+            return;
+        }
+
         var options = new RejectDraftBillOptions
         {
             IsDuplicate = _rejectionType == "duplicate",

@@ -3,7 +3,7 @@
 <MudDialog Gutters="false">
     <DialogContent>
         <div class="d-flex flex-column align-center justify-center pt-8 pb-6">
-            <TeamAvatar Team="@Team" Size="Size.Large" Class="mb-3" Style="width: 80px; height: 80px; font-size: 2.5rem; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.1);" />
+            <TeamAvatar Team="@Team" Size="Size.Large" Class="mb-3" Style="width: 80px; height: 80px; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.1);" />
             <MudText Typo="Typo.h5" Style="font-weight: 700;">@Team.Name</MudText>
             @if (!string.IsNullOrWhiteSpace(Team.Description))
             {

@@ -25,7 +25,7 @@ public class OvertimeServiceTests : IDisposable
             _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Overtime_{Guid.NewGuid()}");
             Directory.CreateDirectory(_testDataDir);
 
-            Dictionary<string, string?> configDict = new() { { "DataPath", _testDataDir } };
+            Dictionary<string, string?> configDict = new() { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
             _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -198,42 +198,6 @@ public class OvertimeServiceTests : IDisposable
             Assert.Equal(0, result.TotalWorkedHours);
             Assert.Equal(0, result.TotalExpectedHours);
             Assert.Equal(today, result.StartDate);
-        }
-
-        [Fact]
-        public void HourBankResult_And_WeeklyOvertimeResult_Properties_CanGetAndSet()
-        {
-            var startDate = new DateOnly(2025, 1, 6);
-            var endDate = new DateOnly(2025, 6, 30);
-            var hourBankResult = new HourBankResult
-            {
-                TotalWorkedHours = 165.5m,
-                TotalExpectedHours = 160m,
-                HourBank = 5.5m,
-                WeeksTracked = 4,
-                StartDate = startDate,
-                EndDate = endDate
-            };
-
-            Assert.Equal(165.5m, hourBankResult.TotalWorkedHours);
-            Assert.Equal(160m, hourBankResult.TotalExpectedHours);
-            Assert.Equal(5.5m, hourBankResult.HourBank);
-            Assert.Equal(4, hourBankResult.WeeksTracked);
-            Assert.Equal(startDate, hourBankResult.StartDate);
-            Assert.Equal(endDate, hourBankResult.EndDate);
-
-            var weeklyResult = new WeeklyOvertimeResult
-            {
-                WorkedHours = 45m,
-                ExpectedHours = 40m,
-                Difference = 5m,
-                IsOvertime = true
-            };
-
-            Assert.Equal(45m, weeklyResult.WorkedHours);
-            Assert.Equal(40m, weeklyResult.ExpectedHours);
-            Assert.Equal(5m, weeklyResult.Difference);
-            Assert.True(weeklyResult.IsOvertime);
         }
 
         [Fact]

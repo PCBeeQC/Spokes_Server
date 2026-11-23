@@ -1,79 +1,93 @@
 @using Markdig
 @inject IJSRuntime JS
+@inject ISnackbar Snackbar
 @inject MarkdownSanitizerService MarkdownSanitizer
 
 <div class="markdown-editor-container" style="border: 1px solid var(--mud-palette-lines-default); border-radius: 4px;">
     <!-- Toolbar -->
     @if (!PreviewMode)
     {
-        <div class="d-flex gap-1 pa-2"
+        <div class="d-flex align-center gap-1 pa-2"
             style="background-color: var(--mud-palette-background-grey); border-bottom: 1px solid var(--mud-palette-lines-default);">
-            <MudTooltip Text="Bold">
-                <MudIconButton Icon="@Icons.Material.Filled.FormatBold" Size="Size.Small"
-                    OnClick="@(() => WrapSelection("**", "**"))" />
-            </MudTooltip>
-            <MudTooltip Text="Italic">
-                <MudIconButton Icon="@Icons.Material.Filled.FormatItalic" Size="Size.Small"
-                    OnClick="@(() => WrapSelection("*", "*"))" />
-            </MudTooltip>
-            <MudTooltip Text="Underline">
-                <MudIconButton Icon="@Icons.Material.Filled.FormatUnderlined" Size="Size.Small"
-                    OnClick="@(() => WrapSelection("<u>", "</u>"))" />
-            </MudTooltip>
-            <MudDivider Vertical="true" FlexItem="true" Class="mx-2" />
-            <MudTooltip Text="Heading 1">
-                <MudIconButton Icon="@Icons.Material.Filled.LooksOne" Size="Size.Small"
-                    OnClick="@(() => InsertTextAtStart("# "))" />
-            </MudTooltip>
-            <MudTooltip Text="Heading 2">
-                <MudIconButton Icon="@Icons.Material.Filled.LooksTwo" Size="Size.Small"
-                    OnClick="@(() => InsertTextAtStart("## "))" />
-            </MudTooltip>
-            <MudTooltip Text="Heading 3">
-                <MudIconButton Icon="@Icons.Material.Filled.Looks3" Size="Size.Small"
-                    OnClick="@(() => InsertTextAtStart("### "))" />
-            </MudTooltip>
-            <MudTooltip Text="Heading 4">
-                <MudIconButton Icon="@Icons.Material.Filled.Looks4" Size="Size.Small"
-                    OnClick="@(() => InsertTextAtStart("#### "))" />
-            </MudTooltip>
-            <MudDivider Vertical="true" FlexItem="true" Class="mx-2" />
-            <MudTooltip Text="Unordered List">
-                <MudIconButton Icon="@Icons.Material.Filled.FormatListBulleted" Size="Size.Small"
-                    OnClick="@(() => InsertTextAtStart("- "))" />
-            </MudTooltip>
-            <MudTooltip Text="Ordered List">
-                <MudIconButton Icon="@Icons.Material.Filled.FormatListNumbered" Size="Size.Small"
-                    OnClick="@(() => InsertTextAtStart("1. "))" />
-            </MudTooltip>
-            <MudTooltip Text="Link">
-                <MudIconButton Icon="@Icons.Material.Filled.Link" Size="Size.Small"
-                    OnClick="@(() => WrapSelection("[", "](url)"))" />
-            </MudTooltip>
-            <MudDivider Vertical="true" FlexItem="true" Class="mx-2" />
-            <MudTooltip Text="Add Empty Line">
-                <MudIconButton Icon="@Icons.Material.Filled.VerticalDistribute" Size="Size.Small"
-                    OnClick="@(() => InsertTextAtStart("&nbsp;"))" />
-            </MudTooltip>
-            <MudTooltip Text="Page Break">
-                <MudIconButton Icon="@Icons.Material.Filled.InsertPageBreak" Size="Size.Small"
-                    OnClick="@(() => InsertTextAtStart("\n<!-- pagebreak -->\n"))" />
-            </MudTooltip>
+            @if (!ReadOnly)
+            {
+                <MudTooltip Text="Bold">
+                    <MudIconButton Icon="@Icons.Material.Filled.FormatBold" Size="Size.Small"
+                        OnClick="@(() => WrapSelection("**", "**"))" />
+                </MudTooltip>
+                <MudTooltip Text="Italic">
+                    <MudIconButton Icon="@Icons.Material.Filled.FormatItalic" Size="Size.Small"
+                        OnClick="@(() => WrapSelection("*", "*"))" />
+                </MudTooltip>
+                <MudTooltip Text="Underline">
+                    <MudIconButton Icon="@Icons.Material.Filled.FormatUnderlined" Size="Size.Small"
+                        OnClick="@(() => WrapSelection("<u>", "</u>"))" />
+                </MudTooltip>
+                <MudDivider Vertical="true" FlexItem="true" Class="mx-2" />
+                <MudTooltip Text="Heading 1">
+                    <MudIconButton Icon="@Icons.Material.Filled.LooksOne" Size="Size.Small"
+                        OnClick="@(() => InsertTextAtStart("# "))" />
+                </MudTooltip>
+                <MudTooltip Text="Heading 2">
+                    <MudIconButton Icon="@Icons.Material.Filled.LooksTwo" Size="Size.Small"
+                        OnClick="@(() => InsertTextAtStart("## "))" />
+                </MudTooltip>
+                <MudTooltip Text="Heading 3">
+                    <MudIconButton Icon="@Icons.Material.Filled.Looks3" Size="Size.Small"
+                        OnClick="@(() => InsertTextAtStart("### "))" />
+                </MudTooltip>
+                <MudTooltip Text="Heading 4">
+                    <MudIconButton Icon="@Icons.Material.Filled.Looks4" Size="Size.Small"
+                        OnClick="@(() => InsertTextAtStart("#### "))" />
+                </MudTooltip>
+                <MudDivider Vertical="true" FlexItem="true" Class="mx-2" />
+                <MudTooltip Text="Unordered List">
+                    <MudIconButton Icon="@Icons.Material.Filled.FormatListBulleted" Size="Size.Small"
+                        OnClick="@(() => InsertTextAtStart("- "))" />
+                </MudTooltip>
+                <MudTooltip Text="Ordered List">
+                    <MudIconButton Icon="@Icons.Material.Filled.FormatListNumbered" Size="Size.Small"
+                        OnClick="@(() => InsertTextAtStart("1. "))" />
+                </MudTooltip>
+                <MudTooltip Text="Link">
+                    <MudIconButton Icon="@Icons.Material.Filled.Link" Size="Size.Small"
+                        OnClick="@(() => WrapSelection("[", "](url)"))" />
+                </MudTooltip>
+                <MudDivider Vertical="true" FlexItem="true" Class="mx-2" />
+                <MudTooltip Text="Add Empty Line">
+                    <MudIconButton Icon="@Icons.Material.Filled.VerticalDistribute" Size="Size.Small"
+                        OnClick="@(() => InsertTextAtStart("&nbsp;"))" />
+                </MudTooltip>
+                <MudTooltip Text="Page Break">
+                    <MudIconButton Icon="@Icons.Material.Filled.InsertPageBreak" Size="Size.Small"
+                        OnClick="@(() => InsertTextAtStart("\n<!-- pagebreak -->\n"))" />
+                </MudTooltip>
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-flex align-center ml-1">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-1" />
+                    @Loc["Read-Only Markdown"]
+                </MudText>
+            }
             <MudSpacer />
+            <MudButton Variant="Variant.Text" Color="Color.Default" Size="Size.Small"
+                StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="CopyMarkdownAsync">@Loc["Copy Markdown"]</MudButton>
             <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
-                StartIcon="@Icons.Material.Filled.Preview" OnClick="@(() => PreviewMode = true)">Preview</MudButton>
+                StartIcon="@Icons.Material.Filled.Preview" OnClick="@(() => PreviewMode = true)">@Loc["Preview"]</MudButton>
         </div>
 
         <!-- Editor -->
         <div style="background-color: var(--mud-palette-background);">
             <textarea id="@ElementId"
+                readonly="@ReadOnly"
                 style="width: 100%; height: 350px; padding: 12px; border: none; outline: none; resize: vertical; background: transparent; color: var(--mud-palette-text-primary); font-family: 'Roboto Mono', monospace; font-size: 0.9rem;"
             @bind:get="Value" @bind:set="OnValueChange" @bind:event="oninput" @onkeydown="OnKeyDown"
             @onkeydown:preventDefault="ShowTagPicker && _blockTextareaKeys"></textarea>
         </div>
 
-        <!-- Tag panel (always visible when tags available) -->
-        @if (AvailableTags != null && AvailableTags.Any())
+        <!-- Tag panel (always visible when tags available and not read-only) -->
+        @if (!ReadOnly && AvailableTags != null && AvailableTags.Any())
         {
             <div style="border-top: 1px solid var(--mud-palette-lines-default); background-color: var(--mud-palette-background-grey); border-radius: 0 0 4px 4px;">
                 @if (ShowTagPicker)
@@ -125,10 +139,13 @@
     else
     {
         <!-- Preview Toolbar -->
-        <div class="d-flex justify-end pa-2"
+        <div class="d-flex justify-end gap-1 pa-2"
             style="background-color: var(--mud-palette-background-grey); border-bottom: 1px solid var(--mud-palette-lines-default);">
+            <MudButton Variant="Variant.Text" Color="Color.Default" Size="Size.Small"
+                StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="CopyMarkdownAsync">@Loc["Copy Markdown"]</MudButton>
             <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
-                StartIcon="@Icons.Material.Filled.Edit" OnClick="@(() => PreviewMode = false)">Back to Edit</MudButton>
+                StartIcon="@(ReadOnly ? Icons.Material.Filled.Code : Icons.Material.Filled.Edit)"
+                OnClick="@(() => PreviewMode = false)">@(ReadOnly ? Loc["Back to Markdown"].Value : Loc["Back to Edit"].Value)</MudButton>
         </div>
 
         <!-- Preview Content -->
@@ -216,6 +233,7 @@
     [Parameter] public string Value { get; set; } = "";
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
     [Parameter] public List<ContextTagDefinition>? AvailableTags { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
 
     private string ElementId = "md-editor-" + Guid.NewGuid();
     private bool PreviewMode = false;
@@ -227,6 +245,19 @@
     private int _selectedTagIndex = 0;
     private bool _blockTextareaKeys = false;
 
+    private async Task CopyMarkdownAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", Value ?? string.Empty);
+            Snackbar.Add(Loc["Markdown copied to clipboard."].Value, Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add(Loc["Could not copy to clipboard."].Value, Severity.Warning);
+        }
+    }
+
     private IEnumerable<ContextTagDefinition> FilteredTags()
     {
         if (AvailableTags == null) return Enumerable.Empty<ContextTagDefinition>();
@@ -237,6 +268,8 @@
 
     private async Task OnValueChange(string v)
     {
+        if (ReadOnly) return;
+
         Value = v;
         await ValueChanged.InvokeAsync(Value);
 
@@ -248,6 +281,8 @@
 
     private async Task OnKeyDown(KeyboardEventArgs e)
     {
+        if (ReadOnly) return;
+
         _blockTextareaKeys = false;
         if (ShowTagPicker)
         {
@@ -326,6 +361,8 @@
 
     private async Task InsertTag(ContextTagDefinition tag)
     {
+        if (ReadOnly) return;
+
         // Read the live textarea value from the DOM to avoid stale Blazor state
         var liveValue = await JS.InvokeAsync<string>("getTextAreaValue", ElementId);
         var pos = await JS.InvokeAsync<int>("getCursorPosition", ElementId);
@@ -347,6 +384,8 @@
 
     private async Task InsertTextAtStart(string text)
     {
+        if (ReadOnly) return;
+
         // This is a simplification, ideally we check cursor line start
         var newVal = await JS.InvokeAsync<string>("insertTextAtCursor", ElementId, text);
         // Update local value to match
@@ -356,6 +395,8 @@
 
     private async Task WrapSelection(string start, string end)
     {
+        if (ReadOnly) return;
+
         var newVal = await JS.InvokeAsync<string>("wrapSelection", ElementId, start, end);
         // Update local value to match
         Value = newVal;

@@ -77,6 +77,12 @@ public class DatabaseRelationshipCoordinator : IHostedService
         _db.ProjectDocuments.OnSaved += d => TriggerProjectUpdate(d.ProjectId);
         _db.ProjectDocuments.OnDeleted += d => TriggerProjectUpdate(d.ProjectId);
 
+        if (_db.ProjectsContext?.ProjectReports != null)
+        {
+            _db.ProjectReports.OnSaved += r => TriggerProjectUpdate(r.ProjectId);
+            _db.ProjectReports.OnDeleted += r => TriggerProjectUpdate(r.ProjectId);
+        }
+
         // Maintain Dynamic Permission Group References
         _db.CompanyProfile.OnSaved += profile => 
         {

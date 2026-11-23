@@ -4,13 +4,6 @@
 @{
     var team = Team ?? (!string.IsNullOrEmpty(TeamId) ? TeamRepo.GetById(TeamId) : null);
     var displayName = team?.Name ?? TeamName ?? Loc["Unknown"].Value;
-    var avatarFontSize = Size switch
-    {
-        Size.Small => "0.625rem",
-        Size.Medium => "0.75rem",
-        Size.Large => "1rem",
-        _ => "0.625rem"
-    };
     var avatarSize = Size switch
     {
         Size.Large => Size.Medium,
@@ -18,51 +11,25 @@
     };
 }
 
-@if (OnClose.HasDelegate)
-{
-    <MudChip T="string"
-             Size="@Size"
-             Color="@Color"
-             Variant="@Variant"
-             OnClose="@HandleClose"
-             Disabled="@Disabled"
-             Class="@Class"
-             Style="@Style"
-             Value="@(team?.Id ?? TeamId ?? displayName)">
-        <AvatarContent>
-            <TeamAvatar Team="@team"
-                        TeamName="@TeamName"
-                        Size="@avatarSize"
-                        FontSize="@avatarFontSize"
-                        UseIcon="@UseIcon" />
-        </AvatarContent>
-        <ChildContent>
-            @displayName
-        </ChildContent>
-    </MudChip>
-}
-else
-{
-    <MudChip T="string"
-             Size="@Size"
-             Color="@Color"
-             Variant="@Variant"
-             Disabled="@Disabled"
-             Class="@Class"
-             Style="@Style"
-             Value="@(team?.Id ?? TeamId ?? displayName)">
-        <AvatarContent>
-            <TeamAvatar Team="@team"
-                        TeamName="@TeamName"
-                        Size="@avatarSize"
-                        FontSize="@avatarFontSize"
-                        UseIcon="@UseIcon" />
-        </AvatarContent>
-        <ChildContent>
-            @displayName
-        </ChildContent>
-    </MudChip>
-}
+<MudChip T="string"
+         Size="@Size"
+         Color="@Color"
+         Variant="@Variant"
+         OnClose="@(OnClose.HasDelegate ? EventCallback.Factory.Create<MudChip<string>>(this, HandleClose) : default)"
+         Disabled="@Disabled"
+         Class="@Class"
+         Style="@Style"
+         Value="@(team?.Id ?? TeamId ?? displayName)">
+    <AvatarContent>
+        <TeamAvatar Team="@team"
+                    TeamName="@TeamName"
+                    Size="@avatarSize"
+                    UseIcon="@UseIcon" />
+    </AvatarContent>
+    <ChildContent>
+        @displayName
+    </ChildContent>
+</MudChip>
 
 @code {
     [Parameter] public Team? Team { get; set; }

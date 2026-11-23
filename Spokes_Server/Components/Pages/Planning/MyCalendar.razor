@@ -4,17 +4,18 @@
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Security
 @implements IDisposable
 @inject Database Db
 @inject UserService UserService
 @inject CalendarService CalendarService
 @inject ChatStateService ChatState
+@inject IUserPrivacyService PrivacyService
+@inject AppLabelService AppLabels
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 
 <PageTitle>@Loc["My Calendar"]</PageTitle>
-
-@* <MudText Class="mt-4 ml-6" Typo="Typo.h4" GutterBottom="true">Calendar</MudText> *@
 
 <MudHidden Breakpoint="Breakpoint.MdAndUp" Invert="true">
     <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
@@ -30,12 +31,15 @@
                     </MudButton>
                 </div>
 
-                <div class="d-flex align-center gap-2">
-                    <MudButton StartIcon="@Icons.Material.Filled.Palette" Variant="Variant.Outlined" Color="Color.Default"
-                        OnClick="OpenCategoryManager">@Loc["Categories"]</MudButton>
-                    <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Outlined" Color="Color.Primary"
-                        OnClick="AddEvent">@Loc["Add Event"]</MudButton>
-                </div>
+                @if (CanManageCalendarActions)
+                {
+                    <div class="d-flex align-center gap-2">
+                        <MudButton StartIcon="@Icons.Material.Filled.Palette" Variant="Variant.Outlined" Color="Color.Default"
+                            OnClick="OpenCategoryManager">@Loc["Categories"]</MudButton>
+                        <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Outlined" Color="Color.Primary"
+                            OnClick="AddEvent">@Loc["Add Event"]</MudButton>
+                    </div>
+                }
             </div>
 
             <!-- Category Filters -->
@@ -126,13 +130,16 @@
                             </MudText>
                         </div>
                     </div>
-                    <MudButton StartIcon="@Icons.Material.Filled.Add"
-                               Variant="Variant.Outlined"
-                               Color="Color.Primary"
-                               Size="Size.Small"
-                               OnClick="AddEvent">
-                        @Loc["Add Event"]
-                    </MudButton>
+                    @if (CanManageCalendarActions)
+                    {
+                        <MudButton StartIcon="@Icons.Material.Filled.Add"
+                                   Variant="Variant.Outlined"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   OnClick="AddEvent">
+                            @Loc["Add Event"]
+                        </MudButton>
+                    }
                 </div>
 
                 <!-- Agenda Events -->
@@ -141,14 +148,17 @@
                     <div class="d-flex flex-column align-center justify-center py-6 text-center" style="background-color: var(--mud-palette-background-grey); border-radius: 8px;">
                         <MudIcon Icon="@Icons.Material.Outlined.EventAvailable" Size="Size.Large" Color="Color.Secondary" Style="opacity: 0.5;" />
                         <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">@Loc["No events scheduled for this day."]</MudText>
-                        <MudButton StartIcon="@Icons.Material.Filled.Add"
-                                   Variant="Variant.Text"
-                                   Color="Color.Primary"
-                                   Size="Size.Small"
-                                   OnClick="AddEvent"
-                                   Class="mt-1">
-                            @Loc["Schedule an event"]
-                        </MudButton>
+                        @if (CanManageCalendarActions)
+                        {
+                            <MudButton StartIcon="@Icons.Material.Filled.Add"
+                                       Variant="Variant.Text"
+                                       Color="Color.Primary"
+                                       Size="Size.Small"
+                                       OnClick="AddEvent"
+                                       Class="mt-1">
+                                @Loc["Schedule an event"]
+                            </MudButton>
+                        }
                     </div>
                 }
                 else
@@ -181,7 +191,7 @@
                                         @if (!string.IsNullOrEmpty(evt.OwnerName))
                                         {
                                             <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                @string.Format(Loc["by {0}"].Value, evt.OwnerName)
+                                                @string.Format(Loc["By {0}"].Value, evt.OwnerName)
                                             </MudText>
                                         }
                                     </div>
@@ -259,7 +269,7 @@
                                                 @if (!string.IsNullOrEmpty(evt.OwnerName))
                                                 {
                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                        @string.Format(Loc["by {0}"].Value, evt.OwnerName)
+                                                        @string.Format(Loc["By {0}"].Value, evt.OwnerName)
                                                     </MudText>
                                                 }
                                             </div>
@@ -300,7 +310,10 @@
             <!-- Mobile Header Row 1: Action Controls -->
             <div class="d-flex justify-space-between align-center px-2 pt-2">
                 <MudButton StartIcon="@Icons.Material.Filled.Today" OnClick="GoToToday">@Loc["Today"]</MudButton>
-                <MudButton EndIcon="@Icons.Material.Filled.Palette" OnClick="OpenCategoryManager">@Loc["Categories"]</MudButton>
+                @if (CanManageCalendarActions)
+                {
+                    <MudButton EndIcon="@Icons.Material.Filled.Palette" OnClick="OpenCategoryManager">@Loc["Categories"]</MudButton>
+                }
             </div>
 
             <!-- Mobile Header Row 2: Month Navigation -->
@@ -469,9 +482,12 @@
         </div>
 
         <!-- FAB Add Event -->
-        <div class="mobile-fab-wrapper d-flex justify-end align-center">
-            <MudFab Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddEvent" DropShadow="false" Class="m-fab" />
-        </div>
+        @if (CanManageCalendarActions)
+        {
+            <div class="mobile-fab-wrapper d-flex justify-end align-center">
+                <MudFab Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddEvent" DropShadow="false" Class="m-fab" />
+            </div>
+        }
     </div>
 </MudHidden>
 
@@ -753,18 +769,6 @@
         z-index: 100;
     }
 
-    .mobile-fab-hint {
-        background-color: var(--mud-palette-background-grey);
-        color: var(--mud-palette-text-secondary);
-        padding: 12px 24px;
-        border-radius: 24px;
-        flex-grow: 1;
-        margin-right: 16px;
-        font-size: 0.9rem;
-        cursor: pointer;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-    }
-
     .m-fab {
         border-radius: 50%;
         box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
@@ -795,7 +799,6 @@
     private bool Loading;
     private Employee? _currentUser;
     private string CurrentUserId = "";
-    private string CurrentUserTeamId = "";
 
     // Mobile View Variables
     private DateOnly SelectedDate = DateOnly.FromDateTime(DateTime.Today);
@@ -816,10 +819,14 @@
     {
         var emp = await UserService.GetEmployeeAsync();
         _currentUser = emp;
+        if (emp == null)
+        {
+            emp = await UserService.GetEmployeeAsync(allowSuspended: true);
+            _currentUser = emp;
+        }
         if (emp != null)
         {
             CurrentUserId = emp.Id;
-            CurrentUserTeamId = emp.TeamId;
             CurrentUserTeamIds.Clear();
             if (!string.IsNullOrEmpty(emp.TeamId))
                 CurrentUserTeamIds.Add(emp.TeamId);
@@ -904,8 +911,22 @@
         StateHasChanged();
     }
 
+    private bool CanManageCalendarActions
+    {
+        get
+        {
+            var live = !string.IsNullOrEmpty(CurrentUserId) ? Db.Employees.GetById(CurrentUserId) : _currentUser;
+            return live != null && (CalendarService.CanCreateOrParticipateInCalendar(live) || CalendarService.HasCalendarAdminOverride(live));
+        }
+    }
+
     private async Task OpenCategoryManager()
     {
+        if (!CanManageCalendarActions)
+        {
+            Snackbar.Add(Loc["You do not have permission to update calendar categories."].Value, Severity.Warning);
+            return;
+        }
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
         var dialog = await DialogService.ShowAsync<CalendarCategoryManagerDialog>("", options);
         var result = await dialog.Result;
@@ -953,9 +974,20 @@
         var startEx = CalendarDays.First().Date;
         var endEx = CalendarDays.Last().Date;
 
-        // Fetch all employees once for mapping
-        var employees = Db.Employees.GetAll().ToDictionary(e => e.Id, e => e.FullName);
-        var teamsDict = Db.Teams.GetAll().ToDictionary(t => t.Id, t => t.Name);
+        // Fetch only discoverable employees and teams for viewer-safe mapping
+        var liveViewer = Db.Employees.GetById(CurrentUserId) ?? _currentUser;
+        var discoverableEmployees = liveViewer != null
+            ? PrivacyService.FilterDiscoverableEmployees(liveViewer, Db.Employees.GetActiveEmployees())
+            : [];
+        var employees = discoverableEmployees.ToDictionary(e => e.Id, e => e.FullName);
+        if (liveViewer != null && !employees.ContainsKey(liveViewer.Id))
+        {
+            employees[liveViewer.Id] = liveViewer.FullName;
+        }
+        var teamsDict = (liveViewer != null
+            ? PrivacyService.FilterDiscoverableTeams(liveViewer, Db.Teams.GetAll())
+            : [])
+            .ToDictionary(t => t.Id, t => t.Name);
         var userCategoriesDict = Categories.ToDictionary(c => c.Id, c => c);
         var viewingContext = new CalendarViewingContext(
             CurrentUserId,
@@ -981,7 +1013,11 @@
                 var current = start < startEx ? startEx : start;
                 var last = end > endEx ? endEx : end;
 
-                var ownerName = evt.EmployeeId == CurrentUserId ? "" : employees.GetValueOrDefault(evt.EmployeeId, Loc["Unknown"].Value);
+                var ownerName = evt.EmployeeId == CurrentUserId
+                    ? ""
+                    : (employees.TryGetValue(evt.EmployeeId, out var visibleOwnerName)
+                        ? visibleOwnerName
+                        : (Db.Employees.GetById(evt.EmployeeId) != null ? AppLabels.Employee : Loc["Unknown"].Value));
                 var effCat = CalendarEffectiveCategory.Resolve(evt, viewingContext);
 
                 while (current <= last)
@@ -1109,6 +1145,16 @@
 
     private async Task OpenDialog(CalendarEvent evt, bool isNew)
     {
+        var liveUser = _currentUser != null ? Db.Employees.GetById(_currentUser.Id) : null;
+        if (liveUser == null
+            || (isNew
+                ? (!CalendarService.CanCreateOrParticipateInCalendar(liveUser) && !CalendarService.HasCalendarAdminOverride(liveUser))
+                : !CalendarService.CanUserViewEvent(evt, liveUser)))
+        {
+            Snackbar.Add(Loc["You do not have permission to access this calendar event."].Value, Severity.Warning);
+            return;
+        }
+
         var parameters = new DialogParameters { ["Event"] = evt, ["IsNew"] = isNew };
         var options = new DialogOptions
         {
@@ -1123,18 +1169,41 @@
 
         if (result != null && !result.Canceled)
         {
-            if (result.Data is CalendarEvent resultEvent) // Saved
+            var actionUser = Db.Employees.GetById(liveUser.Id);
+            var persistedEvent = isNew ? evt : (CalendarService.GetEventById(evt.Id) ?? evt);
+            if (actionUser == null)
             {
-                if (isNew || CalendarService.CanUserEditEvent(evt, _currentUser))
+                Snackbar.Add(Loc["You do not have permission to modify this calendar event."].Value, Severity.Warning);
+                return;
+            }
+
+            try
+            {
+                if (result.Data is CalendarEvent resultEvent) // Saved
                 {
-                    CalendarService.SaveEvent(resultEvent);
-                    Snackbar.Add(Loc["Event saved"].Value, Severity.Success);
+                    if (isNew || CalendarService.CanUserEditEvent(persistedEvent, actionUser))
+                    {
+                        CalendarService.SaveEvent(resultEvent, actionUser.Id);
+                        Snackbar.Add(Loc["Event saved"].Value, Severity.Success);
+                    }
+                    else
+                    {
+                        Snackbar.Add(Loc["You do not have permission to modify this calendar event."].Value, Severity.Warning);
+                    }
+                }
+                else if (!isNew && CalendarService.CanUserEditEvent(persistedEvent, actionUser)) // Deleted
+                {
+                    CalendarService.DeleteEvent(evt.Id, actionUser.Id);
+                    Snackbar.Add(Loc["Event deleted"].Value, Severity.Success);
+                }
+                else
+                {
+                    Snackbar.Add(Loc["You do not have permission to modify this calendar event."].Value, Severity.Warning);
                 }
             }
-            else if (!isNew && CalendarService.CanUserEditEvent(evt, _currentUser)) // Deleted
+            catch (UnauthorizedAccessException)
             {
-                CalendarService.DeleteEvent(evt.Id);
-                Snackbar.Add(Loc["Event deleted"].Value, Severity.Success);
+                Snackbar.Add(Loc["You do not have permission to modify this calendar event."].Value, Severity.Warning);
             }
             LoadData();
         }

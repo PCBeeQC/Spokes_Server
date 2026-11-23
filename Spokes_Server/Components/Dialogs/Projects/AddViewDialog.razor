@@ -19,9 +19,6 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
 
-    // We can pass BoardId to prepopulate visible columns if we want to get fancy later
-    [Parameter] public string? BoardId { get; set; }
-
     private string _viewName = "New View";
     private BoardViewType _viewType = BoardViewType.Kanban;
 

@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
@@ -31,14 +32,13 @@ public class FileAuthorizationServiceTests : TestDataTestBase
     private readonly AlbumService _albumService;
     private readonly FileAuthorizationService _service;
     private readonly RSA _rsa;
-    private readonly string _publicKeyXml;
     private readonly string _privateKeyXml;
 
     public FileAuthorizationServiceTests()
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            { "DataPath", _testDataPath }
+            { "DataPath", _testDataPath }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" }
         }).Build();
 
         var writer = new DiskPersistenceService(NullLogger<DiskPersistenceService>.Instance);
@@ -51,14 +51,13 @@ public class FileAuthorizationServiceTests : TestDataTestBase
         _mockCrypto = new Mock<ICryptoService>();
 
         _rsa = RSA.Create(2048);
-        _publicKeyXml = _rsa.ToXmlString(false);
         _privateKeyXml = _rsa.ToXmlString(true);
 
         _keystore.Unlock(_privateKeyXml);
 
         var testDb = TestDatabaseFactory.Create();
         var escrow = new ServerEscrowService(testDb.CompanyProfile, testDb.ServerConfigs, _mockCrypto.Object);
-        _albumService = new AlbumService(_albums, _channels, _mockCrypto.Object, escrow, _employees);
+        _albumService = new AlbumService(_albums, _channels, _mockCrypto.Object, escrow, _employees, new ChatAuthorizationService(_channels, new Spokes_Server.Core.Data.Repositories.Projects.ProjectRepository(writer, config), new Spokes_Server.Core.Data.Repositories.HR.TeamRepository(writer, config), _employees));
 
         _service = CreateService();
     }
@@ -69,7 +68,7 @@ public class FileAuthorizationServiceTests : TestDataTestBase
         var resolvers = new IFileKeyResolver[]
         {
             new ChatFileKeyResolver(_channels, ks, _mockCrypto.Object),
-            new AlbumFileKeyResolver(_albums, _albumService, ks, _mockCrypto.Object)
+            new AlbumFileKeyResolver(_albums, _albumService, ks)
         };
         return new FileAuthorizationService(providers, resolvers);
     }
@@ -77,8 +76,10 @@ public class FileAuthorizationServiceTests : TestDataTestBase
     [Fact]
     public void ResolveAlbumKey_WhenTokenKeyProvided_ReturnsTokenKeyImmediately()
     {
+        var user = new Employee { Id = "user1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
+        _employees.Save(user);
         _albums.Save(new Album { Id = "alb1", OwnerId = "user1", IsEncrypted = true, EncryptedAlbumKeys = new Dictionary<string, string> { { "user1", "encrypted_album_key" } } });
-        var result = _service.ResolveAlbumKey("alb1", new Employee { Id = "user1" }, "custom_token_key");
+        var result = _service.ResolveAlbumKey("alb1", user, "custom_token_key");
         Assert.True(result.IsSuccess);
         Assert.Equal("custom_token_key", result.EncryptionKey);
     }
@@ -108,9 +109,13 @@ public class FileAuthorizationServiceTests : TestDataTestBase
         _mockCrypto.Setup(c => c.DecryptRsa("encrypted_album_key", _privateKeyXml))
             .Returns("plain_aes_key");
 
-        var result = _service.ResolveAlbumKey("alb_enc", new Employee { Id = "user1" });
+        var user = new Employee { Id = "user1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
+        _employees.Save(user);
+        var result = _service.ResolveAlbumKey("alb_enc", user);
         Assert.True(result.IsSuccess);
+        Assert.True(result.IsEncrypted);
         Assert.Equal("plain_aes_key", result.EncryptionKey);
+        Assert.Null(result.ErrorMessage);
     }
 
     [Fact]
@@ -135,7 +140,8 @@ public class FileAuthorizationServiceTests : TestDataTestBase
     [Fact]
     public void ResolveChannelKey_WhenTokenKeyProvided_ReturnsTokenKey()
     {
-        var user = new Employee { Id = "user1" };
+        var user = new Employee { Id = "user1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
+        _employees.Save(user);
         _channels.Save(new ChatChannel { Id = "chan1", IsEncrypted = true, EncryptedChannelKeys = new Dictionary<string, string> { { "user1", "enc_chan_key" } } });
         var result = _service.ResolveChannelKey("chan1", user, "token_key");
 
@@ -148,7 +154,8 @@ public class FileAuthorizationServiceTests : TestDataTestBase
     {
         var channel = new ChatChannel { Id = "chan_unenc", IsEncrypted = false };
         _channels.Save(channel);
-        var user = new Employee { Id = "user1" };
+        var user = new Employee { Id = "user1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
+        _employees.Save(user);
 
         var result = _service.ResolveChannelKey("chan_unenc", user);
         Assert.False(result.IsEncrypted);
@@ -163,10 +170,13 @@ public class FileAuthorizationServiceTests : TestDataTestBase
 
         var channel = new ChatChannel { Id = "chan_enc", IsEncrypted = true };
         _channels.Save(channel);
-        var user = new Employee { Id = "user1" };
+        var user = new Employee { Id = "user1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
+        _employees.Save(user);
 
         var result = serviceWithLockedKeystore.ResolveChannelKey("chan_enc", user);
         Assert.False(result.IsSuccess);
+        Assert.True(result.IsEncrypted);
+        Assert.Null(result.EncryptionKey);
         Assert.Equal("You do not have the encryption key for this channel.", result.ErrorMessage);
     }
 
@@ -175,7 +185,8 @@ public class FileAuthorizationServiceTests : TestDataTestBase
     {
         var channel = new ChatChannel { Id = "chan_enc_nokey", IsEncrypted = true };
         _channels.Save(channel);
-        var user = new Employee { Id = "user1" };
+        var user = new Employee { Id = "user1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
+        _employees.Save(user);
 
         var result = _service.ResolveChannelKey("chan_enc_nokey", user);
         Assert.False(result.IsSuccess);
@@ -192,7 +203,8 @@ public class FileAuthorizationServiceTests : TestDataTestBase
             EncryptedChannelKeys = new Dictionary<string, string> { { "user1", "enc_chan_key" } }
         };
         _channels.Save(channel);
-        var user = new Employee { Id = "user1" };
+        var user = new Employee { Id = "user1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
+        _employees.Save(user);
 
         _mockCrypto.Setup(c => c.DecryptRsa("enc_chan_key", _privateKeyXml))
             .Returns("plain_chan_aes");
@@ -212,7 +224,8 @@ public class FileAuthorizationServiceTests : TestDataTestBase
             EncryptedChannelKeys = new Dictionary<string, string> { { "user1", "enc_key" } }
         };
         _channels.Save(channel);
-        var user = new Employee { Id = "user1" };
+        var user = new Employee { Id = "user1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
+        _employees.Save(user);
 
         _mockCrypto.Setup(c => c.DecryptRsa("enc_key", _privateKeyXml)).Returns("plain_key");
 
@@ -237,7 +250,8 @@ public class FileAuthorizationServiceTests : TestDataTestBase
             EncryptedAlbumKeys = new Dictionary<string, string> { { "user1", "enc_alb_key" } }
         };
         _albums.Save(album);
-        var user = new Employee { Id = "user1" };
+        var user = new Employee { Id = "user1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
+        _employees.Save(user);
 
         _mockCrypto.Setup(c => c.DecryptRsa("enc_alb_key", _privateKeyXml)).Returns("plain_alb_key");
 
@@ -250,47 +264,6 @@ public class FileAuthorizationServiceTests : TestDataTestBase
         var failure = _service.ResolveDownloadKey("albums", "alb_down", stranger);
         Assert.False(failure.IsSuccess);
         Assert.Contains("do not have the encryption key", failure.ErrorMessage);
-    }
-
-    [Fact]
-    public void ResolveAlbumKey_WhenEncryptedAndUserHasKey_ReturnsSuccessResult()
-    {
-        var album = new Album
-        {
-            Id = "alb_resolve_test", OwnerId = "emp_1",
-            IsEncrypted = true,
-            EncryptedAlbumKeys = new Dictionary<string, string> { { "emp_1", "enc_album_key" } }
-        };
-        _albums.Save(album);
-
-        _mockCrypto.Setup(c => c.DecryptRsa("enc_album_key", _privateKeyXml))
-            .Returns("decrypted_album_aes");
-
-        var user = new Employee { Id = "emp_1" };
-        var result = _service.ResolveAlbumKey("alb_resolve_test", user);
-
-        Assert.True(result.IsSuccess);
-        Assert.True(result.IsEncrypted);
-        Assert.Equal("decrypted_album_aes", result.EncryptionKey);
-        Assert.Null(result.ErrorMessage);
-    }
-
-    [Fact]
-    public void ResolveChannelKey_WhenVaultLocked_ReturnsFailureResult()
-    {
-        var lockedKeystore = new ScopedKeystoreService(new EphemeralDataProtectionProvider());
-        var lockedService = CreateService(lockedKeystore);
-
-        var channel = new ChatChannel { Id = "chan_locked_test", IsEncrypted = true };
-        _channels.Save(channel);
-        var user = new Employee { Id = "emp_2" };
-
-        var result = lockedService.ResolveChannelKey("chan_locked_test", user);
-
-        Assert.False(result.IsSuccess);
-        Assert.True(result.IsEncrypted);
-        Assert.Null(result.EncryptionKey);
-        Assert.Equal("You do not have the encryption key for this channel.", result.ErrorMessage);
     }
 
     [Fact]

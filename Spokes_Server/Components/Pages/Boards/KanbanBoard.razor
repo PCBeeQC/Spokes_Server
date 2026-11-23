@@ -56,7 +56,7 @@
                         Style="background-color: var(--mud-palette-background-grey); height: 100%;">
                         <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="px-2 pt-2">
                             <div class="d-flex align-center gap-2">
-                                <MudChip T="string" Size="Size.Small" Style="@($"background-color: {GetColor(col.Color)}; color: white;")">
+                                <MudChip T="string" Size="Size.Small" Style="@($"background-color: {BoardUiHelper.GetOptionCssColor(col.Color)}; color: white;")">
                                     @col.Name</MudChip>
                                 <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Default">@Cards.Count(c =>
                                                                 GetCardGroupValue(c) == col.Id)</MudChip>
@@ -232,22 +232,5 @@
             return val;
         }
         return "";
-    }
-
-    string GetColor(string colorName)
-    {
-        return colorName switch
-        {
-            "gray" => "var(--mud-palette-grey)",
-            "brown" => "#795548",
-            "orange" => "var(--mud-palette-warning)",
-            "yellow" => "#FBC02D",
-            "green" => "var(--mud-palette-success)",
-            "blue" => "var(--mud-palette-info)",
-            "purple" => "#9C27B0",
-            "pink" => "#E91E63",
-            "red" => "var(--mud-palette-error)",
-            _ => "var(--mud-palette-text-primary)"
-        };
     }
 }

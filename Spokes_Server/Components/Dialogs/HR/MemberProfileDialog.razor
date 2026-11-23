@@ -91,7 +91,7 @@
                      </MudItem>
                  }
 
-                 @if (!string.IsNullOrEmpty(Employee.PhoneNumber) && (IsFriendEdition || _currentUser?.IsAdmin == true || _currentUser?.Id == Employee.Id || _currentUser?.HasPermission(AppPermissions.Admin.ManageUsers) == true))
+                 @if (!string.IsNullOrEmpty(Employee.PhoneNumber) && (IsFriendEdition || _currentUser?.IsEffectiveAdmin == true || _currentUser?.Id == Employee.Id || _currentUser?.HasPermission(AppPermissions.Admin.ManageUsers) == true || _currentUser?.HasPermission(AppPermissions.Hr.ManageEmployees) == true))
                  {
                      <MudItem xs="12" sm="12">
                          <div class="d-flex align-center gap-3 mb-2">
@@ -101,7 +101,7 @@
                      </MudItem>
                  }
                  
-                 @if (!string.IsNullOrEmpty(Employee.Address) && (IsFriendEdition || _currentUser?.IsAdmin == true || _currentUser?.Id == Employee.Id || _currentUser?.HasPermission(AppPermissions.Admin.ManageUsers) == true))
+                 @if (!string.IsNullOrEmpty(Employee.Address) && (IsFriendEdition || _currentUser?.IsEffectiveAdmin == true || _currentUser?.Id == Employee.Id || _currentUser?.HasPermission(AppPermissions.Admin.ManageUsers) == true || _currentUser?.HasPermission(AppPermissions.Hr.ManageEmployees) == true))
                  {
                      <MudItem xs="12" sm="12">
                          <div class="d-flex align-start gap-3 mb-2">
@@ -121,7 +121,7 @@
                          @{
                              var isBlocked = _currentUser?.BlockedUserIds.Contains(Employee.Id) == true;
                          }
-                         <MudButton Color="@(isBlocked ? Color.Default : Color.Error)" Variant="Variant.Outlined" OnClick="ToggleBlock" Size="Size.Small" FullWidth="true" Style="text-transform: none; font-weight: 600;" StartIcon="@(isBlocked ? Icons.Material.Filled.Check : Icons.Material.Filled.Block)">
+                         <MudButton Color="@(isBlocked ? Color.Default : Color.Error)" Variant="Variant.Outlined" OnClick="ToggleBlock" Size="Size.Small" FullWidth="true" Style="text-transform: none; font-weight: 600;" StartIcon="@(isBlocked ? Icons.Material.Filled.Check : Icons.Material.Filled.Block)" Disabled="@(_currentUser?.IsActiveUnsuspended != true)">
                              @(isBlocked ? Loc["Unblock User"] : Loc["Block User"])
                          </MudButton>
                      </MudItem>
@@ -151,7 +151,7 @@
         <MudButton OnClick="Close" Color="Color.Default">@Loc["Close"]</MudButton>
         @if (ShowMessageAction)
         {
-            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Message" Class="px-4 mx-2" Style="text-transform: none; font-weight: 600;" DropShadow="false" Disabled="@(_currentUser?.IsSuspended == true)">@Loc["Message"]</MudButton>
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Message" Class="px-4 mx-2" Style="text-transform: none; font-weight: 600;" DropShadow="false" Disabled="@(_currentUser?.IsActiveUnsuspended != true)">@Loc["Message"]</MudButton>
         }
     </DialogActions>
 </MudDialog>
@@ -168,7 +168,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _currentUser = await UserService.GetEmployeeAsync();
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
         if (_currentUser != null && _currentUser.Id != Employee.Id)
         {
             ShowMessageAction = true;
@@ -198,25 +198,43 @@
 
     private void Close() => MudDialog.Cancel();
 
-    private void ToggleBlock()
+    private async Task<Employee?> EnsureActiveUnsuspendedActorAsync()
     {
-        if (_currentUser == null) return;
-        
-        if (_currentUser.BlockedUserIds.Contains(Employee.Id))
-            _currentUser.BlockedUserIds.Remove(Employee.Id);
+        var liveUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        if (liveUser == null)
+        {
+            _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+            Snackbar.Add(Loc["Your account is currently suspended or inactive."].Value, Severity.Error);
+            StateHasChanged();
+            return null;
+        }
+
+        _currentUser = liveUser;
+        return liveUser;
+    }
+
+    private async Task ToggleBlock()
+    {
+        var liveUser = await EnsureActiveUnsuspendedActorAsync();
+        if (liveUser == null) return;
+
+        if (liveUser.BlockedUserIds.Contains(Employee.Id))
+            liveUser.BlockedUserIds.Remove(Employee.Id);
         else
-            _currentUser.BlockedUserIds.Add(Employee.Id);
-            
-        Database.Employees.Save(_currentUser);
+            liveUser.BlockedUserIds.Add(Employee.Id);
+
+        Database.Employees.Save(liveUser);
         StateHasChanged();
     }
 
-    private void Message()
+    private async Task Message()
     {
-        if (_currentUser == null) return;
+        var liveUser = await EnsureActiveUnsuspendedActorAsync();
+        if (liveUser == null) return;
+
         try
         {
-            var channel = ChatService.CreateDirectMessageChannel(_currentUser.Id, Employee.Id);
+            var channel = ChatService.CreateDirectMessageChannel(liveUser.Id, Employee.Id);
             MudDialog.Close();
             Nav.NavigateTo($"/chat/{channel.Id}");
         }
@@ -226,10 +244,20 @@
         }
     }
 
-    private void ToggleSuspend()
+    private async Task ToggleSuspend()
     {
-        if (_currentUser == null) return;
-        var result = UserService.ToggleModerationSuspension(_currentUser.Id, Employee.Id);
+        var liveUser = await EnsureActiveUnsuspendedActorAsync();
+        if (liveUser == null) return;
+
+        var liveTarget = Database.Employees.GetById(Employee.Id) ?? Employee;
+        if (!UserService.CanModerateUserTarget(liveUser, liveTarget))
+        {
+            Snackbar.Add(Loc["Unauthorized."].Value, Severity.Error);
+            StateHasChanged();
+            return;
+        }
+
+        var result = UserService.ToggleModerationSuspension(liveUser.Id, Employee.Id);
         if (!result.IsSuccess)
         {
             Snackbar.Add(
@@ -245,10 +273,20 @@
         StateHasChanged();
     }
 
-    private void ToggleBan()
+    private async Task ToggleBan()
     {
-        if (_currentUser == null) return;
-        var result = UserService.ToggleModerationBan(_currentUser.Id, Employee.Id);
+        var liveUser = await EnsureActiveUnsuspendedActorAsync();
+        if (liveUser == null) return;
+
+        var liveTarget = Database.Employees.GetById(Employee.Id) ?? Employee;
+        if (!UserService.CanModerateUserTarget(liveUser, liveTarget))
+        {
+            Snackbar.Add(Loc["Unauthorized."].Value, Severity.Error);
+            StateHasChanged();
+            return;
+        }
+
+        var result = UserService.ToggleModerationBan(liveUser.Id, Employee.Id);
         if (!result.IsSuccess)
         {
             Snackbar.Add(

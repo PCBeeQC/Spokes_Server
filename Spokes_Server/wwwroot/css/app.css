@@ -1,6 +1,7 @@
 
 /* Disable 300ms tap delay and double-tap-to-zoom on all interactive elements */
-a, button, input, select, textarea, [contenteditable], [role="button"] {
+a, button, input, select, textarea, [contenteditable], [role="button"],
+.mud-button-root, .mud-icon-button, .mud-list-item-clickable, .mud-nav-link, .mud-chip, .mud-menu-item {
     touch-action: manipulation;
 }
 
@@ -45,6 +46,39 @@ html, body {
     -ms-overflow-style: none !important;
 }
 
+/* Re-enable visible scrollbar exclusively on document viewer pages while keeping the rest of the app scrollbar-free */
+.print-scroll:has(#printable-area),
+.print-scroll.viewer-scroll-active {
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(100, 116, 139, 0.5) rgba(0, 0, 0, 0.04) !important;
+    -ms-overflow-style: auto !important;
+}
+
+.print-scroll:has(#printable-area)::-webkit-scrollbar,
+.print-scroll.viewer-scroll-active::-webkit-scrollbar {
+    display: block !important;
+    width: 10px !important;
+    height: 10px !important;
+}
+
+.print-scroll:has(#printable-area)::-webkit-scrollbar-track,
+.print-scroll.viewer-scroll-active::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.04) !important;
+}
+
+.print-scroll:has(#printable-area)::-webkit-scrollbar-thumb,
+.print-scroll.viewer-scroll-active::-webkit-scrollbar-thumb {
+    background-color: rgba(100, 116, 139, 0.45) !important;
+    border-radius: 5px !important;
+    border: 2px solid transparent !important;
+    background-clip: content-box !important;
+}
+
+.print-scroll:has(#printable-area)::-webkit-scrollbar-thumb:hover,
+.print-scroll.viewer-scroll-active::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(100, 116, 139, 0.75) !important;
+}
+
 /* Hide Android WebView default play button on WebRTC video streams */
 video.livekit-camera::-webkit-media-controls-overlay-play-button,
 video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
@@ -85,15 +119,6 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
     color: #000000 !important;
     color-scheme: light !important;
 }
-
-/* Page number inside each page's footer */
-.footer-page-number {
-    margin-left: auto;
-    font-size: 10px;
-    color: #888;
-}
-
-
 
 /* --- PRINT / PDF STYLES --- */
 @media print {
@@ -259,12 +284,6 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
         display: block;
     }
 
-    .no-break {
-        break-inside: avoid !important;
-        page-break-inside: avoid !important;
-        display: block;
-    }
-
     /* 9. TABLE BORDER FIXES */
     /* Force table borders and backgrounds to show despite browser "ink saving" settings */
     .mud-table-cell, .mud-table-row, tr, .mud-paper {
@@ -301,10 +320,6 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
         width: 50% !important;
     }
 
-    .print-col-7 {
-        width: 60% !important;
-    }
-
     .print-col-5 {
         width: 40% !important;
     }
@@ -334,6 +349,11 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
     .mud-dialog.mud-dialog-width-full {
         width: 100% !important;
     }
+}
+
+/* Prevent MudBlazor's default overflow-wrap: anywhere on .mud-dialog-title from collapsing flex title text into narrow character columns */
+.mud-dialog .mud-dialog-title {
+    overflow-wrap: break-word;
 }
 /* --- SPOKES RICH TEXT EDITOR (Shared Primitive) --- */
 .spokes-rich-text-editor {
@@ -535,8 +555,10 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
     transition: background-color 0.15s ease;
 }
 
-.email-composer-summary-row:hover {
-    background-color: var(--mud-palette-action-default-hover);
+@media (hover: hover) and (pointer: fine) {
+    .email-composer-summary-row:hover {
+        background-color: var(--mud-palette-action-default-hover);
+    }
 }
 
 .email-summary-recipient {
@@ -652,53 +674,199 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
     z-index: 1000 !important;
 }
 
-/* Employee presence indicator badge on avatars */
+/* Employee & Team avatars — single-source container-proportional typography & presence rim badges */
+.employee-avatar,
+.team-avatar {
+    position: relative;
+    vertical-align: middle;
+    overflow: hidden;
+    font-weight: 500;
+}
+
+.employee-avatar.has-presence {
+    overflow: visible !important;
+}
+
+.spokes-avatar-inner,
+.employee-avatar-inner {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    container-type: size;
+}
+
+.spokes-avatar-initials {
+    font-size: inherit;
+    font-size: max(7px, 42cqmin);
+    line-height: 1;
+    font-weight: inherit;
+    user-select: none;
+}
+
+.spokes-avatar-initials.is-single-char {
+    font-size: max(8px, 48cqmin);
+}
+
+.spokes-avatar-icon {
+    font-size: 56cqmin !important;
+    line-height: 1;
+}
+
+.employee-avatar-img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+}
+
 .presence-dot {
     position: absolute;
-    top: 0;
-    right: 0;
-    /* Proportional scale: forces the badge to always equal ~30% of the avatar's actual dimensions */
-    width: 30%;
-    height: 30%;
-    min-width: 8px;
-    min-height: 8px;
+    /* Anchor badge center mathematically onto the 45° circular rim ((1 - 1/√2)/2 ≈ 14.64%) */
+    top: 14.64%;
+    right: 14.64%;
+    width: clamp(7px, 26%, 24px);
+    height: clamp(7px, 26%, 24px);
     border-radius: 50%;
-    /* Translate precisely slightly outwards so the dot rests on the circular rim (angle offset) */
-    transform: translate(25%, -25%);
-    border: 1px solid var(--mud-palette-surface);
+    transform: translate(50%, -50%);
+    box-shadow:
+        0 0 0 var(--presence-ring-width, 1.5px) var(--presence-ring-color, var(--mud-palette-surface)),
+        0 1px 3px rgba(0, 0, 0, 0.25);
     z-index: 10;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    pointer-events: none;
+}
+
+.presence-dot-online {
+    background-color: var(--mud-palette-success);
+}
+
+.presence-dot-away {
+    background-color: var(--mud-palette-warning);
 }
 
 .presence-mobile-badge {
     position: absolute;
-    top: 0;
-    right: 0;
-    width: 42%;
-    height: 42%;
-    min-width: 14px;
-    min-height: 14px;
-    border-radius: 4px;
-    transform: translate(30%, -25%);
-    background-color: var(--mud-palette-surface);
-    border: 1px solid var(--mud-palette-surface);
+    top: 14.64%;
+    right: 14.64%;
+    width: clamp(10px, 34%, 26px);
+    height: clamp(10px, 34%, 26px);
+    border-radius: 24%;
+    transform: translate(50%, -50%);
+    background-color: var(--presence-ring-color, var(--mud-palette-surface));
+    box-shadow:
+        0 0 0 var(--presence-ring-width, 1px) var(--presence-ring-color, var(--mud-palette-surface)),
+        0 1px 3px rgba(0, 0, 0, 0.28);
     z-index: 10;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    line-height: 1;
+    box-sizing: border-box;
 }
 
 .presence-mobile-badge .presence-mobile-icon {
     color: var(--mud-palette-success) !important;
-    width: 100% !important;
-    height: 100% !important;
+    width: 82% !important;
+    height: 82% !important;
+    min-width: 0;
+    min-height: 0;
     font-size: inherit !important;
+    display: block;
 }
 
 /* ═══ Shared components rendered many times per page ═══════════════════════
    Kept here instead of an inline style block in the component, which would be
    duplicated per instance (see AGENTS.md §3). */
+
+/* ─── EmployeeAvatarGroup ───────────────────────────────────────── */
+.spokes-avatar-group {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    max-width: 100%;
+    min-width: 0;
+}
+
+.spokes-avatar-group-stacked > .mud-avatar {
+    box-shadow: 0 0 0 2px var(--spokes-avatar-group-ring, var(--mud-palette-background));
+}
+
+.spokes-avatar-group-stacked > .mud-avatar:not(:first-child) {
+    margin-inline-start: -8px;
+}
+
+.spokes-avatar-group-inline {
+    gap: 4px;
+}
+
+.spokes-avatar-group-responsive > .mud-avatar.mud-avatar-small {
+    width: 32px;
+    height: 32px;
+}
+
+@media (max-width: 599px) {
+    .spokes-avatar-group-responsive > .mud-avatar.mud-avatar-small {
+        width: 24px;
+        height: 24px;
+    }
+
+    .spokes-avatar-group-responsive.spokes-avatar-group-stacked > .mud-avatar:not(:first-child) {
+        margin-inline-start: -6px;
+    }
+}
+
+.spokes-avatar-group-overflow {
+    border: none;
+    padding: 0;
+    flex-shrink: 0;
+    font-weight: 600;
+}
+
+.spokes-avatar-group-overflow.is-interactive {
+    cursor: pointer;
+    transition: filter 0.15s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .spokes-avatar-group-overflow.is-interactive:hover {
+        filter: brightness(1.1);
+    }
+}
+
+.spokes-avatar-group-overflow-dots {
+    width: 66%;
+    height: 66%;
+    display: block;
+}
+
+.spokes-avatar-group-overflow-count {
+    font-size: max(7px, 34cqmin);
+}
+
+.spokes-avatar-group-overflow-text {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--mud-palette-text-secondary);
+    margin-inline-start: 2px;
+    white-space: nowrap;
+}
+
+.spokes-avatar-group-overflow-text.is-interactive {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+.mud-avatar.labor-contributor-avatar {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    min-height: 22px;
+}
 
 /* ─── NotificationBadge ─────────────────────────────────────────── */
 .notification-badge {
@@ -758,20 +926,24 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
 .directory-card {
     transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
     border: 1px solid var(--mud-palette-lines-default);
-    min-height: 180px;
 }
-.directory-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
-    border-color: var(--mud-palette-primary-hover);
+.entry-card {
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+    .directory-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
+        border-color: var(--mud-palette-primary-hover);
+    }
+    .entry-card:hover {
+        border-color: var(--mud-palette-primary);
+        background-color: var(--mud-palette-surface) !important;
+    }
 }
 
 
 /* --- Email Theme Dividers & Utility Animations --- */
-.mud-theme-border-color {
-    border-color: var(--mud-palette-divider) !important;
-}
-
 @keyframes spin-infinite {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
@@ -830,6 +1002,45 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
     height: 100%;
 }
 
+@media (min-width: 960px) {
+    .email-sidebar-container {
+        width: 260px;
+        flex-shrink: 0;
+    }
+
+    .email-list-container {
+        width: 360px;
+        flex-shrink: 0;
+    }
+}
+
+/* Email Sidebar Navigation */
+.folder-actions {
+    visibility: hidden;
+}
+.mud-treeview-item-content:hover .folder-actions,
+.inbox-nav-item:hover .folder-actions {
+    visibility: visible;
+}
+.email-folder-selected > .mud-treeview-item-content,
+.email-nav-selected {
+    background-color: var(--mud-palette-primary-hover) !important;
+    border-radius: 6px;
+}
+.inbox-nav-item {
+    border-radius: 6px;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    overflow: hidden;
+    transition: background-color 0.15s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+    .inbox-nav-item:hover {
+        background-color: var(--mud-palette-action-default-hover);
+    }
+}
+
 /* Mobile Overrides (Stretch email to display in full, page scroll handles reading) */
 @media (max-width: 959.98px) {
     .email-main-layout.email-mobile-reading {
@@ -874,3 +1085,332 @@ video.livekit-screenshare::-webkit-media-controls-overlay-play-button {
     }
 }
 
+/* Selected table row highlight for MudTable */
+tr.mud-selected-item,
+.mud-table-row.mud-selected-item,
+.mud-table-row.mud-selected-item > td {
+    background-color: var(--mud-palette-primary-hover) !important;
+}
+
+
+
+/* Ensure MudDatePicker inline popouts never shrink to compact toolbar input widths */
+.mud-picker-popover {
+    min-width: min(300px, 92vw);
+}
+
+/* Managed cached images (<img data-media-src>) intentionally omit src until mediaLoader.js
+   resolves them from RAM/IndexedDB/network. Keep them invisible until loaded (or failed) so
+   browsers never flash a broken-image icon or alt text before src is assigned. */
+img[data-media-src]:not([data-loaded="true"]):not([data-error="true"]) {
+    opacity: 0;
+}
+
+/* Shared progressive media tile reveal (AlbumMentionCard, Albums grid & covers, mediaLoader.js) */
+.media-tile {
+    position: relative;
+    overflow: hidden;
+    background-color: var(--mud-palette-background-grey);
+}
+.media-tile .media-tile-skeleton {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        90deg,
+        rgba(128, 128, 128, 0.08) 25%,
+        rgba(128, 128, 128, 0.16) 50%,
+        rgba(128, 128, 128, 0.08) 75%
+    );
+    background-size: 200% 100%;
+    animation: spokes-media-shimmer 1.4s ease-in-out infinite;
+    pointer-events: none;
+}
+.media-tile .needs-fade {
+    opacity: 0;
+    transition: opacity 0.25s ease-in-out;
+}
+.media-tile.is-instant .needs-fade {
+    opacity: 1;
+    transition: none !important;
+}
+.media-tile.is-loaded .needs-fade,
+.media-tile .needs-fade[data-loaded="true"] {
+    opacity: 1;
+}
+.media-tile.is-loaded .media-tile-skeleton,
+.media-tile.is-instant .media-tile-skeleton,
+.media-tile:has(.needs-fade[data-loaded="true"]) .media-tile-skeleton {
+    display: none !important;
+}
+@keyframes spokes-media-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Client-side speaking indicators inside VoiceSettingsDialog (driven by spokesVoiceSpeaking) */
+.voice-settings-speaking-icon {
+    display: none;
+    align-items: center;
+}
+.voice-settings-participant[data-voice-speaking="true"] .voice-settings-speaking-icon {
+    display: inline-flex;
+}
+.voice-settings-participant[data-voice-speaking="true"] .voice-settings-avatar-ring .employee-avatar {
+    box-shadow: 0 0 0 2px var(--mud-palette-success);
+}
+
+/* MainLayout shell, safe-area insets, mobile chat-open layout, and print resets */
+.license-banner.mud-alert {
+    align-items: center;
+}
+
+.license-banner .mud-alert-message {
+    width: 100%;
+    padding: 4px 0;
+}
+
+:root {
+    --safe-area-top: env(safe-area-inset-top, 0px);
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html.keyboard-open-ios {
+    --safe-area-bottom: 0px !important;
+}
+
+.mud-layout > .mud-appbar {
+    padding-top: var(--safe-area-top) !important;
+    height: calc(48px + var(--safe-area-top)) !important;
+}
+
+.mud-layout > .mud-main-content:not(.chat-channel-open) {
+    padding-top: calc(48px + var(--safe-area-top)) !important;
+    padding-bottom: var(--safe-area-bottom) !important;
+}
+
+#nav-drawer {
+    top: calc(48px + var(--safe-area-top)) !important;
+    height: calc(100vh - 48px - var(--safe-area-top) - var(--safe-area-bottom)) !important;
+}
+
+.timer-pulse {
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.3;
+    }
+
+    100% {
+        opacity: 1;
+    }
+}
+
+/* Default: chat page still needs top padding for the app bar */
+.mud-layout > .mud-main-content.chat-channel-open {
+    padding-top: calc(48px + var(--safe-area-top)) !important;
+    padding-bottom: var(--safe-area-bottom) !important;
+}
+
+/* On mobile (sm and down), hide the app bar when a chat channel is open */
+@media (max-width: 959.98px) {
+    .mobile-preload-hide {
+        display: none !important;
+    }
+
+    .hide-appbar-mobile {
+        display: none !important;
+    }
+
+    .mud-layout > .mud-main-content.chat-channel-open {
+        padding-top: var(--safe-area-top) !important;
+        padding-bottom: var(--safe-area-bottom) !important;
+        height: var(--viewport-height, 100dvh) !important;
+        position: absolute !important;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+    }
+}
+
+/* On desktop (md and up), keep normal top padding */
+@media (min-width: 960px) {
+    .mud-layout > .mud-main-content.chat-channel-open {
+        padding-top: calc(48px + var(--safe-area-top)) !important;
+    }
+}
+
+/* Print styling to reset restricted viewports so browsers capture full pages */
+@media print {
+    .print-layout {
+        height: auto !important;
+        overflow: visible !important;
+        display: block !important;
+        position: static !important;
+    }
+
+    .print-scroll {
+        overflow: visible !important;
+        display: block !important;
+        position: static !important;
+    }
+}
+
+/* GlobalVoiceBar & pull-down controls drawer */
+.global-voice-bar-root {
+    position: relative;
+    width: 100%;
+    z-index: 100;
+}
+
+.voice-call-panel {
+    background: var(--mud-palette-primary-darken);
+    color: white;
+    width: 100%;
+    min-height: 48px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    position: relative;
+    z-index: 101;
+}
+
+.voice-bar-title-trigger {
+    cursor: pointer;
+}
+
+.voice-bar-title-text {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.voice-bar-connecting-stage {
+    color: rgba(255, 255, 255, 0.78);
+}
+
+.voice-bar-connecting-spinner {
+    width: 16px !important;
+    height: 16px !important;
+}
+
+.voice-bar-disconnect-btn {
+    height: 28px;
+}
+
+.voice-bar-video-spinner-wrap {
+    width: 34px;
+    height: 34px;
+}
+
+.voice-bar-video-spinner {
+    width: 18px !important;
+    height: 18px !important;
+}
+
+.voice-bar-pull-tab {
+    position: absolute;
+    bottom: -20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    cursor: grab;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 64px;
+    height: 20px;
+    background: var(--mud-palette-primary-darken);
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.voice-bar-pull-tab::after {
+    content: "";
+    position: absolute;
+    inset: -10px -14px;
+}
+
+.voice-bar-pull-tab:active {
+    cursor: grabbing !important;
+}
+
+.voice-bar-pull-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transform: rotate(0deg);
+}
+
+.voice-bar-pull-tab[aria-expanded="true"] .voice-bar-pull-icon {
+    transform: rotate(180deg);
+}
+
+.voice-bar-pull-icon-svg {
+    color: white;
+    margin-top: -2px;
+}
+
+.voice-bar-drawer-wrapper {
+    overflow: hidden;
+    height: 0px;
+    will-change: height;
+}
+
+.voice-bar-drawer-wrapper.is-expanded {
+    height: auto;
+}
+
+.voice-drawer-content {
+    min-height: 60px;
+    background: linear-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.1)), var(--mud-palette-primary-darken);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+    box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.1);
+    --mud-palette-text-primary: #ffffff;
+    --mud-palette-action-default: rgba(255, 255, 255, 0.3);
+}
+
+.voice-drawer-content .mud-disabled {
+    opacity: 0.25 !important;
+    background-color: rgba(0, 0, 0, 0.15) !important;
+    border-color: transparent !important;
+}
+
+.voice-drawer-row {
+    width: 100%;
+}
+
+.voice-drawer-label {
+    color: rgba(255, 255, 255, 0.7);
+    font-weight: 600 !important;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.voice-drawer-select {
+    color: white;
+    font-size: 0.75rem;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    min-width: 150px;
+    max-width: 250px;
+}
+
+.voice-audio-container {
+    position: absolute;
+    left: -9999px;
+    top: -9999px;
+    width: 0;
+    height: 0;
+    opacity: 0;
+    pointer-events: none;
+    overflow: hidden;
+}

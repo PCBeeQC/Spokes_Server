@@ -14,7 +14,7 @@
                 <MudText Typo="Typo.caption" Color="Color.Default" Class="text-truncate">@FolderSubtitle</MudText>
             }
         </div>
-        @if (OnRefresh.HasDelegate)
+        @if (!IsReadOnly && OnRefresh.HasDelegate)
         {
             <MudTooltip Text="@Loc["Refresh"]">
                 <MudIconButton Icon="@Icons.Material.Filled.Refresh"
@@ -31,13 +31,17 @@
                              AccountName="@FolderName"
                              Folders="CurrentAccountFolders"
                              SelectedFolder="SelectedFolder"
+                             CanManageFolders="@(!IsReadOnly)"
                              AnchorOrigin="Origin.BottomRight"
                              TransformOrigin="Origin.TopRight"
                              OnSelectFolder="OnSelectFolder"
                              OnFoldersChanged="OnFoldersChanged" />
         }
-        <MudButton Variant="Variant.Filled" Size="Size.Small" EndIcon="@Icons.Material.Filled.Edit" Color="Color.Primary"
-            OnClick="@(async () => await OnCompose.InvokeAsync())">@Loc["Compose"]</MudButton>
+        @if (!IsReadOnly && OnCompose.HasDelegate)
+        {
+            <MudButton Variant="Variant.Filled" Size="Size.Small" EndIcon="@Icons.Material.Filled.Edit" Color="Color.Primary"
+                OnClick="@(async () => await OnCompose.InvokeAsync())">@Loc["Compose"]</MudButton>
+        }
     </div>
 
     <!-- Desktop Folder Title Header (ChatHeader-style) -->
@@ -53,7 +57,7 @@
                 }
             </div>
             <div class="d-flex align-center gap-1">
-                @if (OnRefresh.HasDelegate)
+                @if (!IsReadOnly && OnRefresh.HasDelegate)
                 {
                     <MudTooltip Text="@Loc["Refresh"]">
                         <MudIconButton Icon="@Icons.Material.Filled.Refresh"
@@ -71,6 +75,7 @@
                                      Folders="CurrentAccountFolders"
                                      SelectedFolder="SelectedFolder"
                                      ShowLabelButton="true"
+                                     CanManageFolders="@(!IsReadOnly)"
                                      AnchorOrigin="Origin.BottomRight"
                                      TransformOrigin="Origin.TopRight"
                                      OnSelectFolder="OnSelectFolder"
@@ -134,14 +139,17 @@
                             <MudAvatar Size="Size.Small" Color="Color.Primary" Style="font-size:0.75rem; width:28px; height:28px;">
                                 @(string.IsNullOrWhiteSpace(msg.FromName) ? (msg.FromAddress.Length > 0 ? msg.FromAddress[0].ToString().ToUpper() : "?") : msg.FromName[0].ToString().ToUpper())
                             </MudAvatar>
-                            <MudIconButton Icon="@(msg.IsFlagged ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)"
-                                Color="@(msg.IsFlagged ? Color.Warning : Color.Default)"
-                                Size="Size.Small" OnClick="@(() => OnToggleFlag.InvokeAsync(msg))" Style="padding:2px;" />
-                            @if (msg.IsRead)
+                            @if (!IsReadOnly)
                             {
-                                <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread"
-                                    Size="Size.Small" Color="Color.Default"
-                                    OnClick="@(() => OnMarkAsUnread.InvokeAsync(msg))" Style="padding:2px;" />
+                                <MudIconButton Icon="@(msg.IsFlagged ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)"
+                                    Color="@(msg.IsFlagged ? Color.Warning : Color.Default)"
+                                    Size="Size.Small" OnClick="@(() => OnToggleFlag.InvokeAsync(msg))" Style="padding:2px;" />
+                                @if (msg.IsRead)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread"
+                                        Size="Size.Small" Color="Color.Default"
+                                        OnClick="@(() => OnMarkAsUnread.InvokeAsync(msg))" Style="padding:2px;" />
+                                }
                             }
                         </div>
                         @* Right column: message content *@
@@ -212,7 +220,6 @@
     [Parameter] public int SearchProcessedCount { get; set; }
     [Parameter] public int SearchTotalCount { get; set; }
     [Parameter] public string? TimeZoneId { get; set; }
-    [Parameter] public bool ShowReceivingAddressBadge { get; set; }
     [Parameter] public EventCallback<EmailMessage> OnSelectMessage { get; set; }
     [Parameter] public EventCallback<string> OnSearch { get; set; }
     [Parameter] public EventCallback<bool> OnSearchAllFoldersChanged { get; set; }
@@ -224,6 +231,7 @@
     [Parameter] public string? FolderSubtitle { get; set; }
     [Parameter] public EventCallback<EmailMessage> OnToggleFlag { get; set; }
     [Parameter] public EventCallback<EmailMessage> OnMarkAsUnread { get; set; }
+    [Parameter] public bool IsReadOnly { get; set; }
 
     private IEnumerable<string> _selectedFilters = new HashSet<string>();
 
@@ -254,22 +262,7 @@
 
     private string FormatDate(DateTimeOffset date)
     {
-        DateTime localDate;
-        if (!string.IsNullOrWhiteSpace(TimeZoneId))
-        {
-            try
-            {
-                localDate = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(date, TimeZoneId).DateTime;
-            }
-            catch
-            {
-                localDate = date.LocalDateTime;
-            }
-        }
-        else
-        {
-            localDate = date.LocalDateTime;
-        }
+        var localDate = TimeZoneHelper.ConvertOffsetToLocalTime(TimeZoneId, date);
 
         if (localDate.Date == DateTime.Today) return localDate.ToString("t");
         if (localDate.Year == DateTime.Now.Year) return localDate.ToString("M");

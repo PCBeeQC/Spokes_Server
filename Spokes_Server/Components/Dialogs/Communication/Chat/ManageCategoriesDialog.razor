@@ -1,5 +1,8 @@
-@inject Database Db
+@using Spokes_Server.Core.Services.Security
+@inject IChatService ChatService
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject ScopedKeystoreService ScopedKeystore
 
 <MudDialog>
     <DialogContent>
@@ -14,12 +17,14 @@
                 var cat = Categories[i];
                 var isFirst = i == 0;
                 var isLast = i == Categories.Count - 1;
+                var canMoveUp = !isFirst && cat.Id != "sys_archive";
+                var canMoveDown = !isLast && cat.Id != "sys_archive" && Categories[i + 1].Id != "sys_archive";
                 <MudListItem T="string">
                     <div class="d-flex align-center justify-space-between w-100">
                         <MudText>@cat.Name</MudText>
                         <div class="d-flex gap-1">
-                            <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveUp(cat))" Disabled="@isFirst" />
-                            <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveDown(cat))" Disabled="@isLast" />
+                            <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" OnClick="@(() => MoveUp(cat))" Disabled="@(!canMoveUp)" />
+                            <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" OnClick="@(() => MoveDown(cat))" Disabled="@(!canMoveDown)" />
                             @if (!cat.IsSystem)
                             {
                                 <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteCategory(cat))" />
@@ -41,7 +46,8 @@
 
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
-    
+    [Parameter] public string? CurrentUserId { get; set; }
+
     private List<ChatCategory> Categories = [];
     private string _newCategoryName = "";
 
@@ -49,86 +55,87 @@
 
     private void LoadCategories()
     {
-        Categories = Db.ChatCategories.GetAll().OrderBy(c => c.DisplayOrder).ToList();
+        Categories = ChatService.GetCategories();
     }
 
     private void AddCategory()
     {
         if (string.IsNullOrWhiteSpace(_newCategoryName)) return;
-        
-        var publicCat = Categories.FirstOrDefault(c => c.Id == "sys_public");
-        var startOrder = publicCat?.DisplayOrder ?? -600;
-        
-        var projectsCat = Categories.FirstOrDefault(c => c.Id == "sys_projects");
-        var endOrder = projectsCat?.DisplayOrder ?? -500;
 
-        var customCatsInSpace = Categories.Where(c => !c.IsSystem && c.DisplayOrder > startOrder && c.DisplayOrder < endOrder).ToList();
-        var newOrder = customCatsInSpace.Any() ? customCatsInSpace.Max(c => c.DisplayOrder) + 1 : startOrder + 1;
-
-        if (newOrder >= endOrder)
+        var result = ChatService.CreateCategory(_newCategoryName, CurrentUserId ?? string.Empty);
+        if (!result.IsSuccess)
         {
-            foreach (var c in Categories.Where(c => c.DisplayOrder >= newOrder))
-            {
-                c.DisplayOrder++;
-                Db.ChatCategories.Save(c);
-            }
+            Snackbar.Add(result.ErrorMessage ?? Loc["Failed to create category."].Value, Severity.Error);
+            return;
         }
 
-        var newCat = new ChatCategory
-        {
-            Name = _newCategoryName.Trim(),
-            DisplayOrder = newOrder
-        };
-        
-        Db.ChatCategories.Save(newCat);
         _newCategoryName = "";
         LoadCategories();
     }
 
     private void MoveUp(ChatCategory cat)
     {
+        if (cat.Id == "sys_archive") return;
         var index = Categories.IndexOf(cat);
         if (index > 0)
         {
-            var prev = Categories[index - 1];
-            (cat.DisplayOrder, prev.DisplayOrder) = (prev.DisplayOrder, cat.DisplayOrder);
-            Db.ChatCategories.Save(cat);
-            Db.ChatCategories.Save(prev);
-            LoadCategories();
+            var reordered = new List<ChatCategory>(Categories);
+            (reordered[index - 1], reordered[index]) = (reordered[index], reordered[index - 1]);
+            SaveCategoryOrders(reordered);
         }
     }
 
     private void MoveDown(ChatCategory cat)
     {
+        if (cat.Id == "sys_archive") return;
         var index = Categories.IndexOf(cat);
-        if (index < Categories.Count - 1)
+        if (index >= 0 && index < Categories.Count - 1 && Categories[index + 1].Id != "sys_archive")
         {
-            var next = Categories[index + 1];
-            (cat.DisplayOrder, next.DisplayOrder) = (next.DisplayOrder, cat.DisplayOrder);
-            Db.ChatCategories.Save(cat);
-            Db.ChatCategories.Save(next);
-            LoadCategories();
+            var reordered = new List<ChatCategory>(Categories);
+            (reordered[index], reordered[index + 1]) = (reordered[index + 1], reordered[index]);
+            SaveCategoryOrders(reordered);
         }
+    }
+
+    private void SaveCategoryOrders(List<ChatCategory> reordered)
+    {
+        var orders = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < reordered.Count; i++)
+        {
+            orders[reordered[i].Id] = reordered[i].Id == "sys_archive" ? 10000 : i;
+        }
+
+        var result = ChatService.UpdateCategoryOrders(orders, CurrentUserId ?? string.Empty);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.ErrorMessage ?? Loc["Failed to update category order."].Value, Severity.Error);
+            return;
+        }
+
+        LoadCategories();
     }
 
     private async Task DeleteCategory(ChatCategory cat)
     {
-        var channelsInCat = Db.ChatChannels.GetAll().Where(c => c.CategoryId == cat.Id).ToList();
-        
+        if (cat.IsSystem) return;
+
+        int channelCount = ChatService.GetCategoryChannelCount(cat.Id, CurrentUserId ?? string.Empty);
+
         var options = new DialogOptions { CloseOnEscapeKey = true };
         bool? result = await DialogService.ShowMessageBoxAsync(
-            Loc["Delete Category"].Value, 
-            string.Format(Loc["Are you sure you want to delete '{0}'?"].Value, cat.Name) + (channelsInCat.Any() ? $"\n\n" + string.Format(Loc["There are {0} channel(s) in this category. They will be returned to their default categories."].Value, channelsInCat.Count) : ""), 
+            Loc["Delete Category"].Value,
+            string.Format(Loc["Are you sure you want to delete '{0}'?"].Value, cat.Name) + (channelCount > 0 ? $"\n\n" + string.Format(Loc["There are {0} channel(s) in this category. They will be returned to their default categories."].Value, channelCount) : ""),
             yesText: Loc["Delete"].Value, cancelText: Loc["Cancel"].Value, options: options);
 
         if (result == true)
         {
-            foreach (var ch in channelsInCat)
+            var deleteResult = ChatService.DeleteCategory(cat.Id, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
+            if (!deleteResult.IsSuccess)
             {
-                ch.CategoryId = null;
-                Db.ChatChannels.Save(ch);
+                Snackbar.Add(deleteResult.ErrorMessage ?? Loc["Failed to delete category."].Value, Severity.Error);
+                return;
             }
-            Db.ChatCategories.Delete(cat.Id);
+
             LoadCategories();
         }
     }

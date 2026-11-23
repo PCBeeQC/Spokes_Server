@@ -1,120 +1,115 @@
 @inject IJSRuntime JS
-@implements IAsyncDisposable
 
-<MudPaper Elevation="0" Class="py-2 px-3 rounded-xl mt-1 mb-1" Style="background-color: var(--mud-palette-background-grey); max-width: 400px; border: 1px solid var(--mud-palette-lines-default);">
-    <div class="d-flex align-center w-100">
-        <MudIconButton Icon="@(_isPlaying ? Icons.Material.Filled.Pause : Icons.Material.Filled.PlayArrow)"
-                       Size="Size.Medium"
-                       Color="Color.Primary"
-                       OnClick="TogglePlay" 
-                       Class="mr-2 pa-1"
-                       aria-label="@(_isPlaying ? Loc["Pause"] : Loc["Play"])"
-                       title="@(_isPlaying ? Loc["Pause"] : Loc["Play"])" />
-
-        <input type="range" min="0" max="100" value="@_progress" @oninput="OnProgressChanged" class="mud-slider voice-slider flex-grow-1" style="min-width: 150px;" aria-label="@Loc["Audio seek"]" />
+@if (Compact)
+{
+    <div @ref="_rootRef"
+         data-spokes-audio-player
+         data-compact="true"
+         data-label-play="@Loc["Play"]"
+         data-label-pause="@Loc["Pause"]"
+         class="mud-paper mud-elevation-0 py-1 px-2 rounded-lg d-inline-flex align-center gap-1"
+         style="background-color: var(--mud-palette-background-grey); max-width: 360px; border: 1px solid var(--mud-palette-lines-default);">
+        <MudIcon Icon="@Icons.Material.Filled.Mic" Size="Size.Small" Color="Color.Primary" />
+        <MudText Typo="Typo.caption" Style="font-weight: 600; white-space: nowrap;" Class="mr-1">
+            @(!string.IsNullOrWhiteSpace(Label) ? Label : Loc["Voice Memo"].Value)
+        </MudText>
+        <button type="button"
+                data-audio-toggle
+                class="mud-button-root mud-icon-button mud-primary-text hover:mud-primary-hover mud-ripple mud-ripple-icon mud-icon-button-size-small pa-1"
+                aria-label="@Loc["Play"]"
+                title="@Loc["Play"]">
+            <span class="mud-icon-button-label" data-audio-icon-play>
+                <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small" />
+            </span>
+            <span class="mud-icon-button-label d-none" data-audio-icon-pause>
+                <MudIcon Icon="@Icons.Material.Filled.Pause" Size="Size.Small" />
+            </span>
+        </button>
+        <input type="range" min="0" max="100" value="0" data-audio-slider class="mud-slider voice-slider flex-grow-1" style="min-width: 80px; width: 100px;" aria-label="@Loc["Audio seek"]" />
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.7rem; white-space: nowrap;" Class="mx-1">
+            <span data-audio-compact-time>0:00</span>
+        </MudText>
+        @if (OnRemove.HasDelegate)
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small"
+                           Color="Color.Default"
+                           OnClick="HandleRemoveAsync"
+                           Class="pa-1"
+                           aria-label="@Loc["Remove"]"
+                           title="@Loc["Remove"]" />
+        }
+        <audio src="@AudioUrl" preload="metadata"></audio>
     </div>
-    
-    <div class="d-flex justify-space-between px-2" style="margin-left: 32px; margin-top: -2px;">
-        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.65rem;">@FormatTime(_currentTime)</MudText>
-        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.65rem;">@FormatTime(_duration)</MudText>
+}
+else
+{
+    <div @ref="_rootRef"
+         data-spokes-audio-player
+         data-compact="false"
+         data-label-play="@Loc["Play"]"
+         data-label-pause="@Loc["Pause"]"
+         class="mud-paper mud-elevation-0 py-2 px-3 rounded-xl mt-1 mb-1"
+         style="background-color: var(--mud-palette-background-grey); max-width: 400px; border: 1px solid var(--mud-palette-lines-default);">
+        <div class="d-flex align-center w-100">
+            <button type="button"
+                    data-audio-toggle
+                    class="mud-button-root mud-icon-button mud-primary-text hover:mud-primary-hover mud-ripple mud-ripple-icon mr-2 pa-1"
+                    aria-label="@Loc["Play"]"
+                    title="@Loc["Play"]">
+                <span class="mud-icon-button-label" data-audio-icon-play>
+                    <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Medium" />
+                </span>
+                <span class="mud-icon-button-label d-none" data-audio-icon-pause>
+                    <MudIcon Icon="@Icons.Material.Filled.Pause" Size="Size.Medium" />
+                </span>
+            </button>
+
+            <input type="range" min="0" max="100" value="0" data-audio-slider class="mud-slider voice-slider flex-grow-1" style="min-width: 150px;" aria-label="@Loc["Audio seek"]" />
+        </div>
+
+        <div class="d-flex justify-space-between px-2" style="margin-left: 32px; margin-top: -2px;">
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.65rem;"><span data-audio-current>0:00</span></MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.65rem;"><span data-audio-duration>0:00</span></MudText>
+        </div>
+
+        <audio src="@AudioUrl" preload="metadata"></audio>
     </div>
+}
+@{
+    _lastFingerprint = ComputeFingerprint();
+    _hasRenderedOnce = true;
+}
 
-    <!-- Hidden audio element -->
-    <audio @ref="_audioRef" src="@AudioUrl" @onloadedmetadata="OnLoadedMetadata" @ontimeupdate="OnTimeUpdate" @onended="OnEnded"></audio>
-</MudPaper>
-
-@* Styles live in wwwroot/css/app.css: this component renders once per voice message, so inline style blocks would be re-sent and re-inserted per instance (AGENTS.md §3). *@
+@* Playback, seek, and WebM duration probing are managed 100% client-side by spokesAudioPlayer (voice-recorder.js) with 0 SignalR round-trips. *@
 
 @code {
     [Parameter]
     public string AudioUrl { get; set; } = "";
 
-    private ElementReference _audioRef;
-    private bool _isPlaying;
-    private double _progress;
-    private double _currentTime;
-    private double _duration;
+    [Parameter]
+    public bool Compact { get; set; }
 
-    private async Task TogglePlay()
+    [Parameter]
+    public string? Label { get; set; }
+
+    [Parameter]
+    public EventCallback OnRemove { get; set; }
+
+    private ElementReference _rootRef;
+    private int _lastFingerprint;
+    private bool _hasRenderedOnce;
+
+    private int ComputeFingerprint() => HashCode.Combine(AudioUrl, Compact, Label, OnRemove.HasDelegate);
+
+    protected override bool ShouldRender() => !_hasRenderedOnce || ComputeFingerprint() != _lastFingerprint;
+
+    private async Task HandleRemoveAsync()
     {
-        if (_isPlaying)
+        try { await JS.InvokeVoidAsync("spokesAudioPlayer.pauseInContainer", _rootRef); } catch { }
+        if (OnRemove.HasDelegate)
         {
-            await JS.InvokeVoidAsync("spokesAudioPlayer.pause", _audioRef);
-            _isPlaying = false;
-        }
-        else
-        {
-            await JS.InvokeVoidAsync("spokesAudioPlayer.play", _audioRef);
-            _isPlaying = true;
-        }
-    }
-
-    private async Task OnProgressChanged(ChangeEventArgs e)
-    {
-        if (double.TryParse(e.Value?.ToString(), out double newProgress))
-        {
-            var newTime = (newProgress / 100) * _duration;
-            await JS.InvokeVoidAsync("spokesAudioPlayer.setCurrentTime", _audioRef, newTime);
-            _progress = newProgress;
-            _currentTime = newTime;
-        }
-    }
-
-    private void OnLoadedMetadata(EventArgs e)
-    {
-        _ = InvokeAsync(async () =>
-        {
-            try
-            {
-                var duration = await JS.InvokeAsync<double>("spokesAudioPlayer.getDuration", _audioRef);
-                if (duration > 0)
-                {
-                    _duration = duration;
-                    StateHasChanged();
-                }
-            }
-            catch { }
-        });
-    }
-
-    private void OnTimeUpdate(EventArgs e)
-    {
-        _ = InvokeAsync(async () =>
-        {
-            try
-            {
-                var currentTime = await JS.InvokeAsync<double>("spokesAudioPlayer.getCurrentTime", _audioRef);
-                _currentTime = currentTime;
-                if (_duration > 0)
-                {
-                    _progress = (_currentTime / _duration) * 100;
-                }
-                StateHasChanged();
-            }
-            catch { }
-        });
-    }
-
-    private void OnEnded(EventArgs e)
-    {
-        _isPlaying = false;
-        _progress = 0;
-        _currentTime = 0;
-        StateHasChanged();
-    }
-
-    private string FormatTime(double seconds)
-    {
-        if (!double.IsFinite(seconds) || seconds < 0) seconds = 0;
-        var t = TimeSpan.FromSeconds(seconds);
-        return $"{(int)t.TotalMinutes}:{t.Seconds:D2}";
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_isPlaying)
-        {
-            try { await JS.InvokeVoidAsync("spokesAudioPlayer.pause", _audioRef); } catch { }
+            await OnRemove.InvokeAsync();
         }
     }
 }

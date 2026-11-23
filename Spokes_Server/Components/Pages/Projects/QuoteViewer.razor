@@ -2,14 +2,18 @@
 @attribute [Authorize(Policy = AppPermissions.Projects.View)]
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Common
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Dialogs.Common
 @using Spokes_Server.Components.Pages.Projects.Tabs
 @using Spokes_Server.Components.Pages.Email
+@using Spokes_Server.Core.Services.Communication.Email
 @using Spokes_Server.Core.Services.Documents
 @using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Components.Shared
 @inject Database Db
 @inject ISnackbar Snackbar
@@ -21,6 +25,8 @@
 @inject DocumentPdfService PdfService
 @inject MarkdownSanitizerService MarkdownSanitizer
 @inject ITimelineEventService TimelineEventService
+@inject IFileService FileService
+@inject FileUrlSigner FileUrls
 @implements IAsyncDisposable
 
 @if (Quote == null || Template == null || Profile == null)
@@ -85,12 +91,12 @@ else
             <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to Project</MudButton>
         </div>
         <div class="d-flex align-center gap-2 flex-wrap">
-            <MudSelect T="string" Value="@Quote.Status" ValueChanged="UpdateStatusAsync" Disabled="@(!_canEditQuote)" Dense="true" Margin="Margin.Dense"
+            <MudSelect T="string" Value="@Quote.Status" ValueChanged="UpdateStatusAsync" Disabled="@(!_canApproveQuote)" Dense="true" Margin="Margin.Dense"
                 Variant="Variant.Outlined" Style="width: 180px; min-width: 180px; flex-shrink: 0;">
-                <MudSelectItem Value="@(QuoteStatus.Draft)">Draft</MudSelectItem>
-                <MudSelectItem Value="@(QuoteStatus.Final)">Final</MudSelectItem>
-                <MudSelectItem Value="@(QuoteStatus.Accepted)">Accepted</MudSelectItem>
-                <MudSelectItem Value="@(QuoteStatus.Rejected)">Rejected</MudSelectItem>
+                @foreach (var status in QuoteStatus.GetAllowedTransitions(Quote.Status))
+                {
+                    <MudSelectItem Value="@status">@status</MudSelectItem>
+                }
             </MudSelect>
             <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
             @if (_canEditQuote && Quote.Status == QuoteStatus.Draft)
@@ -104,7 +110,7 @@ else
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.OpenInNew"
                     OnClick="OpenPdf">Open PDF</MudButton>
-                @if (_canEditQuote)
+                @if (CanSendEmail)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
                         OnClick="SendByEmail">Send by Email</MudButton>
@@ -115,11 +121,16 @@ else
                 <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ContentCopy"
                     OnClick="DuplicateQuote">Duplicate</MudButton>
             }
-            @if (_canEditQuote && Quote.Status == QuoteStatus.Draft)
-            {
-                <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Edit"
-                    OnClick="EditQuote">Edit</MudButton>
-            }
+            <MudButton Variant="Variant.Outlined"
+                       Color="@(Quote.Status == QuoteStatus.Draft && _canEditQuote ? Color.Warning : Color.Default)"
+                       StartIcon="@(Quote.Status == QuoteStatus.Draft && _canEditQuote ? Icons.Material.Filled.Edit : (QuoteStatus.CanUnlockEdit(Quote.Status) && _canApproveQuote ? Icons.Material.Filled.EditNote : Icons.Material.Filled.Visibility))"
+                       OnClick="EditQuote">
+                @(Quote.Status == QuoteStatus.Draft && _canEditQuote
+                    ? Loc["Edit"].Value
+                    : (QuoteStatus.CanUnlockEdit(Quote.Status) && _canApproveQuote
+                        ? BizLoc["View / Edit"].Value
+                        : BizLoc["View Details"].Value))
+            </MudButton>
         </div>
     </div>
 
@@ -227,29 +238,16 @@ else
                 </div>
             </div>
 
-            @if (!string.IsNullOrEmpty(Quote.MainImageBase64))
+            @if (!string.IsNullOrEmpty(Quote.EffectiveMainImageUrl))
             {
                 <div class="mb-10 rounded-lg overflow-hidden keep-together fill-remaining-space"
                     style="display: flex; justify-content: center; align-items: flex-start;">
-                    <img src="@Quote.MainImageBase64"
+                    <img src="@FileUrls.SignUrl(Quote.EffectiveMainImageUrl)"
                         style="max-width: 100%; width: auto; height: auto; object-fit: contain;" />
                 </div>
-
-                @if (!string.IsNullOrEmpty(Quote.ScopeOfWork))
-                {
-                    <div class="allow-break">
-                        <MudText Typo="Typo.h5" Class="mt-6 mb-4 keep-together keep-with-next"
-                                 Style="@($"color: {Profile.PrimaryColor}; border-bottom: 2px solid {Profile.PrimaryColor}; display: inline-block;")">
-                            @Template.Label_ScopeOfWork
-                        </MudText>
-                        <div class="markdown-content allow-break">
-                            @RenderMarkdown(Quote.ScopeOfWork)
-                        </div>
-                    </div>
-                }
             }
 
-            @if (!string.IsNullOrEmpty(Quote.ScopeOfWork) && string.IsNullOrEmpty(Quote.MainImageBase64))
+            @if (!string.IsNullOrEmpty(Quote.ScopeOfWork))
             {
                 <div class="allow-break">
                     <MudText Typo="Typo.h5" Class="mt-6 mb-4 keep-together keep-with-next"
@@ -370,7 +368,7 @@ else
                     @if (Quote.ShowTax)
                     {
                         <div class="d-flex justify-space-between mb-1">
-                            <MudText>@Template.Label_Tax (@(Quote.TaxRate * 100)%):</MudText>
+                            <MudText>@Template.Label_Tax (@FinancialCalculationEngine.FormatTaxRatePercent(Quote.TaxRate)%):</MudText>
                             <MudText>@FormatMoney(Quote.TaxAmount)</MudText>
                         </div>
                     }
@@ -495,6 +493,12 @@ else
 
     private bool _isAdmin;
     private bool _canEditQuote;
+    private bool _canApproveQuote;
+    private bool _canUseEmail;
+    private bool CanSendEmail => _canApproveQuote && _canUseEmail && !string.Equals(Profile?.Edition, "Family", StringComparison.OrdinalIgnoreCase);
+    private string? _authorizedProjectId;
+    private string? _authorizedQuoteId;
+    private string _currentUserName = "System";
 
     private const int PageHeight = 940;
     private bool _needsPagination;
@@ -541,7 +545,7 @@ else
                 "\n\n" + string.Join("", System.Linq.Enumerable.Repeat("<div style=\"height: 1rem;\"></div>\n\n", match.Length - 2)));
 
             var html = MarkdownSanitizer.RenderSanitizedHtml(text);
-            return new MarkupString(html);
+            return new MarkupString(FileUrls.SignHtmlFileUrls(html));
         }
         catch (Exception ex)
         {
@@ -550,44 +554,73 @@ else
         }
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
         try
         {
-            Logger.LogInformation("Initializing QuoteViewer for Quote {QuoteId}", QuoteId);
+            if (!string.Equals(_authorizedProjectId, ProjectId, StringComparison.Ordinal) ||
+                !string.Equals(_authorizedQuoteId, QuoteId, StringComparison.Ordinal))
+            {
+                if (_authorizedQuoteId != null && _authorizedQuoteId != QuoteId)
+                {
+                    try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); } catch { }
+                    _needsPagination = true;
+                }
+
+                Project = null;
+                Quote = null;
+                Profile = null;
+                Template = null;
+                ProjectManagerName = "";
+                ProjectManagerEmail = "";
+                _isAdmin = false;
+                _canApproveQuote = false;
+                _canEditQuote = false;
+                _canUseEmail = false;
+                _authorizedProjectId = null;
+                _authorizedQuoteId = null;
+            }
+
+            Logger.LogInformation("Loading QuoteViewer for Quote {QuoteId}", QuoteId);
 
             var emp = await UserService.GetEmployeeAsync();
-            _isAdmin = emp?.IsAdmin ?? false;
-            _canEditQuote = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Projects.Edit) || emp.HasPermission(AppPermissions.Finance.AccessAccounting));
+            var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
 
-            Project = Db.Projects.GetById(ProjectId);
-            
-            if (Project == null || !await UserService.CanViewProjectAsync(Project))
+            if (emp == null || liveProject == null || !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: false))
             {
+                Project = null;
+                Quote = null;
                 Nav.NavigateTo("/projects");
                 return;
             }
 
-            Quote = Db.Quotes.GetByProject(ProjectId).FirstOrDefault(q => q.Id == QuoteId);
-            if (Quote == null || !string.Equals(Quote.ProjectId, ProjectId, StringComparison.OrdinalIgnoreCase))
+            var liveQuote = string.IsNullOrEmpty(QuoteId) ? null : Db.Quotes.GetById(QuoteId);
+            if (liveQuote == null || !string.Equals(liveQuote.ProjectId, liveProject.Id, StringComparison.OrdinalIgnoreCase))
             {
                 Quote = null;
                 Nav.NavigateTo($"/projects/{ProjectId}?tab=quote");
                 return;
             }
+
+            _authorizedProjectId = liveProject.Id;
+            _authorizedQuoteId = liveQuote.Id;
+            Project = liveProject;
+            Quote = liveQuote;
+            _isAdmin = emp.IsEffectiveAdmin;
+            _canApproveQuote = emp.HasPermission(AppPermissions.Projects.ApproveQuotes);
+            _canEditQuote = emp.HasPermission(AppPermissions.Projects.Edit) || _canApproveQuote;
+            _canUseEmail = emp.HasPermission(AppPermissions.Email.Use);
+            _currentUserName = emp.FullName ?? emp.Email ?? "System";
             Profile = Db.CompanyProfile.Get();
 
-            if (Project == null) Logger.LogWarning("Project not found: {ProjectId}", ProjectId);
-            if (Quote == null) Logger.LogWarning("Quote not found: {QuoteId}", QuoteId);
-
             // 1. Check Quote Override
-            if (Quote != null && !string.IsNullOrEmpty(Quote.TemplateId))
+            if (!string.IsNullOrEmpty(Quote.TemplateId))
             {
                 Template = Db.DocumentTemplates.GetById(Quote.TemplateId);
             }
 
             // 2. Check Project Default
-            if (Template == null && Project != null && !string.IsNullOrEmpty(Project.DefaultTemplateId))
+            if (Template == null && !string.IsNullOrEmpty(Project.DefaultTemplateId))
             {
                 Template = Db.DocumentTemplates.GetById(Project.DefaultTemplateId);
             }
@@ -599,19 +632,21 @@ else
                 Template = Db.DocumentTemplates.GetDefault();
             }
 
-            if (Project != null && !string.IsNullOrEmpty(Project.ProjectManagerId))
+            ProjectManagerName = "";
+            ProjectManagerEmail = "";
+            if (!string.IsNullOrEmpty(Project.ProjectManagerId))
             {
                 var pm = Db.Employees.GetById(Project.ProjectManagerId);
                 if (pm != null)
                 {
                     ProjectManagerName = pm.FullName;
-                    ProjectManagerEmail = pm.Email;
+                    ProjectManagerEmail = pm.IsEmailPublic ? pm.Email : string.Empty;
                 }
             }
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Error in OnInitialized");
+            Logger.LogError(ex, "Error loading QuoteViewer");
             Snackbar.Add("Error loading document data", Severity.Error);
         }
     }
@@ -639,22 +674,118 @@ else
             note: labor.Note);
     }
 
+    private async Task<(Spokes_Server.Core.Models.HR.Employee Actor, Project Project, Quote Quote)?> AuthorizeQuoteActionAsync(bool requireApprove = false, bool requireDraft = false)
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        var liveQuote = string.IsNullOrEmpty(QuoteId) ? null : Db.Quotes.GetById(QuoteId);
+        if (emp == null ||
+            liveProject == null ||
+            liveQuote == null ||
+            !string.Equals(liveQuote.ProjectId, liveProject.Id, StringComparison.OrdinalIgnoreCase) ||
+            !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: false))
+        {
+            _canApproveQuote = false;
+            _canEditQuote = false;
+            _canUseEmail = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+
+        var canApprove = emp.HasPermission(AppPermissions.Projects.ApproveQuotes);
+        var canEdit = emp.HasPermission(AppPermissions.Projects.Edit) || canApprove;
+        if (requireApprove ? !canApprove : !canEdit)
+        {
+            _canApproveQuote = canApprove;
+            _canEditQuote = canEdit;
+            _canUseEmail = emp.HasPermission(AppPermissions.Email.Use);
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+
+        if (requireDraft && !string.Equals(liveQuote.Status, QuoteStatus.Draft, StringComparison.OrdinalIgnoreCase))
+        {
+            Snackbar.Add("Only draft quotes can be deleted.", Severity.Warning);
+            return null;
+        }
+
+        _currentUserName = emp.FullName ?? emp.Email ?? "System";
+        return (emp, liveProject, liveQuote);
+    }
+
     private async Task UpdateStatusAsync(string newStatus)
     {
         try
         {
-            if (Quote == null || !_canEditQuote) return;
+            if (Quote == null || newStatus == Quote.Status) return;
 
-            // Admin-only revert from Final to Draft
-            if (Quote.Status == QuoteStatus.Final && newStatus == QuoteStatus.Draft && !_isAdmin)
+            var preAuth = await AuthorizeQuoteActionAsync(requireApprove: true);
+            if (preAuth == null)
             {
-                Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
+                StateHasChanged();
+                return;
+            }
+            var liveQuote = preAuth.Value.Quote;
+
+            if (!QuoteStatus.GetAllowedTransitions(liveQuote.Status).Contains(newStatus))
+            {
+                Snackbar.Add(BizLoc["A quote must be marked Final before it can be Accepted or Rejected."].Value, Severity.Warning);
+                StateHasChanged();
                 return;
             }
 
-            var oldStatus = Quote.Status;
-            Quote.Status = newStatus;
+            var oldStatus = liveQuote.Status;
+            var requiresReason = QuoteStatus.RequiresReason(oldStatus, newStatus);
+            string? reason = null;
 
+            if (requiresReason)
+            {
+                var parameters = new DialogParameters<ConfirmDialog>
+                {
+                    { x => x.ContentText, string.Format(BizLoc["Please provide a reason for changing the quote status from {0} to {1}."].Value, oldStatus, newStatus) },
+                    { x => x.ButtonText, BizLoc["Confirm Status Change"].Value },
+                    { x => x.Color, Color.Warning },
+                    { x => x.ShowReasonInput, true },
+                    { x => x.ReasonRequired, true },
+                    { x => x.ReasonLabel, BizLoc["Reason for status change"].Value },
+                    { x => x.ReasonPlaceholder, BizLoc["Explain why this quote status is being reverted or changed..."].Value }
+                };
+
+                var dialog = await DialogService.ShowAsync<ConfirmDialog>(BizLoc["Confirm Status Change"].Value, parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+                var result = await dialog.Result;
+                if (result == null || result.Canceled || string.IsNullOrWhiteSpace(result.Data as string))
+                {
+                    StateHasChanged();
+                    return;
+                }
+
+                reason = (result.Data as string)?.Trim();
+            }
+
+            var saveAuth = await AuthorizeQuoteActionAsync(requireApprove: true);
+            if (saveAuth == null)
+            {
+                StateHasChanged();
+                return;
+            }
+            liveQuote = saveAuth.Value.Quote;
+            if (liveQuote.Status == newStatus) return;
+
+            liveQuote.Status = newStatus;
+            liveQuote.History.Add(new DocumentHistoryEntry
+            {
+                Timestamp = DateTime.UtcNow,
+                Action = requiresReason ? DocumentHistoryActions.StatusReverted : DocumentHistoryActions.StatusChanged,
+                OldStatus = oldStatus,
+                NewStatus = newStatus,
+                ChangedBy = _currentUserName,
+                Summary = requiresReason
+                    ? $"Reverted status from {oldStatus} to {newStatus}"
+                    : $"Changed status from {oldStatus} to {newStatus}",
+                Reason = reason
+            });
+
+            Quote = liveQuote;
             if (oldStatus != QuoteStatus.Draft && newStatus == QuoteStatus.Draft)
             {
                 if (!string.IsNullOrEmpty(Quote.PdfPath) && System.IO.File.Exists(Quote.PdfPath))
@@ -680,7 +811,7 @@ else
             {
                 Db.Quotes.Save(Quote);
             }
-            TimelineEventService.SyncQuoteStatusTimelineEvent(Quote, oldStatus, newStatus, null);
+            TimelineEventService.SyncQuoteStatusTimelineEvent(Quote, oldStatus, newStatus, _currentUserName);
             Logger.LogInformation("Updated Quote Status to {Status}", newStatus);
             Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
             
@@ -695,28 +826,79 @@ else
 
     private async Task EditQuote()
     {
-        if (Quote == null || !_canEditQuote) return;
+        if (Quote == null) return;
         try
         {
-            var parameters = new DialogParameters { ["Quote"] = Quote, ["ProjectId"] = ProjectId };
-            var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
+            var emp = await UserService.GetEmployeeAsync();
+            var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+            var liveQuote = string.IsNullOrEmpty(QuoteId) ? null : Db.Quotes.GetById(QuoteId);
+            if (emp == null ||
+                liveProject == null ||
+                liveQuote == null ||
+                !string.Equals(liveQuote.ProjectId, liveProject.Id, StringComparison.OrdinalIgnoreCase) ||
+                !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: false))
+            {
+                Snackbar.Add("Access denied.", Severity.Error);
+                return;
+            }
 
-            var dialog = await DialogService.ShowAsync<QuoteEditorDialog>("Edit Quote", parameters, options);
+            var liveCanApprove = emp.HasPermission(AppPermissions.Projects.ApproveQuotes);
+            var liveCanEdit = emp.HasPermission(AppPermissions.Projects.Edit) || liveCanApprove;
+            _canApproveQuote = liveCanApprove;
+            _canEditQuote = liveCanEdit;
+            _currentUserName = emp.FullName ?? emp.Email ?? "System";
+
+            var parameters = new DialogParameters<QuoteEditorDialog>
+            {
+                { x => x.Quote, liveQuote },
+                { x => x.ProjectId, liveProject.Id },
+                { x => x.CanEditDraft, liveCanEdit },
+                { x => x.CanApproveQuote, liveCanApprove },
+                { x => x.CurrentUserName, _currentUserName }
+            };
+            var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
+            var dialogTitle = liveQuote.Status == QuoteStatus.Draft && liveCanEdit
+                ? BizLoc["Edit Quote"].Value
+                : BizLoc["Quote Builder & Details"].Value;
+
+            var dialog = await DialogService.ShowAsync<QuoteEditorDialog>(dialogTitle, parameters, options);
             var result = await dialog.Result;
             if (result is { Canceled: false, Data: Quote editedQuote })
             {
+                var saveEmp = await UserService.GetEmployeeAsync();
+                var saveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+                var saveExisting = string.IsNullOrEmpty(QuoteId) ? null : Db.Quotes.GetById(QuoteId);
+                if (saveEmp == null ||
+                    saveProject == null ||
+                    saveExisting == null ||
+                    !string.Equals(saveExisting.ProjectId, saveProject.Id, StringComparison.OrdinalIgnoreCase) ||
+                    !UserService.CanViewProject(saveEmp, saveProject, allowAccountingFinancialRead: false))
+                {
+                    Snackbar.Add("Access denied.", Severity.Error);
+                    return;
+                }
+
+                var saveCanApprove = saveEmp.HasPermission(AppPermissions.Projects.ApproveQuotes);
+                var saveCanEdit = saveEmp.HasPermission(AppPermissions.Projects.Edit) || saveCanApprove;
+                if (string.Equals(saveExisting.Status, QuoteStatus.Draft, StringComparison.OrdinalIgnoreCase) ? !saveCanEdit : !saveCanApprove)
+                {
+                    Snackbar.Add("Access denied.", Severity.Error);
+                    return;
+                }
+
+                editedQuote.ProjectId = saveProject.Id;
                 Db.Quotes.Save(editedQuote);
                 // Refresh local state
-                Quote = Db.Quotes.GetByProject(ProjectId).FirstOrDefault(q => q.Id == QuoteId);
+                Quote = Db.Quotes.GetById(saveExisting.Id);
                 
                 // Re-evaluate template in case it changed
                 if (!string.IsNullOrEmpty(Quote?.TemplateId))
                 {
                     Template = Db.DocumentTemplates.GetById(Quote.TemplateId);
                 }
-                else if (Project != null && !string.IsNullOrEmpty(Project.DefaultTemplateId))
+                else if (!string.IsNullOrEmpty(saveProject.DefaultTemplateId))
                 {
-                    Template = Db.DocumentTemplates.GetById(Project.DefaultTemplateId);
+                    Template = Db.DocumentTemplates.GetById(saveProject.DefaultTemplateId);
                 }
                 else
                 {
@@ -753,30 +935,36 @@ else
 
     private async Task DuplicateQuote()
     {
-        if (Quote == null || !_canEditQuote) return;
+        if (Quote == null) return;
+        var preAuth = await AuthorizeQuoteActionAsync();
+        if (preAuth == null) return;
+
         var result = await DialogService.ShowMessageBoxAsync("Duplicate Quote", "Are you sure you want to create a copy of this quote?", yesText: "Duplicate", cancelText: "Cancel");
         if (result != true) return;
 
         try 
         {
-            // 1. Clone via serialization to ensure deep copy
-            var json = System.Text.Json.JsonSerializer.Serialize(Quote);
-            var newQuote = System.Text.Json.JsonSerializer.Deserialize<Quote>(json);
-            if (newQuote == null) return;
-            
-            // 2. Update Metadata
-            newQuote.Id = Guid.NewGuid().ToString();
-            newQuote.QuoteNumber = Db.Quotes.GenerateQuoteNumber(Profile?.QuotePrefix ?? "EST-");
-            newQuote.Date = DateTime.Today;
-            newQuote.Status = QuoteStatus.Draft;
-            newQuote.Title = $"{Quote.Title} (Copy)";
-            
-            // 3. Save
+            var saveAuth = await AuthorizeQuoteActionAsync();
+            if (saveAuth == null) return;
+
+            var liveSourceQuote = saveAuth.Value.Quote;
+            var newNumber = Db.Quotes.GenerateQuoteNumber(Profile?.QuotePrefix ?? "EST-");
+            var newQuote = liveSourceQuote.DuplicateAsDraft(newNumber, _currentUserName);
+            newQuote.ProjectId = saveAuth.Value.Project.Id;
+
+            if (!string.IsNullOrWhiteSpace(liveSourceQuote.MainImagePath))
+            {
+                var clonedImage = await FileService.CloneFileAsync(liveSourceQuote.MainImagePath, "projects", newQuote.ProjectId, saveAuth.Value.Actor);
+                if (!string.IsNullOrWhiteSpace(clonedImage))
+                {
+                    newQuote.MainImagePath = clonedImage;
+                }
+            }
+
             Db.Quotes.Save(newQuote);
-            
-            // 4. Navigate
+
             Snackbar.Add("Quote Duplicated Successfully", Severity.Success);
-            Nav.NavigateTo($"/projects/{ProjectId}/quotes/{newQuote.Id}");
+            Nav.NavigateTo($"/projects/{saveAuth.Value.Project.Id}/quotes/{newQuote.Id}");
         }
         catch (Exception ex)
         {
@@ -787,15 +975,21 @@ else
 
     private async Task DeleteQuote()
     {
-        if (Quote == null || !_canEditQuote) return;
+        if (Quote == null) return;
+        var preAuth = await AuthorizeQuoteActionAsync(requireDraft: true);
+        if (preAuth == null) return;
+
         var result = await DialogService.ShowMessageBoxAsync("Delete Quote", "Are you sure you want to delete this draft quote?", yesText: "Delete", cancelText: "Cancel");
         if (result != true) return;
 
         try
         {
-            Db.Quotes.Delete(QuoteId);
+            var deleteAuth = await AuthorizeQuoteActionAsync(requireDraft: true);
+            if (deleteAuth == null) return;
+
+            Db.Quotes.Delete(deleteAuth.Value.Quote.Id);
             Snackbar.Add("Quote deleted successfully", Severity.Success);
-            Nav.NavigateTo($"/projects/{ProjectId}?tab=quote");
+            Nav.NavigateTo($"/projects/{deleteAuth.Value.Project.Id}?tab=quote");
         }
         catch (Exception ex)
         {
@@ -806,8 +1000,22 @@ else
 
     private async Task<bool> EnsurePdfExistsAsync()
     {
-        if (Quote == null) return false;
-        if (PdfService.IsValidCachedPdf(Quote.PdfPath))
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        var liveQuote = string.IsNullOrEmpty(QuoteId) ? null : Db.Quotes.GetById(QuoteId);
+        if (emp == null ||
+            liveProject == null ||
+            liveQuote == null ||
+            !string.Equals(liveQuote.ProjectId, liveProject.Id, StringComparison.OrdinalIgnoreCase) ||
+            !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: false))
+        {
+            Snackbar.Add("Access denied.", Severity.Error);
+            return false;
+        }
+
+        Quote = liveQuote;
+        Project = liveProject;
+        if (PdfService.IsValidCachedPdf(liveQuote.PdfPath))
         {
             return true;
         }
@@ -815,8 +1023,12 @@ else
         try
         {
             Snackbar.Add("Generating PDF document...", Severity.Info);
-            Quote.PdfPath = await PdfService.GenerateQuotePdfAsync(Quote, ProjectId, Nav.BaseUri);
-            Db.Quotes.Save(Quote);
+            liveQuote.PdfPath = await PdfService.GenerateQuotePdfAsync(liveQuote, liveProject.Id, Nav.BaseUri, emp.Id);
+            if (emp.HasPermission(AppPermissions.Projects.Edit) || emp.HasPermission(AppPermissions.Projects.ApproveQuotes))
+            {
+                Db.Quotes.Save(liveQuote);
+            }
+            Quote = liveQuote;
             return true;
         }
         catch (Exception ex)
@@ -829,9 +1041,16 @@ else
 
     private async Task SendByEmail()
     {
-        if (Quote == null) return;
+        var auth = await AuthorizeQuoteActionAsync(requireApprove: true);
+        if (auth == null) return;
+        if (string.Equals(Db.CompanyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase) ||
+            !auth.Value.Actor.HasPermission(AppPermissions.Email.Use))
+        {
+            Snackbar.Add("Active Email.Use permission is required to send emails.", Severity.Error);
+            return;
+        }
 
-        if (!await EnsurePdfExistsAsync())
+        if (!await EnsurePdfExistsAsync() || Quote == null)
         {
             return;
         }
@@ -842,9 +1061,9 @@ else
             ["Subject"] = $"Quote #{Quote.QuoteNumber} from {Profile?.CompanyName}",
             ["Body"] = $"<p>Dear {Project?.Client?.ContactPersonName ?? "Client"},</p><p>Please find attached quote #{Quote.QuoteNumber}.</p>",
             ["IsTemplate"] = true,
-            ["PreloadedFiles"] = new List<(string Path, string FileName)> 
-            { 
-                (Quote.PdfPath, $"Quote_{Quote.QuoteNumber}.pdf") 
+            ["PreloadedDocumentAttachments"] = new List<OutboundDocumentAttachmentRef>
+            {
+                new(OutboundDocumentKind.Quote, Quote.Id, $"Quote_{Quote.QuoteNumber}.pdf")
             }
         };
 
@@ -863,10 +1082,7 @@ else
 
         try
         {
-            var bytes = await System.IO.File.ReadAllBytesAsync(Quote.PdfPath);
-            var base64 = Convert.ToBase64String(bytes);
-            var dataUrl = $"data:application/pdf;base64,{base64}";
-            await JS.InvokeVoidAsync("window.openBase64InNewTab", dataUrl, $"Quote_{Quote.QuoteNumber}.pdf");
+            await JS.OpenPdfFileInNewTabAsync(Quote.PdfPath, $"Quote_{Quote.QuoteNumber}.pdf");
         }
         catch (Exception ex)
         {

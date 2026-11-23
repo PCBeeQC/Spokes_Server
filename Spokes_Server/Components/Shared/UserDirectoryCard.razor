@@ -10,7 +10,7 @@
 @inject PresenceStateService PresenceState
 
 <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column directory-card" Style="@($"border-radius: 16px; {(!Employee.IsActive ? "opacity: 0.75;" : "")}")">
-    <MudCardContent Class="pa-4 flex-grow-1 cursor-pointer" @onclick="OpenProfileDialog">
+    <MudCardContent Class="pt-4 px-4 pb-3 flex-grow-1 cursor-pointer" @onclick="OpenProfileDialog">
         <div class="d-flex gap-4">
             <MudAvatar Size="Size.Large" Style="@($"width: 56px; height: 56px; font-size: 1.5rem; background-color: {(Employee.ProfileColor ?? Colors.DeepPurple.Default)}; color: {Colors.Shades.White}; flex-shrink: 0;")">
                 @if (Employee.HasCustomAvatar)
@@ -34,9 +34,12 @@
                         <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small" Class="ma-0 py-0" Style="font-size: 11px; height: 20px;">@Loc["Inactive"]</MudChip>
                     }
                 </div>
+            @if (!string.IsNullOrEmpty(Employee.DisplaySubtitle))
+            {
                 <MudText Typo="Typo.body2" Color="Color.Secondary" Style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; width: 100%;">
-                    @(!string.IsNullOrEmpty(Employee.DisplaySubtitle) ? Employee.DisplaySubtitle : Employee.Email)
+                    @Employee.DisplaySubtitle
                 </MudText>
+            }
                 
                 @if (ShowPresence)
                 {
@@ -107,7 +110,7 @@
             }
         </div>
     </MudCardContent>
-    <MudCardActions Class="px-4 pb-4 pt-0 d-flex justify-space-between align-center">
+    <MudCardActions Class="px-4 pb-3 pt-0 d-flex justify-space-between align-center">
         <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="OpenProfileDialog">@Loc["View Profile"]</MudButton>
         @if (CurrentUser?.Id != Employee.Id)
         {

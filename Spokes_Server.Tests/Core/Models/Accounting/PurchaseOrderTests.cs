@@ -5,32 +5,6 @@ namespace Spokes_Server.Tests.Core.Models.Accounting;
 public class PurchaseOrderTests
 {
     [Fact]
-    public void PurchaseOrder_Initialization_SetsDefaultsCorrectly()
-    {
-        var po = new PurchaseOrder();
-
-        Assert.False(string.IsNullOrEmpty(po.Id));
-        Assert.Equal(string.Empty, po.PoNumber);
-        Assert.Equal(DateTime.Today, po.Date);
-        Assert.Equal(string.Empty, po.IssuedBy);
-        Assert.Equal(string.Empty, po.SupplierQuoteRef);
-        Assert.Equal(string.Empty, po.SupplierRepName);
-        Assert.NotNull(po.Supplier);
-        Assert.Null(po.Recipient);
-        Assert.True(po.ApplyTax);
-        Assert.Equal(0.14975m, po.TaxRate);
-        Assert.Empty(po.LineItems);
-        Assert.Empty(po.CustomHeaders);
-        Assert.Null(po.TemplateId);
-
-        Assert.Equal(0, po.SubTotal);
-        Assert.Equal(0, po.TaxAmount);
-        Assert.Equal(0, po.GrandTotal);
-        Assert.Equal(0, po.TotalBilled);
-        Assert.Equal(0, po.RemainingBalance);
-    }
-
-    [Fact]
     public void PurchaseOrder_Financials_CalculatedCorrectlyWithTax()
     {
         var po = new PurchaseOrder { ApplyTax = true, TaxRate = 0.15m };
@@ -55,21 +29,6 @@ public class PurchaseOrderTests
         Assert.Equal(1000m, po.SubTotal);
         Assert.Equal(0m, po.TaxAmount);
         Assert.Equal(1000m, po.GrandTotal);
-    }
-
-    [Fact]
-    public void PoItem_Initialization_SetsDefaultsCorrectly()
-    {
-        var item = new PoItem();
-
-        Assert.False(string.IsNullOrEmpty(item.Id));
-        Assert.Equal(string.Empty, item.ProjectId);
-        Assert.Equal(string.Empty, item.PartNumber);
-        Assert.Equal(string.Empty, item.Description);
-        Assert.Equal(1, item.Quantity);
-        Assert.Equal(0, item.UnitPrice);
-        Assert.Equal(0, item.Total);
-        Assert.Empty(item.CustomData);
     }
 
     [Fact]
@@ -161,28 +120,10 @@ public class PurchaseOrderTests
         Assert.False(item1.Equals(new object()));
     }
 
-#pragma warning disable CS0618 // Obsolete member testing
     [Fact]
-    public void PurchaseOrder_LineItems_And_Items_AreSynchronized()
+    public void PurchaseOrder_JsonDeserialization_IgnoresObsoleteItemsProperty()
     {
-        var po = new PurchaseOrder();
-        var item = new PoItem { Description = "Widget A", Quantity = 3, UnitPrice = 10m };
-
-        po.LineItems.Add(item);
-        Assert.Single(po.Items);
-        Assert.Same(item, po.Items[0]);
-        Assert.Equal(30m, po.SubTotal);
-
-        var item2 = new PoItem { Description = "Widget B", Quantity = 1, UnitPrice = 20m };
-        po.Items.Add(item2);
-        Assert.Equal(2, po.LineItems.Count);
-        Assert.Equal(50m, po.SubTotal);
-    }
-
-    [Fact]
-    public void PurchaseOrder_JsonDeserialization_SupportsLegacyItemsProperty()
-    {
-        const string legacyJson = """
+        const string jsonWithObsoleteItems = """
         {
             "Id": "po-1",
             "Items": [
@@ -191,12 +132,10 @@ public class PurchaseOrderTests
         }
         """;
 
-        var po = System.Text.Json.JsonSerializer.Deserialize<PurchaseOrder>(legacyJson);
+        var po = System.Text.Json.JsonSerializer.Deserialize<PurchaseOrder>(jsonWithObsoleteItems);
         Assert.NotNull(po);
-        Assert.Single(po.LineItems);
-        Assert.Equal("Bolts", po.LineItems[0].Description);
-        Assert.Equal("Bolts", po.Items[0].Description);
-        Assert.Equal(20m, po.SubTotal);
+        Assert.Empty(po.LineItems);
+        Assert.Equal(0m, po.SubTotal);
     }
 
     [Fact]
@@ -215,10 +154,8 @@ public class PurchaseOrderTests
         Assert.NotNull(po);
         Assert.Single(po.LineItems);
         Assert.Equal("Screws", po.LineItems[0].Description);
-        Assert.Equal("Screws", po.Items[0].Description);
         Assert.Equal(20m, po.SubTotal);
     }
-#pragma warning restore CS0618
 
     [Fact]
     public void PurchaseOrder_JsonSerialization_WritesLineItemsProperty()

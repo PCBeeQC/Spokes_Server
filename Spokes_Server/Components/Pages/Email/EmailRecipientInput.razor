@@ -1,6 +1,7 @@
-@using System.Security.Claims
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Identity
 @inject Database Db
-@inject AuthenticationStateProvider AuthStateProvider
+@inject UserService UserService
 
 <div class="@($"email-composer-field-row d-flex align-center w-100 {Class}".Trim())">
     @if (!string.IsNullOrEmpty(Label))
@@ -78,76 +79,67 @@
         }
 
         var search = value.Trim();
-
-        // 1. Search in Tier 1: Suppliers / Companies
-        var suppliers = Db.Suppliers.GetAll();
-
-        foreach (var supplier in suppliers)
+        var employee = await UserService.GetEmployeeAsync(allowSuspended: true);
+        if (employee == null)
         {
-            if (supplier.Contacts.Count > 0)
+            return suggestions;
+        }
+
+        if (employee.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: true))
+        {
+            // 1. Search in Tier 1: Suppliers / Companies
+            var suppliers = Db.Suppliers.GetAll();
+
+            foreach (var supplier in suppliers)
             {
-                foreach (var contact in supplier.Contacts)
+                if (supplier.Contacts.Count > 0)
                 {
-                    if (!string.IsNullOrEmpty(contact.Email))
+                    foreach (var contact in supplier.Contacts)
                     {
-                        if (contact.Email.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                            contact.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                            supplier.ContactInfo.BusinessName.Contains(search, StringComparison.OrdinalIgnoreCase))
+                        if (!string.IsNullOrEmpty(contact.Email))
                         {
-                            suggestions.Add(contact.Email);
+                            if (contact.Email.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                                contact.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                                supplier.ContactInfo.BusinessName.Contains(search, StringComparison.OrdinalIgnoreCase))
+                            {
+                                suggestions.Add(contact.Email);
+                            }
                         }
                     }
                 }
-            }
-            else if (!string.IsNullOrEmpty(supplier.ContactInfo.ContactPersonEmail))
-            {
-                if (supplier.ContactInfo.ContactPersonEmail.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                    supplier.ContactInfo.ContactPersonName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                    supplier.ContactInfo.BusinessName.Contains(search, StringComparison.OrdinalIgnoreCase))
+                else if (!string.IsNullOrEmpty(supplier.ContactInfo.ContactPersonEmail))
                 {
-                    suggestions.Add(supplier.ContactInfo.ContactPersonEmail);
+                    if (supplier.ContactInfo.ContactPersonEmail.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        supplier.ContactInfo.ContactPersonName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        supplier.ContactInfo.BusinessName.Contains(search, StringComparison.OrdinalIgnoreCase))
+                    {
+                        suggestions.Add(supplier.ContactInfo.ContactPersonEmail);
+                    }
+                }
+            }
+
+            // 2. Search in Tier 2: Public Contacts
+            var publicContacts = Db.PublicContacts.GetAll();
+            foreach (var contact in publicContacts)
+            {
+                if (!string.IsNullOrEmpty(contact.Email) &&
+                    (contact.Email.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                     contact.Name.Contains(search, StringComparison.OrdinalIgnoreCase)))
+                {
+                    suggestions.Add(contact.Email);
                 }
             }
         }
 
-        // 2. Search in Tier 2: Public Contacts
-        var publicContacts = Db.PublicContacts.GetAll();
-        foreach (var contact in publicContacts)
+        // 3. Search in Tier 3: Private Contacts
+        var privateContacts = Db.PrivateContacts.GetAllForEmployee(employee.Id);
+        foreach (var contact in privateContacts)
         {
             if (!string.IsNullOrEmpty(contact.Email) &&
                 (contact.Email.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                  contact.Name.Contains(search, StringComparison.OrdinalIgnoreCase)))
             {
                 suggestions.Add(contact.Email);
-            }
-        }
-
-        // 3. Search in Tier 3: Private Contacts
-        // We need the current employee ID for this.
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var user = authState.User;
-        if (user.Identity?.IsAuthenticated == true)
-        {
-            var subId = user.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
-            if (!string.IsNullOrEmpty(subId))
-            {
-                var openId = Db.OpenIdAccounts.GetBySub(subId);
-                var employee = (openId != null && !string.IsNullOrEmpty(openId.LinkedEmployeeId))
-                    ? Db.Employees.GetById(openId.LinkedEmployeeId)
-                    : null;
-                if (employee != null)
-                {
-                    var privateContacts = Db.PrivateContacts.GetAllForEmployee(employee.Id);
-                    foreach (var contact in privateContacts)
-                    {
-                        if (!string.IsNullOrEmpty(contact.Email) &&
-                            (contact.Email.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                             contact.Name.Contains(search, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            suggestions.Add(contact.Email);
-                        }
-                    }
-                }
             }
         }
 

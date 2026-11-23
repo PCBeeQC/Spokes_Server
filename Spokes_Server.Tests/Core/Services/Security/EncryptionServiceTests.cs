@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace Spokes_Server.Tests.Core.Services.Security;
 
+[Collection("EnvironmentVariableTests")]
 public class EncryptionServiceTests : IDisposable
 {
     private const string TestMasterPassword = "TestMasterPassword#2026!";
@@ -180,26 +181,19 @@ public class EncryptionServiceTests : IDisposable
     }
 
     [Fact]
-    public void Decrypt_LegacyV1AesCbcCiphertext_RemainsBackwardsCompatible()
+    public void Decrypt_MissingV2Prefix_ThrowsCryptographicException_AndCanDecryptReturnsFalse()
     {
         var service = new EncryptionService(_config);
-        var original = "LegacyImapPassword_v1_2025!";
-        var legacyCipher = CreateLegacyV1Ciphertext(original, TestMasterPassword);
+        var validCipher = service.Encrypt("V2Password123!");
 
-        Assert.DoesNotContain("v2:", legacyCipher);
-        Assert.Equal(original, service.Decrypt(legacyCipher));
-        Assert.True(service.TryDecrypt(legacyCipher, out var viaTryDecrypt));
-        Assert.Equal(original, viaTryDecrypt);
+        Assert.True(service.CanDecrypt(validCipher));
+        Assert.False(service.CanDecrypt(null));
+        Assert.False(service.CanDecrypt(string.Empty));
+        Assert.False(service.CanDecrypt("plaintext-without-v2-prefix"));
 
-        var wrongConfig = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                { "DataPath", _testDataDir },
-                { "SPOKES_MASTER_PASSWORD", "WrongMasterPassword!" }
-            })
-            .Build();
-        var wrongService = new EncryptionService(wrongConfig);
-        Assert.ThrowsAny<CryptographicException>(() => wrongService.Decrypt(legacyCipher));
+        Assert.ThrowsAny<CryptographicException>(() => service.Decrypt("plaintext-without-v2-prefix"));
+        Assert.False(service.TryDecrypt("plaintext-without-v2-prefix", out var plain));
+        Assert.Null(plain);
     }
 
     [Theory]
@@ -291,27 +285,36 @@ public class EncryptionServiceTests : IDisposable
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(3), $"Expected < 3s for 1,000 encrypt+decrypt ops, took {sw.Elapsed.TotalMilliseconds:F1}ms");
     }
 
-    private static string CreateLegacyV1Ciphertext(string plainText, string masterPassword)
+    [Fact]
+    public void FailClosed_WhenMasterPasswordUnset_ThrowsInvalidOperationExceptionAcrossAllCryptoOps()
     {
-        var salt = RandomNumberGenerator.GetBytes(16);
-        var iv = RandomNumberGenerator.GetBytes(16);
-        var key = Rfc2898DeriveBytes.Pbkdf2(masterPassword, salt, 100_000, HashAlgorithmName.SHA256, 32);
-
-        using var aes = Aes.Create();
-        aes.Key = key;
-        aes.IV = iv;
-
-        using var encryptor = aes.CreateEncryptor(aes.Key, aes.IV);
-        using var ms = new MemoryStream();
-        ms.Write(salt);
-        ms.Write(iv);
-        using (var cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
-        using (var sw = new StreamWriter(cs))
+        var previousEnv = Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD");
+        try
         {
-            sw.Write(plainText);
-        }
+            Environment.SetEnvironmentVariable("SPOKES_MASTER_PASSWORD", null);
 
-        return Convert.ToBase64String(ms.ToArray());
+            // Configure Spokes_MasterKey (NOT SPOKES_MASTER_PASSWORD) to ensure legacy fallback no longer applies
+            var unsetConfig = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    { "DataPath", _testDataDir },
+                    { "Spokes_MasterKey", "LegacyIgnoredKey!" }
+                })
+                .Build();
+
+            var validCipher = new EncryptionService(_config).Encrypt("SensitivePayload");
+            var failClosedService = new EncryptionService(unsetConfig);
+
+            Assert.Throws<InvalidOperationException>(() => failClosedService.Encrypt("SecretValue"));
+            Assert.Throws<InvalidOperationException>(() => failClosedService.EncryptBytes(Encoding.UTF8.GetBytes("SecretBytes")));
+            Assert.Throws<InvalidOperationException>(() => failClosedService.EncryptJsonEnvelopeToUtf8Bytes(new SampleSecretState("u1", "Title")));
+            Assert.Throws<InvalidOperationException>(() => failClosedService.Decrypt(validCipher));
+            Assert.Throws<InvalidOperationException>(() => failClosedService.TryDecrypt(validCipher, out _));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SPOKES_MASTER_PASSWORD", previousEnv);
+        }
     }
 
     private sealed record SampleSecretState(string UserId, string Title);

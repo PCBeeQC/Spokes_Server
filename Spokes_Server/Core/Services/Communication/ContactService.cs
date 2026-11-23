@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Models.Communication;
 
@@ -13,16 +12,13 @@ public class ContactService : IContactService
 {
     private readonly PublicContactRepository _publicContacts;
     private readonly PrivateContactRepository _privateContacts;
-    private readonly ILogger<ContactService>? _logger;
 
     public ContactService(
         PublicContactRepository publicContacts,
-        PrivateContactRepository privateContacts,
-        ILogger<ContactService>? logger = null)
+        PrivateContactRepository privateContacts)
     {
         _publicContacts = publicContacts;
         _privateContacts = privateContacts;
-        _logger = logger;
     }
 
     public virtual bool ExistsInPublic(string email)

@@ -78,6 +78,8 @@ public class DefaultPermissionGroupsTests
         Assert.Contains(AppPermissions.Purchases.ViewBills, director.Permissions);
         Assert.Contains(AppPermissions.Purchases.ManageBills, director.Permissions);
         Assert.Contains(AppPermissions.Timesheets.ViewReport, director.Permissions);
+        Assert.Contains(AppPermissions.Hr.ManageEmployees, director.Permissions);
+        Assert.Contains(AppPermissions.Business.ManageSettings, director.Permissions);
         Assert.Contains(AppPermissions.Admin.ManageUsers, director.Permissions);
         Assert.Contains(AppPermissions.Chat.EditAllPublicChannels, director.Permissions);
     }

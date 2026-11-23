@@ -391,25 +391,6 @@
     </MudCard>
 </div>
 
-<style>
-    .directory-card {
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-        border: 1px solid var(--mud-palette-lines-default);
-    }
-    .directory-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
-        border-color: var(--mud-palette-primary-hover);
-    }
-    .entry-card {
-        transition: background-color 0.15s ease, border-color 0.15s ease;
-    }
-    .entry-card:hover {
-        border-color: var(--mud-palette-primary);
-        background-color: var(--mud-palette-surface) !important;
-    }
-</style>
-
 @code {
     [Parameter] public List<TimesheetUiRow> UiRows { get; set; } = new();
     [Parameter] public DateTime WeekStart { get; set; }

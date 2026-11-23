@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Models.Projects;
 
@@ -32,42 +31,6 @@ public class QuoteRepository : JsonRepository<Quote>
         Path.Combine(_basePath, "Projects", item.ProjectId, "Quotes", $"{item.Id}.json");
 
     // Custom loader to scan Project folders for quotes
-    public override void LoadFromDisk()
-    {
-        lock (_loadLock)
-        {
-            var projectsPath = Path.Combine(_basePath, "Projects");
-            if (!Directory.Exists(projectsPath))
-            {
-                _isLoaded = true;
-                return;
-            }
-
-            // Find all "Quotes" folders inside any project
-            var files = Directory.GetFiles(projectsPath, "*.json", SearchOption.AllDirectories)
-                                 .Where(f => f.Contains("Quotes" + Path.DirectorySeparatorChar));
-
-            var tempQuotes = new List<Quote>();
-            foreach (var file in files)
-            {
-                try
-                {
-                    var json = File.ReadAllText(file);
-                    var item = JsonSerializer.Deserialize<Quote>(json);
-                    if (item != null) tempQuotes.Add(item);
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogError(ex, "Error loading quote {File}", file);
-                }
-            }
-
-            RawCache.Clear();
-            foreach (var item in tempQuotes)
-            {
-                RawCache[item.Id] = item;
-            }
-            _isLoaded = true;
-        }
-    }
+    public override void LoadFromDisk() =>
+        LoadProjectSubfolderFromDisk("Quotes", "quote");
 }

@@ -14,7 +14,7 @@ public class StorageHealthServiceTests
     {
         var inMemorySettings = new Dictionary<string, string?>
         {
-            { "DataPath", Path.GetTempPath() }
+            { "DataPath", Path.GetTempPath() }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" }
         };
         _config = new ConfigurationBuilder()
             .AddInMemoryCollection(inMemorySettings)
@@ -25,12 +25,10 @@ public class StorageHealthServiceTests
     public void StorageHealthService_Initializes_WithValidDriveInfo()
     {
         var service = new StorageHealthService(_config, _mockLogger.Object);
-        var info = service.GetHealthInfo();
 
-        Assert.NotNull(info);
-        Assert.True(info.TotalBytes > 0);
-        Assert.True(info.AvailableFreeBytes > 0);
-        Assert.False(info.HasPersistenceFailure);
+        Assert.True(service.TotalBytes > 0);
+        Assert.True(service.AvailableFreeBytes > 0);
+        Assert.False(service.HasPersistenceFailure);
     }
 
     [Fact]
@@ -56,17 +54,5 @@ public class StorageHealthServiceTests
         service.RecordPersistenceSuccess();
 
         Assert.False(service.HasPersistenceFailure);
-    }
-
-    [Fact]
-    public void StorageHealthInfo_Properties_AreConsistent()
-    {
-        var service = new StorageHealthService(_config, _mockLogger.Object);
-        var info = service.GetHealthInfo();
-
-        Assert.Equal(service.Status, info.Status);
-        Assert.Equal(service.AvailableFreeBytes, info.AvailableFreeBytes);
-        Assert.Equal(service.TotalBytes, info.TotalBytes);
-        Assert.Equal(service.IsUploadAllowed, info.IsUploadAllowed);
     }
 }

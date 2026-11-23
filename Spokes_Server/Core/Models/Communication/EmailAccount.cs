@@ -113,12 +113,24 @@ public class EmailAccount : IDataEntity
         }
     }
 
-    public bool CanUserAccess(string employeeId, IEnumerable<string>? userTeamIds = null)
+    public bool CanUserAccess(string employeeId, IEnumerable<string>? userTeamIds = null) =>
+        EmailAccessHelper.CanUserAccess(IsServerManaged, OwnerEmployeeId, AllowedUserIds, AllowedTeamIds, employeeId, userTeamIds);
+}
+
+internal static class EmailAccessHelper
+{
+    public static bool CanUserAccess(
+        bool isServerManaged,
+        string? ownerEmployeeId,
+        List<string>? allowedUserIds,
+        List<string>? allowedTeamIds,
+        string employeeId,
+        IEnumerable<string>? userTeamIds)
     {
         if (string.IsNullOrWhiteSpace(employeeId)) return false;
-        if (!IsServerManaged && string.Equals(OwnerEmployeeId, employeeId, StringComparison.OrdinalIgnoreCase)) return true;
-        if (AllowedUserIds != null && AllowedUserIds.Any(u => string.Equals(u, employeeId, StringComparison.OrdinalIgnoreCase))) return true;
-        if (userTeamIds != null && AllowedTeamIds != null && AllowedTeamIds.Intersect(userTeamIds, StringComparer.OrdinalIgnoreCase).Any()) return true;
+        if (!isServerManaged && string.Equals(ownerEmployeeId, employeeId, StringComparison.OrdinalIgnoreCase)) return true;
+        if (allowedUserIds != null && allowedUserIds.Any(u => string.Equals(u, employeeId, StringComparison.OrdinalIgnoreCase))) return true;
+        if (userTeamIds != null && allowedTeamIds != null && allowedTeamIds.Intersect(userTeamIds, StringComparer.OrdinalIgnoreCase).Any()) return true;
         return false;
     }
 }

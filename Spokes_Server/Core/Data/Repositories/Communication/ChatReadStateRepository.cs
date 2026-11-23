@@ -47,12 +47,6 @@ public class ChatReadStateRepository : JsonRepository<ChatReadState>
         Save(state);
     }
 
-    public List<ChatReadState> GetReadStatesForUser(string userId)
-    {
-        EnsureLoaded();
-        return _cache.Values.Where(rs => rs.UserId == userId).ToList();
-    }
-
     /// <summary>
     /// Returns the last read timestamp, or <see cref="DateTime.MinValue"/> if never read.
     /// </summary>

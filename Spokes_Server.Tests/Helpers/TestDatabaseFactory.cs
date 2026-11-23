@@ -42,7 +42,11 @@ public static class TestDatabaseFactory
         var tempPath = Path.Combine(Path.GetTempPath(), $"Spokes_TestDb_{Guid.NewGuid():N}");
         var persistence = new DiskPersistenceService(NullLogger<DiskPersistenceService>.Instance);
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = tempPath })
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = tempPath,
+                ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"
+            })
             .Build();
 
         var companyProfiles = new CompanyProfileRepository(persistence, config);

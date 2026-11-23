@@ -196,20 +196,8 @@
         };
     }
 
-    private string GetCurrentSoundId(string categoryId)
-    {
-        var soundId = _currentUser?.GetNotificationSound(categoryId);
-        var category = NotificationCategoryRegistry.GetCategory(categoryId);
-        var defaultSound = NotificationSoundCatalog.GetAllSounds()
-            .FirstOrDefault(s => !s.IsSpecial && s.FileName != null && s.FileName.Equals(category?.DefaultSoundFileName, StringComparison.OrdinalIgnoreCase));
-
-        if (string.IsNullOrEmpty(soundId) || soundId == NotificationSoundIds.SpokesDefault || soundId == defaultSound?.Id)
-        {
-            return NotificationSoundIds.SpokesDefault;
-        }
-
-        return soundId;
-    }
+    private string GetCurrentSoundId(string categoryId) =>
+        NotificationSoundCatalog.NormalizeSoundIdForCategory(categoryId, _currentUser?.GetNotificationSound(categoryId));
 
     private async Task OnSoundChanged(string categoryId, string soundId)
     {

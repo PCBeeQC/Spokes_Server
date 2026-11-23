@@ -109,11 +109,16 @@ public class BackupEncryptionServiceTests
         using var encryptedStream = new MemoryStream();
 
         var reportedBytes = new List<long>();
-        var progress = new Progress<long>(b => reportedBytes.Add(b));
+        var progress = new SyncProgress<long>(reportedBytes.Add);
 
         await _encryptionService.EncryptBackupAsync(sourceStream, encryptedStream, masterPassword, progress);
 
         Assert.NotEmpty(reportedBytes);
         Assert.Equal(originalBytes.Length, reportedBytes.Last());
+    }
+
+    private sealed class SyncProgress<T>(Action<T> onReport) : IProgress<T>
+    {
+        public void Report(T value) => onReport(value);
     }
 }

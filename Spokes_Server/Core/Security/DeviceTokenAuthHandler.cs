@@ -90,13 +90,7 @@ public class DeviceTokenAuthHandler : AuthenticationHandler<DeviceTokenAuthOptio
             {
                 // Must match the original cookie options (Path, HttpOnly, SameSite, Secure)
                 // or the browser will silently ignore the delete and keep sending the stale cookie.
-                Response.Cookies.Delete("Spokes_Refresh", new CookieOptions
-                {
-                    HttpOnly = true,
-                    Secure = Request.IsHttps,
-                    SameSite = SameSiteMode.Lax,
-                    Path = "/"
-                });
+                VaultCookieProtector.DeleteRefreshCookie(Context);
             }
             else if (Request.Cookies.ContainsKey("Spokes_Session_v3"))
             {

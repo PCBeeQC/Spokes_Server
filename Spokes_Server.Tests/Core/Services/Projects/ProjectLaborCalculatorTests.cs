@@ -2,11 +2,20 @@ namespace Spokes_Server.Tests.Core.Services.Projects;
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Moq;
+using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Services.HR;
 using Spokes_Server.Core.Services.Projects;
 using Spokes_Server.Core.Services.Reports.Helpers;
+using Spokes_Server.Core.Services.Security;
 using Xunit;
 
 public class ProjectLaborCalculatorTests
@@ -556,5 +565,107 @@ public class ProjectLaborCalculatorTests
         Assert.Equal(12m, model.WeeklyLabor.GrandTotal); // Weekly labor in March is 12h
         Assert.Single(model.WeeklyLabor.Rows);
         Assert.Equal(12m, model.WeeklyLabor.Rows[0].RunningTotal);
+    }
+
+    [Fact]
+    public void PrepareViewerScopedInputs_ExcludesOtherUsersDraftTimesheets_AndBucketsNonDiscoverableContributors()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_LaborScope_{Guid.NewGuid()}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var services = new ServiceCollection();
+            var mockConfig = new Mock<IConfiguration>();
+            mockConfig.Setup(c => c["DataPath"]).Returns(tempDir);
+            mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
+            services.AddSingleton<IConfiguration>(mockConfig.Object);
+            services.AddLogging();
+            services.AddSingleton<EncryptionService>();
+            services.AddSpokesDatabase();
+            using var sp = services.BuildServiceProvider();
+            var db = sp.GetRequiredService<Database>();
+            var hrService = new HRService(db.HrContext);
+
+            var viewer = new Employee
+            {
+                Id = "emp-viewer",
+                FirstName = "Viewer",
+                LastName = "Report",
+                IsActive = true,
+                Permissions = [AppPermissions.Timesheets.ViewReport]
+            };
+            var hiddenEmp = new Employee
+            {
+                Id = "emp-hidden",
+                FirstName = "Hidden",
+                LastName = "Person",
+                Email = "hidden@example.com",
+                IsActive = true
+            };
+            db.Employees.Save(viewer);
+            db.Employees.Save(hiddenEmp);
+
+            var mockPrivacy = new Mock<IUserPrivacyService>();
+            mockPrivacy.Setup(p => p.FilterDiscoverableTeams(It.IsAny<Employee?>(), It.IsAny<IEnumerable<Team>>()))
+                .Returns([]);
+            mockPrivacy.Setup(p => p.CanDiscoverUser(viewer, hiddenEmp)).Returns(false);
+            mockPrivacy.Setup(p => p.CanDiscoverUser(viewer, viewer)).Returns(true);
+
+            var timesheets = new List<Timesheet>
+            {
+                new()
+                {
+                    Id = "ts-viewer-draft",
+                    EmployeeId = viewer.Id,
+                    EmployeeName = viewer.FullName,
+                    Year = 2026,
+                    WeekNumber = 10,
+                    Status = TimesheetStatus.Draft,
+                    Entries = [new TimeEntry { ProjectId = "proj-1", Hours = 3m, Date = new DateTime(2026, 3, 2) }]
+                },
+                new()
+                {
+                    Id = "ts-hidden-draft",
+                    EmployeeId = hiddenEmp.Id,
+                    EmployeeName = hiddenEmp.FullName,
+                    Year = 2026,
+                    WeekNumber = 10,
+                    Status = TimesheetStatus.Draft,
+                    Entries = [new TimeEntry { ProjectId = "proj-1", Hours = 4m, Date = new DateTime(2026, 3, 2) }]
+                },
+                new()
+                {
+                    Id = "ts-hidden-approved",
+                    EmployeeId = hiddenEmp.Id,
+                    EmployeeName = hiddenEmp.FullName,
+                    Year = 2026,
+                    WeekNumber = 10,
+                    Status = TimesheetStatus.Approved,
+                    Entries = [new TimeEntry { ProjectId = "proj-1", Hours = 6m, Date = new DateTime(2026, 3, 3) }]
+                }
+            };
+
+            var scoped = ProjectLaborCalculator.PrepareViewerScopedInputs(
+                viewer,
+                timesheets,
+                [viewer, hiddenEmp],
+                [],
+                hrService,
+                mockPrivacy.Object);
+
+            Assert.DoesNotContain(scoped.ScopedTimesheets, t => t.Id == "ts-hidden-draft");
+            Assert.Contains(scoped.ScopedTimesheets, t => t.Id == "ts-viewer-draft" && t.EmployeeId == viewer.Id);
+            var anonTs = Assert.Single(scoped.ScopedTimesheets, t => t.Id == "ts-hidden-approved");
+            Assert.Equal(ProjectLaborCalculator.RestrictedContributorBucketId, anonTs.EmployeeId);
+            Assert.Equal(string.Empty, anonTs.EmployeeName);
+            Assert.False(scoped.VisibleEmployees.ContainsKey(hiddenEmp.Id));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
     }
 }

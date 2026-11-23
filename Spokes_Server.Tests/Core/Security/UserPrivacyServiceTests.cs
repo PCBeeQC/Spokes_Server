@@ -37,6 +37,7 @@ public class UserPrivacyServiceTests
     {
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns("Data");
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         _mockCompanyProfiles = new Mock<CompanyProfileRepository>(null!, mockConfig.Object);
         _mockEmployees = new Mock<EmployeeRepository>(null!, mockConfig.Object);
@@ -249,7 +250,7 @@ public class UserPrivacyServiceTests
     [Fact]
     public async Task AddContact_ByExactFullName_Success_WhenFullNameMethodAllowed()
     {
-        _profile.Privacy.DiscoveryMethod = UserDiscoveryMethod.ExactEmailOrFullName;
+        _profile.Privacy.DiscoveryMethod = UserDiscoveryMethod.ExactEmailOrUsername;
 
         var result = await _service.AddContactByIdentifierAsync(_bobTeam1, _charlieTeam2.FullName);
 

@@ -1,5 +1,6 @@
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Projects
 @using Spokes_Server.Core.Services.Storage
 @inject Database Db
 @inject ISnackbar Snackbar
@@ -117,44 +118,25 @@
 
     // Cache projects
     private List<Project> Projects = [];
+    private string _initialProjectId = string.Empty;
 
     protected override async Task OnInitializedAsync()
     {
-        var user = await UserService.GetEmployeeAsync();
+        _initialProjectId = Item.ProjectId ?? string.Empty;
+        var user = await UserService.GetEmployeeAsync(allowSuspended: true);
 
         if (user != null)
         {
-            if (user.IsAdmin)
-            {
-                Projects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.DisplayName).ToList();
-            }
-            else
-            {
-                var all = Db.Projects.GetAll().Where(p => p.IsActive);
-                List<Project> filtered = [];
-
-                foreach (var p in all)
-                {
-                    if (p.AccessPolicy == ProjectAccessPolicy.Public)
-                    {
-                        filtered.Add(p);
-                    }
-                    else
-                    {
-                        if (p.AllowedUserIds.Contains(user.Id) ||
-                        (!string.IsNullOrEmpty(user.TeamId) && p.AllowedTeamIds.Contains(user.TeamId)))
-                        {
-                            filtered.Add(p);
-                        }
-                    }
-                }
-                Projects = filtered.OrderBy(p => p.DisplayName).ToList();
-            }
+            Projects = Db.Projects.GetAll()
+                .Where(p => p.IsActive &&
+                            (ProjectAccessHelper.CanAccessProjectForContribution(user, p, Db.Teams, allowSuspended: ReadOnly) ||
+                             (ReadOnly && ProjectAccessHelper.CanAccess(user, p, Db.Teams, allowAccountingFinancialRead: true))))
+                .OrderBy(p => p.DisplayName)
+                .ToList();
         }
         else
         {
-            Projects = Db.Projects.GetAll().Where(p => p.IsActive && p.AccessPolicy == ProjectAccessPolicy.Public).OrderBy(p =>
-            p.DisplayName).ToList();
+            Projects = [];
         }
 
         if (Item.KilometrageRate == 0)
@@ -201,8 +183,21 @@
         Item.TvqAmount = breakdown.TvqAmount;
     }
 
+    private async Task<bool> AuthorizeReceiptOrSubmitMutationAsync()
+    {
+        if (ReadOnly) return false;
+        var caller = await UserService.GetEmployeeAsync();
+        if (caller is not { IsActiveUnsuspended: true } || !caller.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Finance.AccessExpenses))
+        {
+            Snackbar.Add("Your account is read-only or lacks permission to modify expense items.", Severity.Error);
+            return false;
+        }
+        return true;
+    }
+
     private async Task RemoveReceipt()
     {
+        if (!await AuthorizeReceiptOrSubmitMutationAsync()) return;
         if (!string.IsNullOrEmpty(Item.ReceiptPath))
         {
             await FileService.DeleteAsync(Item.ReceiptPath);
@@ -216,6 +211,11 @@
         var result = results.FirstOrDefault();
         if (result != null)
         {
+            if (!await AuthorizeReceiptOrSubmitMutationAsync())
+            {
+                await FileService.DeleteAsync(result.FilePath);
+                return;
+            }
             if (!string.IsNullOrEmpty(Item.ReceiptPath) && Item.ReceiptPath != result.FilePath)
             {
                 await FileService.DeleteAsync(Item.ReceiptPath);
@@ -227,8 +227,19 @@
     }
 
     private void Cancel() => MudDialog.Cancel();
-    private void Submit()
+    private async Task Submit()
     {
+        if (!await AuthorizeReceiptOrSubmitMutationAsync()) return;
+        if (!string.IsNullOrWhiteSpace(Item.ProjectId) &&
+            !string.Equals(Item.ProjectId, _initialProjectId, StringComparison.OrdinalIgnoreCase))
+        {
+            var liveUser = await UserService.GetEmployeeAsync();
+            if (!ProjectAccessHelper.CanAccessProjectForContribution(liveUser, Db.Projects.GetById(Item.ProjectId), Db.Teams, allowSuspended: false))
+            {
+                Snackbar.Add("You do not have access to log expenses to this restricted project.", Severity.Error);
+                return;
+            }
+        }
         if (Item.Total > 0 && Item.SubTotal == 0 && Item.TpsAmount == 0 && Item.TvqAmount == 0)
         {
             RecalculateTaxes();

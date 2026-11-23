@@ -1,4 +1,5 @@
 @using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Common
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Constants
@@ -31,7 +32,7 @@
     across @ProjectCount projects
 </MudAlert>
 
-<MudTable Items="@Invoices" Hover="true" Dense="true">
+<MudTable Elevation="0" Outlined="true" Items="@Invoices" Hover="true" Dense="true">
     <HeaderContent>
         <MudTh>Invoice #</MudTh>
         <MudTh>Date</MudTh>
@@ -73,29 +74,89 @@
     private decimal UnbilledLabor = 0;
     private decimal UnbilledExpenses = 0;
     private bool _canManageInvoices;
+    private bool _canApproveInvoice;
+    private bool _hasAuthorizedAccess;
+    private string? _authorizedGroupId;
+    private List<Project> _accessibleGroupProjects = [];
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
+        if (!string.Equals(_authorizedGroupId, ProjectGroupId, StringComparison.Ordinal))
+        {
+            Group = null;
+            Invoices = [];
+            _accessibleGroupProjects = [];
+            ProjectCount = 0;
+            UnbilledLabor = 0;
+            UnbilledExpenses = 0;
+            _canManageInvoices = false;
+            _canApproveInvoice = false;
+            _hasAuthorizedAccess = false;
+            _authorizedGroupId = null;
+        }
+
         var emp = await UserService.GetEmployeeAsync();
-        _canManageInvoices = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Finance.AccessAccounting) || emp.HasPermission(AppPermissions.Projects.Edit));
+        var liveGroup = string.IsNullOrEmpty(ProjectGroupId) ? null : Db.ProjectGroups.GetById(ProjectGroupId);
+        if (emp == null || liveGroup == null)
+        {
+            return;
+        }
+
+        var canAccountingRead = emp.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: true);
+        if (!emp.IsActiveUnsuspended && !canAccountingRead)
+        {
+            return;
+        }
+
+        var groupProjects = liveGroup.ProjectIds
+            .Select(pid => Db.Projects.GetById(pid))
+            .Where(p => p != null)
+            .Cast<Project>()
+            .ToList();
+
+        var accessibleProjects = groupProjects
+            .Where(p => UserService.CanViewProject(emp, p, allowAccountingFinancialRead: true))
+            .ToList();
+
+        var canViewGroup = canAccountingRead || !liveGroup.ProjectIds.Any() || accessibleProjects.Any();
+        if (!canViewGroup)
+        {
+            return;
+        }
+
+        Group = liveGroup;
+        _accessibleGroupProjects = accessibleProjects;
+        _hasAuthorizedAccess = true;
+        _authorizedGroupId = liveGroup.Id;
+        _canApproveInvoice = emp.HasPermission(AppPermissions.Finance.ApproveInvoices);
+        _canManageInvoices = emp.HasPermission(AppPermissions.Finance.AccessAccounting) || _canApproveInvoice;
         Refresh();
     }
 
     private void Refresh()
     {
+        if (!_hasAuthorizedAccess || Group == null)
+        {
+            Invoices = [];
+            ProjectCount = 0;
+            UnbilledLabor = 0;
+            UnbilledExpenses = 0;
+            return;
+        }
+
         Group = Db.ProjectGroups.GetById(ProjectGroupId);
         if (Group == null) return;
 
-        ProjectCount = Group.ProjectIds.Count;
+        ProjectCount = _accessibleGroupProjects.Count;
         Invoices = Db.Invoices.GetByProjectGroup(ProjectGroupId);
         CalculateUnbilled();
     }
 
     private void CalculateUnbilled()
     {
-        if (Group == null) return;
+        if (!_hasAuthorizedAccess || Group == null) return;
 
-        var projectIds = Group.ProjectIds.ToHashSet();
+        var projectIds = _accessibleGroupProjects.Select(p => p.Id).ToHashSet();
         
         // Get IDs of everything already billed by group invoices
         var billedTimeIds = Invoices.SelectMany(i => i.BilledTimeEntryIds).ToHashSet();
@@ -153,7 +214,7 @@
         }
 
         // Expense items
-        foreach (var report in allReports.Where(r => r.DateSubmitted.HasValue))
+        foreach (var report in allReports.Where(r => r.DateSubmitted.HasValue && r.Status != ExpenseReportStatus.Draft))
         {
             var unbilledItems = report.LineItems
                 .Where(i => projectIds.Contains(i.ProjectId) && !billedExpenseItemIds.Contains(i.Id));
@@ -165,23 +226,69 @@
 
     private async Task CreateInvoice()
     {
-        if (Group == null || !_canManageInvoices) return;
+        var emp = await UserService.GetEmployeeAsync();
+        var liveGroup = string.IsNullOrEmpty(ProjectGroupId) ? null : Db.ProjectGroups.GetById(ProjectGroupId);
+        if (emp == null || liveGroup == null)
+        {
+            _canManageInvoices = false;
+            _canApproveInvoice = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return;
+        }
 
+        var canApprove = emp.HasPermission(AppPermissions.Finance.ApproveInvoices);
+        var canManage = emp.HasPermission(AppPermissions.Finance.AccessAccounting) || canApprove;
+        if (!canManage)
+        {
+            _canManageInvoices = false;
+            _canApproveInvoice = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return;
+        }
+
+        var groupProjects = liveGroup.ProjectIds
+            .Select(pid => Db.Projects.GetById(pid))
+            .Where(p => p != null)
+            .Cast<Project>()
+            .ToList();
+        if (groupProjects.Any(p => !UserService.CanViewProject(emp, p, allowAccountingFinancialRead: true)))
+        {
+            Snackbar.Add("Access denied to one or more projects in this group.", Severity.Error);
+            return;
+        }
+
+        var actorName = emp.FullName ?? emp.Email ?? "System";
         var profile = Db.CompanyProfile.Get();
         var template = Db.DocumentTemplates.GetDefault();
 
         var invoice = new Invoice
         {
-            ProjectGroupId = ProjectGroupId,
-            ProjectId = Group.ProjectIds.FirstOrDefault() ?? "", // Use first project as reference
+            ProjectGroupId = liveGroup.Id,
+            ProjectId = liveGroup.ProjectIds.FirstOrDefault() ?? "", // Use first project as reference
             InvoiceNumber = Db.Invoices.GenerateInvoiceNumber(profile.InvoicePrefix),
             Date = DateTime.Today,
             Status = InvoiceStatus.Draft,
             TaxRate = template?.TaxRate ?? 0.14975m,
-            PaymentTerms = template?.DefaultPaymentTerms ?? string.Empty
+            PaymentTerms = template?.DefaultPaymentTerms ?? string.Empty,
+            History =
+            [
+                new DocumentHistoryEntry
+                {
+                    Timestamp = DateTime.UtcNow,
+                    Action = DocumentHistoryActions.Created,
+                    NewStatus = InvoiceStatus.Draft,
+                    ChangedBy = actorName,
+                    Summary = "Created draft group invoice"
+                }
+            ]
         };
 
-        var parameters = new DialogParameters { ["Invoice"] = invoice };
+        var parameters = new DialogParameters<InvoiceMasterDialog>
+        {
+            { x => x.Invoice, invoice },
+            { x => x.CanEditDraft, true },
+            { x => x.CanApproveInvoice, canApprove }
+        };
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
 
         var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>("Create Group Invoice", parameters, options);
@@ -206,4 +313,3 @@
         }
     }
 }
-

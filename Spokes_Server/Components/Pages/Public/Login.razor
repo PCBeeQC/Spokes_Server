@@ -1,13 +1,10 @@
 @page "/authentication/login"
 @layout LoginLayout
 @using Spokes_Server.Components.Layout
-@using Microsoft.Extensions.Localization
-@using Spokes_Server.Resources
+@using Spokes_Server.Core.Security
 @attribute [AllowAnonymous]
 @inject NavigationManager Nav
 @inject Database Db
-@inject IJSRuntime JS
-@inject IStringLocalizer<AppResources> Loc
 
 <MudContainer MaxWidth="MaxWidth.False" Class="d-flex align-center justify-center mud-width-full"
     Style="height: 100vh; background-color: #f4f6f8;">
@@ -22,7 +19,7 @@
             else
             {
                 <MudAvatar Color="Color.Primary" Style="height: 80px; width: 80px; font-size: 2rem;">
-                    @(Profile?.CompanyName?[..1] ?? "M")
+                    @(!string.IsNullOrEmpty(Profile?.CompanyName) ? Profile.CompanyName[..1] : "M")
                 </MudAvatar>
             }
         </div>
@@ -32,10 +29,14 @@
             @Loc["Please sign in to access the management portal."]
         </MudText>
 
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" FullWidth="true"
-            StartIcon="@Icons.Material.Filled.Login" OnClick="SignIn" Class="py-3">
-            @Loc["Connect with SSO"]
-        </MudButton>
+        <form id="sso-login-form" method="get" action="/sso/login" data-enhance-nav="false" class="mud-width-full">
+            <input type="hidden" id="sso-login-device-id" name="deviceId" value="" />
+            <input type="hidden" name="returnUrl" value="@SafeReturnUrl" />
+            <MudButton id="sso-login-btn" ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary"
+                Size="Size.Large" FullWidth="true" StartIcon="@Icons.Material.Filled.Login" Class="py-3">
+                @Loc["Connect with SSO"]
+            </MudButton>
+        </form>
 
         <MudText Typo="Typo.caption" Color="Color.Default" Class="mt-8">
             &copy; @DateTime.Now.Year @Profile?.CompanyName
@@ -44,37 +45,72 @@
     </MudPaper>
 </MudContainer>
 
-@code {
-    [Parameter][SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
-    private CompanyProfile Profile = default!;
+<script>
+    (function () {
+        const form = document.getElementById('sso-login-form');
+        const deviceInput = document.getElementById('sso-login-device-id');
+        if (!form || !deviceInput) return;
 
-    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+        let submitting = false;
+        window.addEventListener('pageshow', function () {
+            submitting = false;
+        });
+
+        form.addEventListener('submit', async function (ev) {
+            if (submitting || deviceInput.value) return;
+            if (window.pushNotifications && typeof window.pushNotifications.getDeviceId === 'function') {
+                ev.preventDefault();
+                submitting = true;
+                try {
+                    const deviceId = await window.pushNotifications.getDeviceId();
+                    if (deviceId) {
+                        deviceInput.value = deviceId;
+                    }
+                } catch (e) { }
+                form.submit();
+            }
+        });
+    })();
+</script>
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? ReturnUrl { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private CompanyProfile? Profile;
+
+    private string SafeReturnUrl
+    {
+        get
+        {
+            if (HttpContext != null)
+            {
+                return RedirectHelper.GetSafeRedirectUrl(ReturnUrl, HttpContext, "/");
+            }
+
+            var currentHost = Uri.TryCreate(Nav.BaseUri, UriKind.Absolute, out var baseUri) ? baseUri.Host : "localhost";
+            return RedirectHelper.GetSafeRedirectUrl(ReturnUrl, currentHost, "/");
+        }
+    }
 
     protected override void OnInitialized()
     {
         Profile = Db.CompanyProfile.Get();
 
-        // If we haven't tried a silent SSO login yet, try it now.
-        // This handles users navigating directly to the login page.
+        if (HttpContext?.User?.Identity?.IsAuthenticated == true)
+        {
+            Nav.NavigateTo(SafeReturnUrl, forceLoad: true);
+            return;
+        }
+
+        // If we haven't tried a silent SSO login yet, redirect immediately (HTTP 302 during Static SSR).
+        // This handles users navigating directly to the login page with an active IdP session.
         if (HttpContext != null && !HttpContext.Request.Cookies.ContainsKey("Spokes_SSO_Attempt"))
         {
-            var target = !string.IsNullOrEmpty(ReturnUrl) ? ReturnUrl : "/";
-            Nav.NavigateTo($"/sso/login/auto?returnUrl={Uri.EscapeDataString(target)}", forceLoad: true);
+            Nav.NavigateTo($"/sso/login/auto?returnUrl={Uri.EscapeDataString(SafeReturnUrl)}", forceLoad: true);
         }
-    }
-
-    private async Task SignIn()
-    {
-        // 1. Determine where to go after login (Default to Home "/")
-        var target = !string.IsNullOrEmpty(ReturnUrl) ? ReturnUrl : "/";
-
-        string deviceId = "";
-        try {
-            deviceId = await JS.InvokeAsync<string>("pushNotifications.getDeviceId");
-        } catch { }
-
-        // 2. Redirect to the Program.cs endpoint
-        // IMPORTANT: forceLoad: true is required to break out of Blazor and hit the server endpoint
-        Nav.NavigateTo($"/sso/login?deviceId={Uri.EscapeDataString(deviceId)}&returnUrl={Uri.EscapeDataString(target)}", forceLoad: true);
     }
 }

@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
@@ -36,7 +37,7 @@ public class EmailInboxServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_EmailInbox_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -183,35 +184,10 @@ public class EmailInboxServiceTests : IDisposable
     }
 
     [Fact]
-    public void EnsureVirtualInboxSendingIdentity_CreatesAndLinksIdentityFromVirtualInbox()
-    {
-        var inbox = new EmailInbox
-        {
-            Id = "inb-support",
-            AccountId = "acc-work",
-            OwnerEmployeeId = "emp-alice",
-            Name = "Spokes Support",
-            TargetAddresses = ["support@spokes.sh"],
-            AllowedTeamIds = ["team-support"]
-        };
-        _inboxes.Save(inbox);
-
-        var identity = _service.EnsureVirtualInboxSendingIdentity(inbox, "smtp-relay", "Spokes Support Team");
-        Assert.NotNull(identity);
-        Assert.Equal(EmailIdentitySourceType.VirtualInbox, identity.SourceType);
-        Assert.Equal(inbox.Id, identity.SourceInboxId);
-        Assert.Equal("support@spokes.sh", identity.EmailAddress);
-        Assert.Equal("smtp-relay", identity.SendingServerConfigId);
-        Assert.Contains("team-support", identity.AllowedTeamIds);
-        Assert.Contains(identity.Id, inbox.LinkedIdentityIds);
-        Assert.Equal(identity.Id, inbox.DefaultIdentityId);
-    }
-
-    [Fact]
     public void RealInboxSharing_AllowsMultipleUsersToAccessSameRealInboxWithoutDuplication()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice" };
-        var bob = new Employee { Id = "emp-bob", FirstName = "Bob", TeamId = "team-ops" };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Permissions = [AppPermissions.Email.Use] };
+        var bob = new Employee { Id = "emp-bob", FirstName = "Bob", TeamId = "team-ops", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
         _employees.Save(bob);
         _teams.Save(new Team { Id = "team-ops", Name = "Operations" });
@@ -259,8 +235,8 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void GetPermittedIdentities_RespectsLinkedIdentitiesAndDomainMatchedToggle()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh" };
-        var bob = new Employee { Id = "emp-bob", FirstName = "Bob", Email = "bob@otherdomain.com" };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh", Permissions = [AppPermissions.Email.Use] };
+        var bob = new Employee { Id = "emp-bob", FirstName = "Bob", Email = "bob@otherdomain.com", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
         _employees.Save(bob);
 
@@ -268,6 +244,7 @@ public class EmailInboxServiceTests : IDisposable
         {
             Id = "id-support",
             OwnerEmployeeId = "emp-admin",
+            IsServerManaged = true,
             DisplayName = "Spokes Support",
             Username = "support",
             Domain = "spokes.sh"
@@ -292,10 +269,18 @@ public class EmailInboxServiceTests : IDisposable
         _identities.Save(alicePersonalIdentity);
         _identities.Save(bobPersonalIdentity);
 
+        _accounts.Save(new EmailAccount
+        {
+            Id = "acc-1",
+            IsServerManaged = true,
+            EmailAddress = "support@spokes.sh"
+        });
+
         var supportInbox = new EmailInbox
         {
             Id = "inb-support",
             AccountId = "acc-1",
+            IsServerManaged = true,
             Name = "Support",
             TargetAddresses = ["support@spokes.sh"],
             AllowedUserIds = [alice.Id, bob.Id],
@@ -320,8 +305,15 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void SelectDefaultIdentity_MatchesReplyToReceivingAddressFirst()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice" };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
+
+        _accounts.Save(new EmailAccount
+        {
+            Id = "acc-1",
+            OwnerEmployeeId = alice.Id,
+            EmailAddress = "alice@spokes.sh"
+        });
 
         var idSupport = new EmailSendingIdentity
         {
@@ -366,7 +358,7 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void UnifiedViews_AggregateAcrossAccessibleMailboxesAndInboxes()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice" };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
 
         var acc1 = new EmailAccount { Id = "acc-1", OwnerEmployeeId = alice.Id, Name = "Work" };
@@ -428,7 +420,7 @@ public class EmailInboxServiceTests : IDisposable
     public void ServerManagedMailboxes_RequireExplicitSharingAndIsolateFromPersonalMailboxes()
     {
         var admin = new Employee { Id = "emp-admin", FirstName = "Admin", IsAdmin = true };
-        var user = new Employee { Id = "emp-user", FirstName = "User" };
+        var user = new Employee { Id = "emp-user", FirstName = "User", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(admin);
         _employees.Save(user);
 
@@ -597,7 +589,7 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public async Task SetRealInboxArchived_HidesFromActiveViewsAndPreservesDiskFiles_AndUnarchiveRestores()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", IsActive = true };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", IsActive = true, Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
 
         var acc = new EmailAccount
@@ -648,7 +640,7 @@ public class EmailInboxServiceTests : IDisposable
         Assert.Equal(1, _service.GetTotalUnreadCountForUser(alice.Id));
 
         // Archive the Real Inbox
-        _service.SetRealInboxArchived(acc.Id, isArchived: true);
+        _service.SetRealInboxArchived(acc.Id, isArchived: true, alice.Id);
 
         // Hidden from all active views, unread counts, virtual inboxes, and sending identities
         Assert.Empty(_service.GetAccessibleRealInboxes(alice));
@@ -669,7 +661,7 @@ public class EmailInboxServiceTests : IDisposable
         Assert.Equal("<p>Contract body</p>", await File.ReadAllTextAsync(bodyPath));
 
         // Unarchive restores active state
-        _service.SetRealInboxArchived(acc.Id, isArchived: false);
+        _service.SetRealInboxArchived(acc.Id, isArchived: false, alice.Id);
         Assert.Single(_service.GetAccessibleRealInboxes(alice));
         Assert.Empty(_service.GetAccessibleArchivedRealInboxes(alice));
         Assert.Single(_service.GetAccessibleInboxes(alice));
@@ -680,7 +672,7 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public async Task DeleteRealInbox_WipesAllDiskFilesEvictsCachesAndCascadesVirtualInboxesAndIdentities()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", IsActive = true };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", IsActive = true, Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
 
         var acc = new EmailAccount
@@ -704,7 +696,21 @@ public class EmailInboxServiceTests : IDisposable
             TargetAddresses = ["attached@spokes.sh"]
         };
         _inboxes.Save(virtualInbox);
-        var virtualIdentity = _service.EnsureVirtualInboxSendingIdentity(virtualInbox, "smtp-1", "Attached Identity");
+        var virtualIdentity = new EmailSendingIdentity
+        {
+            OwnerEmployeeId = alice.Id,
+            SourceType = EmailIdentitySourceType.VirtualInbox,
+            SourceInboxId = virtualInbox.Id,
+            SourceAccountId = acc.Id,
+            SendingServerConfigId = "smtp-1",
+            DisplayName = "Attached Identity",
+            Username = "attached",
+            Domain = "spokes.sh"
+        };
+        _identities.Save(virtualIdentity);
+        virtualInbox.LinkedIdentityIds.Add(virtualIdentity.Id);
+        virtualInbox.DefaultIdentityId = virtualIdentity.Id;
+        _inboxes.Save(virtualInbox);
 
         var otherInbox = new EmailInbox
         {
@@ -746,7 +752,7 @@ public class EmailInboxServiceTests : IDisposable
         Assert.True(File.Exists(attPath));
 
         // Perform permanent delete
-        _service.DeleteRealInbox(acc.Id);
+        _service.DeleteRealInbox(acc.Id, alice.Id);
         await _persistence.FlushAllAsync();
 
         // Verify entire account directory (Account.json, Folders, Messages, index.json, Bodies, Mime, Attachments) is completely gone from disk
@@ -771,7 +777,7 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void SelectDefaultIdentity_PrefersVirtualInboxDefault_OverBackingRealInboxAutoIdentity()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh" };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
 
         var realIdentity = new EmailSendingIdentity
@@ -830,7 +836,7 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void GetPermittedIdentities_WhenBothInboxAndRealInboxProvided_IncludesBoth()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh" };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
 
         var realIdentity = new EmailSendingIdentity
@@ -880,7 +886,7 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void GetPermittedIdentities_WhenNeitherInboxNorRealInboxProvided_ReturnsAllAccessibleIdentities()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh" };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
 
         var id1 = new EmailSendingIdentity { Id = "id-1", OwnerEmployeeId = alice.Id, DisplayName = "Ident 1", Username = "user1", Domain = "a.com" };
@@ -902,8 +908,8 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void SelectDefaultIdentity_AllInboxesFallback_SelectsUserOwnedIdentity()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh" };
-        var bob = new Employee { Id = "emp-bob", FirstName = "Bob", Email = "bob@spokes.sh" };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh", Permissions = [AppPermissions.Email.Use] };
+        var bob = new Employee { Id = "emp-bob", FirstName = "Bob", Email = "bob@spokes.sh", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
         _employees.Save(bob);
 
@@ -939,7 +945,7 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void SelectDefaultIdentity_WhenRealInboxProvided_SelectsRealInboxDefaultIdentity()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh" };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", Email = "alice@spokes.sh", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
 
         var idAccountA = new EmailSendingIdentity { Id = "id-acc-a", OwnerEmployeeId = alice.Id, Username = "a", Domain = "a.com" };
@@ -1062,7 +1068,7 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void MarkEmailPageVisited_ClearsUnseenUnreadCount_WhilePreservingTotalAndInboxUnreadCounts()
     {
-        var alice = new Employee { Id = "emp-visit-1", FirstName = "Alice" };
+        var alice = new Employee { Id = "emp-visit-1", FirstName = "Alice", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
 
         var acc = new EmailAccount
@@ -1136,7 +1142,7 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void GetPermittedIdentities_WhenInboxIsNullAndUserLacksRealInboxAccess_DoesNotLeakRealInboxIdentities()
     {
-        var bob = new Employee { Id = "emp-bob-vi", FirstName = "Bob", Email = "bob@spokes.sh" };
+        var bob = new Employee { Id = "emp-bob-vi", FirstName = "Bob", Email = "bob@spokes.sh", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(bob);
 
         var adminIdentity = new EmailSendingIdentity
@@ -1200,8 +1206,8 @@ public class EmailInboxServiceTests : IDisposable
         var supportTeam = new Team { Id = "team-support", Name = "Support Team" };
         _teams.Save(supportTeam);
 
-        var teamMember = new Employee { Id = "emp-team-member", FirstName = "Dana", TeamId = supportTeam.Id };
-        var outsider = new Employee { Id = "emp-outsider", FirstName = "Eve" };
+        var teamMember = new Employee { Id = "emp-team-member", FirstName = "Dana", TeamId = supportTeam.Id, Permissions = [AppPermissions.Email.Use] };
+        var outsider = new Employee { Id = "emp-outsider", FirstName = "Eve", Permissions = [AppPermissions.Email.Use] };
         _employees.Save(teamMember);
         _employees.Save(outsider);
 
@@ -1244,8 +1250,8 @@ public class EmailInboxServiceTests : IDisposable
     [Fact]
     public void CanUserAccessEmailMessage_EnforcesLocalDraftCreatorIsolation_EvenOnSharedRealInboxAndForServerAdmins()
     {
-        var alice = new Employee { Id = "emp-shared-alice", FirstName = "Alice" };
-        var bob = new Employee { Id = "emp-shared-bob", FirstName = "Bob" };
+        var alice = new Employee { Id = "emp-shared-alice", FirstName = "Alice", Permissions = [AppPermissions.Email.Use] };
+        var bob = new Employee { Id = "emp-shared-bob", FirstName = "Bob", Permissions = [AppPermissions.Email.Use] };
         var admin = new Employee { Id = "emp-shared-admin", FirstName = "Admin", IsAdmin = true };
         _employees.Save(alice);
         _employees.Save(bob);

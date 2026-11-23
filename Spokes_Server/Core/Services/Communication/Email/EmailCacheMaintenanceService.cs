@@ -7,7 +7,11 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using MimeKit;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Services.Storage;
 
 namespace Spokes_Server.Core.Services.Communication.Email;
 
@@ -17,6 +21,10 @@ public class EmailCacheMaintenanceService : IEmailCacheMaintenanceService
     private readonly EmailMessageRepository _emailMessages;
     private readonly EmailSyncStateService _syncStateService;
     private readonly ILogger<EmailCacheMaintenanceService>? _logger;
+    private readonly EmployeeRepository? _employees;
+    private readonly EmailAccountRepository? _accounts;
+    private readonly TeamRepository? _teams;
+    private readonly CompanyProfileRepository? _companyProfile;
     private readonly string _emailBodyPath;
 
     public EmailCacheMaintenanceService(
@@ -24,12 +32,20 @@ public class EmailCacheMaintenanceService : IEmailCacheMaintenanceService
         EmailMessageRepository emailMessages,
         EmailSyncStateService syncStateService,
         IConfiguration config,
-        ILogger<EmailCacheMaintenanceService>? logger = null)
+        ILogger<EmailCacheMaintenanceService>? logger = null,
+        EmployeeRepository? employees = null,
+        EmailAccountRepository? accounts = null,
+        TeamRepository? teams = null,
+        CompanyProfileRepository? companyProfile = null)
     {
         _emailFolders = emailFolders;
         _emailMessages = emailMessages;
         _syncStateService = syncStateService;
         _logger = logger;
+        _employees = employees;
+        _accounts = accounts;
+        _teams = teams;
+        _companyProfile = companyProfile;
 
         var dataPath = (config != null ? config["DataPath"] : "Data") ?? "Data";
         _emailBodyPath = Path.Combine(dataPath, "EmailAccounts");
@@ -135,21 +151,64 @@ public class EmailCacheMaintenanceService : IEmailCacheMaintenanceService
         return text;
     }
 
-    public async Task RepairEmailInstallationAsync(string accountId, Func<string, CancellationToken, Task> syncAccountCallback, CancellationToken cancellationToken = default)
+    public async Task RepairEmailInstallationAsync(string accountId, Func<string, CancellationToken, Task> syncAccountCallback, string? callerEmployeeId = null, CancellationToken cancellationToken = default)
     {
+        if (string.Equals(_companyProfile?.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException("Email is not available in Family edition.");
+        }
+
+        if (_employees != null || !string.IsNullOrWhiteSpace(callerEmployeeId))
+        {
+            var caller = !string.IsNullOrWhiteSpace(callerEmployeeId) ? _employees?.GetById(callerEmployeeId) : null;
+            if (!FileAccessPermissionHelper.IsWritableUser(caller) ||
+                !FileAccessPermissionHelper.HasAssignedPermission(caller, AppPermissions.Email.Use))
+            {
+                throw new UnauthorizedAccessException("Suspended or unauthorized users cannot repair email cache.");
+            }
+
+            if (_accounts != null)
+            {
+                var account = _accounts.GetById(accountId);
+                if (account == null || account.IsArchived)
+                {
+                    throw new UnauthorizedAccessException("You are not authorized to repair cache for this email account.");
+                }
+
+                var teamIds = TeamRepository.GetUserTeamIds(_teams, caller!.Id, caller);
+
+                bool authorized = (account.IsServerManaged &&
+                                   (caller.IsEffectiveAdmin || FileAccessPermissionHelper.HasAssignedPermission(caller, AppPermissions.Admin.ManageSettings))) ||
+                                  account.CanUserAccess(caller.Id, teamIds);
+                if (!authorized)
+                {
+                    throw new UnauthorizedAccessException("Only authorized Real Inbox users may repair email cache.");
+                }
+            }
+        }
+
         _syncStateService.SetState(accountId, "Preparing Repair...");
 
         var folders = _emailFolders.GetByAccount(accountId);
-        var draftIds = new HashSet<string>();
+        var draftIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var draftFolder = folders.FirstOrDefault(f => f.Path == "LocalDrafts");
-        if (draftFolder != null)
+        foreach (var uid in _emailMessages.GetUidsByFolder(accountId, "LocalDrafts"))
         {
-            var uids = _emailMessages.GetUidsByFolder(accountId, "LocalDrafts");
-            foreach (var uid in uids)
+            var id = _emailMessages.GetIdByUid(accountId, "LocalDrafts", uid);
+            if (!string.IsNullOrWhiteSpace(id)) draftIds.Add(id);
+        }
+
+        foreach (var draftMsg in _emailMessages.GetByFolder(accountId, "LocalDrafts"))
+        {
+            if (!string.IsNullOrWhiteSpace(draftMsg.Id)) draftIds.Add(draftMsg.Id);
+        }
+
+        foreach (var draftFld in folders.Where(f => f.IsDrafts && !string.Equals(f.Path, "LocalDrafts", StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (var uid in _emailMessages.GetUidsByFolder(accountId, draftFld.Path))
             {
-                var id = _emailMessages.GetIdByUid(accountId, "LocalDrafts", uid);
-                if (id != null) draftIds.Add(id);
+                var id = _emailMessages.GetIdByUid(accountId, draftFld.Path, uid);
+                if (!string.IsNullOrWhiteSpace(id)) draftIds.Add(id);
             }
         }
 
@@ -160,7 +219,18 @@ public class EmailCacheMaintenanceService : IEmailCacheMaintenanceService
             var mimeDir = Path.Combine(_emailBodyPath, accountId, "Mime");
             if (Directory.Exists(mimeDir))
             {
-                try { Directory.Delete(mimeDir, true); } catch (Exception ex) { _logger?.LogWarning(ex, "Failed to delete mime directory"); }
+                try
+                {
+                    foreach (var file in Directory.GetFiles(mimeDir))
+                    {
+                        var msgId = Path.GetFileNameWithoutExtension(file);
+                        if (!draftIds.Contains(msgId))
+                        {
+                            try { File.Delete(file); } catch (Exception ex) { _logger?.LogWarning(ex, "Failed to delete mime file {FilePath}", file); }
+                        }
+                    }
+                }
+                catch (Exception ex) { _logger?.LogWarning(ex, "Failed to wipe mime cache directory"); }
             }
 
             var attDir = Path.Combine(_emailBodyPath, accountId, "Attachments");

@@ -1,0 +1,249 @@
+@* Canonical dialog host wrapping <MudDialogProvider /> and synchronizing every MudDialog
+   instance (including ShowMessageBoxAsync and stacked modals) with window.SpokesBridge.backStack
+   in strict LIFO order across Android Capacitor, iOS Capacitor, and Web browsers. *@
+@implements IAsyncDisposable
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<MudDialogProvider />
+
+@code {
+    private sealed class TrackedDialog
+    {
+        public required IDialogReference Reference { get; init; }
+        public required string IdString { get; init; }
+        public required string Key { get; init; }
+        public required string OpenedUri { get; init; }
+        public bool ClosedByBack { get; set; }
+        public bool Unregistered { get; set; }
+    }
+
+    private readonly List<TrackedDialog> _trackedDialogs = [];
+    private DotNetObjectReference<SpokesDialogProvider>? _dotNetRef;
+    private bool _isDisposed;
+
+    protected override void OnInitialized()
+    {
+        // Subscribe BEFORE child <MudDialogProvider /> runs OnInitialized so MudDialogProvider's
+        // DialogInstanceAddedAsync handler stays last in the multicast invocation chain.
+        DialogService.DialogInstanceAddedAsync += OnDialogAddedAsync;
+        DialogService.OnDialogCloseRequested += OnDialogCloseRequested;
+    }
+
+    internal static bool IsDismissibleOnBack(DialogOptions? options)
+    {
+        if (options?.CloseOnEscapeKey == false)
+        {
+            return false;
+        }
+
+        if (options?.BackdropClick == false && options.CloseOnEscapeKey != true)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    internal static bool ShouldUseHistoryGuard(DialogOptions? options) =>
+        options?.NoHeader == true || options?.FullScreen == true;
+
+    private Task OnDialogAddedAsync(IDialogReference reference)
+    {
+        if (_isDisposed || reference == null)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (_trackedDialogs.Any(d => d.Reference.Id == reference.Id))
+        {
+            return Task.CompletedTask;
+        }
+
+        var idString = reference.Id.ToString("N");
+        var tracked = new TrackedDialog
+        {
+            Reference = reference,
+            IdString = idString,
+            Key = $"dialog:{idString}",
+            OpenedUri = Nav.Uri
+        };
+
+        _trackedDialogs.Add(tracked);
+
+        _ = RegisterDialogInJsAsync(tracked);
+        _ = ObserveDialogResultAsync(tracked);
+
+        return Task.CompletedTask;
+    }
+
+    private async Task RegisterDialogInJsAsync(TrackedDialog tracked)
+    {
+        if (_isDisposed || tracked.Unregistered)
+        {
+            return;
+        }
+
+        _dotNetRef ??= DotNetObjectReference.Create(this);
+        var options = tracked.Reference.Options;
+        var allowDismiss = IsDismissibleOnBack(options);
+        var useHistoryGuard = allowDismiss && ShouldUseHistoryGuard(options);
+
+        await SafeInvokeJsVoidAsync(
+            "SpokesBridge.backStack.registerServerEntry",
+            tracked.Key,
+            _dotNetRef,
+            nameof(HandleBackForDialogAsync),
+            new
+            {
+                arg = tracked.IdString,
+                allowDismiss,
+                useHistoryGuard,
+                source = "dialog",
+                keepUntilRemoved = true
+            });
+    }
+
+    private async Task ObserveDialogResultAsync(TrackedDialog tracked)
+    {
+        try
+        {
+            await tracked.Reference.Result;
+        }
+        catch
+        {
+            // Expected if the dialog or circuit is torn down while open
+        }
+
+        if (!_isDisposed && !tracked.Unregistered)
+        {
+            try
+            {
+                await InvokeAsync(() => UnregisterDialogAsync(tracked));
+            }
+            catch (ObjectDisposedException) { }
+            catch (TaskCanceledException) { }
+        }
+    }
+
+    private void OnDialogCloseRequested(IDialogReference reference, DialogResult? result)
+    {
+        if (_isDisposed || reference == null)
+        {
+            return;
+        }
+
+        var tracked = _trackedDialogs.FirstOrDefault(d => d.Reference.Id == reference.Id);
+        if (tracked == null || tracked.Unregistered)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() => UnregisterDialogAsync(tracked));
+    }
+
+    private async Task UnregisterDialogAsync(TrackedDialog tracked)
+    {
+        if (tracked.Unregistered)
+        {
+            return;
+        }
+
+        tracked.Unregistered = true;
+        _trackedDialogs.Remove(tracked);
+
+        // Yield once so any synchronous Nav.NavigateTo(...) immediately following MudDialog.Close()
+        // updates Nav.Uri before we decide whether a Web/iOS synthetic history sentinel should be popped.
+        await Task.Yield();
+
+        var popHistory = !tracked.ClosedByBack &&
+                         !_isDisposed &&
+                         string.Equals(Nav.Uri, tracked.OpenedUri, StringComparison.Ordinal);
+
+        await SafeInvokeJsVoidAsync(
+            "SpokesBridge.backStack.remove",
+            tracked.Key,
+            new { popHistory });
+    }
+
+    [JSInvokable]
+    public async Task<bool> HandleBackForDialogAsync(string dialogId)
+    {
+        if (_isDisposed || string.IsNullOrWhiteSpace(dialogId))
+        {
+            return false;
+        }
+
+        var tracked = _trackedDialogs.FirstOrDefault(d => string.Equals(d.IdString, dialogId, StringComparison.Ordinal));
+        if (tracked == null || tracked.Unregistered)
+        {
+            return false;
+        }
+
+        // Re-check live options in case the dialog updated them via SetOptionsAsync.
+        if (!IsDismissibleOnBack(tracked.Reference.Options))
+        {
+            return false;
+        }
+
+        if (tracked.Reference.Dialog is IBackDismissHandler customHandler)
+        {
+            tracked.ClosedByBack = true;
+            var action = await customHandler.OnBackRequestedAsync();
+            if (action == BackDismissAction.Block)
+            {
+                tracked.ClosedByBack = false;
+                return false;
+            }
+
+            if (action == BackDismissAction.Handled)
+            {
+                return true;
+            }
+        }
+
+        tracked.ClosedByBack = true;
+        DialogService.Close(tracked.Reference, DialogResult.Cancel());
+        return true;
+    }
+
+    private async Task SafeInvokeJsVoidAsync(string identifier, params object?[] args)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync(identifier, args);
+        }
+        catch (JSDisconnectedException) { }
+        catch (TaskCanceledException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+        catch (JSException) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _isDisposed = true;
+        DialogService.DialogInstanceAddedAsync -= OnDialogAddedAsync;
+        DialogService.OnDialogCloseRequested -= OnDialogCloseRequested;
+
+        var remainingKeys = _trackedDialogs
+            .Where(d => !d.Unregistered)
+            .Select(d =>
+            {
+                d.Unregistered = true;
+                return d.Key;
+            })
+            .ToList();
+
+        _trackedDialogs.Clear();
+
+        foreach (var key in remainingKeys)
+        {
+            await SafeInvokeJsVoidAsync("SpokesBridge.backStack.remove", key, new { popHistory = false });
+        }
+
+        _dotNetRef?.Dispose();
+        _dotNetRef = null;
+    }
+}

@@ -36,6 +36,7 @@ public class TimesheetReportServiceTests : IDisposable
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());
@@ -68,19 +69,26 @@ public class TimesheetReportServiceTests : IDisposable
         }
     }
 
-    [Theory]
-    [InlineData(1.5, TimeDisplayFormat.DurationHhmm, "1:30")]
-    [InlineData(1.5, TimeDisplayFormat.DecimalHours, "1.50 h")]
-    [InlineData(0.25, TimeDisplayFormat.DurationHhmm, "0:15")]
-    [InlineData(0.0, TimeDisplayFormat.DurationHhmm, "0:00")]
-    [InlineData(42.75, TimeDisplayFormat.DurationHhmm, "42:45")]
-    [InlineData(42.75, TimeDisplayFormat.DecimalHours, "42.75 h")]
-    public void FormatDuration_ReturnsExpectedStrings(decimal hours, TimeDisplayFormat format, string expected)
+    [Fact]
+    public void CsvExportHelper_SanitizesFormulaInjection()
     {
-        var result = _service.FormatDuration(hours, format);
-        Assert.Equal(expected, result);
-    }
+        var entries = new List<TimesheetReportEntry>
+        {
+            new()
+            {
+                EmployeeName = "=cmd|' /C calc'!A0",
+                ProjectName = "+12345",
+                TaskName = "Dev",
+                Entry = new TimeEntry { Date = new DateTime(2026, 9, 1), Hours = 1.0m, Description = "@payload" }
+            }
+        };
 
+        var csv = Spokes_Server.Core.Services.Reports.Helpers.TimesheetCsvExportHelper.GenerateDetailedCsv(entries, TimeDisplayFormat.DecimalHours);
+
+        Assert.Contains("'=cmd|' /C calc'!A0", csv);
+        Assert.Contains("'+12345", csv);
+        Assert.Contains("'@payload", csv);
+    }
 
     [Fact]
     public void CalculateKPISummary_CalculatesTotalsAccurately()
@@ -105,7 +113,7 @@ public class TimesheetReportServiceTests : IDisposable
             }
         };
 
-        var kpi = _service.CalculateKPISummary(entries);
+        var kpi = Spokes_Server.Core.Services.Reports.Helpers.TimesheetCalculationHelper.CalculateKPISummary(entries);
 
         Assert.Equal(10.0m, kpi.TotalHours);
         Assert.Equal(8.0m, kpi.BillableHours);
@@ -155,7 +163,7 @@ public class TimesheetReportServiceTests : IDisposable
             }
         };
 
-        var groups = _service.BuildSummaryGroups(entries, ReportGroupBy.Project, ReportSubGroupBy.Description);
+        var groups = Spokes_Server.Core.Services.Reports.Helpers.TimesheetCalculationHelper.BuildSummaryGroups(entries, ReportGroupBy.Project, ReportSubGroupBy.Description);
 
         Assert.Equal(2, groups.Count);
         var alpha = groups.First(g => g.Key == "Project Alpha");
@@ -201,7 +209,7 @@ public class TimesheetReportServiceTests : IDisposable
             }
         };
 
-        var matrix = _service.BuildWeeklyMatrix(entries, monday, WeeklyGroupBy.Employee);
+        var matrix = Spokes_Server.Core.Services.Reports.Helpers.TimesheetCalculationHelper.BuildWeeklyMatrix(entries, monday, WeeklyGroupBy.Employee);
 
         Assert.Equal(monday.Date, matrix.WeekStartDate.Date);
         Assert.Equal(monday.AddDays(6).Date, matrix.WeekEndDate.Date);
@@ -225,11 +233,11 @@ public class TimesheetReportServiceTests : IDisposable
         var end = new DateTime(2026, 8, 16);
         var range = new DateRange(start, end);
 
-        var nextWeek = _service.ShiftDateRange(range, 1);
+        var nextWeek = Spokes_Server.Core.Services.Reports.Helpers.TimesheetDateRangeHelper.ShiftDateRange(range, 1);
         Assert.Equal(new DateTime(2026, 8, 17), nextWeek.Start);
         Assert.Equal(new DateTime(2026, 8, 23), nextWeek.End);
 
-        var prevWeek = _service.ShiftDateRange(range, -1);
+        var prevWeek = Spokes_Server.Core.Services.Reports.Helpers.TimesheetDateRangeHelper.ShiftDateRange(range, -1);
         Assert.Equal(new DateTime(2026, 8, 3), prevWeek.Start);
         Assert.Equal(new DateTime(2026, 8, 9), prevWeek.End);
     }
@@ -256,7 +264,7 @@ public class TimesheetReportServiceTests : IDisposable
             }
         };
 
-        var csv = _service.GenerateDetailedCsv(entries, TimeDisplayFormat.DurationHhmm);
+        var csv = Spokes_Server.Core.Services.Reports.Helpers.TimesheetCsvExportHelper.GenerateDetailedCsv(entries, TimeDisplayFormat.DurationHhmm);
 
         Assert.Contains("Date,Employee,Project,Client,Task,Description,Is Billable,Rate,Hours,Amount", csv);
         Assert.Contains("Jane Doe", csv);
@@ -268,19 +276,19 @@ public class TimesheetReportServiceTests : IDisposable
     [Fact]
     public void FormatCurrency_UsesCompanyProfileCurrencySymbol()
     {
-        var result = _service.FormatCurrency(1234.50m);
+        var result = Spokes_Server.Core.Services.Reports.Helpers.TimesheetFormatHelper.FormatCurrency(1234.50m, _db.CompanyProfile.Get()?.CurrencySymbol ?? "$");
         Assert.Equal("1,234.50 $", result);
     }
 
     [Fact]
     public void GetPresetDateRange_ReturnsValidDateRanges()
     {
-        var today = _service.GetPresetDateRange("Today");
+        var today = Spokes_Server.Core.Services.Reports.Helpers.TimesheetDateRangeHelper.GetPresetDateRange("Today");
         Assert.NotNull(today.Start);
         Assert.NotNull(today.End);
         Assert.Equal(DateTime.Today, today.Start!.Value.Date);
 
-        var thisWeek = _service.GetPresetDateRange("This Week");
+        var thisWeek = Spokes_Server.Core.Services.Reports.Helpers.TimesheetDateRangeHelper.GetPresetDateRange("This Week");
         Assert.Equal(DayOfWeek.Monday, thisWeek.Start!.Value.DayOfWeek);
         Assert.Equal(DayOfWeek.Sunday, thisWeek.End!.Value.DayOfWeek);
     }
@@ -300,7 +308,7 @@ public class TimesheetReportServiceTests : IDisposable
             }
         };
 
-        var csv = _service.GenerateSummaryCsv(groups, TimeDisplayFormat.DecimalHours);
+        var csv = Spokes_Server.Core.Services.Reports.Helpers.TimesheetCsvExportHelper.GenerateSummaryCsv(groups, TimeDisplayFormat.DecimalHours);
 
         Assert.Contains("Title,Subtitle,Duration,Billable Hours,Billable Amount", csv);
         Assert.Contains("Project Alpha", csv);
@@ -333,7 +341,7 @@ public class TimesheetReportServiceTests : IDisposable
             ]
         };
 
-        var csv = _service.GenerateWeeklyCsv(matrix, TimeDisplayFormat.DurationHhmm);
+        var csv = Spokes_Server.Core.Services.Reports.Helpers.TimesheetCsvExportHelper.GenerateWeeklyCsv(matrix, TimeDisplayFormat.DurationHhmm);
 
         Assert.Contains("Alice", csv);
         Assert.Contains("Total", csv);
@@ -501,5 +509,146 @@ public class TimesheetReportServiceTests : IDisposable
         Assert.Equal(600m, redactedEntries[0].BillableAmount);
         Assert.Equal(0m, redactedEntries[0].CostRate);
         Assert.Equal(0m, redactedEntries[0].CostAmount);
+    }
+
+    [Fact]
+    public async Task LoadAllEntriesAsync_WithAllowedEmployeeIds_AndIncludeBillingRatesFalse_ScopesAndZeroesBillingFields()
+    {
+        var emp1 = new Employee { Id = "emp-scope-1", FirstName = "Alice", LastName = "Scoped", HourlyRate = 50m };
+        var emp2 = new Employee { Id = "emp-scope-2", FirstName = "Bob", LastName = "Excluded", HourlyRate = 60m };
+        _db.Employees.Save(emp1);
+        _db.Employees.Save(emp2);
+
+        var wt = new WorkType { Id = "wt-scope-rate", Name = "Eng", DefaultRate = 140m, CostRate = 45m };
+        _db.WorkTypes.Save(wt);
+
+        var proj = new Project
+        {
+            Id = "proj-scope-rate",
+            Name = "Scoped Project",
+            Allocations = [new ProjectTaskAllocation { WorkTypeId = wt.Id, QuotedHours = 80m }]
+        };
+        _db.Projects.Save(proj);
+
+        _db.Timesheets.Save(new Timesheet
+        {
+            Id = "ts-scope-1",
+            EmployeeId = emp1.Id,
+            Status = TimesheetStatus.Approved,
+            Entries =
+            [
+                new TimeEntry { Id = "e-s1", ProjectId = proj.Id, WorkTypeId = wt.Id, Date = DateTime.Today, Hours = 3m, IsBillable = true }
+            ]
+        });
+        _db.Timesheets.Save(new Timesheet
+        {
+            Id = "ts-scope-2",
+            EmployeeId = emp2.Id,
+            Status = TimesheetStatus.Approved,
+            Entries =
+            [
+                new TimeEntry { Id = "e-s2", ProjectId = proj.Id, WorkTypeId = wt.Id, Date = DateTime.Today, Hours = 5m, IsBillable = true }
+            ]
+        });
+
+        var scoped = await _service.LoadAllEntriesAsync(
+            includeCostRates: false,
+            allowedEmployeeIds: new HashSet<string> { emp1.Id },
+            includeBillingRates: false);
+
+        var entry = Assert.Single(scoped);
+        Assert.Equal(emp1.Id, entry.EmployeeId);
+        Assert.Equal(0m, entry.HourlyRate);
+        Assert.Equal(0m, entry.BillableAmount);
+        Assert.Null(entry.ProjectAllocatedHours);
+        Assert.Equal(0m, entry.CostRate);
+        Assert.Equal(0m, entry.CostAmount);
+    }
+
+    [Fact]
+    public void CsvExports_WhenBillingAndCostRatesExcluded_ZeroAllMonetaryColumns()
+    {
+        var summaryGroups = new List<TimesheetGroupSummary>
+        {
+            new()
+            {
+                Key = "Project Alpha",
+                Subtitle = "Acme Inc",
+                TotalHours = 10.0m,
+                BillableHours = 8.0m,
+                BillableAmount = 800m,
+                CostAmount = 350m,
+                EntryCount = 2,
+                Subgroups =
+                [
+                    new()
+                    {
+                        Key = "Subtask A",
+                        TotalHours = 10.0m,
+                        BillableHours = 8.0m,
+                        BillableAmount = 800m,
+                        CostAmount = 350m,
+                        EntryCount = 2
+                    }
+                ]
+            }
+        };
+
+        var summaryCsv = Spokes_Server.Core.Services.Reports.Helpers.TimesheetCsvExportHelper.GenerateSummaryCsv(summaryGroups, TimeDisplayFormat.DecimalHours, includeBillingRates: false, includeCostRates: false);
+        Assert.DoesNotContain("800.00", summaryCsv);
+        Assert.DoesNotContain("350.00", summaryCsv);
+        Assert.Contains(",0.00,0.00,", summaryCsv);
+
+        var detailedEntries = new List<TimesheetReportEntry>
+        {
+            new()
+            {
+                EmployeeName = "Jane Doe",
+                ProjectName = "Portal Overhaul",
+                ClientId = "TechCorp",
+                TaskName = "Testing",
+                HourlyRate = 110m,
+                Entry = new TimeEntry
+                {
+                    Date = new DateTime(2026, 9, 1),
+                    Hours = 4.5m,
+                    Description = "Unit testing",
+                    IsBillable = true
+                }
+            }
+        };
+
+        var detailedCsv = Spokes_Server.Core.Services.Reports.Helpers.TimesheetCsvExportHelper.GenerateDetailedCsv(detailedEntries, TimeDisplayFormat.DurationHhmm, includeBillingRates: false);
+        Assert.DoesNotContain("110.00", detailedCsv);
+        Assert.DoesNotContain("495.00", detailedCsv);
+        Assert.Contains(",Yes,0.00,4:30,0.00", detailedCsv);
+
+        var monday = new DateTime(2026, 8, 17);
+        var matrix = new TimesheetWeeklyMatrix
+        {
+            WeekStartDate = monday,
+            WeekEndDate = monday.AddDays(6),
+            DayHeaders = ["Mon 17", "Tue 18", "Wed 19", "Thu 20", "Fri 21", "Sat 22", "Sun 23"],
+            DayTotals = [8, 0, 0, 0, 0, 0, 0],
+            Rows =
+            [
+                new TimesheetWeeklyRow
+                {
+                    EntityName = "Alice",
+                    Subtitle = "Dev Team",
+                    Cells =
+                    [
+                        new TimesheetWeeklyCell { Date = monday, Hours = 8m, BillableHours = 8m, BillableAmount = 960m },
+                        ..Enumerable.Range(1, 6).Select(i => new TimesheetWeeklyCell { Date = monday.AddDays(i), Hours = 0m })
+                    ]
+                }
+            ]
+        };
+
+        var weeklyCsv = Spokes_Server.Core.Services.Reports.Helpers.TimesheetCsvExportHelper.GenerateWeeklyCsv(matrix, TimeDisplayFormat.DurationHhmm, includeBillingRates: false);
+        Assert.DoesNotContain("960.00", weeklyCsv);
+        Assert.Contains(",08:00,", weeklyCsv.Replace(",8:00,", ",08:00,"));
+        var aliceLine = weeklyCsv.Split('\n', StringSplitOptions.RemoveEmptyEntries).Single(l => l.StartsWith("Alice,", StringComparison.Ordinal));
+        Assert.EndsWith(",0.00", aliceLine.TrimEnd('\r'));
     }
 }

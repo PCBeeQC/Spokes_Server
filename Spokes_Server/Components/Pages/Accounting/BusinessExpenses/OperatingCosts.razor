@@ -1,0 +1,1216 @@
+@page "/business/operating-costs"
+@attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
+@implements IDisposable
+@using System.Globalization
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Extensions
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Components.Dialogs.Accounting
+@using Spokes_Server.Components.Pages.Accounting.BusinessExpenses.Tabs
+@using Spokes_Server.Components.Shared
+@inject Database Db
+@inject IBusinessOverheadService OverheadService
+@inject IAccountingService AccountingService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject UserService UserService
+@inject AppLabelService AppLabels
+
+<PageTitle>@BizLoc["Company Bills & Overhead"]</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.False" Class="pa-4 px-md-6">
+    @* Header & Period Controls *@
+    <div class="d-flex align-center justify-space-between flex-wrap gap-3 mt-2 mb-4">
+        <div>
+            <MudText Typo="Typo.h4">@BizLoc["Company Bills & Overhead"]</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                @BizLoc["Manage recurring fixed costs, one-time company bills, internal projects, and hourly overhead burden rates."]
+            </MudText>
+        </div>
+
+        <div class="d-flex align-center flex-wrap gap-2">
+            <MudSelect T="string"
+                       Value="@_periodMode"
+                       ValueChanged="OnPeriodModeChanged"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Dense="true"
+                       Style="min-width: 170px;">
+                <MudSelectItem Value="@("Month")">@BizLoc["Monthly View"]</MudSelectItem>
+                <MudSelectItem Value="@("Year")">@BizLoc["Annual View (12 Months)"]</MudSelectItem>
+            </MudSelect>
+
+            <div class="d-flex align-center gap-1">
+                <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small" OnClick="PrevPeriod" />
+                <MudText Typo="Typo.subtitle1" Style="min-width: 140px; text-align: center;">
+                    <b>@PeriodLabel</b>
+                </MudText>
+                <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" OnClick="NextPeriod" />
+            </div>
+        </div>
+    </div>
+
+    @* KPI Summary Strip *@
+    <div class="d-flex flex-wrap gap-4 mb-5">
+        <div style="flex: 1; min-width: 220px;">
+            <StatCard Title="@BizLoc["Fixed & Amortized Bills (Pre-Tax)"]"
+                      Value="@FixedAndAmortizedPreTax.ToString("C0")"
+                      Icon="@Icons.Material.Filled.ReceiptLong"
+                      IconColor="Color.Primary"
+                      Subtitle="@($"{ActiveRecurringProfilesCount} {BizLoc["Recurring"].Value.ToLower()} · {ActiveAmortizedItemsCount} {BizLoc["amortized (12-mo)"].Value}")" />
+        </div>
+        <div style="flex: 1; min-width: 220px;">
+            <StatCard Title="@BizLoc["Internal Project Cost (Pre-Tax)"]"
+                      Value="@InternalProjectsTotalPreTax.ToString("C0")"
+                      Icon="@Icons.Material.Filled.Engineering"
+                      IconColor="Color.Warning"
+                      Subtitle="@($"{_overheadSummary.InternalLaborHours:N1} h {BizLoc["internal labor"].Value}")" />
+        </div>
+        <div style="flex: 1; min-width: 220px;">
+            <StatCard Title="@BizLoc["Total Business Overhead Pool"]"
+                      Value="@_overheadSummary.CompanyOverheadPoolPreTax.ToString("C0")"
+                      Icon="@Icons.Material.Filled.AccountBalanceWallet"
+                      IconColor="Color.Info"
+                      Subtitle="@($"{BizLoc["Incl. Tax:"].Value} {_overheadSummary.CompanyOverheadPoolTotal:C0}")" />
+        </div>
+        <div style="flex: 1; min-width: 220px;">
+            <StatCard Title="@BizLoc["Overhead Rate / Direct Hour"]"
+                      Value="@($"{_overheadSummary.EffectiveOverheadRatePerDirectHourPreTax:C2}/h")"
+                      Icon="@Icons.Material.Filled.Speed"
+                      IconColor="Color.Success"
+                      Subtitle="@($"{_overheadSummary.TotalCompanyDirectLaborHours:N1} h {BizLoc["direct client labor"].Value}")" />
+        </div>
+    </div>
+
+    @* Primary Tabs *@
+    <SpokesTabs ActivePanelIndex="@ActiveTabIndex"
+                ActivePanelIndexChanged="OnTabIndexChanged"
+                Class="mb-4">
+        <MudTabPanel Text="@BizLoc["Recurring Company Bills"]" Icon="@Icons.Material.Filled.Repeat">
+        <MudTable Items="@FilteredRecurringProfiles" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0">
+            <ToolBarContent>
+                <div>
+                    <MudText Typo="Typo.h6">@BizLoc["Recurring Fixed Cost Profiles"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["Rent, utilities, insurance, software subscriptions, and telecom bills prorated monthly."]
+                    </MudText>
+                </div>
+                <MudSpacer />
+                <MudTextField @bind-Value="_searchRecurring"
+                              Placeholder="@BizLoc["Search name, supplier, category..."]"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Class="mt-0 mr-3"
+                              Style="max-width: 260px;" />
+                @if (_canManageBills)
+                {
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="AddRecurringProfile">
+                        @BizLoc["Add Recurring Cost"]
+                    </MudButton>
+                }
+            </ToolBarContent>
+            <HeaderContent>
+                <MudTh>@BizLoc["Expense Name"]</MudTh>
+                <MudTh>@BizLoc["Supplier"]</MudTh>
+                <MudTh>@BizLoc["GL Account"]</MudTh>
+                <MudTh>@BizLoc["Frequency"]</MudTh>
+                <MudTh Style="text-align: right;">@BizLoc["Base Amount"]</MudTh>
+                <MudTh Style="text-align: right;">@BizLoc["Monthly Prorated (Pre-Tax)"]</MudTh>
+                <MudTh>@BizLoc["Latest Bill Status"]</MudTh>
+                <MudTh Style="text-align: right;">@Loc["Actions"]</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                @{
+                    var monthlyPreTax = OverheadService.GetRecurringProfileMonthlyPreTax(context, _selectedDate.Year, _selectedDate.Month);
+                    var linkedActualBills = Db.Bills.GetAll()
+                        .Where(b => !b.IsVoid && b.Status != BillStatus.Void && string.Equals(b.LinkedRecurringExpenseId, context.Id, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    var latestLinkedBill = linkedActualBills.OrderByDescending(b => b.Date).FirstOrDefault();
+                    var latestHistoryBill = context.History?.OrderByDescending(h => h.Date).FirstOrDefault();
+                    var totalBillCount = (context.History?.Count ?? 0) + linkedActualBills.Count;
+                }
+                <MudTd DataLabel="@BizLoc["Expense Name"]">
+                    <MudText Typo="Typo.body2"><b>@context.Name</b></MudText>
+                    @if (!string.IsNullOrWhiteSpace(context.Description))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Description</MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="@BizLoc["Supplier"]">
+                    @(string.IsNullOrWhiteSpace(context.Supplier) ? "—" : context.Supplier)
+                </MudTd>
+                <MudTd DataLabel="@BizLoc["GL Account"]">
+                    @(string.IsNullOrWhiteSpace(context.GlAccountCode) ? "—" : context.GlAccountCode)
+                </MudTd>
+                <MudTd DataLabel="@BizLoc["Frequency"]">
+                    <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                        @context.Frequency
+                    </MudChip>
+                </MudTd>
+                <MudTd DataLabel="@BizLoc["Base Amount"]" Style="text-align: right;">
+                    @((context.Amount > 0 ? context.Amount : (latestLinkedBill?.Amount ?? latestHistoryBill?.Amount ?? 0m)).ToString("C2"))
+                </MudTd>
+                <MudTd DataLabel="@BizLoc["Monthly Prorated (Pre-Tax)"]" Style="text-align: right; font-weight: 700;">
+                    @monthlyPreTax.ToString("C2")/mo
+                </MudTd>
+                <MudTd DataLabel="@BizLoc["Latest Bill Status"]">
+                    @if (latestLinkedBill != null && (latestHistoryBill == null || latestLinkedBill.Date >= latestHistoryBill.Date))
+                    {
+                        var isBillSettled = latestLinkedBill.BalanceDue <= 0m || BillStatus.IsSettled(latestLinkedBill.Status);
+                        var isWrittenOff = latestLinkedBill.Status == BillStatus.WrittenOff;
+                        <MudChip T="string" Size="Size.Small" Color="@(isWrittenOff ? Color.Secondary : (isBillSettled ? Color.Success : Color.Warning))">
+                            @(isWrittenOff ? BizLoc["Written Off"] : (isBillSettled ? BizLoc["Paid"] : BizLoc["Pending"])) (@latestLinkedBill.Date.ToString("MMM dd"))
+                        </MudChip>
+                    }
+                    else if (latestHistoryBill != null)
+                    {
+                        var isHistSettled = latestHistoryBill.BalanceDue <= 0m || latestHistoryBill.IsPaid;
+                        var isHistWrittenOff = latestHistoryBill.Status == BillStatus.WrittenOff;
+                        <MudChip T="string" Size="Size.Small" Color="@(isHistWrittenOff ? Color.Secondary : (isHistSettled ? Color.Success : Color.Warning))">
+                            @(isHistWrittenOff ? BizLoc["Written Off"] : (isHistSettled ? BizLoc["Paid"] : BizLoc["Pending"])) (@latestHistoryBill.Date.ToString("MMM dd"))
+                        </MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">
+                            @BizLoc["Prorated Estimate"]
+                        </MudChip>
+                    }
+                </MudTd>
+                <MudTd DataLabel="@Loc["Actions"]" Style="text-align: right; white-space: nowrap;">
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Info"
+                               Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Receipt"
+                               Class="mr-1"
+                               OnClick="@(() => OpenRecurringBillHistory(context))">
+                        @BizLoc["Bills"] (@totalBillCount)
+                    </MudButton>
+                    @if (_canManageBills)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Color="Color.Primary"
+                                       Size="Size.Small"
+                                       OnClick="@(() => EditRecurringProfile(context))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Color="Color.Error"
+                                       Size="Size.Small"
+                                       OnClick="@(() => DeleteRecurringProfile(context))" />
+                    }
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Align="Align.Center" Class="py-4 mud-text-secondary">
+                    @BizLoc["No recurring fixed costs configured yet."]
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@BizLoc["One-Time Company Bills"]" Icon="@Icons.Material.Filled.EventRepeat">
+        <MudTable Items="@FilteredAmortizedItems" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0">
+            <ToolBarContent>
+                <div>
+                    <MudText Typo="Typo.h6">@BizLoc["One-Time Overhead Bills (Amortized Over 12 Months)"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["Non-project business purchases, legal/accounting fees, annual licenses, and shop tooling spread evenly across 12 calendar months."]
+                    </MudText>
+                </div>
+                <MudSpacer />
+                <MudTextField @bind-Value="_searchOneTime"
+                              Placeholder="@BizLoc["Search supplier, description, invoice #..."]"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Class="mt-0 mr-3"
+                              Style="max-width: 260px;" />
+                @if (_canManageBills)
+                {
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="AddOverheadBill">
+                        @BizLoc["Add Overhead Bill"]
+                    </MudButton>
+                }
+            </ToolBarContent>
+            <HeaderContent>
+                <MudTh>@BizLoc["Date"]</MudTh>
+                <MudTh>@BizLoc["Description / Invoice #"]</MudTh>
+                <MudTh>@BizLoc["Supplier"]</MudTh>
+                <MudTh Style="text-align: right;">@BizLoc["Pre-Tax Amount"]</MudTh>
+                <MudTh Style="text-align: right;">@BizLoc["Total (Incl. Tax)"]</MudTh>
+                <MudTh Style="text-align: right;">@BizLoc["Monthly Amortized (Pre-Tax)"]</MudTh>
+                <MudTh>@BizLoc["12-Month Window"]</MudTh>
+                <MudTh>@Loc["Status"]</MudTh>
+                <MudTh Style="text-align: right;">@Loc["Actions"]</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="@BizLoc["Date"]">@context.Date.ToString("yyyy-MM-dd")</MudTd>
+                <MudTd DataLabel="@BizLoc["Description / Invoice #"]">
+                    <MudText Typo="Typo.body2"><b>@context.Title</b></MudText>
+                    @if (!string.IsNullOrWhiteSpace(context.Subtitle))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Subtitle</MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="@BizLoc["Supplier"]">@(string.IsNullOrWhiteSpace(context.Supplier) ? "—" : context.Supplier)</MudTd>
+                <MudTd DataLabel="@BizLoc["Pre-Tax Amount"]" Style="text-align: right;">@context.PreTaxAmount.ToString("C2")</MudTd>
+                <MudTd DataLabel="@BizLoc["Total (Incl. Tax)"]" Style="text-align: right;">@context.TotalAmount.ToString("C2")</MudTd>
+                <MudTd DataLabel="@BizLoc["Monthly Amortized (Pre-Tax)"]" Style="text-align: right; font-weight: 700;">
+                    @context.MonthlyPreTax.ToString("C2")/mo
+                </MudTd>
+                <MudTd DataLabel="@BizLoc["12-Month Window"]">
+                    <div class="d-flex align-center gap-1">
+                        <MudText Typo="Typo.caption">@context.WindowStart.ToString("MMM yyyy") → @context.WindowEnd.ToString("MMM yyyy")</MudText>
+                        @if (context.IsActiveInSelectedPeriod)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text">
+                                @BizLoc["Active"]
+                            </MudChip>
+                        }
+                    </div>
+                </MudTd>
+                <MudTd DataLabel="@Loc["Status"]">
+                    <MudChip T="string" Size="Size.Small" Color="@context.StatusColor">
+                        @context.StatusLabel
+                    </MudChip>
+                </MudTd>
+                <MudTd DataLabel="@Loc["Actions"]" Style="text-align: right; white-space: nowrap;">
+                    @if (_canManageBills)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Color="Color.Primary"
+                                       Size="Size.Small"
+                                       OnClick="@(() => EditAmortizedItem(context))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Color="Color.Error"
+                                       Size="Size.Small"
+                                       OnClick="@(() => DeleteAmortizedItem(context))" />
+                    }
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Align="Align.Center" Class="py-4 mud-text-secondary">
+                    @BizLoc["No one-time business overhead bills recorded yet."]
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@BizLoc["Internal Projects & Salaries"]" Icon="@Icons.Material.Filled.Groups">
+        <MudPaper Class="pa-4 mb-5" Elevation="0" Outlined="true">
+            <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-3">
+                <div>
+                    <MudText Typo="Typo.h6">@BizLoc["Internal & Unbillable Projects Overhead"] (@PeriodLabel)</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["All employee hours (loaded cost) and purchases logged to internal projects are included in the Business Overhead Pool."]
+                    </MudText>
+                </div>
+            </div>
+
+            <MudTable Items="@_internalProjectRows" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>@BizLoc["Internal Project"]</MudTh>
+                    @if (_canManageSalaries)
+                    {
+                        <MudTh>@AppLabels.Employees</MudTh>
+                    }
+                    <MudTh Style="text-align: right;">@BizLoc["Hours Logged"]</MudTh>
+                    @if (_canManageSalaries)
+                    {
+                        <MudTh Style="text-align: right;">@BizLoc["Loaded Labor Cost"]</MudTh>
+                    }
+                    <MudTh Style="text-align: right;">@BizLoc["Purchases & Expenses (Pre-Tax)"]</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Total Overhead Contribution"]</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="@BizLoc["Internal Project"]">
+                        @if (context.CanOpenProject)
+                        {
+                            <MudLink Href="@($"/projects/{context.ProjectId}")" Typo="Typo.body2">
+                                <b>@context.ProjectDisplayName</b>
+                            </MudLink>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2"><b>@context.ProjectDisplayName</b></MudText>
+                        }
+                    </MudTd>
+                    @if (_canManageSalaries)
+                    {
+                        <MudTd DataLabel="@AppLabels.Employees">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @(context.Contributors.Count > 0 ? string.Join(", ", context.Contributors) : "—")
+                            </MudText>
+                        </MudTd>
+                    }
+                    <MudTd DataLabel="@BizLoc["Hours Logged"]" Style="text-align: right; font-weight: 600;">
+                        @context.Hours.ToString("N1") h
+                    </MudTd>
+                    @if (_canManageSalaries)
+                    {
+                        <MudTd DataLabel="@BizLoc["Loaded Labor Cost"]" Style="text-align: right;">
+                            @context.LaborCost.ToString("C2")
+                        </MudTd>
+                    }
+                    <MudTd DataLabel="@BizLoc["Purchases & Expenses (Pre-Tax)"]" Style="text-align: right;">
+                        @context.PurchasesAndExpensesPreTax.ToString("C2")
+                    </MudTd>
+                    <MudTd DataLabel="@BizLoc["Total Overhead Contribution"]" Style="text-align: right; font-weight: 700;">
+                        @context.TotalPreTax.ToString("C2")
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Align="Align.Center" Class="py-3 mud-text-secondary">
+                        @BizLoc["No internal projects found."]
+                    </MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+
+        @if (_canManageSalaries)
+        {
+            <SalaryTab />
+        }
+        </MudTabPanel>
+
+        <MudTabPanel Text="@BizLoc["Overhead Rate & Allocation"]" Icon="@Icons.Material.Filled.PieChart">
+            <MudGrid Spacing="4">
+                <MudItem xs="12" md="5">
+                    <MudPaper Class="pa-4 h-100" Elevation="0" Outlined="true">
+                        <MudText Typo="Typo.h6" Class="mb-1">@BizLoc["Overhead Pool Distribution"]</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-4">
+                            @PeriodLabel — @BizLoc["Pre-Tax Prorated Breakdown"]
+                        </MudText>
+
+                        @if (_chartData.Length > 0 && _overheadSummary.CompanyOverheadPoolPreTax > 0)
+                        {
+                            <MudChart ChartOptions="_chartOptions"
+                                      ChartType="ChartType.Pie"
+                                      ChartSeries="@_chartData.AsChartDataSet()"
+                                      ChartLabels="@_chartLabels"
+                                      Width="100%"
+                                      Height="290px" />
+                        }
+                        else
+                        {
+                            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-4">
+                                @BizLoc["No operating overhead recorded for this period yet. Add recurring costs, overhead bills, or internal project time to populate the overhead pool."]
+                            </MudAlert>
+                        }
+                    </MudPaper>
+                </MudItem>
+
+                <MudItem xs="12" md="7">
+                    <MudPaper Class="pa-4 h-100" Elevation="0" Outlined="true">
+                        <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-3">
+                            <div>
+                                <MudText Typo="Typo.h6">@BizLoc["Accountant Overhead & Allocation Summary"]</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @BizLoc["Allocated to client projects proportionally by direct labor hours."]
+                                </MudText>
+                            </div>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
+                                @PeriodLabel
+                            </MudChip>
+                        </div>
+
+                        <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Hover="true" Bordered="true" Striped="true">
+                            <thead>
+                                <tr>
+                                    <th>@BizLoc["Overhead Pillar"]</th>
+                                    <th>@BizLoc["Details"]</th>
+                                    <th style="text-align: right;">@BizLoc["Pre-Tax"]</th>
+                                    <th style="text-align: right;">@BizLoc["Taxes"]</th>
+                                    <th style="text-align: right;">@BizLoc["Total"]</th>
+                                    <th style="text-align: right;">%</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var row in _overheadSummary.BreakdownRows)
+                                {
+                                    var sharePct = _overheadSummary.CompanyOverheadPoolPreTax > 0
+                                        ? Math.Round(row.CompanyPoolPreTax / _overheadSummary.CompanyOverheadPoolPreTax * 100m, 1)
+                                        : 0m;
+                                    <tr>
+                                        <td><b>@GetLocalizedCategoryName(row.Category, row.Name)</b></td>
+                                        <td><MudText Typo="Typo.caption" Color="Color.Secondary">@row.Details</MudText></td>
+                                        <td style="text-align: right; font-weight: 600;">@row.CompanyPoolPreTax.ToString("C2")</td>
+                                        <td style="text-align: right; color: var(--mud-palette-text-secondary);">@row.CompanyPoolTax.ToString("C2")</td>
+                                        <td style="text-align: right;">@row.CompanyPoolTotal.ToString("C2")</td>
+                                        <td style="text-align: right;">@sharePct.ToString("N1")%</td>
+                                    </tr>
+                                }
+                                <tr style="background-color: var(--mud-palette-background-grey); font-weight: 800;">
+                                    <td><b>@BizLoc["Total Business Overhead Pool"]</b></td>
+                                    <td>@BizLoc["100% allocated across active client projects"]</td>
+                                    <td style="text-align: right;"><b>@_overheadSummary.CompanyOverheadPoolPreTax.ToString("C2")</b></td>
+                                    <td style="text-align: right;"><b>@_overheadSummary.CompanyOverheadPoolTax.ToString("C2")</b></td>
+                                    <td style="text-align: right;"><b>@_overheadSummary.CompanyOverheadPoolTotal.ToString("C2")</b></td>
+                                    <td style="text-align: right;"><b>100%</b></td>
+                                </tr>
+                            </tbody>
+                        </MudSimpleTable>
+
+                        <MudPaper Class="pa-3 mt-4" Elevation="0" Style="background-color: var(--mud-palette-background-grey);">
+                            <MudGrid Spacing="2" Class="align-center">
+                                <MudItem xs="12" sm="4">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Direct Client Hours (Period)"]</MudText>
+                                    <MudText Typo="Typo.subtitle1"><b>@_overheadSummary.TotalCompanyDirectLaborHours.ToString("N1") h</b></MudText>
+                                </MudItem>
+                                <MudItem xs="12" sm="4">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Internal / Unbillable Hours"]</MudText>
+                                    <MudText Typo="Typo.subtitle1"><b>@_overheadSummary.InternalLaborHours.ToString("N1") h</b></MudText>
+                                </MudItem>
+                                <MudItem xs="12" sm="4">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Effective Overhead Rate (Pre-Tax)"]</MudText>
+                                    <MudText Typo="Typo.subtitle1" Color="Color.Primary">
+                                        <b>@_overheadSummary.EffectiveOverheadRatePerDirectHourPreTax.ToString("C2") / h</b>
+                                    </MudText>
+                                </MudItem>
+                            </MudGrid>
+                        </MudPaper>
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+        </MudTabPanel>
+    </SpokesTabs>
+</MudContainer>
+
+@code {
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+
+    private string _currentTab = "recurring";
+
+    private int ActiveTabIndex => _currentTab switch
+    {
+        "recurring" => 0,
+        "one-time" => 1,
+        "internal" => 2,
+        "overview" => 3,
+        _ => 0
+    };
+
+    private void OnTabIndexChanged(int index)
+    {
+        var tabName = index switch
+        {
+            0 => "recurring",
+            1 => "one-time",
+            2 => "internal",
+            3 => "overview",
+            _ => "recurring"
+        };
+        UpdateActiveTab(tabName);
+    }
+    private string _periodMode = "Month";
+    private DateTime _selectedDate = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private Employee? _currentUser;
+    private bool _canManageSalaries;
+    private bool _canWriteAccounting;
+    private bool _canManageBills;
+    private bool _isDisposed;
+
+    private string _searchRecurring = string.Empty;
+    private string _searchOneTime = string.Empty;
+
+    private PeriodOverheadCalculationResult _overheadSummary = new();
+    private List<RecurringExpense> _recurringProfiles = [];
+    private List<AmortizedOverheadItemViewModel> _amortizedItems = [];
+    private List<InternalProjectOverheadRow> _internalProjectRows = [];
+
+    private double[] _chartData = [];
+    private string[] _chartLabels = [];
+    private readonly ChartOptions _chartOptions = new()
+    {
+        ChartPalette = ["#594AE2", "#FF4081", "#FF9800", "#00BCD4"],
+        ShowToolTips = true,
+        ShowLegend = true
+    };
+
+    private DateTime PeriodStart => _periodMode == "Year"
+        ? new DateTime(_selectedDate.Year, 1, 1)
+        : new DateTime(_selectedDate.Year, _selectedDate.Month, 1);
+
+    private DateTime PeriodEnd => _periodMode == "Year"
+        ? new DateTime(_selectedDate.Year, 12, 31)
+        : new DateTime(_selectedDate.Year, _selectedDate.Month, DateTime.DaysInMonth(_selectedDate.Year, _selectedDate.Month));
+
+    private string PeriodLabel => _periodMode == "Year"
+        ? _selectedDate.Year.ToString(CultureInfo.InvariantCulture)
+        : _selectedDate.ToString("MMMM yyyy", CultureInfo.CurrentUICulture);
+
+    private decimal FixedAndAmortizedPreTax =>
+        _overheadSummary.RecurringFixedPreTax + _overheadSummary.OneTimeAmortizedPreTax;
+
+    private decimal InternalProjectsTotalPreTax =>
+        _overheadSummary.InternalLaborCost + _overheadSummary.InternalPurchasesAndExpensesPreTax;
+
+    private int ActiveRecurringProfilesCount => _recurringProfiles.Count;
+    private int ActiveAmortizedItemsCount => _amortizedItems.Count(i => i.IsActiveInSelectedPeriod);
+
+    private IEnumerable<RecurringExpense> FilteredRecurringProfiles =>
+        string.IsNullOrWhiteSpace(_searchRecurring)
+            ? _recurringProfiles
+            : _recurringProfiles.Where(r =>
+                (r.Name?.Contains(_searchRecurring, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (r.Supplier?.Contains(_searchRecurring, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (r.GlAccountCode?.Contains(_searchRecurring, StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private IEnumerable<AmortizedOverheadItemViewModel> FilteredAmortizedItems =>
+        string.IsNullOrWhiteSpace(_searchOneTime)
+            ? _amortizedItems
+            : _amortizedItems.Where(i =>
+                i.Title.Contains(_searchOneTime, StringComparison.OrdinalIgnoreCase) ||
+                i.Subtitle.Contains(_searchOneTime, StringComparison.OrdinalIgnoreCase) ||
+                i.Supplier.Contains(_searchOneTime, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshCurrentUserAsync();
+        if (_canWriteAccounting)
+        {
+            OverheadService.NormalizeLegacyEstimates(_currentUser);
+        }
+
+        ResolveTabFromQuery();
+        RefreshData();
+    }
+
+    private async Task RefreshCurrentUserAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        _canManageSalaries = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: true);
+        _canWriteAccounting = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false);
+        _canManageBills = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: false);
+    }
+
+    protected override void OnParametersSet()
+    {
+        ResolveTabFromQuery();
+    }
+
+    private void ResolveTabFromQuery()
+    {
+        if (string.IsNullOrWhiteSpace(Tab)) return;
+        _currentTab = Tab.Trim().ToLowerInvariant() switch
+        {
+            "overview" or "estimator" => "overview",
+            "recurring" or "manage" or "add-bills" => "recurring",
+            "one-time" or "onetime" => "one-time",
+            "internal" or "salaries" => "internal",
+            _ => "overview"
+        };
+    }
+
+    private void UpdateActiveTab(string tabName)
+    {
+        if (_isDisposed || string.IsNullOrWhiteSpace(tabName)) return;
+        _currentTab = tabName;
+
+        if (!Nav.Uri.Contains("/business/operating-costs", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+
+    private void OnPeriodModeChanged(string mode)
+    {
+        _periodMode = mode;
+        RefreshData();
+    }
+
+    private void PrevPeriod()
+    {
+        _selectedDate = _periodMode == "Year"
+            ? _selectedDate.AddYears(-1)
+            : _selectedDate.AddMonths(-1);
+        RefreshData();
+    }
+
+    private void NextPeriod()
+    {
+        _selectedDate = _periodMode == "Year"
+            ? _selectedDate.AddYears(1)
+            : _selectedDate.AddMonths(1);
+        RefreshData();
+    }
+
+    private void RefreshData()
+    {
+        _overheadSummary = _currentUser != null
+            ? OverheadService.CalculatePeriodOverhead(PeriodStart, PeriodEnd, actor: _currentUser)
+            : new PeriodOverheadCalculationResult();
+
+        var allRecurring = Db.RecurringExpenses.GetAll();
+        _recurringProfiles = allRecurring
+            .Where(r => !string.Equals(r.Frequency, RecurringExpenseFrequency.OneTime, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(r => r.Name)
+            .ToList();
+
+        BuildAmortizedItems(allRecurring);
+        BuildInternalProjectRows();
+        BuildChartData();
+        StateHasChanged();
+    }
+
+    private void BuildChartData()
+    {
+        var nonZeroRows = _overheadSummary.BreakdownRows.Where(r => r.CompanyPoolPreTax > 0).ToList();
+        if (nonZeroRows.Count > 0)
+        {
+            _chartLabels = nonZeroRows
+                .Select(r => $"{GetLocalizedCategoryName(r.Category, r.Name)} ({r.CompanyPoolPreTax:C0})")
+                .ToArray();
+            _chartData = nonZeroRows
+                .Select(r => (double)Math.Round(r.CompanyPoolPreTax, 2))
+                .ToArray();
+        }
+        else
+        {
+            _chartLabels = [];
+            _chartData = [];
+        }
+    }
+
+    private string GetLocalizedCategoryName(string key, string fallback) => key switch
+    {
+        OverheadCostCategory.RecurringFixed => string.IsNullOrWhiteSpace(fallback) ? BizLoc["Recurring Fixed Costs"].Value : fallback,
+        OverheadCostCategory.OneTimeAmortized => string.IsNullOrWhiteSpace(fallback) ? BizLoc["One-Time Overhead Bills (12-Mo Amortized)"].Value : fallback,
+        OverheadCostCategory.InternalLabor => string.IsNullOrWhiteSpace(fallback) ? BizLoc["Internal & Unbillable Project Labor"].Value : fallback,
+        OverheadCostCategory.InternalPurchasesAndExpenses => string.IsNullOrWhiteSpace(fallback) ? BizLoc["Internal Project Purchases & Expenses"].Value : fallback,
+        _ => fallback
+    };
+
+    private void BuildAmortizedItems(IReadOnlyList<RecurringExpense> allRecurring)
+    {
+        _amortizedItems.Clear();
+
+        // 1. Standalone Company Bills (not tied to a PO or Recurring Profile)
+        var overheadBills = Db.Bills.GetAll()
+            .Where(b => !string.Equals(b.Status, BillStatus.Void, StringComparison.OrdinalIgnoreCase)
+                        && string.IsNullOrWhiteSpace(b.PurchaseOrderId)
+                        && string.IsNullOrWhiteSpace(b.LinkedRecurringExpenseId))
+            .OrderByDescending(b => b.Date)
+            .ToList();
+
+        foreach (var bill in overheadBills)
+        {
+            var sign = bill.IsCreditNote ? -1m : 1m;
+            var preTax = (bill.SubTotal > 0m ? bill.SubTotal : Math.Max(0m, bill.Amount - bill.TaxAmount)) * sign;
+            var total = bill.Amount * sign;
+            var winStart = new DateTime(bill.Date.Year, bill.Date.Month, 1);
+            var winEnd = winStart.AddMonths(11);
+            var isActive = winStart <= PeriodEnd && winEnd >= new DateTime(PeriodStart.Year, PeriodStart.Month, 1);
+
+            var isPaid = bill.BalanceDue <= 0m || BillStatus.IsSettled(bill.Status);
+            var statusColor = bill.Status == BillStatus.WrittenOff
+                ? Color.Secondary
+                : (isPaid
+                    ? Color.Success
+                    : (string.Equals(bill.Status, BillStatus.AwaitingApproval, StringComparison.OrdinalIgnoreCase) ? Color.Warning : Color.Error));
+
+            _amortizedItems.Add(new AmortizedOverheadItemViewModel
+            {
+                Id = bill.Id,
+                Date = bill.Date,
+                Title = !string.IsNullOrWhiteSpace(bill.Description)
+                    ? bill.Description
+                    : (!string.IsNullOrWhiteSpace(bill.InvoiceNumber) ? $"Invoice #{bill.InvoiceNumber}" : BizLoc["Business Overhead Bill"].Value),
+                Subtitle = !string.IsNullOrWhiteSpace(bill.InvoiceNumber) ? $"Inv #{bill.InvoiceNumber}" : string.Empty,
+                Supplier = bill.SupplierName,
+                PreTaxAmount = preTax,
+                TotalAmount = total,
+                MonthlyPreTax = Math.Round(preTax / 12m, 2),
+                WindowStart = winStart,
+                WindowEnd = winEnd,
+                IsActiveInSelectedPeriod = isActive,
+                StatusLabel = isPaid ? BizLoc["Paid"].Value : bill.Status,
+                StatusColor = statusColor,
+                SourceBill = bill
+            });
+        }
+
+        // 2. Legacy / One-Time RecurringExpense items
+        var oneTimeProfiles = allRecurring
+            .Where(r => string.Equals(r.Frequency, RecurringExpenseFrequency.OneTime, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(r => r.CreatedDate)
+            .ToList();
+
+        foreach (var profile in oneTimeProfiles)
+        {
+            var latestRec = profile.History?.OrderByDescending(h => h.Date).FirstOrDefault();
+            var effDate = latestRec?.Date ?? profile.CreatedDate;
+            decimal preTax;
+            decimal total;
+
+            if (latestRec != null && latestRec.Amount > 0m)
+            {
+                total = latestRec.Amount;
+                preTax = latestRec.SubTotal > 0m
+                    ? latestRec.SubTotal
+                    : FinancialCalculationEngine.CalculateFromGrandTotal(latestRec.Amount, profile.IsTaxExempt).SubTotal;
+            }
+            else
+            {
+                total = profile.Amount;
+                preTax = FinancialCalculationEngine.CalculateFromGrandTotal(profile.Amount, profile.IsTaxExempt).SubTotal;
+            }
+
+            var winStart = new DateTime(effDate.Year, effDate.Month, 1);
+            var winEnd = winStart.AddMonths(11);
+            var isActive = winStart <= PeriodEnd && winEnd >= new DateTime(PeriodStart.Year, PeriodStart.Month, 1);
+            var isPaid = latestRec?.IsPaid == true;
+
+            _amortizedItems.Add(new AmortizedOverheadItemViewModel
+            {
+                Id = profile.Id,
+                Date = effDate,
+                Title = profile.Name,
+                Subtitle = profile.Description,
+                Supplier = profile.Supplier,
+                PreTaxAmount = preTax,
+                TotalAmount = total,
+                MonthlyPreTax = Math.Round(preTax / 12m, 2),
+                WindowStart = winStart,
+                WindowEnd = winEnd,
+                IsActiveInSelectedPeriod = isActive,
+                StatusLabel = isPaid ? BizLoc["Paid"].Value : (latestRec != null ? BizLoc["Pending"].Value : BizLoc["One-Time Profile"].Value),
+                StatusColor = isPaid ? Color.Success : Color.Warning,
+                SourceRecurringProfile = profile
+            });
+        }
+
+        _amortizedItems = _amortizedItems.OrderByDescending(i => i.Date).ToList();
+    }
+
+    private void BuildInternalProjectRows()
+    {
+        _internalProjectRows.Clear();
+        if (_currentUser == null) return;
+
+        var internalProjects = Db.Projects.GetAll()
+            .Where(p => p.IsInternal && ProjectAccessHelper.CanAccess(_currentUser, p, Db.Teams, allowAccountingFinancialRead: true))
+            .OrderBy(p => p.ProjectNumber)
+            .ThenBy(p => p.Name)
+            .ToList();
+
+        if (internalProjects.Count == 0) return;
+
+        var employees = _canManageSalaries
+            ? Db.Employees.GetAll().ToDictionary(e => e.Id, StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, Employee>(StringComparer.OrdinalIgnoreCase);
+        var contributions = _canManageSalaries ? Db.EmployerContributions.GetAll() : [];
+        var timesheets = Db.Timesheets.GetAll()
+            .Where(t => t != null && !string.Equals(t.Status, TimesheetStatus.Rejected, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var pos = Db.PurchaseOrders.GetAll()
+            .Where(po => !string.Equals(po.Status, PurchaseOrderStatus.Void, StringComparison.OrdinalIgnoreCase)
+                         && !string.Equals(po.Status, PurchaseOrderStatus.Draft, StringComparison.OrdinalIgnoreCase)
+                         && po.Date.Date >= PeriodStart.Date && po.Date.Date <= PeriodEnd.Date)
+            .ToList();
+        var expenseReports = Db.ExpenseReports.GetAll()
+            .Where(exp => exp != null && !string.Equals(exp.Status, ExpenseReportStatus.Draft, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var proj in internalProjects)
+        {
+            decimal hours = 0m;
+            decimal laborCost = 0m;
+            var contributors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var ts in timesheets)
+            {
+                if (ts?.Entries == null) continue;
+                Employee? emp = null;
+                var hourlyCost = 0m;
+                if (_canManageSalaries)
+                {
+                    employees.TryGetValue(ts.EmployeeId ?? string.Empty, out emp);
+                    hourlyCost = EmployerContribution.CalculateTotalHourlyCost(emp, contributions);
+                }
+
+                foreach (var entry in ts.Entries)
+                {
+                    if (entry.Hours <= 0m) continue;
+                    if (!string.Equals(entry.ProjectId, proj.Id, StringComparison.OrdinalIgnoreCase)) continue;
+                    var d = entry.Date.Date;
+                    if (d < PeriodStart.Date || d > PeriodEnd.Date) continue;
+
+                    hours += entry.Hours;
+                    if (_canManageSalaries)
+                    {
+                        laborCost += Math.Round(entry.Hours * hourlyCost, 2);
+                        if (emp != null && !string.IsNullOrWhiteSpace(emp.FullName))
+                            contributors.Add(emp.FullName);
+                    }
+                }
+            }
+
+            decimal purchasesPreTax = 0m;
+            foreach (var po in pos)
+            {
+                if (po.LineItems == null) continue;
+                foreach (var item in po.LineItems)
+                {
+                    if (string.Equals(item.ProjectId, proj.Id, StringComparison.OrdinalIgnoreCase))
+                        purchasesPreTax += Math.Round(item.Total, 2);
+                }
+            }
+
+            foreach (var exp in expenseReports)
+            {
+                if (exp?.LineItems == null) continue;
+                foreach (var item in exp.LineItems)
+                {
+                    if (!string.Equals(item.ProjectId, proj.Id, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (item.Date.Date < PeriodStart.Date || item.Date.Date > PeriodEnd.Date) continue;
+                    purchasesPreTax += Math.Round(item.EffectiveSubTotal, 2);
+                }
+            }
+
+            _internalProjectRows.Add(new InternalProjectOverheadRow
+            {
+                ProjectId = proj.Id,
+                ProjectDisplayName = proj.DisplayName,
+                CanOpenProject = ProjectAccessHelper.CanAccess(_currentUser, proj, Db.Teams, allowAccountingFinancialRead: false),
+                Contributors = _canManageSalaries ? contributors.OrderBy(c => c).ToList() : [],
+                Hours = Math.Round(hours, 2),
+                LaborCost = _canManageSalaries ? Math.Round(laborCost, 2) : 0m,
+                PurchasesAndExpensesPreTax = Math.Round(purchasesPreTax, 2),
+                TotalPreTax = Math.Round((_canManageSalaries ? laborCost : 0m) + purchasesPreTax, 2)
+            });
+        }
+    }
+
+    private async Task AddRecurringProfile()
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canManageBills)
+        {
+            Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        var newProfile = new RecurringExpense
+        {
+            IsEstimate = false,
+            Frequency = RecurringExpenseFrequency.Monthly,
+            CreatedDate = DateTime.Today
+        };
+
+        var parameters = new DialogParameters<RecurringExpenseDialog>
+        {
+            { x => x.Expense, newProfile },
+            { x => x.IsNew, true }
+        };
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>(BizLoc["Add Recurring Fixed Cost"].Value, parameters, options);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: RecurringExpense saved })
+        {
+            await RefreshCurrentUserAsync();
+            if (!_canManageBills)
+            {
+                Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+                return;
+            }
+            saved.IsEstimate = false;
+            AccountingService.SaveRecurringExpense(saved, _currentUser);
+            RefreshData();
+            Snackbar.Add(BizLoc["Recurring fixed cost saved."].Value, Severity.Success);
+        }
+    }
+
+    private async Task EditRecurringProfile(RecurringExpense expense)
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canManageBills)
+        {
+            Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        var parameters = new DialogParameters<RecurringExpenseDialog>
+        {
+            { x => x.Expense, expense.DeepClone()! },
+            { x => x.IsNew, false },
+            { x => x.ActiveTabIndex, 0 }
+        };
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>(BizLoc["Edit Recurring Fixed Cost"].Value, parameters, options);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: RecurringExpense updated })
+        {
+            await RefreshCurrentUserAsync();
+            if (!_canManageBills)
+            {
+                Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+                return;
+            }
+            updated.IsEstimate = false;
+            AccountingService.SaveRecurringExpense(updated, _currentUser);
+            RefreshData();
+            Snackbar.Add(BizLoc["Recurring fixed cost updated."].Value, Severity.Success);
+        }
+        else
+        {
+            RefreshData();
+        }
+    }
+
+    private async Task OpenRecurringBillHistory(RecurringExpense expense)
+    {
+        await RefreshCurrentUserAsync();
+        var parameters = new DialogParameters<RecurringExpenseDialog>
+        {
+            { x => x.Expense, expense.DeepClone()! },
+            { x => x.IsNew, false },
+            { x => x.ActiveTabIndex, 1 }
+        };
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>($"{BizLoc["Bill History"].Value} — {expense.Name}", parameters, options);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: RecurringExpense updated })
+        {
+            await RefreshCurrentUserAsync();
+            if (!_canManageBills)
+            {
+                Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+                return;
+            }
+            updated.IsEstimate = false;
+            AccountingService.SaveRecurringExpense(updated, _currentUser);
+        }
+        RefreshData();
+    }
+
+    private async Task DeleteRecurringProfile(RecurringExpense expense)
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canManageBills)
+        {
+            Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            Loc["Delete"].Value,
+            string.Format(BizLoc["Are you sure you want to delete '{0}'?"].Value, expense.Name),
+            yesText: Loc["Delete"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirm == true)
+        {
+            await RefreshCurrentUserAsync();
+            if (!_canManageBills)
+            {
+                Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+                return;
+            }
+            AccountingService.DeleteRecurringExpense(expense.Id, _currentUser);
+            RefreshData();
+            Snackbar.Add(BizLoc["Recurring profile deleted."].Value, Severity.Success);
+        }
+    }
+
+    private async Task AddOverheadBill()
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canManageBills)
+        {
+            Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        var newBill = new Bill
+        {
+            Id = Guid.NewGuid().ToString(),
+            Date = DateTime.Today,
+            DueDate = DateTime.Today.AddMonths(1),
+            Status = BillStatus.Unpaid,
+            IsBusinessOverhead = true
+        };
+
+        var parameters = new DialogParameters<BillEditorDialog>
+        {
+            { x => x.Bill, newBill }
+        };
+
+        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<BillEditorDialog>(BizLoc["Add Business Overhead Bill (12-Mo Amortized)"].Value, parameters, options);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: Bill savedBill })
+        {
+            await RefreshCurrentUserAsync();
+            if (!_canManageBills)
+            {
+                Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(savedBill.PurchaseOrderId) && string.IsNullOrWhiteSpace(savedBill.LinkedRecurringExpenseId))
+            {
+                savedBill.IsBusinessOverhead = true;
+            }
+            AccountingService.SaveBill(savedBill, _currentUser?.FullName, _currentUser);
+            RefreshData();
+            Snackbar.Add(BizLoc["Overhead bill saved and amortized over 12 months."].Value, Severity.Success);
+        }
+    }
+
+    private async Task EditAmortizedItem(AmortizedOverheadItemViewModel item)
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canManageBills)
+        {
+            Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        if (item.SourceBill != null)
+        {
+            var parameters = new DialogParameters<BillEditorDialog>
+            {
+                { x => x.Bill, item.SourceBill.DeepClone()! }
+            };
+            var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true, CloseButton = true };
+            var dialog = await DialogService.ShowAsync<BillEditorDialog>(BizLoc["Edit Business Overhead Bill"].Value, parameters, options);
+            var result = await dialog.Result;
+            if (result is { Canceled: false, Data: Bill updatedBill })
+            {
+                await RefreshCurrentUserAsync();
+                if (!_canManageBills)
+                {
+                    Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+                    return;
+                }
+                AccountingService.SaveBill(updatedBill, _currentUser?.FullName, _currentUser);
+            }
+            RefreshData();
+        }
+        else if (item.SourceRecurringProfile != null)
+        {
+            var parameters = new DialogParameters<RecurringExpenseDialog>
+            {
+                { x => x.Expense, item.SourceRecurringProfile.DeepClone()! },
+                { x => x.IsNew, false }
+            };
+            var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+            var dialog = await DialogService.ShowAsync<RecurringExpenseDialog>(BizLoc["Edit One-Time Overhead Expense"].Value, parameters, options);
+            var result = await dialog.Result;
+            if (result is { Canceled: false, Data: RecurringExpense updatedProfile })
+            {
+                await RefreshCurrentUserAsync();
+                if (!_canManageBills)
+                {
+                    Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+                    return;
+                }
+                updatedProfile.IsEstimate = false;
+                AccountingService.SaveRecurringExpense(updatedProfile, _currentUser);
+            }
+            RefreshData();
+        }
+    }
+
+    private async Task DeleteAmortizedItem(AmortizedOverheadItemViewModel item)
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canManageBills)
+        {
+            Snackbar.Add(BizLoc["Active Purchases.ManageBills permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            Loc["Delete"].Value,
+            string.Format(BizLoc["Are you sure you want to delete '{0}'?"].Value, item.Title),
+            yesText: Loc["Delete"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirm != true) return;
+
+        try
+        {
+            await RefreshCurrentUserAsync();
+            DomainActorGuard.RequirePermission(_currentUser, AppPermissions.Purchases.ManageBills, "delete overhead item", allowSuspended: false);
+            if (item.SourceBill != null)
+            {
+                AccountingService.DeleteBill(item.SourceBill.Id, _currentUser);
+            }
+            else if (item.SourceRecurringProfile != null)
+            {
+                AccountingService.DeleteRecurringExpense(item.SourceRecurringProfile.Id, _currentUser);
+            }
+
+            RefreshData();
+            Snackbar.Add(BizLoc["Overhead item deleted."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+
+    private sealed class AmortizedOverheadItemViewModel
+    {
+        public string Id { get; set; } = string.Empty;
+        public DateTime Date { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public string Subtitle { get; set; } = string.Empty;
+        public string Supplier { get; set; } = string.Empty;
+        public decimal PreTaxAmount { get; set; }
+        public decimal TotalAmount { get; set; }
+        public decimal MonthlyPreTax { get; set; }
+        public DateTime WindowStart { get; set; }
+        public DateTime WindowEnd { get; set; }
+        public bool IsActiveInSelectedPeriod { get; set; }
+        public string StatusLabel { get; set; } = string.Empty;
+        public Color StatusColor { get; set; } = Color.Default;
+        public Bill? SourceBill { get; set; }
+        public RecurringExpense? SourceRecurringProfile { get; set; }
+    }
+
+    private sealed class InternalProjectOverheadRow
+    {
+        public string ProjectId { get; set; } = string.Empty;
+        public string ProjectDisplayName { get; set; } = string.Empty;
+        public bool CanOpenProject { get; set; }
+        public List<string> Contributors { get; set; } = [];
+        public decimal Hours { get; set; }
+        public decimal LaborCost { get; set; }
+        public decimal PurchasesAndExpensesPreTax { get; set; }
+        public decimal TotalPreTax { get; set; }
+    }
+}

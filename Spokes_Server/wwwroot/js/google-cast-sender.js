@@ -74,20 +74,6 @@
         },
 
         /**
-         * Returns whether Google Cast devices were discovered on the local network.
-         */
-        hasDevices: function () {
-            if (getNativeCastPlugin()) return true;
-            if (!this.isAvailable()) return false;
-            try {
-                const state = castContext.getCastState();
-                return state !== cast.framework.CastState.NO_DEVICES_AVAILABLE;
-            } catch (e) {
-                return false;
-            }
-        },
-
-        /**
          * Initializes the Cast context with the specified App ID and Blazor reference.
          */
         init: async function (appId, dotNetRef) {
@@ -170,7 +156,7 @@
                     }
                     if (activeDotNetRef) {
                         try {
-                            await activeDotNetRef.invokeMethodAsync('OnCastAuthFailed', 'NATIVE_ERROR', msg || 'Failed to connect to Google Cast device.');
+                            await activeDotNetRef.invokeMethodAsync('OnCastAuthFailed', err?.code || 'NATIVE_ERROR', msg || 'Failed to connect to Google Cast device.');
                         } catch (e) {}
                     }
                     return false;
@@ -225,11 +211,17 @@
                     return false;
                 }
 
-                // If SESSION_STATE_CHANGED already attached, this is a clean no-op.
-                // Otherwise fallback to attachSession if event didn't fire.
+                // If SESSION_STATE_CHANGED already attached, send any fresh pending INIT_SESSION payload on the active session.
+                // Otherwise attach the newly created session (which consumes and sends pendingInitPayload).
                 const session = castContext.getCurrentSession();
-                if (session && attachedSessionId !== session.getSessionId()) {
-                    attachSession(session);
+                if (session) {
+                    if (attachedSessionId !== session.getSessionId()) {
+                        attachSession(session);
+                    } else if (pendingInitPayload) {
+                        const payload = pendingInitPayload;
+                        pendingInitPayload = null;
+                        sendInitSession(session, payload);
+                    }
                 }
                 return true;
             } catch (err) {
@@ -306,9 +298,8 @@
             type: 'INIT_SESSION',
             serverId: payload.serverId || '',
             serverUrl: payload.serverUrl || window.location.origin,
-            licensePayload: payload.licensePayload || null,
+            castTicket: payload.castTicket || null,
             serverFingerprint: payload.serverFingerprint || null,
-            trialTicket: payload.trialTicket || null,
             databaseCreationVersion: payload.databaseCreationVersion || null,
             isDemo: Boolean(payload.isDemo)
         };

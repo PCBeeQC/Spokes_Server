@@ -8,8 +8,6 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.ReverseProxy;
 using Yarp.ReverseProxy.Configuration;
 using Yarp.ReverseProxy.Transforms;
 
@@ -65,9 +63,6 @@ public static class ReverseProxyExtensions
 
         return services;
     }
-
-    public static IServiceCollection AddSpokesReverseProxy(this IServiceCollection services, SystemConfig systemConfig)
-        => services.AddSpokesReverseProxy();
 
     internal static void ConfigureForwardedHeaders(ForwardedHeadersOptions options, IConfiguration? configuration)
     {

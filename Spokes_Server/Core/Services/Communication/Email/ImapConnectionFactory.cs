@@ -52,10 +52,17 @@ public class ImapConnectionFactory : IImapConnectionFactory
         return await ConnectAsync(account, cancellationToken);
     }
 
-    public async Task<ImapConnectionResult> ConnectAsync(EmailAccount account, CancellationToken cancellationToken = default)
+    public Task<ImapConnectionResult> ConnectAsync(EmailAccount account, CancellationToken cancellationToken = default) =>
+        ConnectCoreWithOptionalPasswordAsync(account, plainPasswordOverride: null, cancellationToken);
+
+    private async Task<ImapConnectionResult> ConnectCoreWithOptionalPasswordAsync(
+        EmailAccount account,
+        string? plainPasswordOverride,
+        CancellationToken cancellationToken)
     {
         var username = !string.IsNullOrWhiteSpace(account.Username) ? account.Username : account.EmailAddress;
-        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(account.EncryptedPassword))
+        var hasPasswordSource = !string.IsNullOrEmpty(plainPasswordOverride) || !string.IsNullOrEmpty(account.EncryptedPassword);
+        if (string.IsNullOrWhiteSpace(username) || !hasPasswordSource)
         {
             _logger?.LogWarning("[ImapConnectionFactory] EmailAccount {AccountId} has missing credentials", account.Id);
             return new ImapConnectionResult(null, ImapConnectionStatus.MissingCredentials, "Missing email credentials");
@@ -68,20 +75,20 @@ public class ImapConnectionFactory : IImapConnectionFactory
             return new ImapConnectionResult(null, ImapConnectionStatus.ServerNotConfigured, "IMAP server not configured");
         }
 
-        string password;
-        try
+        var password = plainPasswordOverride;
+        if (string.IsNullOrEmpty(password) && !string.IsNullOrEmpty(account.EncryptedPassword))
         {
-            password = _encryptionService.Decrypt(account.EncryptedPassword);
-            if (string.IsNullOrEmpty(password))
+            if (!_encryptionService.TryDecrypt(account.EncryptedPassword, out password))
             {
-                _logger?.LogWarning("[ImapConnectionFactory] Decrypted email password for account {AccountId} is empty", account.Id);
-                return new ImapConnectionResult(null, ImapConnectionStatus.MissingCredentials, "Decrypted password is empty");
+                _logger?.LogWarning("[ImapConnectionFactory] Stored password for email account {AccountId} ({Email}) cannot be decrypted; please re-enter the password in Email Settings.", account.Id, account.EmailAddress);
+                return new ImapConnectionResult(null, ImapConnectionStatus.DecryptionError, "Stored password cannot be decrypted. Please re-enter the password in Email Settings.");
             }
         }
-        catch (Exception ex)
+
+        if (string.IsNullOrWhiteSpace(password))
         {
-            _logger?.LogError(ex, "[ImapConnectionFactory] Failed to decrypt email password for account {AccountId}", account.Id);
-            return new ImapConnectionResult(null, ImapConnectionStatus.DecryptionError, ex.Message);
+            _logger?.LogWarning("[ImapConnectionFactory] Decrypted email password for account {AccountId} is empty", account.Id);
+            return new ImapConnectionResult(null, ImapConnectionStatus.MissingCredentials, "Decrypted password is empty");
         }
 
         bool isTrustedServer = account.IsServerManaged || usedConfiguredServer;
@@ -93,26 +100,6 @@ public class ImapConnectionFactory : IImapConnectionFactory
             password,
             allowPlaintext: isTrustedServer,
             requireSafeExternalHost: !isTrustedServer,
-            cancellationToken);
-    }
-
-    public Task<ImapConnectionResult> TestConnectionAsync(
-        string host,
-        int port,
-        bool useSsl,
-        string username,
-        string password,
-        CancellationToken cancellationToken = default)
-    {
-        // Secure by default for raw ad-hoc connection tests: enforce TLS and DNS-pinned SSRF checks.
-        return ConnectAndAuthenticateCoreAsync(
-            host,
-            port,
-            useSsl,
-            username,
-            password,
-            allowPlaintext: false,
-            requireSafeExternalHost: true,
             cancellationToken);
     }
 
@@ -220,39 +207,7 @@ public class ImapConnectionFactory : IImapConnectionFactory
             callerIsAdmin = account.IsServerManaged;
         }
 
-        var username = !string.IsNullOrWhiteSpace(account.Username) ? account.Username : account.EmailAddress;
-        var (host, port, useSsl, usedConfiguredServer) = ResolveServerEndpointDetails(account);
-        if (string.IsNullOrWhiteSpace(host))
-            return (false, "IMAP host is not configured.");
-
-        var password = plainPasswordOverride;
-        if (string.IsNullOrEmpty(password) && !string.IsNullOrEmpty(account.EncryptedPassword))
-        {
-            try
-            {
-                password = _encryptionService.Decrypt(account.EncryptedPassword);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "[ImapConnectionFactory] Failed to decrypt saved password during TestConnectionAsync for account {AccountId}", account.Id);
-                return (false, callerIsAdmin ? $"Failed to decrypt saved password: {ex.Message}" : MailTransportSecurityHelper.SanitizedConnectionErrorMessage);
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
-            return (false, "Username and password are required.");
-
-        bool isTrustedServer = account.IsServerManaged || usedConfiguredServer;
-        using var result = await ConnectAndAuthenticateCoreAsync(
-            host,
-            port,
-            useSsl,
-            username,
-            password,
-            allowPlaintext: isTrustedServer,
-            requireSafeExternalHost: !isTrustedServer,
-            cancellationToken);
-
+        using var result = await ConnectCoreWithOptionalPasswordAsync(account, plainPasswordOverride, cancellationToken);
         if (result.IsSuccess)
         {
             try
@@ -266,6 +221,11 @@ public class ImapConnectionFactory : IImapConnectionFactory
             return (true, "Connection successful!");
         }
 
+        if (result.Status == ImapConnectionStatus.ServerNotConfigured)
+            return (false, "IMAP host is not configured.");
+        if (result.Status == ImapConnectionStatus.MissingCredentials)
+            return (false, "Username and password are required.");
+
         var errorMessage = callerIsAdmin
             ? (result.ErrorMessage ?? "Connection failed.")
             : MailTransportSecurityHelper.SanitizedConnectionErrorMessage;
@@ -274,39 +234,9 @@ public class ImapConnectionFactory : IImapConnectionFactory
 
     public async Task<string?> TryDetectSenderDisplayNameAsync(EmailAccount account, string? plainPasswordOverride = null, CancellationToken cancellationToken = default)
     {
-        var username = !string.IsNullOrWhiteSpace(account.Username) ? account.Username : account.EmailAddress;
-        var (host, port, useSsl, usedConfiguredServer) = ResolveServerEndpointDetails(account);
-        if (string.IsNullOrWhiteSpace(host))
-            return null;
-
-        var password = plainPasswordOverride;
-        if (string.IsNullOrEmpty(password) && !string.IsNullOrEmpty(account.EncryptedPassword))
-        {
-            try
-            {
-                password = _encryptionService.Decrypt(account.EncryptedPassword);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
-            return null;
-
         try
         {
-            bool isTrustedServer = account.IsServerManaged || usedConfiguredServer;
-            using var result = await ConnectAndAuthenticateCoreAsync(
-                host,
-                port,
-                useSsl,
-                username,
-                password,
-                allowPlaintext: isTrustedServer,
-                requireSafeExternalHost: !isTrustedServer,
-                cancellationToken);
+            using var result = await ConnectCoreWithOptionalPasswordAsync(account, plainPasswordOverride, cancellationToken);
             if (!result.IsSuccess || result.Client == null)
                 return null;
 
@@ -395,12 +325,6 @@ public class ImapConnectionFactory : IImapConnectionFactory
         return null;
     }
 
-    public (string Host, int Port, bool UseSsl) ResolveServerEndpoint(EmailAccount account)
-    {
-        var (host, port, useSsl, _) = ResolveServerEndpointDetails(account);
-        return (host, port, useSsl);
-    }
-
     private (string Host, int Port, bool UseSsl, bool UsedConfiguredServer) ResolveServerEndpointDetails(EmailAccount account)
     {
         if (!string.IsNullOrWhiteSpace(account.IncomingServerConfigId))
@@ -425,19 +349,6 @@ public class ImapConnectionFactory : IImapConnectionFactory
         try
         {
             var result = await ConnectAsync(accountId, cancellationToken);
-            return result.Client;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    public async Task<ImapClient?> CreateAuthenticatedClientAsync(EmailAccount account, CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var result = await ConnectAsync(account, cancellationToken);
             return result.Client;
         }
         catch

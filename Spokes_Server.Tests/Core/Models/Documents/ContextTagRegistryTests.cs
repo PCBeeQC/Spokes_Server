@@ -108,9 +108,22 @@ public class ContextTagRegistryTests
     public void Resolve_ReplacesProjectManagerTags()
     {
         var body = "Your PM: @ProjectManager.Name (@ProjectManager.Email), @ProjectManager.Position";
-        var result = ContextTagRegistry.Resolve(body, CreateTestProject(), CreateTestProfile(), CreateTestManager());
+        var manager = CreateTestManager();
+        manager.IsEmailPublic = true;
+        var result = ContextTagRegistry.Resolve(body, CreateTestProject(), CreateTestProfile(), manager);
 
         Assert.Equal("Your PM: Alice Martin (alice@polyrobotics.com), Senior Project Manager", result);
+    }
+
+    [Fact]
+    public void Resolve_HidesPrivateProjectManagerEmail()
+    {
+        var body = "Your PM: @ProjectManager.Name (@ProjectManager.Email), @ProjectManager.Position";
+        var manager = CreateTestManager();
+        manager.IsEmailPublic = false;
+        var result = ContextTagRegistry.Resolve(body, CreateTestProject(), CreateTestProfile(), manager);
+
+        Assert.Equal("Your PM: Alice Martin (), Senior Project Manager", result);
     }
 
     [Fact]

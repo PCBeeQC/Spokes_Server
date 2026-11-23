@@ -46,9 +46,9 @@ public class CompanyBillInboxBackgroundService : BackgroundService
                 var inboxService = scope.ServiceProvider.GetRequiredService<CompanyBillInboxService>();
                 var settings = inboxService.GetSettings();
 
-                if (settings.Enabled && !string.IsNullOrWhiteSpace(settings.EmailAddress))
+                if (settings.Enabled && !string.IsNullOrWhiteSpace(settings.AccountId))
                 {
-                    _logger.LogInformation("Checking company bill inbox: {Email}", settings.EmailAddress);
+                    _logger.LogInformation("Checking company bill inbox: {Email}", !string.IsNullOrWhiteSpace(settings.EmailAddress) ? settings.EmailAddress : settings.AccountId);
                     var count = await inboxService.CheckInboxAsync(stoppingToken);
                     if (count > 0)
                     {

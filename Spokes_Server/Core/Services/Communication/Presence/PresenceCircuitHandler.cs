@@ -36,6 +36,8 @@ public class UserCircuitContext
     public bool IsFocused { get; set; }
     public bool IsIdle { get; set; }
     public bool IsConnected { get; set; } = true;
+    public bool IsTerminated { get; set; }
+    public bool CanRegisterPresence => IsConnected && !IsTerminated;
 
     private bool _isMobileViewport;
     public bool IsMobileViewport
@@ -53,7 +55,7 @@ public class UserCircuitContext
 
     public bool IsMobile => string.Equals(DeviceType, Core.Models.Core.DeviceType.Mobile, StringComparison.OrdinalIgnoreCase);
     public bool IsMobileLayout => IsMobileViewport;
-    public bool IsActivelyViewed => IsConnected && IsFocused && !IsIdle;
+    public bool IsActivelyViewed => CanRegisterPresence && IsFocused && !IsIdle;
 
     public event Action? OnFocusChanged;
     public void NotifyFocusChanged() => OnFocusChanged?.Invoke();
@@ -63,6 +65,15 @@ public class UserCircuitContext
 
     public event Action? OnDeviceTypeChanged;
     public void NotifyDeviceTypeChanged() => OnDeviceTypeChanged?.Invoke();
+
+    public event Action? OnConnectionDown;
+    public void NotifyConnectionDown() => OnConnectionDown?.Invoke();
+
+    public event Action? OnConnectionUp;
+    public void NotifyConnectionUp() => OnConnectionUp?.Invoke();
+
+    public event Action? OnCircuitClosed;
+    public void NotifyCircuitClosed() => OnCircuitClosed?.Invoke();
 
     /// <summary>
     /// Evaluates whether an in-app notification (snackbar / audio) should be displayed in this circuit.
@@ -118,46 +129,79 @@ public class PresenceCircuitHandler : CircuitHandler
         {
             _presenceState.RemoveConnection(_circuitContext.SubscriptionId);
         }
-        else
+
+        if (!string.IsNullOrEmpty(_circuitContext.UserId))
         {
-            // Fallback for anonymous or very early disconnects
-            _presenceState.RemoveConnection(circuit.Id);
+            _clientStateService.StopActiveTyping(_circuitContext.UserId);
+        }
+
+        _circuitContext.NotifyConnectionDown();
+
+        return circuit != null
+            ? base.OnConnectionDownAsync(circuit, cancellationToken)
+            : Task.CompletedTask;
+    }
+
+    public override Task OnCircuitClosedAsync(Circuit circuit, CancellationToken cancellationToken)
+    {
+        _circuitContext.IsConnected = false;
+        _circuitContext.IsTerminated = true;
+        _circuitContext.IsFocused = false;
+
+        if (!string.IsNullOrEmpty(_circuitContext.SubscriptionId))
+        {
+            _presenceState.RemoveConnection(_circuitContext.SubscriptionId, markTerminated: true);
         }
 
         if (!string.IsNullOrEmpty(_circuitContext.UserId))
         {
-            _clientStateService.FlushToDiskIfUnsent(_circuitContext.UserId);
+            _clientStateService.StopActiveTyping(_circuitContext.UserId);
         }
 
-        return base.OnConnectionDownAsync(circuit, cancellationToken);
+        _circuitContext.NotifyCircuitClosed();
+
+        return circuit != null
+            ? base.OnCircuitClosedAsync(circuit, cancellationToken)
+            : Task.CompletedTask;
     }
 
     public override Task OnConnectionUpAsync(Circuit circuit, CancellationToken cancellationToken)
     {
-        _circuitContext.IsConnected = true;
-        _circuitContext.IsFocused = false;
-
-        // Re-establish presence instantly if the websocket reconnects and we already know who they are,
-        // without waiting for the Blazor UI tree to deeply render and fire JS Interop again.
-        if (!string.IsNullOrEmpty(_circuitContext.UserId))
+        if (_circuitContext.IsTerminated)
         {
-            var connectionId = _circuitContext.SubscriptionId ?? circuit.Id;
+            _circuitContext.NotifyConnectionUp();
+
+        return base.OnConnectionUpAsync(circuit, cancellationToken);
+        }
+
+        _circuitContext.IsConnected = true;
+
+        // Re-establish presence instantly if the websocket reconnects after MainLayout has initialized
+        // SubscriptionId, without waiting for the Blazor UI tree to deeply render and fire JS Interop again.
+        // Avoid registering a fallback circuit.Id before OnAfterRenderAsync, which would create a duplicate
+        // connection key and clobber initial focus/device state.
+        if (!string.IsNullOrEmpty(_circuitContext.UserId) && !string.IsNullOrEmpty(_circuitContext.SubscriptionId))
+        {
+            _circuitContext.IsFocused = false;
             _presenceState.RegisterConnection(new ConnectionRegistrationOptions
             {
                 UserId = _circuitContext.UserId,
-                SubscriptionId = connectionId,
+                SubscriptionId = _circuitContext.SubscriptionId,
                 DeviceType = _circuitContext.DeviceType,
                 HasPushEnabled = _circuitContext.HasPushEnabled,
                 IsCapacitorApp = _circuitContext.IsCapacitorApp,
                 SessionId = _circuitContext.SessionId,
                 IsFocused = false,
-                IsReconnect = true
+                IsReconnect = true,
+                IsTransportAlive = () => _circuitContext.CanRegisterPresence
             });
         }
         // Note: Since they just reconnected, we cannot guarantee focus state. 
         // The browser's visibilitychange or focus event will correct this.
         // But we typically want to err on the side of giving them push notifications 
         // if we are unsure (PresenceTier changes will handle this).
+
+        _circuitContext.NotifyConnectionUp();
 
         return base.OnConnectionUpAsync(circuit, cancellationToken);
     }

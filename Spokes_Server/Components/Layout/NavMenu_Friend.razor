@@ -5,9 +5,7 @@
 @inject IConfiguration Config
 @inject UserService UserService
 @inject IUserPrivacyService PrivacyService
-@inject AuthenticationStateProvider AuthStateProvider
 @inject ChatNotificationService ChatNotifications
-@inject CalendarNotificationService CalendarNotifications
 @inject AppLabelService AppLabels
 @inject StartupTimingService StartupTimings
 @inject IJSRuntime JS
@@ -25,27 +23,12 @@
                 {
                     <span style="display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-right: 8px; border-radius: 10px; background: var(--mud-palette-error); color: white; font-size: 11px; font-weight: 700;">@_unreadCount</span>
                 }
-                
-                @if (_isEditingFavorites)
-                {
-                    <span @onclick:stopPropagation="true" @onclick:preventDefault="true" class="d-flex">
-                        <MudTooltip Text="@Loc["MoveUp"]">
-                            <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Color="Color.Default" Size="Size.Small" OnClick="@(() => MoveFavoriteUp(href))" />
-                        </MudTooltip>
-                        <MudTooltip Text="@Loc["MoveDown"]">
-                            <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Color="Color.Default" Size="Size.Small" OnClick="@(() => MoveFavoriteDown(href))" />
-                        </MudTooltip>
-                    </span>
-                }
             </div>
         </MudNavLink>
     }
 </MudNavMenu>
 
 @code {
-    [Parameter] public bool _isEditingFavorites { get; set; } = false;
-    [Parameter] public bool drawerOpen { get; set; } = true;
-    
     private Employee? _currentUser;
     private int _unreadCount = 0;
     private List<string> _availableLinks = new();
@@ -56,46 +39,12 @@
         "chat" => (Loc["Chat"].Value, Icons.Material.Filled.Chat),
         "planning/calendar" => (Loc["Calendar"].Value, Icons.Material.Filled.CalendarMonth),
         "organization" => ($"{AppLabels.Employees} & {AppLabels.Teams}", @Icons.Material.Filled.People),
-        "admin/definitions" => (Loc["TaskDefinitions"].Value, Icons.Material.Filled.ListAlt),
-        "admin/standard-documents" => (Loc["StandardDocuments"].Value, Icons.Material.Filled.Description),
         "admin/settings" => (Loc["Settings"].Value, Icons.Material.Filled.Settings),
         "admin/demo-settings" => (Loc["DemoSettings"].Value, Icons.Material.Filled.Build),
         "admin/moderation" => (Loc["Moderation"].Value, Icons.Material.Filled.Security),
         "albums" => (Loc["Albums"].Value, @Icons.Material.Filled.PhotoLibrary),
         _ => (Loc["Unknown"].Value, Icons.Material.Filled.Link)
     };
-
-    private void MoveFavoriteUp(string href)
-    {
-        if (_currentUser == null) return;
-        var index = _availableLinks.IndexOf(href);
-        if (index > 0)
-        {
-            _availableLinks.RemoveAt(index);
-            _availableLinks.Insert(index - 1, href);
-            
-            // Save order to profile
-            _currentUser.FavoriteLinks = _availableLinks.ToList();
-            Db.Employees.Save(_currentUser);
-            StateHasChanged();
-        }
-    }
-
-    private void MoveFavoriteDown(string href)
-    {
-        if (_currentUser == null) return;
-        var index = _availableLinks.IndexOf(href);
-        if (index >= 0 && index < _availableLinks.Count - 1)
-        {
-            _availableLinks.RemoveAt(index);
-            _availableLinks.Insert(index + 1, href);
-            
-            // Save order to profile
-            _currentUser.FavoriteLinks = _availableLinks.ToList();
-            Db.Employees.Save(_currentUser);
-            StateHasChanged();
-        }
-    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -124,10 +73,10 @@
             if (HasPerm(AppPermissions.Admin.ManageSettings))
             {
                 allowed.Add("admin/settings");
-                if (Config.GetValue<bool>("Spokes_DemoSetup"))
-                {
-                    allowed.Add("admin/demo-settings");
-                }
+            }
+            if (_currentUser.IsEffectiveAdmin && Config.GetValue<bool>("Spokes_DemoSetup"))
+            {
+                allowed.Add("admin/demo-settings");
             }
             
             // 2. Friend edition uses the standard defined allowed list order (Chat, Calendar, Albums, Organization, etc.)
@@ -140,35 +89,34 @@
                 Db.Employees.Save(_currentUser);
             }
 
-            // Initialize chat and calendar notifications
-            // Calendar notifications are already initialized by MainLayout.OnInitializedAsync; initialize chat unread state asynchronously so nav chrome renders immediately.
-            ChatNotifications.OnUnreadCountChanged += UpdateUnreadCount;
-            _unreadCount = ChatNotifications.TotalUnreadCount;
-            _ = InitializeChatUnreadBackgroundAsync(_currentUser.Id);
-
-
-            ChatNotifications.OnUnreadCountChanged += UpdateUnreadCount;
-            _unreadCount = ChatNotifications.TotalUnreadCount;
-            UpdateUnreadCount();
+            // Subscribe to unread count changes (lifecycle owned by MainLayout)
+            if (_currentUser.HasEffectivePermission(AppPermissions.Chat.Use, allowSuspended: true))
+            {
+                ChatNotifications.OnUnreadCountChanged += UpdateUnreadCount;
+                _unreadCount = ChatNotifications.TotalUnreadCount;
+            }
         }
         StartupTimings.Add($"Server: NavMenu_Friend OnInitializedAsync Done (+{sw.ElapsedMilliseconds}ms)");
     }
 
-    private async Task InitializeChatUnreadBackgroundAsync(string userId)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        try
+        if (firstRender && _currentUser != null)
         {
-            await ChatNotifications.InitializeAsync(userId);
-            UpdateUnreadCount();
+            try { await JS.InvokeVoidAsync("pushNotifications.updateBadge", _unreadCount); } catch { }
         }
-        catch { }
     }
 
     private bool HasPerm(string perm) => _currentUser?.HasPermission(perm) ?? false;
 
     private void UpdateUnreadCount()
     {
-        _unreadCount = ChatNotifications.TotalUnreadCount;
+        var nextCount = ChatNotifications.TotalUnreadCount;
+        if (nextCount == _unreadCount)
+        {
+            return;
+        }
+        _unreadCount = nextCount;
         InvokeAsync(async () =>
         {
             StateHasChanged();

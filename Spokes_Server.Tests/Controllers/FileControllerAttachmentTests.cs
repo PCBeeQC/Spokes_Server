@@ -10,6 +10,7 @@ using Microsoft.Extensions.Primitives;
 using Moq;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Controllers;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
@@ -20,6 +21,7 @@ using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication;
 using Spokes_Server.Core.Services.Communication.Chat;
+using Spokes_Server.Core.Services.Security;
 using Spokes_Server.Core.Services.Storage;
 using Spokes_Server.Tests.Helpers;
 
@@ -39,6 +41,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     private readonly Employee _defaultUser;
     private readonly FileController _controller;
     private readonly IServiceProvider _serviceProvider;
+    private readonly FileTokenService _fileTokenService;
     private readonly ScopedKeystoreService _keystore;
     private readonly CryptoService _defaultCrypto;
 
@@ -46,6 +49,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     {
         _mockConfig = new Mock<IConfiguration>();
         _mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        _mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
         var writer = new DiskPersistenceService(mockLogger.Object);
@@ -56,6 +60,11 @@ public class FileControllerAttachmentTests : TestDataTestBase
         _companyProfiles = new CompanyProfileRepository(writer, _mockConfig.Object);
         _albums = new AlbumRepository(writer, _mockConfig.Object);
         _deviceSessions = new DeviceSessionRepository(writer, _mockConfig.Object);
+        _chatAuth = new ChatAuthorizationService(
+            _channelsRepo,
+            new Spokes_Server.Core.Data.Repositories.Projects.ProjectRepository(writer, _mockConfig.Object),
+            new Spokes_Server.Core.Data.Repositories.HR.TeamRepository(writer, _mockConfig.Object),
+            _employeeRepo);
 
         var mockAuthStateProvider = new Mock<Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider>();
         _userService = new UserService(mockAuthStateProvider.Object, _employeeRepo, _openIdAccountRepo);
@@ -65,8 +74,10 @@ public class FileControllerAttachmentTests : TestDataTestBase
         services.AddSingleton<IConfiguration>(_mockConfig.Object);
         services.AddDataProtection().UseEphemeralDataProtectionProvider();
         services.AddMemoryCache();
+        services.AddSingleton<FileTokenService>();
         _serviceProvider = services.BuildServiceProvider();
 
+        _fileTokenService = _serviceProvider.GetRequiredService<FileTokenService>();
         var dataProtectionProvider = _serviceProvider.GetRequiredService<IDataProtectionProvider>();
         _keystore = new ScopedKeystoreService(dataProtectionProvider);
         _defaultCrypto = new CryptoService();
@@ -80,7 +91,8 @@ public class FileControllerAttachmentTests : TestDataTestBase
             IsActive = true,
             IsSuspended = false,
             IsBanned = false,
-            IsAdmin = false
+            IsAdmin = false,
+            Permissions = [AppPermissions.Email.Use, AppPermissions.Chat.Use]
         };
         _employeeRepo.Save(_defaultUser);
         _openIdAccountRepo.Save(new OpenIdAccount { Id = "link-user1", Sub = "user1", LinkedEmployeeId = "user1" });
@@ -95,23 +107,28 @@ public class FileControllerAttachmentTests : TestDataTestBase
         _employeeRepo.Save(new Employee { Id = "inactive1", FirstName = "Inactive", LastName = "User", IsActive = false });
         _openIdAccountRepo.Save(new OpenIdAccount { Id = "link-inactive1", Sub = "inactive1", LinkedEmployeeId = "inactive1" });
 
-        _employeeRepo.Save(new Employee { Id = "suspended1", FirstName = "Suspended", LastName = "User", IsActive = true, IsSuspended = true });
+        _employeeRepo.Save(new Employee { Id = "suspended1", FirstName = "Suspended", LastName = "User", IsActive = true, IsSuspended = true, Permissions = [AppPermissions.Email.Use, AppPermissions.Chat.Use] });
         _openIdAccountRepo.Save(new OpenIdAccount { Id = "link-suspended1", Sub = "suspended1", LinkedEmployeeId = "suspended1" });
 
         _employeeRepo.Save(new Employee { Id = "banned1", FirstName = "Banned", LastName = "User", IsActive = true, IsBanned = true });
         _openIdAccountRepo.Save(new OpenIdAccount { Id = "link-banned1", Sub = "banned1", LinkedEmployeeId = "banned1" });
 
-        // Default chat provider setup
-        var chatServiceMock = new Mock<IChatChannelAccessService>();
-        chatServiceMock.Setup(s => s.GetChannelsForUser(It.IsAny<string>()))
-            .Returns((string uid) => _channelsRepo.GetDirectChannelsForUser(uid)
-                .Concat(_channelsRepo.GetChannelsForUser(uid, new List<string>(), new List<string>())).ToList());
+        // Default chat & email provider setup
+        var emailInboxMock = new Mock<Spokes_Server.Core.Services.Communication.Email.IEmailInboxService>();
+        emailInboxMock
+            .Setup(s => s.CanUserAccessEmailMessage(It.IsAny<Employee>(), It.IsAny<string>(), It.IsAny<string>()))
+            .Returns((Employee u, string acctId, string _) =>
+                FileAccessPermissionHelper.IsReadableUser(u) &&
+                FileAccessPermissionHelper.HasAssignedPermission(u, AppPermissions.Email.Use) &&
+                (u.IsAdmin || u.Id.Equals(acctId, StringComparison.OrdinalIgnoreCase)));
 
-        var chatProvider = new ChatFileAccessProvider(chatServiceMock.Object);
-        _providers = new List<IFileAccessProvider> { chatProvider, new EmailFileAccessProvider() };
+        var chatProvider = new ChatFileAccessProvider(_chatAuth, _channelsRepo);
+        _providers = new List<IFileAccessProvider> { chatProvider, new EmailFileAccessProvider(emailInboxMock.Object) };
 
         _controller = CreateController();
     }
+
+    private readonly ChatAuthorizationService _chatAuth;
 
     private FileController CreateController(
         IEnumerable<IFileAccessProvider>? providers = null,
@@ -124,11 +141,11 @@ public class FileControllerAttachmentTests : TestDataTestBase
         var db = TestDatabaseFactory.Create(_deviceSessions, _employeeRepo);
         var escrow = new ServerEscrowService(db.CompanyProfile, db.ServerConfigs, activeCrypto);
         var imageService = new ImageProcessingService();
-        var albumService = new AlbumService(_albums, _channelsRepo, activeCrypto, escrow, _employeeRepo);
+        var albumService = new AlbumService(_albums, _channelsRepo, activeCrypto, escrow, _employeeRepo, _chatAuth);
         var keyResolvers = new IFileKeyResolver[]
         {
             new ChatFileKeyResolver(_channelsRepo, _keystore, activeCrypto),
-            new AlbumFileKeyResolver(_albums, albumService, _keystore, activeCrypto)
+            new AlbumFileKeyResolver(_albums, albumService, _keystore)
         };
         var fileAuthService = new FileAuthorizationService(
             providers ?? _providers,
@@ -142,6 +159,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
             _userService,
             imageService,
             _channelsRepo,
+            fileTokenService: _fileTokenService,
             config: _mockConfig.Object);
 
         var httpContext = new DefaultHttpContext
@@ -169,9 +187,13 @@ public class FileControllerAttachmentTests : TestDataTestBase
         {
             new Claim(ClaimTypes.NameIdentifier, employeeId),
             new Claim("sub", employeeId),
-            new Claim("EmployeeId", employeeId)
+            new Claim("EmployeeId", employeeId),
+            new Claim("SessionId", $"sess-{employeeId}")
         }, "mock"));
     }
+
+    private string ChatToken(string channelId, string fileName, string userId = "user1", bool isThumbnail = false)
+        => _fileTokenService.GenerateAccessToken("chat", channelId, fileName, null, userId, $"sess-{userId}", isThumbnail: isThumbnail);
 
     private string CreateChannelAttachment(string channelId, string fileName, string content = "file-content")
     {
@@ -184,7 +206,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
 
     private string CreateEmailAttachment(string employeeId, string messageId, string attachmentId, string content = "email-content")
     {
-        var dir = Path.Combine(_testDataPath, "Employees", employeeId, "Email", "Attachments", messageId);
+        var dir = Path.Combine(_testDataPath, "EmailAccounts", employeeId, "Attachments", messageId);
         Directory.CreateDirectory(dir);
         var fullPath = Path.Combine(dir, attachmentId);
         File.WriteAllText(fullPath, content);
@@ -196,79 +218,29 @@ public class FileControllerAttachmentTests : TestDataTestBase
     // =========================================================================
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public async Task GetAttachment_InvalidChannelId_ReturnsBadRequest(string? channelId)
+    [InlineData(null, "valid.png")]
+    [InlineData("", "valid.png")]
+    [InlineData("   ", "valid.png")]
+    [InlineData("..", "valid.png")]
+    [InlineData("../secret", "valid.png")]
+    [InlineData("chan/..", "valid.png")]
+    [InlineData("chan..nel", "valid.png")]
+    [InlineData("chan\0nel", "valid.png")]
+    [InlineData("chan:nel", "valid.png")]
+    [InlineData("chan<nel", "valid.png")]
+    [InlineData("chan1", null)]
+    [InlineData("chan1", "")]
+    [InlineData("chan1", "   ")]
+    [InlineData("chan1", "..")]
+    [InlineData("chan1", "../secret.txt")]
+    [InlineData("chan1", "dir/../file.png")]
+    [InlineData("chan1", "file..png")]
+    [InlineData("chan1", "file\0name.png")]
+    [InlineData("chan1", "file:name.png")]
+    [InlineData("chan1", "file<name.png")]
+    public async Task GetAttachment_InvalidPathParameters_ReturnsBadRequest(string? channelId, string? fileName)
     {
-        var result = _controller.GetFile("chat", channelId!, "valid.png");
-        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
-        var spokesResult = Assert.IsType<SpokesResult>(badRequest.Value);
-        Assert.False(spokesResult.IsSuccess);
-        Assert.Equal("Invalid path parameters", spokesResult.ErrorMessage);
-    }
-
-    [Theory]
-    [InlineData("..")]
-    [InlineData("../secret")]
-    [InlineData("chan/..")]
-    [InlineData("chan..nel")]
-    public async Task GetAttachment_ChannelIdContainsDotDot_ReturnsBadRequest(string channelId)
-    {
-        var result = _controller.GetFile("chat", channelId, "valid.png");
-        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
-        var spokesResult = Assert.IsType<SpokesResult>(badRequest.Value);
-        Assert.False(spokesResult.IsSuccess);
-        Assert.Equal("Invalid path parameters", spokesResult.ErrorMessage);
-    }
-
-    [Theory]
-    [InlineData("chan\0nel")]
-    [InlineData("chan:nel")]
-    [InlineData("chan<nel")]
-    public async Task GetAttachment_ChannelIdContainsInvalidChars_ReturnsBadRequest(string channelId)
-    {
-        var result = _controller.GetFile("chat", channelId, "valid.png");
-        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
-        var spokesResult = Assert.IsType<SpokesResult>(badRequest.Value);
-        Assert.False(spokesResult.IsSuccess);
-        Assert.Equal("Invalid path parameters", spokesResult.ErrorMessage);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public async Task GetAttachment_InvalidFileName_ReturnsBadRequest(string? fileName)
-    {
-        var result = _controller.GetFile("chat", "chan1", fileName!);
-        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
-        var spokesResult = Assert.IsType<SpokesResult>(badRequest.Value);
-        Assert.False(spokesResult.IsSuccess);
-        Assert.Equal("Invalid path parameters", spokesResult.ErrorMessage);
-    }
-
-    [Theory]
-    [InlineData("..")]
-    [InlineData("../secret.txt")]
-    [InlineData("dir/../file.png")]
-    [InlineData("file..png")]
-    public async Task GetAttachment_FileNameContainsDotDot_ReturnsBadRequest(string fileName)
-    {
-        var result = _controller.GetFile("chat", "chan1", fileName);
-        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
-        var spokesResult = Assert.IsType<SpokesResult>(badRequest.Value);
-        Assert.False(spokesResult.IsSuccess);
-        Assert.Equal("Invalid path parameters", spokesResult.ErrorMessage);
-    }
-
-    [Theory]
-    [InlineData("file\0name.png")]
-    [InlineData("file:name.png")]
-    [InlineData("file<name.png")]
-    public async Task GetAttachment_FileNameContainsInvalidChars_ReturnsBadRequest(string fileName)
-    {
-        var result = _controller.GetFile("chat", "chan1", fileName);
+        var result = await _controller.GetFile("chat", channelId!, fileName!);
         var badRequest = Assert.IsType<BadRequestObjectResult>(result);
         var spokesResult = Assert.IsType<SpokesResult>(badRequest.Value);
         Assert.False(spokesResult.IsSuccess);
@@ -280,37 +252,37 @@ public class FileControllerAttachmentTests : TestDataTestBase
     // =========================================================================
 
     [Fact]
-    public void GetAttachment_UserNotAuthenticated_ReturnsUnauthorized()
+    public async Task GetAttachment_UserNotAuthenticated_ReturnsUnauthorized()
     {
         var unauthController = CreateController(principal: new ClaimsPrincipal(new ClaimsIdentity()));
-        var result = unauthController.GetFile("chat", "chan1", "file.png");
+        var result = await unauthController.GetFile("chat", "chan1", "file.png");
         var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
         var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
         Assert.False(payload.IsSuccess);
     }
 
     [Fact]
-    public void GetAttachment_EmployeeNotFound_ReturnsUnauthorized()
+    public async Task GetAttachment_EmployeeNotFound_ReturnsUnauthorized()
     {
         var unknownUserController = CreateController(principal: CreateClaimsPrincipal("nonexistent-emp"));
-        var result = unknownUserController.GetFile("chat", "chan1", "file.png");
+        var result = await unknownUserController.GetFile("chat", "chan1", "file.png");
         var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
         var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
         Assert.False(payload.IsSuccess);
     }
 
     [Fact]
-    public void GetAttachment_UserIsInactive_ReturnsUnauthorized()
+    public async Task GetAttachment_UserIsInactive_ReturnsUnauthorized()
     {
         var inactiveController = CreateController(principal: CreateClaimsPrincipal("inactive1"));
-        var result = inactiveController.GetFile("chat", "chan1", "file.png");
+        var result = await inactiveController.GetFile("chat", "chan1", "file.png");
         var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
         var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
         Assert.False(payload.IsSuccess);
     }
 
     [Fact]
-    public void GetAttachment_UserIsSuspended_AllowsReadOnlyDownload()
+    public async Task GetAttachment_UserIsSuspended_AllowsReadOnlyDownload()
     {
         var channel = new ChatChannel
         {
@@ -322,16 +294,16 @@ public class FileControllerAttachmentTests : TestDataTestBase
         var fullPath = CreateChannelAttachment("chan-suspended-read", "file.png");
 
         var suspendedController = CreateController(principal: CreateClaimsPrincipal("suspended1"));
-        var result = suspendedController.GetFile("chat", "chan-suspended-read", "file.png");
+        var result = await suspendedController.GetFile("chat", "chan-suspended-read", "file.png", ChatToken("chan-suspended-read", "file.png", "suspended1"));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
         Assert.Equal(fullPath, fileResult.FileName);
     }
 
     [Fact]
-    public void GetAttachment_UserIsBanned_ReturnsUnauthorized()
+    public async Task GetAttachment_UserIsBanned_ReturnsUnauthorized()
     {
         var bannedController = CreateController(principal: CreateClaimsPrincipal("banned1"));
-        var result = bannedController.GetFile("chat", "chan1", "file.png");
+        var result = await bannedController.GetFile("chat", "chan1", "file.png");
         var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
         var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
         Assert.False(payload.IsSuccess);
@@ -342,9 +314,9 @@ public class FileControllerAttachmentTests : TestDataTestBase
     // =========================================================================
 
     [Fact]
-    public void GetAttachment_ChannelDoesNotExist_ReturnsNotFound()
+    public async Task GetAttachment_ChannelDoesNotExist_ReturnsNotFound()
     {
-        var result = _controller.GetFile("chat", "invalid-channel", "file.png");
+        var result = await _controller.GetFile("chat", "invalid-channel", "file.png", ChatToken("invalid-channel", "file.png"));
         var notFound = Assert.IsType<NotFoundObjectResult>(result);
         var spokesResult = Assert.IsType<SpokesResult>(notFound.Value);
         Assert.False(spokesResult.IsSuccess);
@@ -352,7 +324,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAttachment_ChatProviderDeniesAccess_ReturnsForbid()
+    public async Task GetAttachment_ChatProviderDeniesAccess_ReturnsForbid()
     {
         var channel = new ChatChannel
         {
@@ -367,7 +339,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
         mockProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), channel.Id)).Returns(false);
 
         var controller = CreateController(providers: new[] { mockProvider.Object });
-        var result = controller.GetFile("chat", channel.Id, "file.png");
+        var result = await controller.GetFile("chat", channel.Id, "file.png", ChatToken(channel.Id, "file.png"));
         var forbidden = Assert.IsType<ObjectResult>(result);
         Assert.Equal(403, forbidden.StatusCode);
         var payload = Assert.IsType<SpokesResult>(forbidden.Value);
@@ -375,7 +347,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAttachment_ChatProviderGrantsAccess_ReturnsPhysicalFile()
+    public async Task GetAttachment_ChatProviderGrantsAccess_ReturnsPhysicalFile()
     {
         var channel = new ChatChannel
         {
@@ -392,66 +364,25 @@ public class FileControllerAttachmentTests : TestDataTestBase
         mockProvider.Setup(p => p.CanAccess(It.IsAny<Employee>(), channel.Id)).Returns(true);
 
         var controller = CreateController(providers: new[] { mockProvider.Object });
-        var result = controller.GetFile("chat", channel.Id, "doc.pdf");
+        var result = await controller.GetFile("chat", channel.Id, "doc.pdf", ChatToken(channel.Id, "doc.pdf"));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
         Assert.Equal("application/pdf", fileResult.ContentType);
     }
 
     [Fact]
-    public void GetAttachment_NoProviderAndUserNotParticipantInNonGeneralChannel_ReturnsForbid()
+    public async Task GetAttachment_WhenNoChatProviderRegistered_FailsClosedWithBadRequest()
     {
         var channel = new ChatChannel
         {
             Id = "chan-no-provider-private",
             ChannelType = ChatChannelType.Direct,
-            ParticipantIds = new List<string> { "user2", "user3" }
-        };
-        _channelsRepo.Save(channel);
-
-        var controller = CreateController(providers: Array.Empty<IFileAccessProvider>());
-        var result = controller.GetFile("chat", channel.Id, "file.png");
-        var forbidden = Assert.IsType<ObjectResult>(result);
-        Assert.Equal(403, forbidden.StatusCode);
-        var payload = Assert.IsType<SpokesResult>(forbidden.Value);
-        Assert.False(payload.IsSuccess);
-    }
-
-    [Fact]
-    public void GetAttachment_NoProviderAndUserIsParticipantInNonGeneralChannel_ReturnsPhysicalFile()
-    {
-        var channel = new ChatChannel
-        {
-            Id = "chan-no-provider-allowed",
-            ChannelType = ChatChannelType.Direct,
             ParticipantIds = new List<string> { "user1", "user2" }
         };
         _channelsRepo.Save(channel);
 
-        CreateChannelAttachment(channel.Id, "photo.jpg");
-
         var controller = CreateController(providers: Array.Empty<IFileAccessProvider>());
-        var result = controller.GetFile("chat", channel.Id, "photo.jpg");
-        var fileResult = Assert.IsType<PhysicalFileResult>(result);
-        Assert.Equal("image/jpeg", fileResult.ContentType);
-    }
-
-    [Fact]
-    public void GetAttachment_NoProviderAndChannelIsGeneral_ReturnsPhysicalFile()
-    {
-        var channel = new ChatChannel
-        {
-            Id = "chan-general-fallback",
-            ChannelType = ChatChannelType.General,
-            ParticipantIds = new List<string> { "user2" } // user1 is not in list
-        };
-        _channelsRepo.Save(channel);
-
-        CreateChannelAttachment(channel.Id, "graphic.png");
-
-        var controller = CreateController(providers: Array.Empty<IFileAccessProvider>());
-        var result = controller.GetFile("chat", channel.Id, "graphic.png");
-        var fileResult = Assert.IsType<PhysicalFileResult>(result);
-        Assert.Equal("image/png", fileResult.ContentType);
+        var result = await controller.GetFile("chat", channel.Id, "file.png", ChatToken(channel.Id, "file.png"));
+        Assert.IsType<BadRequestObjectResult>(result);
     }
 
     // =========================================================================
@@ -459,7 +390,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     // =========================================================================
 
     [Fact]
-    public void GetAttachment_FileDoesNotExist_ReturnsNotFound()
+    public async Task GetAttachment_FileDoesNotExist_ReturnsNotFound()
     {
         var channel = new ChatChannel
         {
@@ -469,7 +400,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
         };
         _channelsRepo.Save(channel);
 
-        var result = _controller.GetFile("chat", channel.Id, "missing.png");
+        var result = await _controller.GetFile("chat", channel.Id, "missing.png", ChatToken(channel.Id, "missing.png"));
         Assert.IsType<NotFoundObjectResult>(result);
     }
 
@@ -481,7 +412,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     [InlineData("vector.webp", "image/webp")]
     [InlineData("drawing.bmp", "image/bmp")]
     [InlineData("document.pdf", "application/pdf")]
-    public void GetAttachment_SafeInlineContentType_ServesInline(string fileName, string expectedContentType)
+    public async Task GetAttachment_SafeInlineContentType_ServesInline(string fileName, string expectedContentType)
     {
         var channel = new ChatChannel { Id = "chan-inline", ChannelType = ChatChannelType.General };
         _channelsRepo.Save(channel);
@@ -489,7 +420,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
         CreateChannelAttachment(channel.Id, fileName);
 
         var controller = CreateController();
-        var result = controller.GetFile("chat", channel.Id, fileName);
+        var result = await controller.GetFile("chat", channel.Id, fileName, ChatToken(channel.Id, fileName));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
 
         Assert.Equal(expectedContentType, fileResult.ContentType);
@@ -502,7 +433,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAttachment_NonAsciiFileName_SetsAsciiSafeAndRfc5987ContentDisposition()
+    public async Task GetAttachment_NonAsciiFileName_SetsAsciiSafeAndRfc5987ContentDisposition()
     {
         var channel = new ChatChannel { Id = "chan-unicode", ChannelType = ChatChannelType.General };
         _channelsRepo.Save(channel);
@@ -511,7 +442,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
         CreateChannelAttachment(channel.Id, unicodeFileName);
 
         var controller = CreateController();
-        var result = controller.GetFile("chat", channel.Id, unicodeFileName);
+        var result = await controller.GetFile("chat", channel.Id, unicodeFileName, ChatToken(channel.Id, unicodeFileName));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
 
         Assert.True(string.IsNullOrEmpty(fileResult.FileDownloadName));
@@ -520,7 +451,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAttachment_DownloadQueryParamPresent_ForcesDownload()
+    public async Task GetAttachment_DownloadQueryParamPresent_ForcesDownload()
     {
         var channel = new ChatChannel { Id = "chan-force-dl-query", ChannelType = ChatChannelType.General };
         _channelsRepo.Save(channel);
@@ -528,7 +459,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
         CreateChannelAttachment(channel.Id, "photo.jpg");
 
         var controller = CreateController(query: new Dictionary<string, StringValues> { ["download"] = "1" });
-        var result = controller.GetFile("chat", channel.Id, "photo.jpg");
+        var result = await controller.GetFile("chat", channel.Id, "photo.jpg", ChatToken(channel.Id, "photo.jpg"));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
 
         Assert.Equal("photo.jpg", fileResult.FileDownloadName);
@@ -540,7 +471,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     [InlineData("vector.svg")]
     [InlineData("data.xml")]
     [InlineData("document.xhtml")]
-    public void GetAttachment_ForceDownloadExtensions_ForcesDownload(string fileName)
+    public async Task GetAttachment_ForceDownloadExtensions_ForcesDownload(string fileName)
     {
         var channel = new ChatChannel { Id = "chan-xss-extensions", ChannelType = ChatChannelType.General };
         _channelsRepo.Save(channel);
@@ -548,7 +479,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
         CreateChannelAttachment(channel.Id, fileName);
 
         var controller = CreateController();
-        var result = controller.GetFile("chat", channel.Id, fileName);
+        var result = await controller.GetFile("chat", channel.Id, fileName, ChatToken(channel.Id, fileName));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
 
         Assert.Equal(fileName, fileResult.FileDownloadName);
@@ -561,7 +492,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     [InlineData("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
     [InlineData("video.mp4", "video/mp4")]
     [InlineData("archive.zip", "application/x-zip-compressed")]
-    public void GetAttachment_UnsafeInlineContentType_ForcesDownload(string fileName, string expectedContentType)
+    public async Task GetAttachment_UnsafeInlineContentType_ForcesDownload(string fileName, string expectedContentType)
     {
         var channel = new ChatChannel { Id = "chan-unsafe-inline", ChannelType = ChatChannelType.General };
         _channelsRepo.Save(channel);
@@ -569,7 +500,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
         CreateChannelAttachment(channel.Id, fileName);
 
         var controller = CreateController();
-        var result = controller.GetFile("chat", channel.Id, fileName);
+        var result = await controller.GetFile("chat", channel.Id, fileName, ChatToken(channel.Id, fileName));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
 
         Assert.Equal(expectedContentType, fileResult.ContentType);
@@ -587,9 +518,9 @@ public class FileControllerAttachmentTests : TestDataTestBase
     [InlineData("chan1", "image\0.png")]
     [InlineData("", "image.png")]
     [InlineData("chan1", "")]
-    public void GetAttachmentThumb_InvalidParameters_ReturnsBadRequest(string channelId, string fileName)
+    public async Task GetAttachmentThumb_InvalidParameters_ReturnsBadRequest(string channelId, string fileName)
     {
-        var result = _controller.GetFileThumb("chat", channelId, fileName);
+        var result = await _controller.GetFileThumb("chat", channelId, fileName);
         var badRequest = Assert.IsType<BadRequestObjectResult>(result);
         var spokesResult = Assert.IsType<SpokesResult>(badRequest.Value);
         Assert.False(spokesResult.IsSuccess);
@@ -597,7 +528,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAttachmentThumb_UserNotAuthorized_ReturnsForbid()
+    public async Task GetAttachmentThumb_UserNotAuthorized_ReturnsForbid()
     {
         var channel = new ChatChannel
         {
@@ -607,8 +538,8 @@ public class FileControllerAttachmentTests : TestDataTestBase
         };
         _channelsRepo.Save(channel);
 
-        var controller = CreateController(providers: Array.Empty<IFileAccessProvider>());
-        var result = controller.GetFileThumb("chat", channel.Id, "image.png");
+        var controller = CreateController();
+        var result = await controller.GetFileThumb("chat", channel.Id, "image.png", ChatToken(channel.Id, "image.png", isThumbnail: true));
         var forbidden = Assert.IsType<ObjectResult>(result);
         Assert.Equal(403, forbidden.StatusCode);
         var payload = Assert.IsType<SpokesResult>(forbidden.Value);
@@ -616,7 +547,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAttachmentThumb_ThumbFileExists_ReturnsThumbPhysicalFile()
+    public async Task GetAttachmentThumb_ThumbFileExists_ReturnsThumbPhysicalFile()
     {
         var channel = new ChatChannel { Id = "chan-thumb-found", ChannelType = ChatChannelType.General };
         _channelsRepo.Save(channel);
@@ -625,7 +556,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
         CreateChannelAttachment(channel.Id, "photo.png", "original data");
 
         var controller = CreateController();
-        var result = controller.GetFileThumb("chat", channel.Id, "photo.png");
+        var result = await controller.GetFileThumb("chat", channel.Id, "photo.png", ChatToken(channel.Id, "photo.png", isThumbnail: true));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
 
         Assert.EndsWith("photo.png_thumb.jpg", fileResult.FileName);
@@ -635,7 +566,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAttachmentThumb_ThumbDoesNotExistButOriginalExists_FallsBackToOriginal()
+    public async Task GetAttachmentThumb_ThumbDoesNotExistButOriginalExists_FallsBackToOriginal()
     {
         var channel = new ChatChannel { Id = "chan-thumb-fallback", ChannelType = ChatChannelType.General };
         _channelsRepo.Save(channel);
@@ -643,7 +574,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
         CreateChannelAttachment(channel.Id, "photo.png", "original data");
 
         var controller = CreateController();
-        var result = controller.GetFileThumb("chat", channel.Id, "photo.png");
+        var result = await controller.GetFileThumb("chat", channel.Id, "photo.png", ChatToken(channel.Id, "photo.png", isThumbnail: true));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
 
         Assert.EndsWith("photo.png", fileResult.FileName);
@@ -653,12 +584,12 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAttachmentThumb_NeitherThumbNorOriginalExists_ReturnsNotFound()
+    public async Task GetAttachmentThumb_NeitherThumbNorOriginalExists_ReturnsNotFound()
     {
         var channel = new ChatChannel { Id = "chan-thumb-none", ChannelType = ChatChannelType.General };
         _channelsRepo.Save(channel);
 
-        var result = _controller.GetFileThumb("chat", channel.Id, "missing.png");
+        var result = await _controller.GetFileThumb("chat", channel.Id, "missing.png", ChatToken(channel.Id, "missing.png", isThumbnail: true));
         Assert.IsType<NotFoundObjectResult>(result);
     }
 
@@ -926,7 +857,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetAttachment_ModernPathFallback_ServesFile()
+    public async Task GetAttachment_ModernPathFallback_ServesFile()
     {
         var channel = new ChatChannel
         {
@@ -943,13 +874,13 @@ public class FileControllerAttachmentTests : TestDataTestBase
         var fullPath = Path.Combine(dir, "modern-file.pdf");
         File.WriteAllText(fullPath, "modern-pdf-content");
 
-        var result = _controller.GetFile("chat", "chan-modern-1", "modern-file.pdf");
+        var result = await _controller.GetFile("chat", "chan-modern-1", "modern-file.pdf", ChatToken("chan-modern-1", "modern-file.pdf"));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
         Assert.Equal(fullPath, fileResult.FileName);
     }
 
     [Fact]
-    public void GetAttachment_EncryptedChannel_MissingKey_ReturnsBadRequest()
+    public async Task GetAttachment_EncryptedChannel_MissingKey_ReturnsBadRequest()
     {
         var channel = new ChatChannel
         {
@@ -966,7 +897,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
         var cryptoMock = new Mock<ICryptoService>();
         var controller = CreateController(crypto: cryptoMock.Object);
 
-        var result = controller.GetFile("chat", "chan-enc-1", "enc-file.pdf");
+        var result = await controller.GetFile("chat", "chan-enc-1", "enc-file.pdf", ChatToken("chan-enc-1", "enc-file.pdf"));
         var badRequest = Assert.IsType<BadRequestObjectResult>(result);
         var spokesResult = Assert.IsType<SpokesResult>(badRequest.Value);
         Assert.False(spokesResult.IsSuccess);
@@ -974,7 +905,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
     }
 
     [Fact]
-    public void GetLegacyAttachment_ServesAttachmentViaLegacyRoute()
+    public async Task GetLegacyAttachment_ServesAttachmentViaLegacyRoute()
     {
         var channel = new ChatChannel
         {
@@ -987,13 +918,13 @@ public class FileControllerAttachmentTests : TestDataTestBase
 
         var fullPath = CreateChannelAttachment("chan-legacy-route", "legacy-pic.jpg");
 
-        var result = _controller.GetLegacyAttachment("chan-legacy-route", "legacy-pic.jpg");
+        var result = await _controller.GetLegacyAttachment("chan-legacy-route", "legacy-pic.jpg", ChatToken("chan-legacy-route", "legacy-pic.jpg"));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
         Assert.Equal(fullPath, fileResult.FileName);
     }
 
     [Fact]
-    public void GetLegacyAttachmentThumb_ServesThumbnailViaLegacyRoute()
+    public async Task GetLegacyAttachmentThumb_ServesThumbnailViaLegacyRoute()
     {
         var channel = new ChatChannel
         {
@@ -1006,7 +937,7 @@ public class FileControllerAttachmentTests : TestDataTestBase
 
         var thumbPath = CreateChannelAttachment("chan-legacy-thumb", "legacy-pic.jpg_thumb.jpg");
 
-        var result = _controller.GetLegacyAttachmentThumb("chan-legacy-thumb", "legacy-pic.jpg");
+        var result = await _controller.GetLegacyAttachmentThumb("chan-legacy-thumb", "legacy-pic.jpg", ChatToken("chan-legacy-thumb", "legacy-pic.jpg", isThumbnail: true));
         var fileResult = Assert.IsType<PhysicalFileResult>(result);
         Assert.Equal(thumbPath, fileResult.FileName);
     }
@@ -1070,5 +1001,72 @@ public class FileControllerAttachmentTests : TestDataTestBase
         // Exact fn match -> extracts and serves attachment
         var matchedFnResult = _controller.GetEmailAttachment("msg_mime", "att_blob", "user1", ct: "application/pdf", fn: "expected_report.pdf");
         Assert.IsType<PhysicalFileResult>(matchedFnResult);
+    }
+
+    [Fact]
+    public void GetEmailAttachment_UserWithoutEmailUsePermission_ReturnsForbid()
+    {
+        CreateEmailAttachment("user2", "msg_perm", "secret.pdf");
+
+        var deniedController = CreateController(principal: CreateClaimsPrincipal("user2"));
+        var result = deniedController.GetEmailAttachment("msg_perm", "secret.pdf", "user2", ct: "application/pdf", fn: "secret.pdf");
+        var forbidden = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(403, forbidden.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetFile_WithDisplayFileName_SetsContentDispositionToOriginalName()
+    {
+        var channel = new ChatChannel { Id = "chan-fn-display", ChannelType = ChatChannelType.General };
+        _channelsRepo.Save(channel);
+
+        const string storedName = "639303502351979221_6e15c5aa.pdf";
+        CreateChannelAttachment(channel.Id, storedName, "%PDF-1.4");
+
+        var controller = CreateController();
+        var result = await controller.GetFile("chat", channel.Id, storedName, t: ChatToken(channel.Id, storedName), fn: "sample-doc.pdf");
+        Assert.IsType<PhysicalFileResult>(result);
+
+        var disposition = controller.Response.Headers.ContentDisposition.ToString();
+        Assert.Contains("filename=\"sample-doc.pdf\"", disposition);
+        Assert.Contains("filename*=UTF-8''sample-doc.pdf", disposition);
+        Assert.DoesNotContain(storedName, disposition);
+    }
+
+    [Fact]
+    public async Task GetFile_WithDisplayFileNameAndDownloadQuery_SetsAttachmentFileDownloadName()
+    {
+        var channel = new ChatChannel { Id = "chan-fn-download", ChannelType = ChatChannelType.General };
+        _channelsRepo.Save(channel);
+
+        const string storedName = "639303502351979221_6e15c5aa.pdf";
+        CreateChannelAttachment(channel.Id, storedName, "%PDF-1.4");
+
+        var controller = CreateController();
+        controller.HttpContext.Request.QueryString = new QueryString("?download=1");
+        var result = await controller.GetFile("chat", channel.Id, storedName, t: ChatToken(channel.Id, storedName), fn: "sample-doc.pdf");
+        var fileResult = Assert.IsType<PhysicalFileResult>(result);
+
+        Assert.Equal("sample-doc.pdf", fileResult.FileDownloadName);
+        var disposition = controller.Response.Headers.ContentDisposition.ToString();
+        Assert.Contains("attachment; filename=\"sample-doc.pdf\"", disposition);
+    }
+
+    [Fact]
+    public async Task GetFile_WithMismatchedDisplayExtension_FallsBackToStoredFileName()
+    {
+        var channel = new ChatChannel { Id = "chan-fn-mismatch", ChannelType = ChatChannelType.General };
+        _channelsRepo.Save(channel);
+
+        const string storedName = "639303502351979221_6e15c5aa.pdf";
+        CreateChannelAttachment(channel.Id, storedName, "%PDF-1.4");
+
+        var controller = CreateController();
+        var result = await controller.GetFile("chat", channel.Id, storedName, t: ChatToken(channel.Id, storedName), fn: "evil.exe");
+        Assert.IsType<PhysicalFileResult>(result);
+
+        var disposition = controller.Response.Headers.ContentDisposition.ToString();
+        Assert.Contains($"filename=\"{storedName}\"", disposition);
+        Assert.DoesNotContain("evil.exe", disposition);
     }
 }

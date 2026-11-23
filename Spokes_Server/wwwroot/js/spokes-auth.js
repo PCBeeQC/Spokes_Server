@@ -4,6 +4,36 @@
  */
 window.spokesAuth = window.spokesAuth || {};
 
+window.spokesAuth._getOriginPrefAsync = async function(Prefs, baseKey, currentOrigin, allowLegacyHost) {
+    const scopedKey = baseKey + '::' + currentOrigin;
+    const res = await Prefs.get({ key: scopedKey });
+    if (res && res.value) {
+        return res.value;
+    }
+
+    // Copy legacy host/global fallbacks into the origin-scoped key without deleting the legacy keys.
+    // On newer mobile shells, OriginPreferencesPlugin already isolates this WebView to its own
+    // per-origin store so retaining the legacy key carries zero cross-origin risk; on older mobile
+    // binaries without OriginPreferencesPlugin, Preferences is shared with switcher.js / index.html
+    // and other configured servers, so deleting legacy keys would break unread badges and device IDs.
+    if (allowLegacyHost && window.location && window.location.hostname) {
+        const legacyHostKey = baseKey + '_' + window.location.hostname;
+        const legacyHostRes = await Prefs.get({ key: legacyHostKey });
+        if (legacyHostRes && legacyHostRes.value) {
+            await Prefs.set({ key: scopedKey, value: legacyHostRes.value }).catch(() => {});
+            return legacyHostRes.value;
+        }
+    }
+
+    const legacyGlobalRes = await Prefs.get({ key: baseKey });
+    if (legacyGlobalRes && legacyGlobalRes.value) {
+        await Prefs.set({ key: scopedKey, value: legacyGlobalRes.value }).catch(() => {});
+        return legacyGlobalRes.value;
+    }
+
+    return null;
+};
+
 /**
  * Build request headers with mobile auth if running in Capacitor.
  * @param {Object} [extraHeaders] - Additional headers to merge
@@ -14,32 +44,32 @@ window.spokesAuth = window.spokesAuth || {};
 window.spokesAuth.getHeaders = async function(extraHeaders, targetHostname) {
     var hdrs = Object.assign({}, extraHeaders || {});
     if (typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.())) {
+        const currentOrigin = window.spokesAuth.getCanonicalOrigin();
+        if (!currentOrigin) {
+            return hdrs;
+        }
+        if (targetHostname !== undefined && targetHostname !== null && String(targetHostname).trim() !== '') {
+            const targetOrigin = window.spokesAuth.getCanonicalOrigin(targetHostname);
+            if (!targetOrigin || targetOrigin !== currentOrigin) {
+                return hdrs;
+            }
+        }
         hdrs['X-Spokes-Client'] = 'mobile';
         try {
-            const host = targetHostname || window.location.hostname;
-            const refreshKey = 'spokes_refresh_' + host;
-            var res = await window.Capacitor.Plugins.Preferences.get({ key: refreshKey });
-            
-            // Migration path: ONLY for current hostname, never leak primary token to secondary targetHostnames
-            if ((!res || !res.value) && (!targetHostname || targetHostname === window.location.hostname)) {
-                res = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_refresh' });
-                if (res && res.value) {
-                    await window.Capacitor.Plugins.Preferences.set({ key: refreshKey, value: res.value });
-                    await window.Capacitor.Plugins.Preferences.remove({ key: 'spokes_refresh' });
-                }
+            const Prefs = window.Capacitor?.Plugins?.Preferences;
+            if (!Prefs) {
+                return hdrs;
             }
-
-            if (res && res.value) {
-                hdrs['Authorization'] = 'Bearer ' + res.value;
+            const [refreshToken, deviceId] = await Promise.all([
+                window.spokesAuth._getOriginPrefAsync(Prefs, 'spokes_refresh', currentOrigin, true),
+                window.spokesAuth._getOriginPrefAsync(Prefs, 'spokes_device_id', currentOrigin, false)
+            ]);
+            if (refreshToken) {
+                hdrs['Authorization'] = 'Bearer ' + refreshToken;
             }
-
-            // Attach device ID if available
-            try {
-                var devRes = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_device_id' });
-                if (devRes && devRes.value) {
-                    hdrs['X-Device-Id'] = devRes.value;
-                }
-            } catch (e) {}
+            if (deviceId) {
+                hdrs['X-Device-Id'] = deviceId;
+            }
         } catch (e) {
             console.warn('[SpokesAuth] Failed to read mobile auth token:', e);
         }
@@ -77,16 +107,57 @@ window.spokesAuth.waitForCookieSyncAsync = async function(maxRetries, intervalMs
  * so JS reads the token and passes it to the native call.
  * @returns {Promise<string|null>} The raw refresh token, or null on desktop/if not stored.
  */
+window.spokesAuth.getCanonicalOrigin = function(urlOrHost) {
+    try {
+        if (urlOrHost === undefined || urlOrHost === null || String(urlOrHost).trim() === '') {
+            const current = new URL(window.location.href);
+            if (current.protocol === 'http:' || current.protocol === 'https:') {
+                return current.origin.toLowerCase();
+            }
+            return '';
+        }
+        const raw = String(urlOrHost).trim();
+        let parsed;
+        if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw)) {
+            parsed = new URL(raw);
+        } else {
+            const scheme = (window.location && (window.location.protocol === 'http:' || window.location.protocol === 'https:'))
+                ? window.location.protocol
+                : 'https:';
+            parsed = new URL(scheme + '//' + raw);
+        }
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            return parsed.origin.toLowerCase();
+        }
+    } catch (e) {}
+    return '';
+};
+
+window.spokesAuth.setRefreshToken = async function(token, targetOrigin) {
+    if (!window.Capacitor?.Plugins?.Preferences) return false;
+    const currentOrigin = window.spokesAuth.getCanonicalOrigin();
+    const resolvedOrigin = targetOrigin ? window.spokesAuth.getCanonicalOrigin(targetOrigin) : currentOrigin;
+    if (!resolvedOrigin) return false;
+    if (currentOrigin && resolvedOrigin !== currentOrigin) {
+        return false;
+    }
+    const key = 'spokes_refresh::' + resolvedOrigin;
+    if (!token) {
+        await window.Capacitor.Plugins.Preferences.remove({ key });
+    } else {
+        await window.Capacitor.Plugins.Preferences.set({ key, value: token });
+    }
+    return true;
+};
+
 window.spokesAuth.getRefreshToken = async function() {
     if (!window.Capacitor?.isNativePlatform?.()) return null;
     try {
         const Prefs = window.Capacitor.Plugins.Preferences;
-        const refreshKey = 'spokes_refresh_' + window.location.hostname;
-        let res = await Prefs.get({ key: refreshKey });
-        if (!res || !res.value) {
-            res = await Prefs.get({ key: 'spokes_refresh' });
-        }
-        return res?.value || null;
+        const currentOrigin = window.spokesAuth.getCanonicalOrigin();
+        if (!Prefs || !currentOrigin) return null;
+
+        return await window.spokesAuth._getOriginPrefAsync(Prefs, 'spokes_refresh', currentOrigin, true);
     } catch (e) {
         console.warn('[SpokesAuth] Failed to read refresh token:', e);
         return null;
@@ -120,6 +191,8 @@ window.spokesAuth.generateCodeChallenge = async function(verifier) {
 
 /**
  * Refresh the session using the stored refresh token.
+ * Enforces bounded timeouts on Capacitor Preferences and fetch() so post-sleep
+ * network/bridge stalls can never leave _refreshPromise permanently pending.
  * @returns {Promise<boolean>} True if successfully refreshed.
  */
 window.spokesAuth.refreshSessionAsync = async function() {
@@ -131,36 +204,43 @@ window.spokesAuth.refreshSessionAsync = async function() {
         return window.spokesAuth._refreshPromise;
     }
 
+    const PREFS_TIMEOUT_MS = 3000;
+    const REFRESH_FETCH_TIMEOUT_MS = 10000;
+    const withTimeout = (promise, ms, fallbackValue) => {
+        let timerId = null;
+        return Promise.race([
+            Promise.resolve(promise).catch(() => fallbackValue),
+            new Promise(resolve => {
+                timerId = setTimeout(() => resolve(fallbackValue), ms);
+            })
+        ]).finally(() => {
+            if (timerId) clearTimeout(timerId);
+        });
+    };
+
     window.spokesAuth._refreshPromise = (async () => {
         try {
             const Prefs = window.Capacitor.Plugins.Preferences;
-            const refreshKey = 'spokes_refresh_' + window.location.hostname;
-            
-            let [refreshRes, deviceIdRes] = await Promise.all([
-                Prefs.get({ key: refreshKey }),
-                Prefs.get({ key: 'spokes_device_id' })
-            ]);
-            
-            // Migration path: if namespaced key is missing, check global key
-            if (!refreshRes || !refreshRes.value) {
-                refreshRes = await Prefs.get({ key: 'spokes_refresh' });
-                if (refreshRes && refreshRes.value) {
-                    // Background migration, don't await so we don't block boot
-                    Prefs.set({ key: refreshKey, value: refreshRes.value }).catch(()=>{});
-                    Prefs.remove({ key: 'spokes_refresh' }).catch(()=>{});
-                }
+            const currentOrigin = window.spokesAuth.getCanonicalOrigin();
+            if (!currentOrigin) {
+                return false;
             }
-            
-            if (!refreshRes || !refreshRes.value) {
+            const deviceIdKey = 'spokes_device_id::' + currentOrigin;
+            const [refreshToken, initialDeviceId] = await Promise.all([
+                withTimeout(window.spokesAuth._getOriginPrefAsync(Prefs, 'spokes_refresh', currentOrigin, true), PREFS_TIMEOUT_MS, null),
+                withTimeout(window.spokesAuth._getOriginPrefAsync(Prefs, 'spokes_device_id', currentOrigin, false), PREFS_TIMEOUT_MS, null)
+            ]);
+
+            if (!refreshToken) {
                 return false;
             }
 
             // Fall back to pushNotifications.getDeviceId() if Preferences device ID is missing
-            let deviceId = (deviceIdRes && deviceIdRes.value) || '';
+            let deviceId = initialDeviceId || '';
             if (!deviceId || deviceId.startsWith('dev_')) {
                 try {
                     if (window.pushNotifications && window.pushNotifications.getDeviceId) {
-                        deviceId = await window.pushNotifications.getDeviceId();
+                        deviceId = await withTimeout(window.pushNotifications.getDeviceId(), PREFS_TIMEOUT_MS, '');
                     }
                 } catch(e) {}
             }
@@ -172,7 +252,7 @@ window.spokesAuth.refreshSessionAsync = async function() {
             if (!deviceId || deviceId.startsWith('dev_')) {
                 try {
                     deviceId = crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15));
-                    Prefs.set({ key: 'spokes_device_id', value: deviceId }).catch(()=>{});
+                    Prefs.set({ key: deviceIdKey, value: deviceId }).catch(()=>{});
                     localStorage.setItem('spokes_device_id', deviceId);
                 } catch(e) {}
             }
@@ -186,25 +266,48 @@ window.spokesAuth.refreshSessionAsync = async function() {
             // A single fetch() is enough: with CapacitorHttp's fetch patch disabled, fetch, navigation
             // and the Blazor WebSocket all share the WebView cookie store, and the session cookie value
             // is stable (server-side ticket store), so no native-jar priming or iframe sync is needed.
-            const r = await fetch('/spokesapi/auth/refresh', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Spokes-Client': isNative ? 'mobile' : 'web'
-                },
-                body: JSON.stringify({
-                    refreshToken: refreshRes.value,
-                    deviceId: deviceId
-                }),
-                cache: 'no-store'
-            });
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            const fetchTimer = controller ? setTimeout(() => { try { controller.abort(); } catch (e) {} }, REFRESH_FETCH_TIMEOUT_MS) : null;
+            let r;
+            try {
+                const fetchOpts = {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Spokes-Client': isNative ? 'mobile' : 'web'
+                    },
+                    body: JSON.stringify({
+                        refreshToken: refreshToken,
+                        deviceId: deviceId
+                    }),
+                    cache: 'no-store'
+                };
+                if (controller) {
+                    fetchOpts.signal = controller.signal;
+                }
+                r = await fetch('/spokesapi/auth/refresh', fetchOpts);
+            } finally {
+                if (fetchTimer) clearTimeout(fetchTimer);
+            }
 
             if (r.ok) {
                 try {
                     const data = await r.json();
-                    if (data && data.expiresInSeconds && window.__spokesSession) {
-                        // Read by the resume logic in App.razor to decide whether a refresh is needed before reconnecting.
-                        window.__spokesSession.expiresAt = Date.now() + (data.expiresInSeconds * 1000);
+                    if (window.__spokesSession) {
+                        window.__spokesSession.authenticated = true;
+                        if (data && data.expiresInSeconds) {
+                            // Read by the resume logic in spokes-boot.js to decide whether a refresh is needed before reconnecting.
+                            window.__spokesSession.expiresAt = Date.now() + (data.expiresInSeconds * 1000);
+                        }
+                        if (data && typeof data.userScope === 'string' && data.userScope.length > 0) {
+                            window.__spokesSession.userScope = data.userScope;
+                        }
+                        if (data && typeof data.hasVaultKey === 'boolean') {
+                            window.__spokesSession.hasVaultKey = data.hasVaultKey;
+                        }
+                    }
+                    if (window.spokesMediaLoader && typeof window.spokesMediaLoader.reconcileSession === 'function') {
+                        window.spokesMediaLoader.reconcileSession();
                     }
                 } catch (jsonErr) {
                     console.warn('[spokesAuth] Failed to parse refresh response:', jsonErr);
@@ -213,7 +316,11 @@ window.spokesAuth.refreshSessionAsync = async function() {
             } else {
                 // Only wipe the token if the server explicitly rejected credentials as unauthorized
                 if (r.status === 401) {
-                    try { await Prefs.remove({ key: refreshKey }); } catch(e) {}
+                    const scopedRefreshKey = 'spokes_refresh::' + currentOrigin;
+                    try { await Prefs.remove({ key: scopedRefreshKey }); } catch(e) {}
+                    if (window.location && window.location.hostname) {
+                        try { await Prefs.remove({ key: 'spokes_refresh_' + window.location.hostname }); } catch(e) {}
+                    }
                     try { await Prefs.remove({ key: 'spokes_refresh' }); } catch(e) {}
                 } else {
                     console.warn('[spokesAuth] Server returned transient or request error during refresh:', r.status);

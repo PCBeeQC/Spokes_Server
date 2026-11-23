@@ -1,8 +1,11 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Data
 @using MudBlazor
 @inject Database Db
+@inject UserService UserService
+@inject ISnackbar Snackbar
 
 <MudDialog>
     <DialogContent>
@@ -15,6 +18,7 @@
 
             <MudText Typo="Typo.subtitle1" Class="mb-2">Client</MudText>
             <MudAutocomplete T="Supplier" Label="Select Client" Value="selectedClient"
+                             Disabled="@(!_canModifyAuthorized || (IsEdit && _inaccessibleProjectIds.Count > 0))"
                              SearchFunc="SearchClients" ToStringFunc="@(s => s?.ContactInfo.BusinessName ?? "")"
                              Variant="Variant.Outlined" Class="mb-4" Required="true"
                              RequiredError="Client is required" ValueChanged="OnClientSelected" MaxItems="null" />
@@ -51,7 +55,7 @@
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
         <MudButton Color="Color.Primary" OnClick="Submit" Variant="Variant.Filled"
-                   Disabled="@(!success || selectedClient == null || !SelectedProjectIds.Any())">
+                   Disabled="@(!_canModifyAuthorized || !success || selectedClient == null || (!SelectedProjectIds.Any() && !_inaccessibleProjectIds.Any()))">
             @(IsEdit ? "Save Changes" : "Create Group")
         </MudButton>
     </DialogActions>
@@ -68,10 +72,16 @@
     private List<Supplier> AllClients = [];
     private List<Project> AvailableProjects = [];
     private HashSet<string> SelectedProjectIds = [];
+    private HashSet<string> _inaccessibleProjectIds = [];
+    private Spokes_Server.Core.Models.HR.Employee? _currentActor;
+    private bool _canModifyAuthorized;
     private bool IsEdit => ExistingGroup != null;
+    private string RequiredPermission => IsEdit ? AppPermissions.Projects.Edit : AppPermissions.Projects.Create;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        _currentActor = await UserService.GetEmployeeAsync();
+        _canModifyAuthorized = _currentActor != null && _currentActor.HasPermission(RequiredPermission);
         AllClients = Db.Suppliers.GetAll().OrderBy(s => s.ContactInfo.BusinessName).ToList();
 
         if (ExistingGroup != null)
@@ -91,7 +101,20 @@
             selectedClient = AllClients.FirstOrDefault(c => 
                 c.ContactInfo.BusinessName.Equals(Group.Client.BusinessName, StringComparison.OrdinalIgnoreCase));
 
-            SelectedProjectIds = [.. Group.ProjectIds];
+            SelectedProjectIds = [];
+            _inaccessibleProjectIds = [];
+            foreach (var pid in Group.ProjectIds)
+            {
+                var proj = Db.Projects.GetById(pid);
+                if (proj != null && _currentActor != null && UserService.CanViewProject(_currentActor, proj, allowAccountingFinancialRead: false))
+                {
+                    SelectedProjectIds.Add(pid);
+                }
+                else
+                {
+                    _inaccessibleProjectIds.Add(pid);
+                }
+            }
             
             if (selectedClient != null)
             {
@@ -119,11 +142,12 @@
 
         var selectedClientName = selectedClient.ContactInfo.BusinessName?.Trim() ?? "";
 
-        // Get all projects for this client that are NOT in another group
+        // Get all accessible projects for this client that are NOT in another group
         // Match client by trimmed, case-insensitive business name
         var allClientProjects = Db.Projects.GetAll()
             .Where(p => (p.Client.BusinessName?.Trim() ?? "").Equals(selectedClientName, StringComparison.OrdinalIgnoreCase))
             .Where(p => !p.IsInternal)
+            .Where(p => _currentActor != null && UserService.CanViewProject(_currentActor, p, allowAccountingFinancialRead: false))
             .ToList();
 
         // Filter out projects that are in OTHER groups (allow projects in THIS group for editing)
@@ -133,13 +157,21 @@
             .OrderBy(p => p.DisplayName)
             .ToList();
 
-        // If client changed, clear project selections that don't belong to new client
+        // If client changed, clear accessible project selections that don't belong to new client
         var validIds = AvailableProjects.Select(p => p.Id).ToHashSet();
         SelectedProjectIds.RemoveWhere(id => !validIds.Contains(id));
     }
 
     private void OnClientSelected(Supplier? client)
     {
+        if (!_canModifyAuthorized || (IsEdit && _inaccessibleProjectIds.Count > 0 && client?.Id != selectedClient?.Id))
+        {
+            if (IsEdit && _inaccessibleProjectIds.Count > 0)
+            {
+                Snackbar.Add("Cannot change client while this group contains restricted projects.", Severity.Warning);
+            }
+            return;
+        }
         selectedClient = client;
         if (client != null)
         {
@@ -179,30 +211,62 @@
     private async Task Submit()
     {
         await form.ValidateAsync();
-        if (!success || selectedClient == null || !SelectedProjectIds.Any())
+        if (!success || selectedClient == null || (!SelectedProjectIds.Any() && !_inaccessibleProjectIds.Any()))
             return;
 
-        Group.ProjectIds = SelectedProjectIds.ToList();
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.HasPermission(RequiredPermission))
+        {
+            _canModifyAuthorized = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return;
+        }
 
-        // Update project references - set ProjectGroupId on selected projects
-        foreach (var projectId in SelectedProjectIds)
+        if (IsEdit && ExistingGroup != null && _inaccessibleProjectIds.Count > 0)
+        {
+            Group.Client = ExistingGroup.Client;
+        }
+
+        var authorizedSelectedIds = SelectedProjectIds
+            .Where(pid =>
+            {
+                var p = Db.Projects.GetById(pid);
+                return p != null && UserService.CanViewProject(emp, p, allowAccountingFinancialRead: false);
+            })
+            .ToHashSet();
+
+        if (!authorizedSelectedIds.Any() && !_inaccessibleProjectIds.Any())
+        {
+            Snackbar.Add("Select at least one accessible project.", Severity.Warning);
+            return;
+        }
+
+        Group.ProjectIds = authorizedSelectedIds
+            .Concat(_inaccessibleProjectIds)
+            .Distinct()
+            .ToList();
+
+        // Update project references - set ProjectGroupId only on authorized accessible projects
+        foreach (var projectId in authorizedSelectedIds)
         {
             var project = Db.Projects.GetById(projectId);
-            if (project != null)
+            if (project != null && UserService.CanViewProject(emp, project, allowAccountingFinancialRead: false))
             {
                 project.ProjectGroupId = Group.Id;
                 Db.Projects.Save(project);
             }
         }
 
-        // If editing, clear ProjectGroupId from projects that were removed
+        // If editing, clear ProjectGroupId only from accessible projects that were explicitly removed
         if (IsEdit && ExistingGroup != null)
         {
-            var removedProjectIds = ExistingGroup.ProjectIds.Except(SelectedProjectIds);
+            var removedProjectIds = ExistingGroup.ProjectIds
+                .Where(id => !_inaccessibleProjectIds.Contains(id))
+                .Except(authorizedSelectedIds);
             foreach (var projectId in removedProjectIds)
             {
                 var project = Db.Projects.GetById(projectId);
-                if (project != null)
+                if (project != null && UserService.CanViewProject(emp, project, allowAccountingFinancialRead: false))
                 {
                     project.ProjectGroupId = null;
                     Db.Projects.Save(project);

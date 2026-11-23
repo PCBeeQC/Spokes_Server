@@ -6,7 +6,7 @@ using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Security;
-using Spokes_Server.Core.Services.Communication.Chat;
+using Spokes_Server.Core.Services.Communication.Voice;
 using Spokes_Server.Core.Services.Communication.Notifications;
 using Spokes_Server.Core.Services.Communication.Notifications.Routing;
 using Spokes_Server.Core.Services.Security;
@@ -21,24 +21,24 @@ namespace Spokes_Server.Core.Services.Communication.Presence;
 /// </summary>
 public class PresenceStateService : IPushDecisionService
 {
-    private readonly ChatStateService? _chatStateService;
+    private readonly VoiceStateService? _voiceStateService;
     private readonly SessionService? _sessionService;
     private readonly ILogger<PresenceStateService>? _logger;
 
     [ActivatorUtilitiesConstructor]
     public PresenceStateService(
-        ChatStateService? chatStateService,
+        VoiceStateService? voiceStateService,
         SessionService? sessionService,
         ILogger<PresenceStateService>? logger = null)
     {
-        _chatStateService = chatStateService;
+        _voiceStateService = voiceStateService;
         _sessionService = sessionService;
         _logger = logger;
 
-        if (_chatStateService != null)
+        if (_voiceStateService != null)
         {
-            _chatStateService.VoiceMemberJoined += OnVoiceMemberChanged;
-            _chatStateService.VoiceMemberLeft += OnVoiceMemberChanged;
+            _voiceStateService.VoiceMemberJoined += OnVoiceMemberChanged;
+            _voiceStateService.VoiceMemberLeft += OnVoiceMemberChanged;
         }
     }
 
@@ -50,52 +50,91 @@ public class PresenceStateService : IPushDecisionService
         }
     }
 
-    public PresenceStateService(ChatStateService chatStateService)
-        : this(chatStateService, (SessionService?)null, (ILogger<PresenceStateService>?)null)
+    public PresenceStateService(VoiceStateService voiceStateService)
+        : this(voiceStateService, (SessionService?)null, (ILogger<PresenceStateService>?)null)
     {
     }
 
-    public PresenceStateService(ChatStateService chatStateService, SessionService? sessionService)
-        : this(chatStateService, sessionService, (ILogger<PresenceStateService>?)null)
+    public PresenceStateService(VoiceStateService voiceStateService, SessionService? sessionService)
+        : this(voiceStateService, sessionService, (ILogger<PresenceStateService>?)null)
     {
     }
 
-    public PresenceStateService(ChatStateService chatStateService, CoreContext coreContext, HrContext hrContext, ILogger<PresenceStateService>? logger = null)
-        : this(chatStateService, new SessionService(coreContext, hrContext), logger)
+    public PresenceStateService(VoiceStateService voiceStateService, CoreContext coreContext, HrContext hrContext, ILogger<PresenceStateService>? logger = null)
+        : this(voiceStateService, new SessionService(coreContext, hrContext), logger)
     {
     }
 
     public event Action<string>? OnUserPresenceChanged;
 
-    private Action<string>? _localSessionRevoked;
-    public event Action<string>? OnSessionRevoked
-    {
-        add
-        {
-            if (_sessionService != null)
-                _sessionService.OnSessionRevoked += value;
-            else
-                _localSessionRevoked += value;
-        }
-        remove
-        {
-            if (_sessionService != null)
-                _sessionService.OnSessionRevoked -= value;
-            else
-                _localSessionRevoked -= value;
-        }
-    }
     // Per-subscription active connections: Key: SubscriptionId, Value: ConnectionInfo
     private readonly ConcurrentDictionary<string, ConnectionInfo> _activeConnections = new();
+
+    private readonly record struct UnloadedTombstone(DateTime UnloadedAtUtc, long Sequence);
+
+    // Recently unloaded/terminated subscriptions so late out-of-order JS interop cannot resurrect a closed tab
+    private readonly ConcurrentDictionary<string, UnloadedTombstone> _unloadedSubscriptions = new();
 
     // Last-seen timestamps per (UserId, DeviceType)
     private readonly ConcurrentDictionary<(string UserId, string DeviceType), DateTime> _lastSeen = new();
 
-    // Last-seen timestamps strictly for push-enabled connections per (UserId, DeviceType)
-    private readonly ConcurrentDictionary<(string UserId, string DeviceType), DateTime> _lastSeenForPush = new();
-
     public const int RecentlySeenMinutes = 5;
-    private const double PushDelayMinutes = 1.5; // 90 seconds grace period
+    private const int UnloadedTombstoneRetentionMinutes = 15;
+
+    private static bool InvokeTransportAlive(Func<bool> predicate)
+    {
+        try
+        {
+            return predicate();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsTransportAlive(ConnectionInfo c)
+        => c.IsTransportAlive == null || InvokeTransportAlive(c.IsTransportAlive);
+
+    private bool TryGetActiveUnloadedTombstone(string? subscriptionId, out UnloadedTombstone tombstone)
+    {
+        tombstone = default;
+        if (string.IsNullOrEmpty(subscriptionId)) return false;
+        if (_unloadedSubscriptions.TryGetValue(subscriptionId, out var entry))
+        {
+            if ((DateTime.UtcNow - entry.UnloadedAtUtc).TotalMinutes < UnloadedTombstoneRetentionMinutes)
+            {
+                tombstone = entry;
+                return true;
+            }
+            _unloadedSubscriptions.TryRemove(subscriptionId, out _);
+        }
+        return false;
+    }
+
+    private bool IsSubscriptionUnloaded(string? subscriptionId)
+        => TryGetActiveUnloadedTombstone(subscriptionId, out _);
+
+    private static bool IsStaleSequence(long? incomingSequence, long lastSequence)
+        => incomingSequence.HasValue && incomingSequence.Value > 0 && incomingSequence.Value < lastSequence;
+
+    private static void AdvanceSequence(ConnectionInfo info, long? incomingSequence)
+    {
+        if (incomingSequence.HasValue && incomingSequence.Value > info.LastPresenceSequence)
+        {
+            info.LastPresenceSequence = incomingSequence.Value;
+        }
+    }
+
+    /// <summary>
+    /// Returns true if the given subscription ID is currently registered in active connections and its transport is alive.
+    /// </summary>
+    public bool HasConnection(string? subscriptionId)
+    {
+        return !string.IsNullOrEmpty(subscriptionId)
+            && _activeConnections.TryGetValue(subscriptionId, out var info)
+            && IsTransportAlive(info);
+    }
 
     /// <summary>
     /// Register an active Blazor circuit connection for a subscription using a registration options object.
@@ -104,11 +143,53 @@ public class PresenceStateService : IPushDecisionService
     {
         if (options == null || string.IsNullOrEmpty(options.SubscriptionId)) return;
 
+        if (options.IsTransportAlive != null && !InvokeTransportAlive(options.IsTransportAlive))
+            return;
+
+        if (TryGetActiveUnloadedTombstone(options.SubscriptionId, out var tombstone))
+        {
+            bool newerThanTombstone = tombstone.Sequence > 0
+                && options.PresenceSequence.HasValue
+                && options.PresenceSequence.Value > tombstone.Sequence;
+            if (!options.IsReconnect && !newerThanTombstone)
+                return;
+
+            _unloadedSubscriptions.TryRemove(options.SubscriptionId, out _);
+        }
+
         var now = DateTime.UtcNow;
         var lastInteraction = now;
 
         bool isMobileConnection = options.IsCapacitorApp ||
             string.Equals(options.DeviceType, Models.Core.DeviceType.Mobile, StringComparison.OrdinalIgnoreCase);
+
+        bool upgradedFromDesktop = false;
+        bool existingFocused = false;
+        var existingClientState = ConnectionPresenceState.Active;
+        DateTime existingLastInteraction = now;
+        long existingSequence = 0;
+        Func<bool>? existingTransportAlive = null;
+
+        if (_activeConnections.TryGetValue(options.SubscriptionId, out var existingForSub))
+        {
+            lock (existingForSub.SyncRoot)
+            {
+                if (isMobileConnection &&
+                    string.Equals(existingForSub.DeviceType, Models.Core.DeviceType.Desktop, StringComparison.OrdinalIgnoreCase))
+                {
+                    upgradedFromDesktop = true;
+                }
+                existingFocused = existingForSub.IsFocused;
+                existingClientState = existingForSub.ClientState;
+                existingLastInteraction = existingForSub.LastInteractionUtc;
+                existingSequence = existingForSub.LastPresenceSequence;
+                existingTransportAlive = existingForSub.IsTransportAlive;
+            }
+        }
+
+        var effectiveTransportAlive = options.IsTransportAlive ?? existingTransportAlive;
+        if (effectiveTransportAlive != null && !InvokeTransportAlive(effectiveTransportAlive))
+            return;
 
         if (!string.IsNullOrEmpty(options.SessionId))
         {
@@ -121,16 +202,30 @@ public class PresenceStateService : IPushDecisionService
                      kvp.Value.IsCapacitorApp ||
                      string.Equals(kvp.Value.DeviceType, Models.Core.DeviceType.Mobile, StringComparison.OrdinalIgnoreCase)))
                 {
+                    if (isMobileConnection &&
+                        string.Equals(kvp.Value.DeviceType, Models.Core.DeviceType.Desktop, StringComparison.OrdinalIgnoreCase))
+                    {
+                        upgradedFromDesktop = true;
+                    }
                     _activeConnections.TryRemove(kvp.Key, out _);
                 }
             }
         }
 
-        if (options.IsReconnect && !options.IsFocused)
+        bool preserveExisting = options.PreserveExistingActivity && existingForSub != null;
+        bool effectiveIsFocused = preserveExisting ? existingFocused : options.IsFocused;
+        var effectiveClientState = preserveExisting ? existingClientState : ConnectionPresenceState.Active;
+        long effectiveSequence = Math.Max(existingSequence, options.PresenceSequence ?? 0);
+
+        if (preserveExisting)
         {
-            if (_activeConnections.TryGetValue(options.SubscriptionId, out var prevInfo))
+            lastInteraction = existingLastInteraction;
+        }
+        else if (options.IsReconnect && !effectiveIsFocused)
+        {
+            if (existingForSub != null)
             {
-                lastInteraction = prevInfo.LastInteractionUtc;
+                lastInteraction = existingLastInteraction;
             }
             else if (_lastSeen.TryGetValue((options.UserId, options.DeviceType), out var prevSeen) && prevSeen != default)
             {
@@ -138,42 +233,92 @@ public class PresenceStateService : IPushDecisionService
             }
         }
 
+        var normalizedDeviceType = isMobileConnection ? Models.Core.DeviceType.Mobile : options.DeviceType;
+
         _activeConnections[options.SubscriptionId] = new ConnectionInfo
         {
             UserId = options.UserId,
             SessionId = options.SessionId,
-            DeviceType = options.DeviceType,
-            IsFocused = options.IsFocused,
+            DeviceType = normalizedDeviceType,
+            IsFocused = effectiveIsFocused,
             HasPushEnabled = options.HasPushEnabled,
             IsCapacitorApp = options.IsCapacitorApp,
-            ClientState = ConnectionPresenceState.Active,
-            LastInteractionUtc = lastInteraction
+            ClientState = effectiveClientState,
+            LastInteractionUtc = lastInteraction,
+            LastPresenceSequence = effectiveSequence,
+            IsTransportAlive = effectiveTransportAlive
         };
 
-        if (!options.IsReconnect || options.IsFocused)
+        if (upgradedFromDesktop && !HasActiveDesktopConnection(options.UserId))
         {
-            UpdateLastSeen(options.UserId, options.DeviceType, options.HasPushEnabled);
+            _lastSeen.TryRemove((options.UserId, Models.Core.DeviceType.Desktop), out _);
+        }
+
+        if ((!options.IsReconnect && !preserveExisting) || effectiveIsFocused)
+        {
+            UpdateLastSeen(options.UserId, normalizedDeviceType);
         }
 
         OnUserPresenceChanged?.Invoke(options.UserId);
     }
 
     /// <summary>
-    /// Remove an active connection when a Blazor circuit closes.
+    /// Marks a connection offline due to explicit client unload/termination beacon and prevents late
+    /// out-of-order hub invocations from resurrecting it unless the transport genuinely reconnects
+    /// or reports a strictly newer presence sequence on a live circuit.
+    /// </summary>
+    public void MarkConnectionOffline(string? subscriptionId, long? sequence = null)
+        => RemoveConnection(subscriptionId, markTerminated: true, sequence: sequence);
+
+    /// <summary>
+    /// Remove an active connection when a Blazor circuit disconnects or closes.
     /// </summary>
     public void RemoveConnection(string? subscriptionId)
+        => RemoveConnection(subscriptionId, markTerminated: false, sequence: null);
+
+    /// <summary>
+    /// Remove an active connection, optionally recording an unload tombstone to block late re-registration races.
+    /// </summary>
+    public void RemoveConnection(string? subscriptionId, bool markTerminated, long? sequence = null)
     {
         if (string.IsNullOrEmpty(subscriptionId)) return;
+
+        if (sequence.HasValue && sequence.Value > 0 && _activeConnections.TryGetValue(subscriptionId, out var existingInfo))
+        {
+            lock (existingInfo.SyncRoot)
+            {
+                if (IsStaleSequence(sequence, existingInfo.LastPresenceSequence))
+                {
+                    _logger?.LogDebug(
+                        "[PresenceState] Ignoring stale offline/remove for {SubscriptionId} (seq={Seq} < lastSeq={LastSeq})",
+                        subscriptionId, sequence.Value, existingInfo.LastPresenceSequence);
+                    return;
+                }
+            }
+        }
+
+        if (markTerminated)
+        {
+            var incomingSeq = sequence.GetValueOrDefault();
+            var now = DateTime.UtcNow;
+            _unloadedSubscriptions.AddOrUpdate(
+                subscriptionId,
+                new UnloadedTombstone(now, incomingSeq),
+                (_, prev) => incomingSeq > 0 && prev.Sequence > incomingSeq
+                    ? prev
+                    : new UnloadedTombstone(now, Math.Max(prev.Sequence, incomingSeq)));
+            CleanupUnloadedSubscriptionsIfNeeded();
+        }
 
         if (_activeConnections.TryRemove(subscriptionId, out var info))
         {
             if (info.IsFocused && !IsConnectionIdle(info))
             {
-                UpdateLastSeen(info.UserId, info.DeviceType, info.HasPushEnabled);
+                UpdateLastSeen(info.UserId, info.DeviceType);
             }
             else
             {
-                UpdateLastSeenIfNewer(info.UserId, info.DeviceType, info.HasPushEnabled, info.LastInteractionUtc);
+                UpdateLastSeenIfNewer(info.UserId, info.DeviceType, info.LastInteractionUtc);
             }
             TouchSession(info.SessionId);
             OnUserPresenceChanged?.Invoke(info.UserId);
@@ -183,95 +328,157 @@ public class PresenceStateService : IPushDecisionService
     /// <summary>
     /// Update focus state for a subscription connection.
     /// </summary>
-    public void SetConnectionFocus(string userId, string? subscriptionId, bool isFocused)
+    public void SetConnectionFocus(string userId, string? subscriptionId, bool isFocused, long? sequence = null)
     {
-        if (!string.IsNullOrEmpty(subscriptionId) && _activeConnections.TryGetValue(subscriptionId, out var info))
+        if (TryApplyConnectionFocus(subscriptionId, isFocused, userIdFallback: userId, logPrefix: false, sequence: sequence))
         {
-            if (!isFocused && !info.IsFocused)
-            {
-                return;
-            }
-
-            bool wasActivelyFocused = info.IsFocused && !IsConnectionIdle(info);
-            info.IsFocused = isFocused;
-
-            if (isFocused)
-            {
-                info.LastInteractionUtc = DateTime.UtcNow;
-                if (info.ClientState == ConnectionPresenceState.Idle)
-                {
-                    info.ClientState = ConnectionPresenceState.Active;
-                }
-                UpdateLastSeen(userId, info.DeviceType, info.HasPushEnabled);
-            }
-            else if (wasActivelyFocused)
-            {
-                info.LastInteractionUtc = DateTime.UtcNow;
-                UpdateLastSeen(userId, info.DeviceType, info.HasPushEnabled);
-            }
+            OnUserPresenceChanged?.Invoke(userId);
         }
-
-        OnUserPresenceChanged?.Invoke(userId);
     }
 
     /// <summary>
     /// Update focus state for a subscription connection directly by subscription ID.
+    /// Returns true when the focus transition was accepted and applied; false if missing, dead, or rejected as stale.
     /// </summary>
-    public void SetConnectionFocusBySubscription(string? subscriptionId, bool isFocused)
+    public bool SetConnectionFocusBySubscription(string? subscriptionId, bool isFocused, long? sequence = null)
     {
-        _logger?.LogDebug("[PresenceState] SetConnectionFocusBySubscription called for {SubscriptionId}, isFocused: {IsFocused}", subscriptionId, isFocused);
+        _logger?.LogDebug("[PresenceState] SetConnectionFocusBySubscription called for {SubscriptionId}, isFocused: {IsFocused}, seq: {Sequence}", subscriptionId, isFocused, sequence);
+        return TryApplyConnectionFocus(subscriptionId, isFocused, userIdFallback: null, logPrefix: true, sequence: sequence);
+    }
+
+    private bool TryApplyConnectionFocus(string? subscriptionId, bool isFocused, string? userIdFallback, bool logPrefix, long? sequence)
+    {
+        if (IsSubscriptionUnloaded(subscriptionId)) return false;
+
         if (!string.IsNullOrEmpty(subscriptionId) && _activeConnections.TryGetValue(subscriptionId, out var info))
         {
-            if (!isFocused && !info.IsFocused)
+            if (!IsTransportAlive(info))
             {
-                return;
+                RemoveConnection(subscriptionId);
+                return false;
             }
 
-            _logger?.LogDebug("[PresenceState] Found connection info. UserId: {UserId}, DeviceType: {DeviceType}", info.UserId, info.DeviceType);
-            bool wasActivelyFocused = info.IsFocused && !IsConnectionIdle(info);
-            info.IsFocused = isFocused;
+            string targetUserId;
+            string deviceType;
+            bool shouldUpdateLastSeen = false;
 
-            if (isFocused)
+            lock (info.SyncRoot)
             {
-                info.LastInteractionUtc = DateTime.UtcNow;
-                if (info.ClientState == ConnectionPresenceState.Idle)
+                if (IsStaleSequence(sequence, info.LastPresenceSequence))
                 {
-                    info.ClientState = ConnectionPresenceState.Active;
+                    _logger?.LogDebug(
+                        "[PresenceState] Ignoring stale focus({IsFocused}) for {SubscriptionId} (seq={Seq} < lastSeq={LastSeq})",
+                        isFocused, subscriptionId, sequence, info.LastPresenceSequence);
+                    return false;
                 }
-                UpdateLastSeen(info.UserId, info.DeviceType, info.HasPushEnabled);
-            }
-            else if (wasActivelyFocused)
-            {
-                info.LastInteractionUtc = DateTime.UtcNow;
-                UpdateLastSeen(info.UserId, info.DeviceType, info.HasPushEnabled);
+
+                AdvanceSequence(info, sequence);
+
+                if (!isFocused && !info.IsFocused)
+                {
+                    return false;
+                }
+
+                if (logPrefix)
+                {
+                    _logger?.LogDebug("[PresenceState] Found connection info. UserId: {UserId}, DeviceType: {DeviceType}", info.UserId, info.DeviceType);
+                }
+
+                bool wasActivelyFocused = info.IsFocused && !IsConnectionIdle(info);
+                info.IsFocused = isFocused;
+                targetUserId = userIdFallback ?? info.UserId;
+                deviceType = info.DeviceType;
+
+                if (isFocused)
+                {
+                    info.LastInteractionUtc = DateTime.UtcNow;
+                    if (info.ClientState == ConnectionPresenceState.Idle)
+                    {
+                        info.ClientState = ConnectionPresenceState.Active;
+                    }
+                    shouldUpdateLastSeen = true;
+                }
+                else if (wasActivelyFocused)
+                {
+                    info.LastInteractionUtc = DateTime.UtcNow;
+                    shouldUpdateLastSeen = true;
+                }
             }
 
-            OnUserPresenceChanged?.Invoke(info.UserId);
+            if (shouldUpdateLastSeen)
+            {
+                UpdateLastSeen(targetUserId, deviceType);
+            }
+
+            if (userIdFallback == null)
+            {
+                OnUserPresenceChanged?.Invoke(info.UserId);
+            }
+            return true;
         }
-        else
+
+        if (logPrefix)
         {
             _logger?.LogDebug("[PresenceState] Connection info NOT FOUND for subscriptionId: {SubscriptionId}", subscriptionId);
         }
+
+        return userIdFallback != null;
     }
 
     /// <summary>
     /// Explicitly sets the client presence state (Active, Idle, DoNotDisturb, Offline) for a connection.
     /// Used by Electron OS presence events, system tray status menu, and browser 5-minute idle timers.
+    /// Returns true when the state update was accepted and applied; false if missing, dead, or rejected as stale.
     /// </summary>
-    public void SetConnectionPresenceState(string? subscriptionId, ConnectionPresenceState state)
+    public bool SetConnectionPresenceState(string? subscriptionId, ConnectionPresenceState state, long? sequence = null)
     {
-        if (string.IsNullOrEmpty(subscriptionId)) return;
+        if (string.IsNullOrEmpty(subscriptionId)) return false;
+        if (state != ConnectionPresenceState.Offline && IsSubscriptionUnloaded(subscriptionId)) return false;
+
         if (_activeConnections.TryGetValue(subscriptionId, out var info))
         {
-            info.ClientState = state;
+            if (!IsTransportAlive(info))
+            {
+                RemoveConnection(subscriptionId);
+                return false;
+            }
+
+            string userId;
+            string deviceType;
+            string? sessionId;
+
+            lock (info.SyncRoot)
+            {
+                if (IsStaleSequence(sequence, info.LastPresenceSequence))
+                {
+                    _logger?.LogDebug(
+                        "[PresenceState] Ignoring stale state({State}) for {SubscriptionId} (seq={Seq} < lastSeq={LastSeq})",
+                        state, subscriptionId, sequence, info.LastPresenceSequence);
+                    return false;
+                }
+
+                AdvanceSequence(info, sequence);
+
+                info.ClientState = state;
+                if (state == ConnectionPresenceState.Active)
+                {
+                    info.LastInteractionUtc = DateTime.UtcNow;
+                }
+                userId = info.UserId;
+                deviceType = info.DeviceType;
+                sessionId = info.SessionId;
+            }
+
             if (state == ConnectionPresenceState.Active)
             {
-                info.LastInteractionUtc = DateTime.UtcNow;
-                UpdateLastSeen(info.UserId, info.DeviceType, info.HasPushEnabled);
-                TouchSession(info.SessionId);
+                UpdateLastSeen(userId, deviceType);
+                TouchSession(sessionId);
             }
-            OnUserPresenceChanged?.Invoke(info.UserId);
+            OnUserPresenceChanged?.Invoke(userId);
+            return true;
         }
+
+        return false;
     }
 
     /// <summary>
@@ -282,37 +489,60 @@ public class PresenceStateService : IPushDecisionService
         if (string.IsNullOrEmpty(subscriptionId)) return;
         if (_activeConnections.TryGetValue(subscriptionId, out var info))
         {
-            info.LastInteractionUtc = timestampUtc;
-            _lastSeen[(info.UserId, info.DeviceType)] = timestampUtc;
-            if (info.HasPushEnabled)
+            lock (info.SyncRoot)
             {
-                _lastSeenForPush[(info.UserId, info.DeviceType)] = timestampUtc;
+                info.LastInteractionUtc = timestampUtc;
             }
+            _lastSeen[(info.UserId, info.DeviceType)] = timestampUtc;
         }
     }
 
     /// <summary>
-    /// Periodically sweeps active connections and transitions any connection that has exceeded
-    /// the 5-minute inactivity threshold to Idle, firing OnUserPresenceChanged for affected users.
+    /// Periodically sweeps active connections, evicts any connection whose underlying circuit transport is dead,
+    /// and transitions any connection that has exceeded the 5-minute inactivity threshold to Idle,
+    /// firing OnUserPresenceChanged for affected users.
     /// </summary>
     public void SweepStaleConnections()
     {
         var now = DateTime.UtcNow;
         var affectedUsers = new HashSet<string>();
 
-        foreach (var info in _activeConnections.Values)
+        foreach (var tombstone in _unloadedSubscriptions)
         {
+            if ((now - tombstone.Value.UnloadedAtUtc).TotalMinutes >= UnloadedTombstoneRetentionMinutes)
+            {
+                _unloadedSubscriptions.TryRemove(tombstone.Key, out _);
+            }
+        }
+
+        foreach (var kvp in _activeConnections)
+        {
+            var info = kvp.Value;
+            if (!IsTransportAlive(info))
+            {
+                if (_activeConnections.TryRemove(kvp.Key, out var evicted))
+                {
+                    UpdateLastSeenIfNewer(evicted.UserId, evicted.DeviceType, evicted.LastInteractionUtc);
+                    TouchSession(evicted.SessionId);
+                    affectedUsers.Add(evicted.UserId);
+                }
+                continue;
+            }
+
             // Voice participation counts as active presence (speaking/listening without keyboard/mouse/touch input)
-            if (_chatStateService?.IsUserInAnyVoiceChannel(info.UserId) == true)
+            if (_voiceStateService?.IsUserInAnyVoiceChannel(info.UserId) == true)
             {
                 continue;
             }
 
-            if (info.ClientState == ConnectionPresenceState.Active &&
-                (now - info.LastInteractionUtc).TotalMinutes >= RecentlySeenMinutes)
+            lock (info.SyncRoot)
             {
-                info.ClientState = ConnectionPresenceState.Idle;
-                affectedUsers.Add(info.UserId);
+                if (info.ClientState == ConnectionPresenceState.Active &&
+                    (now - info.LastInteractionUtc).TotalMinutes >= RecentlySeenMinutes)
+                {
+                    info.ClientState = ConnectionPresenceState.Idle;
+                    affectedUsers.Add(info.UserId);
+                }
             }
         }
 
@@ -324,13 +554,16 @@ public class PresenceStateService : IPushDecisionService
 
     private bool IsConnectionEffectiveOnline(ConnectionInfo c)
     {
+        if (!IsTransportAlive(c))
+            return false;
+
         if (c.ClientState == ConnectionPresenceState.Offline)
             return false;
 
         if (string.Equals(c.DeviceType, Models.Core.DeviceType.Desktop, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        if (_chatStateService?.IsUserInAnyVoiceChannel(c.UserId) == true)
+        if (_voiceStateService?.IsUserInAnyVoiceChannel(c.UserId) == true)
             return c.IsFocused;
 
         return c.IsFocused && c.ClientState != ConnectionPresenceState.Idle;
@@ -342,19 +575,13 @@ public class PresenceStateService : IPushDecisionService
             return true;
 
         // Voice participation counts as active presence (speaking/listening without keyboard/mouse/touch input)
-        if (_chatStateService?.IsUserInAnyVoiceChannel(c.UserId) == true)
+        if (_voiceStateService?.IsUserInAnyVoiceChannel(c.UserId) == true)
             return false;
 
         if (c.ClientState == ConnectionPresenceState.Idle)
             return true;
 
-        var lastActivity = c.LastInteractionUtc;
-        if (_lastSeen.TryGetValue((c.UserId, c.DeviceType), out var dictLastSeen) && dictLastSeen != default && dictLastSeen < lastActivity)
-        {
-            lastActivity = dictLastSeen;
-        }
-
-        return (DateTime.UtcNow - lastActivity).TotalMinutes >= RecentlySeenMinutes;
+        return (DateTime.UtcNow - c.LastInteractionUtc).TotalMinutes >= RecentlySeenMinutes;
     }
 
     /// <summary>
@@ -362,7 +589,9 @@ public class PresenceStateService : IPushDecisionService
     /// </summary>
     public string? GetUserIdBySubscription(string? subscriptionId)
     {
-        if (!string.IsNullOrEmpty(subscriptionId) && _activeConnections.TryGetValue(subscriptionId, out var info))
+        if (!string.IsNullOrEmpty(subscriptionId)
+            && _activeConnections.TryGetValue(subscriptionId, out var info)
+            && IsTransportAlive(info))
         {
             return info.UserId;
         }
@@ -374,12 +603,20 @@ public class PresenceStateService : IPushDecisionService
     /// </summary>
     public void UpdatePushEnabledState(string? subscriptionId, bool hasPushEnabled)
     {
+        if (IsSubscriptionUnloaded(subscriptionId)) return;
+
         if (!string.IsNullOrEmpty(subscriptionId) && _activeConnections.TryGetValue(subscriptionId, out var info))
         {
+            if (!IsTransportAlive(info))
+            {
+                RemoveConnection(subscriptionId);
+                return;
+            }
+
             info.HasPushEnabled = hasPushEnabled;
             if (hasPushEnabled)
             {
-                UpdateLastSeen(info.UserId, info.DeviceType, true);
+                UpdateLastSeen(info.UserId, info.DeviceType);
             }
         }
     }
@@ -423,16 +660,6 @@ public class PresenceStateService : IPushDecisionService
             && !IsConnectionIdle(info);
     }
 
-    /// <summary>
-    /// Checks whether a specific connection is associated with a mobile device.
-    /// </summary>
-    public bool IsConnectionMobile(string? subscriptionId)
-    {
-        if (string.IsNullOrEmpty(subscriptionId)) return false;
-        return _activeConnections.TryGetValue(subscriptionId, out var info)
-            && string.Equals(info.DeviceType, Models.Core.DeviceType.Mobile, StringComparison.OrdinalIgnoreCase);
-    }
-
     // --- Device-tier queries ---
 
     /// <summary>
@@ -455,7 +682,7 @@ public class PresenceStateService : IPushDecisionService
     {
         if (!HasActiveDesktopConnection(userId)) return false;
         if (IsUserFocusedOnDesktop(userId)) return false;
-        if (_chatStateService?.IsUserInAnyVoiceChannel(userId) == true) return false;
+        if (_voiceStateService?.IsUserInAnyVoiceChannel(userId) == true) return false;
 
         var desktopConnections = _activeConnections.Values
             .Where(c => c.UserId == userId &&
@@ -476,54 +703,6 @@ public class PresenceStateService : IPushDecisionService
         return false;
     }
 
-    // --- Push-Specific Device-tier queries and Notification Routing Heuristics ---
-
-    /// <summary>
-    /// Returns true if the user has at least one focused/active connection that also has push enabled.
-    /// </summary>
-    public bool IsUserFocusedForPush(string userId)
-    {
-        return GetUserConnections(userId)
-            .Any(c => c.IsFocused && c.HasPushEnabled && IsConnectionEffectiveOnline(c) && !IsConnectionIdle(c));
-    }
-
-    /// <summary>
-    /// Returns true if the user has at least one active desktop connection that has push enabled.
-    /// </summary>
-    public bool HasActiveDesktopConnectionForPush(string userId)
-    {
-        return GetUserConnections(userId)
-            .Any(c => c.DeviceType.Equals(Models.Core.DeviceType.Desktop, StringComparison.OrdinalIgnoreCase)
-                   && c.HasPushEnabled
-                   && IsConnectionEffectiveOnline(c));
-    }
-
-    /// <summary>
-    /// Returns true if the user has a push-enabled desktop connection but has been unfocused for over 90 seconds.
-    /// </summary>
-    public bool IsUserAwayFromDesktopForPush(string userId)
-    {
-        if (!HasActiveDesktopConnectionForPush(userId)) return false;
-        if (IsUserFocused(userId)) return false;
-        if (_chatStateService?.IsUserInAnyVoiceChannel(userId) == true) return false;
-
-        var lastSeen = GetLastSeenOnDesktopForPush(userId);
-        if (lastSeen.HasValue)
-        {
-            return (DateTime.UtcNow - lastSeen.Value).TotalMinutes >= PushDelayMinutes;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// Returns true if the user was seen on a desktop device within the 90-second push grace period.
-    /// </summary>
-    public bool WasRecentlySeenOnDesktopForPush(string userId)
-    {
-        var lastSeen = GetLastSeenOnDesktopForPush(userId) ?? GetLastSeenOnDesktop(userId);
-        return lastSeen.HasValue && (DateTime.UtcNow - lastSeen.Value).TotalMinutes < PushDelayMinutes;
-    }
-
     /// <summary>
     /// Checks if a matured 1-minute delayed mobile push should be suppressed because the user has refocused Spokes.
     /// </summary>
@@ -537,7 +716,7 @@ public class PresenceStateService : IPushDecisionService
     /// </summary>
     public bool IsUserInVoiceCall(string userId)
     {
-        return _chatStateService?.IsUserInAnyVoiceChannel(userId) == true;
+        return _voiceStateService?.IsUserInAnyVoiceChannel(userId) == true;
     }
 
     /// <summary>
@@ -570,7 +749,7 @@ public class PresenceStateService : IPushDecisionService
     {
         if (!HasActiveConnection(userId)) return false;
         if (IsUserFocused(userId)) return false;
-        if (_chatStateService?.IsUserInAnyVoiceChannel(userId) == true) return false;
+        if (_voiceStateService?.IsUserInAnyVoiceChannel(userId) == true) return false;
 
         var onlineConnections = _activeConnections.Values
             .Where(c => c.UserId == userId && IsConnectionEffectiveOnline(c))
@@ -687,52 +866,36 @@ public class PresenceStateService : IPushDecisionService
     }
 
     /// <summary>
-    /// Returns when the user was last seen on a desktop device WITH push enabled, or null if never tracked.
-    /// </summary>
-    public DateTime? GetLastSeenOnDesktopForPush(string userId)
-    {
-        if (_lastSeenForPush.TryGetValue((userId, DeviceType.Desktop), out var lastSeen))
-        {
-            return lastSeen;
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Returns true if the user was seen on ANY device within the last 5 minutes.
-    /// </summary>
-    public bool WasRecentlySeen(string userId)
-    {
-        var lastSeen = GetLastSeen(userId);
-        return lastSeen.HasValue && (DateTime.UtcNow - lastSeen.Value).TotalMinutes < RecentlySeenMinutes;
-    }
-
-    /// <summary>
-    /// Returns true if the user was seen on a desktop device within the last 5 minutes.
-    /// </summary>
-    public bool WasRecentlySeenOnDesktop(string userId)
-    {
-        var lastSeen = GetLastSeenOnDesktop(userId);
-        return lastSeen.HasValue && (DateTime.UtcNow - lastSeen.Value).TotalMinutes < RecentlySeenMinutes;
-    }
-
-
-    /// <summary>
     /// Pings the server that a device is actively being used by the user physically (idle detection).
     /// </summary>
     public void PingDeviceActive(string? subscriptionId)
     {
-        if (string.IsNullOrEmpty(subscriptionId)) return;
+        if (string.IsNullOrEmpty(subscriptionId) || IsSubscriptionUnloaded(subscriptionId)) return;
         if (_activeConnections.TryGetValue(subscriptionId, out var info))
         {
-            info.LastInteractionUtc = DateTime.UtcNow;
-            if (info.ClientState == ConnectionPresenceState.Idle)
+            if (!IsTransportAlive(info))
             {
-                info.ClientState = ConnectionPresenceState.Active;
+                RemoveConnection(subscriptionId);
+                return;
             }
-            UpdateLastSeen(info.UserId, info.DeviceType, info.HasPushEnabled);
-            TouchSession(info.SessionId);
-            OnUserPresenceChanged?.Invoke(info.UserId);
+
+            string userId;
+            string deviceType;
+            string? sessionId;
+            lock (info.SyncRoot)
+            {
+                info.LastInteractionUtc = DateTime.UtcNow;
+                if (info.ClientState == ConnectionPresenceState.Idle)
+                {
+                    info.ClientState = ConnectionPresenceState.Active;
+                }
+                userId = info.UserId;
+                deviceType = info.DeviceType;
+                sessionId = info.SessionId;
+            }
+            UpdateLastSeen(userId, deviceType);
+            TouchSession(sessionId);
+            OnUserPresenceChanged?.Invoke(userId);
         }
     }
 
@@ -742,7 +905,7 @@ public class PresenceStateService : IPushDecisionService
     /// </summary>
     public void PingUserActive(string userId)
     {
-        var userConnections = _activeConnections.Values.Where(c => c.UserId == userId).ToList();
+        var userConnections = _activeConnections.Values.Where(c => c.UserId == userId && IsTransportAlive(c)).ToList();
         var targetConnections = userConnections.Where(c => c.IsFocused).ToList();
         if (targetConnections.Count == 0)
         {
@@ -751,47 +914,43 @@ public class PresenceStateService : IPushDecisionService
 
         foreach (var info in targetConnections)
         {
-            info.LastInteractionUtc = DateTime.UtcNow;
-            if (info.ClientState == ConnectionPresenceState.Idle)
+            string deviceType;
+            string? sessionId;
+            lock (info.SyncRoot)
             {
-                info.ClientState = ConnectionPresenceState.Active;
+                info.LastInteractionUtc = DateTime.UtcNow;
+                if (info.ClientState == ConnectionPresenceState.Idle)
+                {
+                    info.ClientState = ConnectionPresenceState.Active;
+                }
+                deviceType = info.DeviceType;
+                sessionId = info.SessionId;
             }
-            UpdateLastSeen(userId, info.DeviceType, info.HasPushEnabled);
-            TouchSession(info.SessionId);
+            UpdateLastSeen(userId, deviceType);
+            TouchSession(sessionId);
         }
 
         if (userConnections.Count == 0)
         {
             // Fallback if they have no tracked connections but are active
-            UpdateLastSeen(userId, "Unknown", false);
+            UpdateLastSeen(userId, "Unknown");
         }
 
         OnUserPresenceChanged?.Invoke(userId);
     }
 
-    private void UpdateLastSeen(string userId, string deviceType, bool hasPushEnabled)
+    private void UpdateLastSeen(string userId, string deviceType)
     {
-        var now = DateTime.UtcNow;
-        _lastSeen[(userId, deviceType)] = now;
-        if (hasPushEnabled)
-        {
-            _lastSeenForPush[(userId, deviceType)] = now;
-        }
-
+        _lastSeen[(userId, deviceType)] = DateTime.UtcNow;
         CleanupLastSeenIfNeeded();
     }
 
-    private void UpdateLastSeenIfNewer(string userId, string deviceType, bool hasPushEnabled, DateTime timestampUtc)
+    private void UpdateLastSeenIfNewer(string userId, string deviceType, DateTime timestampUtc)
     {
         if (timestampUtc == default) return;
 
         var key = (userId, deviceType);
         _lastSeen.AddOrUpdate(key, timestampUtc, (_, existing) => timestampUtc > existing ? timestampUtc : existing);
-        if (hasPushEnabled)
-        {
-            _lastSeenForPush.AddOrUpdate(key, timestampUtc, (_, existing) => timestampUtc > existing ? timestampUtc : existing);
-        }
-
         CleanupLastSeenIfNeeded();
     }
 
@@ -805,7 +964,21 @@ public class PresenceStateService : IPushDecisionService
             foreach (var key in oldKeys)
             {
                 _lastSeen.TryRemove(key, out _);
-                _lastSeenForPush.TryRemove(key, out _);
+            }
+        }
+    }
+
+    private void CleanupUnloadedSubscriptionsIfNeeded()
+    {
+        if (_unloadedSubscriptions.Count > 5000)
+        {
+            var now = DateTime.UtcNow;
+            foreach (var kvp in _unloadedSubscriptions)
+            {
+                if ((now - kvp.Value.UnloadedAtUtc).TotalMinutes >= UnloadedTombstoneRetentionMinutes)
+                {
+                    _unloadedSubscriptions.TryRemove(kvp.Key, out _);
+                }
             }
         }
     }
@@ -830,14 +1003,6 @@ public class PresenceStateService : IPushDecisionService
                 key,
                 session.LastSeenAt,
                 (_, existing) => session.LastSeenAt > existing ? session.LastSeenAt : existing);
-
-            if (session.PushEnabled && session.HasPush)
-            {
-                _lastSeenForPush.AddOrUpdate(
-                    key,
-                    session.LastSeenAt,
-                    (_, existing) => session.LastSeenAt > existing ? session.LastSeenAt : existing);
-            }
         }
     }
 
@@ -920,41 +1085,26 @@ public class PresenceStateService : IPushDecisionService
     /// </summary>
     public IEnumerable<string> GetOnlineSessions()
         => _activeConnections.Values
-            .Where(c => !string.IsNullOrEmpty(c.SessionId))
+            .Where(c => !string.IsNullOrEmpty(c.SessionId) && IsTransportAlive(c))
             .Select(c => c.SessionId!)
             .Distinct()
             .ToList();
 
     /// <summary>
-    /// Triggers a global broadcast to log out all active connections for the specified SessionId.
-    /// </summary>
-    public void TriggerRemoteLogout(string sessionId)
-    {
-        if (string.IsNullOrEmpty(sessionId)) return;
-
-        if (_sessionService != null)
-        {
-            _sessionService.TriggerRemoteLogout(sessionId);
-        }
-        else
-        {
-            _localSessionRevoked?.Invoke(sessionId);
-        }
-    }
-
-    /// <summary>
     /// Returns a snapshot of all active transient connections across the application.
     /// </summary>
-    public IReadOnlyCollection<ConnectionInfo> GetActiveConnections() => _activeConnections.Values.ToList();
+    public IReadOnlyCollection<ConnectionInfo> GetActiveConnections()
+        => _activeConnections.Values.Where(IsTransportAlive).ToList();
 
     /// <summary>
     /// Returns all active transient connections for a specific user.
     /// </summary>
     public IEnumerable<ConnectionInfo> GetUserConnections(string userId)
-        => _activeConnections.Values.Where(c => c.UserId == userId).ToList();
+        => _activeConnections.Values.Where(c => c.UserId == userId && IsTransportAlive(c)).ToList();
 
     public class ConnectionInfo
     {
+        internal object SyncRoot { get; } = new();
         public string UserId { get; set; } = string.Empty;
         public string? SessionId { get; set; }
         public string DeviceType { get; set; } = Models.Core.DeviceType.Desktop;
@@ -963,6 +1113,8 @@ public class PresenceStateService : IPushDecisionService
         public bool IsCapacitorApp { get; set; }
         public ConnectionPresenceState ClientState { get; set; } = ConnectionPresenceState.Active;
         public DateTime LastInteractionUtc { get; set; } = DateTime.UtcNow;
+        public long LastPresenceSequence { get; set; }
+        public Func<bool>? IsTransportAlive { get; set; }
     }
 }
 
@@ -992,4 +1144,7 @@ public class ConnectionRegistrationOptions
     public string? SessionId { get; set; }
     public bool IsFocused { get; set; }
     public bool IsReconnect { get; set; }
+    public bool PreserveExistingActivity { get; set; }
+    public long? PresenceSequence { get; set; }
+    public Func<bool>? IsTransportAlive { get; set; }
 }

@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Components.Authorization;
 using Spokes_Server.Controllers;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
@@ -16,6 +17,7 @@ using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Security;
+using Spokes_Server.Core.Services.Identity;
 
 namespace Spokes_Server.Tests.Controllers;
 
@@ -23,6 +25,7 @@ public class BackupControllerTests : TestDataTestBase
 {
     private readonly DiskPersistenceService _persistence;
     private readonly EmployeeRepository _employeeRepo;
+    private readonly OpenIdAccountRepository _openIdRepo;
     private readonly BackupService _backupService;
     private readonly string _backupsDir;
 
@@ -30,7 +33,7 @@ public class BackupControllerTests : TestDataTestBase
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            { "DataPath", _testDataPath },
+            { "DataPath", _testDataPath }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" },
             { "Spokes_DemoMode", "false" }
         }).Build();
 
@@ -38,6 +41,7 @@ public class BackupControllerTests : TestDataTestBase
         _persistence = new DiskPersistenceService(persistenceLogger.Object);
 
         _employeeRepo = new EmployeeRepository(_persistence, config);
+        _openIdRepo = new OpenIdAccountRepository(_persistence, config);
         var companyRepo = new CompanyProfileRepository(_persistence, config);
 
         var backupLogger = new Mock<ILogger<BackupService>>();
@@ -57,11 +61,16 @@ public class BackupControllerTests : TestDataTestBase
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            { "DataPath", _testDataPath },
+            { "DataPath", _testDataPath }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" },
             { "Spokes_DemoMode", demoMode ? "true" : "false" }
         }).Build();
 
-        return new BackupController(_backupService, config)
+        var mockAuth = new Mock<AuthenticationStateProvider>();
+        mockAuth.Setup(a => a.GetAuthenticationStateAsync())
+            .ReturnsAsync(new AuthenticationState(user ?? new ClaimsPrincipal(new ClaimsIdentity())));
+        var userService = new UserService(mockAuth.Object, _employeeRepo, _openIdRepo);
+
+        return new BackupController(_backupService, config, userService)
         {
             ControllerContext = new ControllerContext
             {
@@ -100,14 +109,6 @@ public class BackupControllerTests : TestDataTestBase
         Assert.Equal(403, forbidden.StatusCode);
         var payload = Assert.IsType<SpokesResult>(forbidden.Value);
         Assert.False(payload.IsSuccess);
-    }
-
-    [Fact]
-    public void Constructor_WithDependencies_InitializesSuccessfully()
-    {
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
-        var controller = new BackupController(_backupService, config);
-        Assert.NotNull(controller);
     }
 
     [Fact]
@@ -266,7 +267,7 @@ public class BackupControllerTests : TestDataTestBase
     }
 
     [Fact]
-    public void DownloadBackup_WhenUserHasManageSettingsPermissionAndBackupExists_ReturnsPhysicalFileResult()
+    public void DownloadBackup_WhenUserHasOnlyManageSettingsPermission_ReturnsForbidden()
     {
         // Arrange - non-admin with AppPermissions.Admin.ManageSettings
         var user = new Employee
@@ -287,11 +288,10 @@ public class BackupControllerTests : TestDataTestBase
         var result = controller.DownloadBackup(fileName);
 
         // Assert
-        var physicalFile = Assert.IsType<PhysicalFileResult>(result);
-        Assert.Equal("application/zip", physicalFile.ContentType);
-        Assert.Equal(fileName, physicalFile.FileDownloadName);
-        Assert.Equal(filePath, physicalFile.FileName);
-        Assert.True(physicalFile.EnableRangeProcessing);
+        var obj = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(403, obj.StatusCode);
+        var payload = Assert.IsType<SpokesResult>(obj.Value);
+        Assert.False(payload.IsSuccess);
     }
 
     [Fact]
@@ -354,6 +354,6 @@ public class BackupControllerTests : TestDataTestBase
             .ToList();
 
         Assert.NotEmpty(authAttrs);
-        Assert.Equal(AppPermissions.Admin.ManageSettings, authAttrs[0].Policy);
+        Assert.Equal(AppPermissions.Admin.PolicyName, authAttrs[0].Policy);
     }
 }

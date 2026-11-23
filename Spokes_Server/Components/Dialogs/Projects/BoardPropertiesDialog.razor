@@ -8,7 +8,7 @@
             {
                 <MudListItem>
                     <div class="d-flex align-center gap-3 w-100">
-                        <MudIcon Icon="@GetPropertyIcon(prop.Type)" Size="Size.Small" Color="Color.Default" />
+                        <MudIcon Icon="@BoardUiHelper.GetPropertyIcon(prop.Type)" Size="Size.Small" Color="Color.Default" />
                         <MudText Class="flex-grow-1">@prop.Name</MudText>
                         <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => EditProperty(prop))" />
                         <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteProperty(prop))" />
@@ -82,18 +82,5 @@
     }
 
     void Close() => MudDialog.Close(DialogResult.Ok(true));
-    
-    string GetPropertyIcon(BoardPropertyType type) => type switch
-    {
-        BoardPropertyType.Select => Icons.Material.Filled.ArrowDropDownCircle,
-        BoardPropertyType.Person => Icons.Material.Filled.Person,
-        BoardPropertyType.Date => Icons.Material.Filled.CalendarToday,
-        BoardPropertyType.Checkbox => Icons.Material.Filled.CheckBox,
-        BoardPropertyType.URL => Icons.Material.Filled.Link,
-        BoardPropertyType.Email => Icons.Material.Filled.Email,
-        BoardPropertyType.Number => Icons.Material.Filled.Numbers,
-        BoardPropertyType.Phone => Icons.Material.Filled.Phone,
-        _ => Icons.Material.Filled.ShortText
-    };
 }
 

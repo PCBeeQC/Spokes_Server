@@ -12,11 +12,18 @@ public class SoundService : ISoundService
     private readonly IJSRuntime _js;
     private readonly UserService _userService;
 
+    public bool IsCallRingtonePlaying { get; private set; }
+
     public SoundService(IJSRuntime js, UserService userService)
     {
         _js = js;
         _userService = userService;
     }
+
+    private static bool IsCallRingtoneSound(string? soundNameOrCategory)
+        => !string.IsNullOrEmpty(soundNameOrCategory) &&
+           (soundNameOrCategory.Contains("ringtone", System.StringComparison.OrdinalIgnoreCase) ||
+            soundNameOrCategory.Contains("call", System.StringComparison.OrdinalIgnoreCase));
 
     public Task PlayChannelLeaveAsync()
     {
@@ -27,6 +34,11 @@ public class SoundService : ISoundService
     {
         if (string.IsNullOrWhiteSpace(soundName) || soundName == NotificationSoundIds.SystemDefault)
             return Task.CompletedTask;
+
+        if (!isPreview && IsCallRingtoneSound(soundName))
+        {
+            IsCallRingtonePlaying = true;
+        }
 
         return _js.InvokeVoidAsync("SoundManager.play", soundName, isPreview).AsTask();
     }
@@ -44,12 +56,17 @@ public class SoundService : ISoundService
         var fileName = NotificationSoundCatalog.ResolveEffectiveSoundFileName(category, soundIdToUse);
         if (!string.IsNullOrEmpty(fileName))
         {
+            if (!isPreview && (IsCallRingtoneSound(category) || IsCallRingtoneSound(fileName)))
+            {
+                IsCallRingtonePlaying = true;
+            }
             await _js.InvokeVoidAsync("SoundManager.play", fileName, isPreview);
         }
     }
 
     public Task StopCallRingtoneAsync()
     {
+        IsCallRingtonePlaying = false;
         return _js.InvokeVoidAsync("SoundManager.stopCallRingtone").AsTask();
     }
 

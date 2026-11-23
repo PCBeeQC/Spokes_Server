@@ -1,11 +1,10 @@
-@using System.Security.Claims
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.Communication
 @inject Database Db
 @inject IContactService ContactService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
-@inject AuthenticationStateProvider AuthStateProvider
+@inject UserService UserService
 
 <MudDialog>
     <DialogContent>
@@ -54,14 +53,17 @@
         }
         else if (_selectedOption == "company")
         {
-            <MudAutocomplete T="Supplier" Label="Search existing companies..." 
-                            SearchFunc="@SearchSuppliers" 
-                            ToStringFunc="@(s => s == null ? null : s.ContactInfo.BusinessName)"
-                            ValueChanged="OnSupplierSelected"
-                            Variant="Variant.Outlined" Class="mb-4" MaxItems="null" />
-                            
-            <MudDivider Class="my-4" />
-            <MudText Typo="Typo.body2" Class="mb-2">Or</MudText>
+            @if (_canViewShared)
+            {
+                <MudAutocomplete T="Supplier" Label="Search existing companies..." 
+                                SearchFunc="@SearchSuppliers" 
+                                ToStringFunc="@(s => s == null ? null : s.ContactInfo.BusinessName)"
+                                ValueChanged="OnSupplierSelected"
+                                Variant="Variant.Outlined" Class="mb-4" MaxItems="null" />
+                                
+                <MudDivider Class="my-4" />
+                <MudText Typo="Typo.body2" Class="mb-2">Or</MudText>
+            }
             <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateNewCompany">Create New Company</MudButton>
         }
         else if (_selectedOption == "public" || _selectedOption == "private")
@@ -100,6 +102,7 @@
     private bool _existsInPublic = false;
     private bool _existsInPrivate = false;
     private bool _canManageShared = false;
+    private bool _canViewShared = false;
 
     protected override async Task OnInitializedAsync()
     {
@@ -110,20 +113,12 @@
         _existsInPublic = ContactService.ExistsInPublic(Email);
         
         // Check Private & Shared Management Permission
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var user = authState.User;
-        var subId = user.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
-        if (!string.IsNullOrEmpty(subId))
+        var employee = await UserService.GetEmployeeAsync();
+        if (employee != null)
         {
-            var openId = Db.OpenIdAccounts.GetBySub(subId);
-            var employee = (openId != null && !string.IsNullOrEmpty(openId.LinkedEmployeeId))
-                ? Db.Employees.GetById(openId.LinkedEmployeeId)
-                : null;
-            if (employee != null)
-            {
-                _existsInPrivate = ContactService.ExistsInPrivate(employee.Id, Email);
-                _canManageShared = employee.IsAdmin || employee.HasPermission(AppPermissions.AddressBook.Manage);
-            }
+            _existsInPrivate = ContactService.ExistsInPrivate(employee.Id, Email);
+            _canManageShared = employee.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false);
+            _canViewShared = _canManageShared && employee.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: false);
         }
     }
 
@@ -133,15 +128,28 @@
         _selectedOption = option;
     }
 
-    private Task<IEnumerable<Supplier>> SearchSuppliers(string value, CancellationToken token)
+    private async Task<IEnumerable<Supplier>> SearchSuppliers(string value, CancellationToken token)
     {
-        if (!_canManageShared) return Task.FromResult(Enumerable.Empty<Supplier>());
-        return Task.FromResult<IEnumerable<Supplier>>(Db.Suppliers.Search(value));
+        var employee = await UserService.GetEmployeeAsync();
+        if (employee == null ||
+            !employee.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false) ||
+            !employee.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: false))
+        {
+            return Enumerable.Empty<Supplier>();
+        }
+        return Db.Suppliers.Search(value);
     }
 
     private async Task OnSupplierSelected(Supplier supplier)
     {
-        if (!_canManageShared || supplier == null) return;
+        var employee = await UserService.GetEmployeeAsync();
+        if (supplier == null ||
+            employee == null ||
+            !employee.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false) ||
+            !employee.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: false))
+        {
+            return;
+        }
         
         // Open the dialog to let them add the specifics 
         var newContact = new ContactPerson { Email = Email, Name = DisplayName };
@@ -154,6 +162,14 @@
 
         if (result is { Canceled: false, Data: ContactPerson contact })
         {
+            employee = await UserService.GetEmployeeAsync();
+            if (employee == null ||
+                !employee.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false) ||
+                !employee.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: false))
+            {
+                Snackbar.Add("You do not have permission to update address book companies.", Severity.Warning);
+                return;
+            }
             if (supplier.Contacts.Count == 0) contact.IsPrimary = true;
             supplier.Contacts.Add(contact);
             Db.Suppliers.Save(supplier);
@@ -165,7 +181,11 @@
 
     private async Task CreateNewCompany()
     {
-        if (!_canManageShared) return;
+        var employee = await UserService.GetEmployeeAsync();
+        if (employee == null || !employee.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false))
+        {
+            return;
+        }
         var newSupplier = new Supplier();
         // Add the contact as primary contact
         newSupplier.Contacts.Add(new ContactPerson
@@ -184,6 +204,12 @@
         var result = await dialog.Result;
         if (result is { Canceled: false, Data: Supplier created })
         {
+            employee = await UserService.GetEmployeeAsync();
+            if (employee == null || !employee.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false))
+            {
+                Snackbar.Add("You do not have permission to create address book companies.", Severity.Warning);
+                return;
+            }
             Db.Suppliers.Save(created);
             Snackbar.Add("Company created and contact added", Severity.Success);
             MudDialog.Close(DialogResult.Ok(true));
@@ -195,36 +221,29 @@
         await _form.ValidateAsync();
         if (!_success) return;
 
+        var employee = await UserService.GetEmployeeAsync();
+        if (employee == null)
+        {
+            Snackbar.Add("Could not identify current employee account.", Severity.Error);
+            return;
+        }
+
         if (_selectedOption == "public")
         {
-            if (!_canManageShared) return;
+            if (!employee.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false))
+            {
+                Snackbar.Add("You do not have permission to add public contacts.", Severity.Warning);
+                return;
+            }
             ContactService.SavePublicContact(_contact);
             Snackbar.Add("Added to Public Contacts", Severity.Success);
             MudDialog.Close(DialogResult.Ok(true));
         }
         else if (_selectedOption == "private")
         {
-            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-            var user = authState.User;
-            var subId = user.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
-            
-            if (!string.IsNullOrEmpty(subId))
-            {
-                var openId = Db.OpenIdAccounts.GetBySub(subId);
-                var employee = (openId != null && !string.IsNullOrEmpty(openId.LinkedEmployeeId))
-                    ? Db.Employees.GetById(openId.LinkedEmployeeId)
-                    : null;
-                if (employee != null)
-                {
-                    ContactService.SavePrivateContact(employee.Id, _contact);
-                    Snackbar.Add("Added to Private Contacts", Severity.Success);
-                    MudDialog.Close(DialogResult.Ok(true));
-                }
-                else
-                {
-                    Snackbar.Add("Could not identify current employee account.", Severity.Error);
-                }
-            }
+            ContactService.SavePrivateContact(employee.Id, _contact);
+            Snackbar.Add("Added to Private Contacts", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
         }
     }
 

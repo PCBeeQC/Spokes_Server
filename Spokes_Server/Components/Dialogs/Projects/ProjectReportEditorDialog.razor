@@ -1,0 +1,1256 @@
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Models.Documents
+@using Spokes_Server.Core.Models.Common
+@using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Security
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Components.Dialogs.Common
+@inject Database Db
+@inject ProjectReportService ReportService
+@inject UserService UserService
+@inject AppLabelService AppLabels
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudDialog Style="min-width: min(920px, 95vw); max-width: 1050px;">
+    <TitleContent>
+        <div class="d-flex align-center justify-space-between w-100 pr-2">
+            <div class="d-flex align-center gap-2">
+                <MudIcon Icon="@Icons.Material.Filled.Assessment" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">
+                    @(ExistingReport == null ? BizLoc["Create Project Report"] : BizLoc["Edit Project Report"])
+                </MudText>
+                @if (ExistingReport != null)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="@(_report.Status == ProjectReportStatus.Final ? Color.Info : Color.Default)">
+                        @BizLoc[_report.Status]
+                    </MudChip>
+                }
+            </div>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudContainer Style="max-height: 78vh; overflow-y: auto;" Class="pa-1">
+            @if (IsReadOnly)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Filled" Class="mb-3" Dense="true">
+                    @BizLoc["This report is marked as Final and cannot be edited directly. Unlock or revert to Draft to make changes."]
+                </MudAlert>
+            }
+
+            @* --- TOP METADATA & DATE CUTOFF BAR --- *@
+            <MudPaper Class="pa-4 mb-3" Outlined="true">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="3">
+                        <MudTextField @bind-Value="_report.ReportNumber"
+                                      Label="@BizLoc["Report #"]"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      ReadOnly="true" />
+                    </MudItem>
+                    <MudItem xs="12" sm="9">
+                        <MudTextField @bind-Value="_report.Title"
+                                      Label="@BizLoc["Report Title"]"
+                                      Placeholder="@BizLoc["e.g. 2026 Project Status & Financial Bilan"]"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      ReadOnly="@IsReadOnly" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="4">
+                        <MudDatePicker Date="_periodStartDate"
+                                       DateChanged="OnPeriodStartDateChanged"
+                                       Label="@BizLoc["Period Start Date (Optional)"]"
+                                       HelperText="@BizLoc["Leave blank for full project since inception"]"
+                                       Clearable="true"
+                                       MaxDate="_asOfDate"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       DateFormat="yyyy-MM-dd"
+                                       ReadOnly="@IsReadOnly" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudDatePicker Date="_asOfDate"
+                                       DateChanged="OnAsOfDateChanged"
+                                       Label="@BizLoc["As-Of Cutoff Date"]"
+                                       HelperText="@BizLoc["Excludes any activity after this date"]"
+                                       MinDate="_periodStartDate"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       DateFormat="yyyy-MM-dd"
+                                       ReadOnly="@IsReadOnly" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Refresh"
+                                   FullWidth="true"
+                                   Style="margin-top: 6px; height: 40px;"
+                                   Disabled="@IsReadOnly"
+                                   OnClick="RefreshSnapshot">
+                            @BizLoc["Refresh Snapshot Data"]
+                        </MudButton>
+                    </MudItem>
+
+                    @if (!IsReadOnly)
+                    {
+                        <MudItem xs="12">
+                            <div class="d-flex align-center flex-wrap gap-1">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mr-2">@BizLoc["Quick Period:"]</MudText>
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Variant="@(IsFullProjectPeriodSelected ? Variant.Filled : Variant.Outlined)"
+                                         Color="@(IsFullProjectPeriodSelected ? Color.Primary : Color.Default)"
+                                         Icon="@(IsFullProjectPeriodSelected ? Icons.Material.Filled.Check : null)"
+                                         OnClick="SetPeriodFullProject">
+                                    @BizLoc["100% Since Inception"]
+                                </MudChip>
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Variant="@(IsThisYearPeriodSelected ? Variant.Filled : Variant.Outlined)"
+                                         Color="@(IsThisYearPeriodSelected ? Color.Primary : Color.Default)"
+                                         Icon="@(IsThisYearPeriodSelected ? Icons.Material.Filled.Check : null)"
+                                         OnClick="SetPeriodThisYear">
+                                    @string.Format(BizLoc["This Year ({0})"].Value, DateTime.Today.Year)
+                                </MudChip>
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Variant="@(IsLastYearPeriodSelected ? Variant.Filled : Variant.Outlined)"
+                                         Color="@(IsLastYearPeriodSelected ? Color.Primary : Color.Default)"
+                                         Icon="@(IsLastYearPeriodSelected ? Icons.Material.Filled.Check : null)"
+                                         OnClick="SetPeriodLastYear">
+                                    @string.Format(BizLoc["Last Year ({0})"].Value, DateTime.Today.Year - 1)
+                                </MudChip>
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Variant="@(IsThisQuarterPeriodSelected ? Variant.Filled : Variant.Outlined)"
+                                         Color="@(IsThisQuarterPeriodSelected ? Color.Primary : Color.Default)"
+                                         Icon="@(IsThisQuarterPeriodSelected ? Icons.Material.Filled.Check : null)"
+                                         OnClick="SetPeriodThisQuarter">
+                                    @BizLoc["This Quarter"]
+                                </MudChip>
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Variant="@(IsThisMonthPeriodSelected ? Variant.Filled : Variant.Outlined)"
+                                         Color="@(IsThisMonthPeriodSelected ? Color.Primary : Color.Default)"
+                                         Icon="@(IsThisMonthPeriodSelected ? Icons.Material.Filled.Check : null)"
+                                         OnClick="SetPeriodThisMonth">
+                                    @BizLoc["This Month"]
+                                </MudChip>
+                            </div>
+                        </MudItem>
+                    }
+                </MudGrid>
+
+                @if (_datesModifiedSinceSnapshot && ExistingReport != null)
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3" NoIcon="false">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                            <span>@BizLoc["You changed the report period dates. Click Refresh Snapshot Data to recalculate figures for the new dates."]</span>
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Info" OnClick="RefreshSnapshot">
+                                @BizLoc["Update Snapshot Now"]
+                            </MudButton>
+                        </div>
+                    </MudAlert>
+                }
+
+                @* Snapshot live summary strip *@
+                <div class="d-flex align-center justify-space-between flex-wrap gap-2 mt-3 pt-2" style="border-top: 1px dashed var(--mud-palette-lines-inputs);">
+                    <div class="d-flex align-center flex-wrap gap-3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            <b>@BizLoc["Snapshot Window:"]</b>
+                            @(_report.Snapshot.PeriodStartDate.HasValue ? _report.Snapshot.PeriodStartDate.Value.ToString("yyyy-MM-dd") : BizLoc["Project Inception"].Value)
+                            → @_report.Snapshot.AsOfDate.ToString("yyyy-MM-dd")
+                        </MudText>
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" Icon="@Icons.Material.Filled.Schedule">
+                            @_report.Snapshot.TotalLaborHours.ToString("N1") h@(_canViewAllLabor ? $" ({_report.Snapshot.EmployeeLaborRows.Count} {AppLabels.Employees})" : string.Empty)
+                        </MudChip>
+                        @if (_canViewPurchases)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary" Icon="@Icons.Material.Filled.ShoppingCart">
+                                @_report.Snapshot.PurchaseItems.Count @BizLoc["Purchases"] (@_report.Snapshot.TotalPurchaseCost.ToString("C"))
+                            </MudChip>
+                        }
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info" Icon="@Icons.Material.Filled.ReceiptLong">
+                            @_report.Snapshot.Invoices.Count @BizLoc["Invoices"] (@_report.Snapshot.TotalInvoiced.ToString("C"))
+                        </MudChip>
+                        @if (_canViewAccounting && _report.Snapshot.DirectTransactions.Count > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Success" Icon="@Icons.Material.Filled.SwapHoriz">
+                                @_report.Snapshot.DirectTransactions.Count @BizLoc["Other Transactions"]
+                            </MudChip>
+                        }
+                    </div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["Captured:"] @_report.Snapshot.CapturedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                    </MudText>
+                </div>
+            </MudPaper>
+
+            @* --- QUICK PRESETS BAR --- *@
+            @if (!IsReadOnly)
+            {
+                <MudPaper Class="pa-3 mb-3" Outlined="true" Style="background-color: var(--mud-palette-background-grey);">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                            <MudIcon Icon="@Icons.Material.Filled.AutoAwesome" Size="Size.Small" Class="mr-1" Style="vertical-align: text-bottom;" />
+                            @BizLoc["Report Presets:"]
+                        </MudText>
+                        <div class="d-flex flex-wrap gap-2">
+                            @if (_canViewCostRates)
+                            {
+                                <MudButton Size="Size.Small"
+                                           Variant="@(IsBossBilanPresetActive ? Variant.Filled : Variant.Outlined)"
+                                           Color="@(IsBossBilanPresetActive ? Color.Primary : Color.Default)"
+                                           StartIcon="@Icons.Material.Filled.Analytics"
+                                           OnClick="ApplyPresetBossBilan">
+                                    @string.Format(BizLoc["Management Bilan ({0}/Week + Purchases/Month)"].Value, AppLabels.Employee)
+                                </MudButton>
+                                <MudButton Size="Size.Small"
+                                           Variant="@(IsFullInternalPresetActive ? Variant.Filled : Variant.Outlined)"
+                                           Color="@(IsFullInternalPresetActive ? Color.Primary : Color.Default)"
+                                           StartIcon="@Icons.Material.Filled.AccountBalance"
+                                           OnClick="ApplyPresetFullInternal">
+                                    @BizLoc["Complete Internal Audit"]
+                                </MudButton>
+                            }
+                            <MudButton Size="Size.Small"
+                                       Variant="@(IsClientBillablePresetActive ? Variant.Filled : Variant.Outlined)"
+                                       Color="@(IsClientBillablePresetActive ? Color.Primary : Color.Default)"
+                                       StartIcon="@Icons.Material.Filled.BusinessCenter"
+                                       OnClick="ApplyPresetClientBillable">
+                                @BizLoc["Client Progress (Billable)"]
+                            </MudButton>
+                            <MudButton Size="Size.Small"
+                                       Variant="@(IsHoursOnlyPresetActive ? Variant.Filled : Variant.Outlined)"
+                                       Color="@(IsHoursOnlyPresetActive ? Color.Primary : Color.Default)"
+                                       StartIcon="@Icons.Material.Filled.AccessTime"
+                                       OnClick="ApplyPresetHoursOnly">
+                                @BizLoc["Hours & Activity Only"]
+                            </MudButton>
+                        </div>
+                    </div>
+                </MudPaper>
+            }
+
+            @* --- CONFIGURATION TABS --- *@
+            <MudTabs Elevation="0" Outlined="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pt-3">
+                @* TAB 1: SECTIONS & CONTENT TOGGLES *@
+                <MudTabPanel Text="@BizLoc["Sections & Content"]" Icon="@Icons.Material.Filled.Tune">
+                    <MudGrid Spacing="3">
+                        @* Audience & Financial Visibility Mode *@
+                        <MudItem xs="12">
+                            <MudPaper Class="pa-3" Outlined="true">
+                                <MudGrid Spacing="2" Class="align-center">
+                                    <MudItem xs="12" sm="4">
+                                        <MudSelect T="string" @bind-Value="_report.Options.Audience"
+                                                   Label="@BizLoc["Report Audience"]"
+                                                   HelperText="@BizLoc["Controls cover page labels (Project Client vs. Prepared For)"]"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   ReadOnly="@IsReadOnly">
+                                            <MudSelectItem Value="@ProjectReportAudience.Internal">
+                                                @BizLoc["Internal / Management"]
+                                            </MudSelectItem>
+                                            <MudSelectItem Value="@ProjectReportAudience.Client">
+                                                @BizLoc["Client / External"]
+                                            </MudSelectItem>
+                                        </MudSelect>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="8">
+                                        <MudSelect T="string" @bind-Value="_report.Options.FinancialMode"
+                                                   Label="@BizLoc["Financial Mode"]"
+                                                   HelperText="@BizLoc["Controls whether internal costs/margins, client billable amounts, or only hours/quantities are shown"]"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   ReadOnly="@IsReadOnly">
+                                            @if (_canViewCostRates)
+                                            {
+                                                <MudSelectItem Value="@ProjectReportFinancialMode.InternalCostAndProfit">
+                                                    @BizLoc["Internal Cost, Revenue & Net Profit (Management Bilan)"]
+                                                </MudSelectItem>
+                                            }
+                                            <MudSelectItem Value="@ProjectReportFinancialMode.ClientBillable">
+                                                @BizLoc["Client Billable Rates & Invoicing (Client-Facing)"]
+                                            </MudSelectItem>
+                                            <MudSelectItem Value="@ProjectReportFinancialMode.HoursAndQuantitiesOnly">
+                                                @BizLoc["Hours & Quantities Only (No Currency Amounts)"]
+                                            </MudSelectItem>
+                                        </MudSelect>
+                                    </MudItem>
+                                </MudGrid>
+                            </MudPaper>
+                        </MudItem>
+
+                        @* Section 1: Financial Summary *@
+                        <MudItem xs="12" md="6">
+                            <MudPaper Class="pa-3 h-100" Outlined="true">
+                                <div class="d-flex justify-space-between align-center mb-2">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudIcon Icon="@Icons.Material.Filled.Leaderboard" Color="Color.Primary" Size="Size.Small" />
+                                        <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">@BizLoc["Financial & KPI Summary"]</MudText>
+                                    </div>
+                                    <MudSwitch @bind-Value="_report.Options.ShowFinancialSummary" Color="Color.Primary" Disabled="@IsReadOnly" />
+                                </div>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-2">
+                                    @BizLoc["Displays high-level budget, invoiced revenue, labor/procurement totals, and profitability cards."]
+                                </MudText>
+                                @if (_report.Options.ShowFinancialSummary && _report.Options.FinancialMode != ProjectReportFinancialMode.HoursAndQuantitiesOnly)
+                                {
+                                    <MudSelect T="string" @bind-Value="_report.Options.FinancialSummaryTaxMode"
+                                               Label="@BizLoc["Taxes in Financial Summary"]"
+                                               Variant="Variant.Outlined"
+                                               Margin="Margin.Dense"
+                                               Class="mb-2"
+                                               ReadOnly="@IsReadOnly">
+                                        <MudSelectItem Value="@ProjectReportTaxDisplayMode.SeparateTaxes">
+                                            @BizLoc["Include Taxes — Display Separately (Subtotal + Tax + Total)"]
+                                        </MudSelectItem>
+                                        <MudSelectItem Value="@ProjectReportTaxDisplayMode.ExcludeTaxes">
+                                            @BizLoc["Exclude Taxes (Pre-Tax / Subtotal Only)"]
+                                        </MudSelectItem>
+                                        <MudSelectItem Value="@ProjectReportTaxDisplayMode.IncludeTaxes">
+                                            @BizLoc["Include Taxes (Combined Grand Total)"]
+                                        </MudSelectItem>
+                                    </MudSelect>
+                                    <MudCheckBox @bind-Value="_report.Options.ShowCashFlowPosition"
+                                                 Label="@BizLoc["Include Cash Flow & Paid vs. Spent Position"]"
+                                                 Dense="true"
+                                                 Color="Color.Primary"
+                                                 Disabled="@IsReadOnly" />
+                                    @if (_canViewCostRates && _report.Options.FinancialMode == ProjectReportFinancialMode.InternalCostAndProfit && _project?.IsInternal != true)
+                                    {
+                                        <MudCheckBox @bind-Value="_report.Options.ShowOverheadSection"
+                                                     Label="@BizLoc["Include Business Overhead Allocation (Prorated Monthly by Direct Hours)"]"
+                                                     Dense="true"
+                                                     Color="Color.Primary"
+                                                     Disabled="@IsReadOnly" />
+                                        @if (_report.Options.ShowOverheadSection)
+                                        {
+                                            <MudCheckBox @bind-Value="_report.Options.ShowOverheadBreakdownTable"
+                                                         Label="@BizLoc["Include itemized overhead breakdown table"]"
+                                                         Dense="true"
+                                                         Color="Color.Primary"
+                                                         Class="ml-6"
+                                                         Disabled="@IsReadOnly" />
+                                        }
+                                    }
+                                }
+                            </MudPaper>
+                        </MudItem>
+
+                        @* Section 3: Purchases & Procurement *@
+                        @if (_canViewPurchases)
+                        {
+                            <MudItem xs="12" md="6">
+                                <MudPaper Class="pa-3 h-100" Outlined="true">
+                                    <div class="d-flex justify-space-between align-center mb-2">
+                                        <div class="d-flex align-center gap-2">
+                                            <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Color="Color.Primary" Size="Size.Small" />
+                                            <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">@BizLoc["Purchases & Procurement"]</MudText>
+                                        </div>
+                                        <MudSwitch @bind-Value="_report.Options.ShowPurchasesSection" Color="Color.Primary" Disabled="@IsReadOnly" />
+                                    </div>
+                                    @if (_report.Options.ShowPurchasesSection)
+                                    {
+                                        <MudSelect T="string" @bind-Value="_report.Options.PurchasesGrouping"
+                                                   Label="@BizLoc["Purchases Grouping"]"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Class="mb-2"
+                                                   ReadOnly="@IsReadOnly">
+                                            <MudSelectItem Value="@ProjectReportPurchasesGrouping.ByMonthDetailed">
+                                                @BizLoc["By Month — Detailed Items & Monthly Subtotals"]
+                                            </MudSelectItem>
+                                            <MudSelectItem Value="@ProjectReportPurchasesGrouping.ByMonthSummaryOnly">
+                                                @BizLoc["By Month — Monthly Summary Table Only"]
+                                            </MudSelectItem>
+                                            <MudSelectItem Value="@ProjectReportPurchasesGrouping.BySupplier">
+                                                @BizLoc["By Supplier — Grouped by Vendor"]
+                                            </MudSelectItem>
+                                            <MudSelectItem Value="@ProjectReportPurchasesGrouping.Chronological">
+                                                @BizLoc["Chronological — Flat List"]
+                                            </MudSelectItem>
+                                        </MudSelect>
+                                        @if (_report.Options.FinancialMode != ProjectReportFinancialMode.HoursAndQuantitiesOnly)
+                                        {
+                                            <MudCheckBox @bind-Value="_report.Options.ShowPurchaseTaxBreakdown"
+                                                         Label="@BizLoc["Show Net / Tax / Total Breakdown"]"
+                                                         Dense="true"
+                                                         Color="Color.Primary"
+                                                         Disabled="@IsReadOnly" />
+                                        }
+                                    }
+                                </MudPaper>
+                            </MudItem>
+                        }
+
+                        @* Section 2: Labor & Time Breakdown *@
+                        <MudItem xs="12">
+                            <MudPaper Class="pa-3" Outlined="true">
+                                <div class="d-flex justify-space-between align-center mb-2">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudIcon Icon="@Icons.Material.Filled.Engineering" Color="Color.Primary" Size="Size.Small" />
+                                        <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">@BizLoc["Labor & Time Breakdown"]</MudText>
+                                    </div>
+                                    <MudSwitch @bind-Value="_report.Options.ShowLaborSection" Color="Color.Primary" Disabled="@IsReadOnly" />
+                                </div>
+
+                                @if (_report.Options.ShowLaborSection)
+                                {
+                                    <MudGrid Spacing="2">
+                                        <MudItem xs="12" sm="4">
+                                            <MudCheckBox @bind-Value="_report.Options.ShowLaborByTask"
+                                                         Label="@BizLoc["Summary by Task & Subtask (Budget vs. Actual)"]"
+                                                         Dense="true"
+                                                         Color="Color.Primary"
+                                                         Disabled="@IsReadOnly" />
+                                        </MudItem>
+                                        <MudItem xs="12" sm="4">
+                                            <MudCheckBox @bind-Value="_report.Options.ShowLaborByEmployee"
+                                                         Label="@string.Format(BizLoc["Summary by {0} (Hours & Share)"].Value, AppLabels.Employee)"
+                                                         Dense="true"
+                                                         Color="Color.Primary"
+                                                         Disabled="@IsReadOnly" />
+                                        </MudItem>
+                                        <MudItem xs="12" sm="4">
+                                            @if (_canViewLaborRates && _report.Options.FinancialMode != ProjectReportFinancialMode.HoursAndQuantitiesOnly)
+                                            {
+                                                <MudCheckBox @bind-Value="_report.Options.ShowLaborFinancials"
+                                                             Label="@BizLoc["Show Labor Rates & Financial Totals"]"
+                                                             Dense="true"
+                                                             Color="Color.Primary"
+                                                             Disabled="@IsReadOnly" />
+                                            }
+                                        </MudItem>
+
+                                        <MudItem xs="12">
+                                            <MudDivider Class="my-1" />
+                                        </MudItem>
+
+                                        <MudItem xs="12" sm="4">
+                                            <MudCheckBox @bind-Value="_report.Options.ShowLaborPeriodicBreakdown"
+                                                         Label="@BizLoc["Include Periodic Breakdown (By Week / Month)"]"
+                                                         Dense="true"
+                                                         Color="Color.Primary"
+                                                         Disabled="@IsReadOnly" />
+                                        </MudItem>
+
+                                        @if (_report.Options.ShowLaborPeriodicBreakdown)
+                                        {
+                                            <MudItem xs="12" sm="4">
+                                                <MudSelect T="string" @bind-Value="_report.Options.LaborPeriodGranularity"
+                                                           Label="@BizLoc["Period Granularity"]"
+                                                           Variant="Variant.Outlined"
+                                                           Margin="Margin.Dense"
+                                                           ReadOnly="@IsReadOnly">
+                                                    <MudSelectItem Value="@ProjectReportPeriodGranularity.Weekly">
+                                                        @BizLoc["Weekly (ISO Weeks)"]
+                                                    </MudSelectItem>
+                                                    <MudSelectItem Value="@ProjectReportPeriodGranularity.Monthly">
+                                                        @BizLoc["Monthly"]
+                                                    </MudSelectItem>
+                                                </MudSelect>
+                                            </MudItem>
+                                            <MudItem xs="12" sm="4">
+                                                <MudSelect T="string" @bind-Value="_report.Options.LaborPeriodicLayout"
+                                                           Label="@BizLoc["Periodic Presentation Layout"]"
+                                                           Variant="Variant.Outlined"
+                                                           Margin="Margin.Dense"
+                                                           ReadOnly="@IsReadOnly">
+                                                    <MudSelectItem Value="@ProjectReportLaborLayout.EmployeeMatrix">
+                                                        @string.Format(BizLoc["Summary Matrix (Periods × {0})"].Value, AppLabels.Employees)
+                                                    </MudSelectItem>
+                                                    <MudSelectItem Value="@ProjectReportLaborLayout.GroupedByEmployee">
+                                                        @string.Format(BizLoc["Detailed by {0} (Rows per Period)"].Value, AppLabels.Employee)
+                                                    </MudSelectItem>
+                                                    <MudSelectItem Value="@ProjectReportLaborLayout.TaskMatrix">
+                                                        @BizLoc["Detailed by Task & Subtask (Rows per Period)"]
+                                                    </MudSelectItem>
+                                                </MudSelect>
+                                            </MudItem>
+                                        }
+                                    </MudGrid>
+                                }
+                            </MudPaper>
+                        </MudItem>
+
+                        @* Section 4: Employee Expenses *@
+                        @if (_canViewAccounting)
+                        {
+                            <MudItem xs="12" md="6">
+                                <MudPaper Class="pa-3 h-100" Outlined="true">
+                                    <div class="d-flex justify-space-between align-center mb-2">
+                                        <div class="d-flex align-center gap-2">
+                                            <MudIcon Icon="@Icons.Material.Filled.Receipt" Color="Color.Primary" Size="Size.Small" />
+                                            <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">@string.Format(BizLoc["{0} Expenses"].Value, AppLabels.Employee)</MudText>
+                                        </div>
+                                        <MudSwitch @bind-Value="_report.Options.ShowExpensesSection" Color="Color.Primary" Disabled="@IsReadOnly" />
+                                    </div>
+                                    @if (_report.Options.ShowExpensesSection)
+                                    {
+                                        <MudSelect T="string" @bind-Value="_report.Options.ExpensesGrouping"
+                                                   Label="@BizLoc["Expenses Grouping"]"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Class="mb-2"
+                                                   ReadOnly="@IsReadOnly">
+                                            <MudSelectItem Value="@ProjectReportExpensesGrouping.ByMonth">@BizLoc["By Month"]</MudSelectItem>
+                                            <MudSelectItem Value="@ProjectReportExpensesGrouping.ByEmployee">@string.Format(BizLoc["By {0}"].Value, AppLabels.Employee)</MudSelectItem>
+                                            <MudSelectItem Value="@ProjectReportExpensesGrouping.Chronological">@BizLoc["Chronological"]</MudSelectItem>
+                                        </MudSelect>
+                                        <MudCheckBox @bind-Value="_report.Options.SubmittedOrPaidExpensesOnly"
+                                                     Label="@BizLoc["Only Submitted / Paid Expense Reports"]"
+                                                     Dense="true"
+                                                     Color="Color.Primary"
+                                                     Disabled="@IsReadOnly" />
+                                    }
+                                </MudPaper>
+                            </MudItem>
+                        }
+
+                        @* Sections 5, 6, 7: Billing, Commissions, Timeline *@
+                        <MudItem xs="12" md="6">
+                            <MudPaper Class="pa-3 h-100" Outlined="true">
+                                <MudText Typo="Typo.subtitle2" Style="font-weight: 700;" Class="mb-2">
+                                    @BizLoc["Additional Project Sections"]
+                                </MudText>
+                                <MudStack Spacing="1">
+                                    <MudCheckBox @bind-Value="_report.Options.ShowBillingHistory"
+                                                 Label="@BizLoc["Quotes, Invoices & Client POs History"]"
+                                                 Dense="true"
+                                                 Color="Color.Primary"
+                                                 Disabled="@IsReadOnly" />
+                                    @if (_canViewAccounting)
+                                    {
+                                        <MudCheckBox @bind-Value="_report.Options.ShowDirectTransactions"
+                                                     Label="@BizLoc["Other Project Transactions (Direct Income & Payments)"]"
+                                                     Dense="true"
+                                                     Color="Color.Primary"
+                                                     Disabled="@IsReadOnly" />
+                                    }
+                                    @if (_canViewCostRates && _report.Options.FinancialMode == ProjectReportFinancialMode.InternalCostAndProfit)
+                                    {
+                                        <MudCheckBox @bind-Value="_report.Options.ShowCommissionsSection"
+                                                     Label="@BizLoc["Sales Commissions Breakdown"]"
+                                                     Dense="true"
+                                                     Color="Color.Primary"
+                                                     Disabled="@IsReadOnly" />
+                                    }
+                                    <MudCheckBox @bind-Value="_report.Options.ShowTimelineNotes"
+                                                 Label="@BizLoc["Key Project Milestones & Timeline Notes"]"
+                                                 Dense="true"
+                                                 Color="Color.Primary"
+                                                 Disabled="@IsReadOnly" />
+                                </MudStack>
+                            </MudPaper>
+                        </MudItem>
+                    </MudGrid>
+                </MudTabPanel>
+
+                @* TAB 2: NARRATIVE & NOTES *@
+                <MudTabPanel Text="@BizLoc["Narrative & Notes"]" Icon="@Icons.Material.Filled.Notes">
+                    <MudStack Spacing="3">
+                        <MudTextField @bind-Value="_report.ExecutiveSummary"
+                                      Label="@BizLoc["Executive Summary / Management Commentary"]"
+                                      Placeholder="@BizLoc["Summarize key achievements, budget status, scope changes, or upcoming milestones..."]"
+                                      Lines="5"
+                                      Variant="Variant.Outlined"
+                                      ReadOnly="@IsReadOnly" />
+
+                        <MudTextField @bind-Value="_report.ClosingNotes"
+                                      Label="@BizLoc["Closing Notes & Next Steps"]"
+                                      Placeholder="@BizLoc["Optional closing remarks, recommendations, or terms..."]"
+                                      Lines="4"
+                                      Variant="Variant.Outlined"
+                                      ReadOnly="@IsReadOnly" />
+                    </MudStack>
+                </MudTabPanel>
+
+                @* TAB 3: TEMPLATE, PRINT & SIGNATURES *@
+                <MudTabPanel Text="@BizLoc["Template & Print"]" Icon="@Icons.Material.Filled.Print">
+                    <MudGrid Spacing="3">
+                        <MudItem xs="12" md="6">
+                            <MudPaper Class="pa-3" Outlined="true">
+                                <MudText Typo="Typo.subtitle2" Style="font-weight: 700;" Class="mb-2">@BizLoc["Document Styling & Confidentiality"]</MudText>
+                                <MudSelect T="string" Value="@_report.TemplateId"
+                                           ValueChanged="OnTemplateChanged"
+                                           Label="@BizLoc["Document Template"]"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Clearable="true"
+                                           Placeholder="@BizLoc["Company Default Template"]"
+                                           Class="mb-3"
+                                           ReadOnly="@IsReadOnly">
+                                    @foreach (var tmpl in _templates)
+                                    {
+                                        <MudSelectItem Value="@tmpl.Id">@tmpl.Name @(tmpl.IsDefault ? $"({BizLoc["Default"].Value})" : "")</MudSelectItem>
+                                    }
+                                </MudSelect>
+
+                                <MudCheckBox @bind-Value="_report.IsConfidential"
+                                             Label="@BizLoc["Display Confidential Watermark / Badge"]"
+                                             Dense="true"
+                                             Color="Color.Warning"
+                                             Disabled="@IsReadOnly" />
+                            </MudPaper>
+                        </MudItem>
+
+                        <MudItem xs="12" md="6">
+                            <MudPaper Class="pa-3" Outlined="true">
+                                <MudText Typo="Typo.subtitle2" Style="font-weight: 700;" Class="mb-2">@BizLoc["Page Break Controls"]</MudText>
+                                <MudStack Spacing="1">
+                                    <MudCheckBox @bind-Value="_report.Options.PageBreakBeforeLabor"
+                                                 Label="@BizLoc["Start Labor Breakdown on a New Page"]"
+                                                 Dense="true"
+                                                 Color="Color.Primary"
+                                                 Disabled="@IsReadOnly" />
+                                    <MudCheckBox @bind-Value="_report.Options.PageBreakBeforePurchases"
+                                                 Label="@BizLoc["Start Purchases Breakdown on a New Page"]"
+                                                 Dense="true"
+                                                 Color="Color.Primary"
+                                                 Disabled="@IsReadOnly" />
+                                    <MudCheckBox @bind-Value="_report.Options.PageBreakBeforeBilling"
+                                                 Label="@BizLoc["Start Billing History on a New Page"]"
+                                                 Dense="true"
+                                                 Color="Color.Primary"
+                                                 Disabled="@IsReadOnly" />
+                                    @if (_canViewCostRates && _report.Options.FinancialMode == ProjectReportFinancialMode.InternalCostAndProfit && _project?.IsInternal != true)
+                                    {
+                                        <MudCheckBox @bind-Value="_report.Options.PageBreakBeforeOverhead"
+                                                     Label="@BizLoc["Start Business Overhead Allocation on a New Page"]"
+                                                     Dense="true"
+                                                     Color="Color.Primary"
+                                                     Disabled="@IsReadOnly" />
+                                    }
+                                </MudStack>
+                            </MudPaper>
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudPaper Class="pa-3" Outlined="true">
+                                <div class="d-flex justify-space-between align-center mb-2">
+                                    <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">@BizLoc["Approval & Signature Block"]</MudText>
+                                    <MudSwitch @bind-Value="_report.SignatureRequired" Color="Color.Primary" Disabled="@IsReadOnly" />
+                                </div>
+                                @if (_report.SignatureRequired)
+                                {
+                                    <MudGrid Spacing="2">
+                                        <MudItem xs="12" sm="6">
+                                            <MudTextField @bind-Value="_report.CompanyRepresentativeName"
+                                                          Label="@string.Format(BizLoc["{0} Representative Name"].Value, AppLabels.Company)"
+                                                          Variant="Variant.Outlined"
+                                                          Margin="Margin.Dense"
+                                                          ReadOnly="@IsReadOnly" />
+                                        </MudItem>
+                                        <MudItem xs="12" sm="6">
+                                            <MudTextField @bind-Value="_report.ClientRepresentativeName"
+                                                          Label="@BizLoc["Client / Recipient Representative Name"]"
+                                                          Variant="Variant.Outlined"
+                                                          Margin="Margin.Dense"
+                                                          ReadOnly="@IsReadOnly" />
+                                        </MudItem>
+                                    </MudGrid>
+                                }
+                            </MudPaper>
+                        </MudItem>
+                    </MudGrid>
+                </MudTabPanel>
+
+                @* TAB 4: HISTORY *@
+                @if (ExistingReport != null)
+                {
+                    <MudTabPanel Text="@BizLoc["History"]" Icon="@Icons.Material.Filled.History">
+                        <DocumentHistoryTab Entries="_report.History" />
+                    </MudTabPanel>
+                }
+            </MudTabs>
+        </MudContainer>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        @if (!IsReadOnly)
+        {
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Save" OnClick="Save">
+                @Loc["Save"]
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string ProjectId { get; set; } = string.Empty;
+    [Parameter] public ProjectReport? ExistingReport { get; set; }
+    [Parameter] public bool ForceUnlockEdit { get; set; }
+
+    private Project? _project;
+    private ProjectReport _report = new();
+    private List<DocumentTemplate> _templates = [];
+    private DateTime? _periodStartDate;
+    private DateTime? _asOfDate = DateTime.Today;
+    private bool _datesModifiedSinceSnapshot;
+    private bool _canViewCostRates;
+    private bool _canViewAccounting;
+    private bool _canViewPurchases;
+    private bool _canViewLaborRates;
+    private bool _canViewAllLabor;
+    private bool _canEditAuthorized;
+    private bool _canUnlockFinalAuthorized;
+    private string _currentUserName = "Unknown";
+
+    private bool IsReadOnly =>
+        !_canEditAuthorized ||
+        (ExistingReport != null &&
+         string.Equals(_report.Status, ProjectReportStatus.Final, StringComparison.OrdinalIgnoreCase) &&
+         (!ForceUnlockEdit || !_canUnlockFinalAuthorized));
+
+    private void UpdateViewerPermissions(Spokes_Server.Core.Models.HR.Employee? emp)
+    {
+        var perms = ProjectReportService.GetViewerPermissions(emp);
+        _canViewAccounting = perms.CanViewAccounting;
+        _canViewCostRates = perms.CanViewCostRates;
+        _canViewPurchases = perms.CanViewPurchases;
+        _canViewLaborRates = perms.CanViewLaborRates;
+        _canViewAllLabor = perms.CanViewAllLabor;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        _currentUserName = emp?.FullName ?? "Unknown";
+        UpdateViewerPermissions(emp);
+
+        _project = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        _templates = Db.DocumentTemplates.GetAll();
+
+        var canEditProject = emp != null && _project != null && UserService.CanEditProject(emp, _project);
+        _canUnlockFinalAuthorized = emp != null && _project != null &&
+                                    (emp.IsEffectiveAdmin || (canEditProject && emp.HasPermission(AppPermissions.Projects.Delete)));
+
+        if (ExistingReport != null)
+        {
+            var liveExisting = Db.ProjectReports.GetById(ExistingReport.Id);
+            var targetReport = liveExisting ?? ExistingReport;
+            if (!canEditProject ||
+                _project == null ||
+                !string.Equals(targetReport.ProjectId, _project.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                _canEditAuthorized = false;
+                _report = new ProjectReport { ProjectId = ProjectId };
+                return;
+            }
+
+            var isFinal = string.Equals(targetReport.Status, ProjectReportStatus.Final, StringComparison.OrdinalIgnoreCase);
+            _canEditAuthorized = !isFinal || (ForceUnlockEdit && _canUnlockFinalAuthorized);
+
+            // Clone so cancel doesn't mutate in-memory state
+            _report = targetReport.DeepClone();
+            _report.ProjectId = _project.Id;
+            ClampRestrictedReportOptions();
+            _periodStartDate = _report.PeriodStartDate;
+            _asOfDate = _report.AsOfDate;
+        }
+        else
+        {
+            _canEditAuthorized = canEditProject;
+            var profile = Db.CompanyProfile.Get();
+            var defaultTemplate = Db.DocumentTemplates.GetDefault();
+
+            _report = new ProjectReport
+            {
+                ProjectId = _project?.Id ?? ProjectId,
+                ReportNumber = Db.ProjectReports.GenerateReportNumber(profile.ReportPrefix),
+                Title = BuildDefaultReportTitle(defaultTemplate),
+                Status = ProjectReportStatus.Draft,
+                CreatedBy = _currentUserName,
+                TemplateId = defaultTemplate?.Id,
+                PeriodStartDate = null,
+                AsOfDate = DateTime.Today,
+                CompanyRepresentativeName = _currentUserName,
+                ClientRepresentativeName = _project?.Client?.ContactPersonName ?? string.Empty
+            };
+
+            if (!_canViewCostRates)
+            {
+                _report.Options.FinancialMode = ProjectReportFinancialMode.ClientBillable;
+            }
+            else
+            {
+                ApplyPresetBossBilan();
+            }
+
+            ClampRestrictedReportOptions();
+            _periodStartDate = _report.PeriodStartDate;
+            _asOfDate = _report.AsOfDate;
+
+            if (_project != null && _canEditAuthorized)
+            {
+                _report.Snapshot = ReportService.BuildSnapshot(_project, _periodStartDate, _asOfDate ?? DateTime.Today);
+            }
+        }
+    }
+
+    private void ClampRestrictedReportOptions()
+    {
+        if (!_canViewCostRates)
+        {
+            if (string.Equals(_report.Options.FinancialMode, ProjectReportFinancialMode.InternalCostAndProfit, StringComparison.OrdinalIgnoreCase))
+            {
+                _report.Options.FinancialMode = ProjectReportFinancialMode.ClientBillable;
+            }
+            _report.Options.ShowOverheadSection = false;
+            _report.Options.ShowCommissionsSection = false;
+        }
+
+        if (!_canViewPurchases)
+        {
+            _report.Options.ShowPurchasesSection = false;
+        }
+
+        if (!_canViewAccounting)
+        {
+            _report.Options.ShowExpensesSection = false;
+        }
+
+        if (!_canViewLaborRates)
+        {
+            _report.Options.ShowLaborFinancials = false;
+        }
+
+        _report.Options.SubmittedOrPaidExpensesOnly = true;
+    }
+
+    private string BuildDefaultReportTitle(DocumentTemplate? template)
+    {
+        var reportTitleLabel = !string.IsNullOrWhiteSpace(template?.Label_ReportSubtitle)
+            ? template.Label_ReportSubtitle.Trim()
+            : BizLoc["Project Status & Financial Report"].Value;
+
+        if (_project == null)
+        {
+            return reportTitleLabel;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_project.ProjectNumber))
+        {
+            return $"{_project.ProjectNumber} : {_project.Name} -- {reportTitleLabel}";
+        }
+
+        return $"{_project.Name} -- {reportTitleLabel}";
+    }
+
+    private void OnTemplateChanged(string? newTemplateId)
+    {
+        var previousTemplate = !string.IsNullOrWhiteSpace(_report.TemplateId)
+            ? _templates.FirstOrDefault(t => t.Id == _report.TemplateId) ?? Db.DocumentTemplates.GetDefault()
+            : Db.DocumentTemplates.GetDefault();
+        var previousDefaultTitle = BuildDefaultReportTitle(previousTemplate);
+
+        _report.TemplateId = newTemplateId;
+
+        var nextTemplate = !string.IsNullOrWhiteSpace(newTemplateId)
+            ? _templates.FirstOrDefault(t => t.Id == newTemplateId) ?? Db.DocumentTemplates.GetDefault()
+            : Db.DocumentTemplates.GetDefault();
+
+        if (string.IsNullOrWhiteSpace(_report.Title) || string.Equals(_report.Title.Trim(), previousDefaultTitle, StringComparison.Ordinal))
+        {
+            _report.Title = BuildDefaultReportTitle(nextTemplate);
+        }
+    }
+
+    private void OnPeriodStartDateChanged(DateTime? newStart)
+    {
+        _periodStartDate = newStart;
+        _report.PeriodStartDate = newStart;
+
+        if (_periodStartDate.HasValue && _asOfDate.HasValue && _periodStartDate.Value.Date > _asOfDate.Value.Date)
+        {
+            _asOfDate = _periodStartDate.Value.Date;
+            _report.AsOfDate = _asOfDate.Value;
+        }
+
+        if (ExistingReport == null)
+        {
+            RebuildSnapshotInternal();
+        }
+        else
+        {
+            _datesModifiedSinceSnapshot = true;
+        }
+    }
+
+    private void OnAsOfDateChanged(DateTime? newAsOf)
+    {
+        var effectiveAsOf = newAsOf ?? DateTime.Today;
+        _asOfDate = effectiveAsOf;
+        _report.AsOfDate = effectiveAsOf;
+
+        if (_periodStartDate.HasValue && _periodStartDate.Value.Date > effectiveAsOf.Date)
+        {
+            _periodStartDate = effectiveAsOf.Date;
+            _report.PeriodStartDate = _periodStartDate;
+        }
+
+        if (ExistingReport == null)
+        {
+            RebuildSnapshotInternal();
+        }
+        else
+        {
+            _datesModifiedSinceSnapshot = true;
+        }
+    }
+
+    private bool IsFullProjectPeriodSelected =>
+        !_periodStartDate.HasValue && (_asOfDate?.Date ?? DateTime.Today) == DateTime.Today;
+
+    private bool IsThisYearPeriodSelected =>
+        _periodStartDate?.Date == new DateTime(DateTime.Today.Year, 1, 1) &&
+        (_asOfDate?.Date ?? DateTime.Today) == DateTime.Today;
+
+    private bool IsLastYearPeriodSelected =>
+        _periodStartDate?.Date == new DateTime(DateTime.Today.Year - 1, 1, 1) &&
+        _asOfDate?.Date == new DateTime(DateTime.Today.Year - 1, 12, 31);
+
+    private bool IsThisQuarterPeriodSelected =>
+        _periodStartDate?.Date == new DateTime(DateTime.Today.Year, ((DateTime.Today.Month - 1) / 3) * 3 + 1, 1) &&
+        (_asOfDate?.Date ?? DateTime.Today) == DateTime.Today;
+
+    private bool IsThisMonthPeriodSelected =>
+        _periodStartDate?.Date == new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1) &&
+        (_asOfDate?.Date ?? DateTime.Today) == DateTime.Today;
+
+    private bool IsBossBilanPresetActive =>
+        _report.Options.Audience == ProjectReportAudience.Internal &&
+        _report.Options.FinancialMode == ProjectReportFinancialMode.InternalCostAndProfit &&
+        _report.Options.ShowLaborSection &&
+        _report.Options.ShowLaborPeriodicBreakdown &&
+        _report.Options.LaborPeriodicLayout == ProjectReportLaborLayout.EmployeeMatrix &&
+        _report.Options.ShowPurchasesSection &&
+        _report.Options.PurchasesGrouping == ProjectReportPurchasesGrouping.ByMonthDetailed &&
+        !_report.Options.ShowCommissionsSection;
+
+    private bool IsFullInternalPresetActive =>
+        _report.Options.Audience == ProjectReportAudience.Internal &&
+        _report.Options.FinancialMode == ProjectReportFinancialMode.InternalCostAndProfit &&
+        _report.Options.ShowLaborSection &&
+        _report.Options.ShowLaborPeriodicBreakdown &&
+        _report.Options.LaborPeriodicLayout == ProjectReportLaborLayout.EmployeeMatrix &&
+        _report.Options.ShowCommissionsSection &&
+        _report.Options.ShowTimelineNotes;
+
+    private bool IsClientBillablePresetActive =>
+        _report.Options.FinancialMode == ProjectReportFinancialMode.ClientBillable;
+
+    private bool IsHoursOnlyPresetActive =>
+        _report.Options.FinancialMode == ProjectReportFinancialMode.HoursAndQuantitiesOnly;
+
+    private void SetPeriodFullProject()
+    {
+        _periodStartDate = null;
+        _asOfDate = DateTime.Today;
+        _report.PeriodStartDate = null;
+        _report.AsOfDate = DateTime.Today;
+        RebuildSnapshotInternal();
+    }
+
+    private void SetPeriodThisYear()
+    {
+        var year = DateTime.Today.Year;
+        _periodStartDate = new DateTime(year, 1, 1);
+        _asOfDate = DateTime.Today;
+        _report.PeriodStartDate = _periodStartDate;
+        _report.AsOfDate = _asOfDate.Value;
+        RebuildSnapshotInternal();
+    }
+
+    private void SetPeriodLastYear()
+    {
+        var year = DateTime.Today.Year - 1;
+        _periodStartDate = new DateTime(year, 1, 1);
+        _asOfDate = new DateTime(year, 12, 31);
+        _report.PeriodStartDate = _periodStartDate;
+        _report.AsOfDate = _asOfDate.Value;
+        RebuildSnapshotInternal();
+    }
+
+    private void SetPeriodThisQuarter()
+    {
+        var today = DateTime.Today;
+        int quarterStartMonth = ((today.Month - 1) / 3) * 3 + 1;
+        _periodStartDate = new DateTime(today.Year, quarterStartMonth, 1);
+        _asOfDate = today;
+        _report.PeriodStartDate = _periodStartDate;
+        _report.AsOfDate = _asOfDate.Value;
+        RebuildSnapshotInternal();
+    }
+
+    private void SetPeriodThisMonth()
+    {
+        var today = DateTime.Today;
+        _periodStartDate = new DateTime(today.Year, today.Month, 1);
+        _asOfDate = today;
+        _report.PeriodStartDate = _periodStartDate;
+        _report.AsOfDate = _asOfDate.Value;
+        RebuildSnapshotInternal();
+    }
+
+    private void RefreshSnapshot()
+    {
+        RebuildSnapshotInternal();
+        Snackbar.Add(BizLoc["Report snapshot updated for the selected date range."], Severity.Success);
+    }
+
+    private void RebuildSnapshotInternal()
+    {
+        if (_project == null) return;
+        _report.PeriodStartDate = _periodStartDate;
+        _report.AsOfDate = _asOfDate ?? DateTime.Today;
+        _report.Snapshot = ReportService.BuildSnapshot(_project, _report.PeriodStartDate, _report.AsOfDate);
+        _datesModifiedSinceSnapshot = false;
+    }
+
+    private void ApplyPresetBossBilan()
+    {
+        _report.Options = new ProjectReportOptions
+        {
+            Audience = ProjectReportAudience.Internal,
+            FinancialMode = _canViewCostRates ? ProjectReportFinancialMode.InternalCostAndProfit : ProjectReportFinancialMode.ClientBillable,
+            ShowFinancialSummary = true,
+            ShowCashFlowPosition = true,
+            ShowLaborSection = true,
+            ShowLaborByTask = true,
+            ShowLaborByEmployee = true,
+            ShowLaborPeriodicBreakdown = true,
+            LaborPeriodGranularity = ProjectReportPeriodGranularity.Weekly,
+            LaborPeriodicLayout = ProjectReportLaborLayout.EmployeeMatrix,
+            ShowLaborFinancials = _canViewLaborRates,
+            ShowPurchasesSection = _canViewPurchases,
+            PurchasesGrouping = ProjectReportPurchasesGrouping.ByMonthDetailed,
+            ShowPurchaseTaxBreakdown = true,
+            ShowExpensesSection = _canViewAccounting,
+            ExpensesGrouping = ProjectReportExpensesGrouping.ByMonth,
+            SubmittedOrPaidExpensesOnly = true,
+            ShowBillingHistory = true,
+            ShowCommissionsSection = false,
+            ShowOverheadSection = _canViewCostRates && _project?.IsInternal != true,
+            ShowTimelineNotes = false
+        };
+    }
+
+    private void ApplyPresetFullInternal()
+    {
+        _report.Options = new ProjectReportOptions
+        {
+            Audience = ProjectReportAudience.Internal,
+            FinancialMode = _canViewCostRates ? ProjectReportFinancialMode.InternalCostAndProfit : ProjectReportFinancialMode.ClientBillable,
+            ShowFinancialSummary = true,
+            ShowCashFlowPosition = true,
+            ShowLaborSection = true,
+            ShowLaborByTask = true,
+            ShowLaborByEmployee = true,
+            ShowLaborPeriodicBreakdown = true,
+            LaborPeriodGranularity = ProjectReportPeriodGranularity.Weekly,
+            LaborPeriodicLayout = ProjectReportLaborLayout.EmployeeMatrix,
+            ShowLaborFinancials = _canViewLaborRates,
+            ShowPurchasesSection = _canViewPurchases,
+            PurchasesGrouping = ProjectReportPurchasesGrouping.ByMonthDetailed,
+            ShowPurchaseTaxBreakdown = true,
+            ShowExpensesSection = _canViewAccounting,
+            ExpensesGrouping = ProjectReportExpensesGrouping.ByMonth,
+            SubmittedOrPaidExpensesOnly = true,
+            ShowBillingHistory = true,
+            ShowCommissionsSection = _canViewCostRates,
+            ShowOverheadSection = _canViewCostRates && _project?.IsInternal != true,
+            ShowTimelineNotes = true
+        };
+    }
+
+    private void ApplyPresetClientBillable()
+    {
+        _report.Options = new ProjectReportOptions
+        {
+            Audience = ProjectReportAudience.Client,
+            FinancialMode = ProjectReportFinancialMode.ClientBillable,
+            ShowFinancialSummary = true,
+            ShowCashFlowPosition = false,
+            ShowLaborSection = true,
+            ShowLaborByTask = true,
+            ShowLaborByEmployee = false,
+            ShowLaborPeriodicBreakdown = true,
+            LaborPeriodGranularity = ProjectReportPeriodGranularity.Weekly,
+            LaborPeriodicLayout = ProjectReportLaborLayout.EmployeeMatrix,
+            ShowLaborFinancials = _canViewLaborRates,
+            ShowPurchasesSection = _canViewPurchases,
+            PurchasesGrouping = ProjectReportPurchasesGrouping.ByMonthSummaryOnly,
+            ShowPurchaseTaxBreakdown = false,
+            ShowExpensesSection = false,
+            ShowBillingHistory = true,
+            ShowCommissionsSection = false,
+            ShowOverheadSection = false,
+            ShowTimelineNotes = true
+        };
+    }
+
+    private void ApplyPresetHoursOnly()
+    {
+        _report.Options = new ProjectReportOptions
+        {
+            Audience = ProjectReportAudience.Internal,
+            FinancialMode = ProjectReportFinancialMode.HoursAndQuantitiesOnly,
+            ShowFinancialSummary = false,
+            ShowCashFlowPosition = false,
+            ShowLaborSection = true,
+            ShowLaborByTask = true,
+            ShowLaborByEmployee = true,
+            ShowLaborPeriodicBreakdown = true,
+            LaborPeriodGranularity = ProjectReportPeriodGranularity.Weekly,
+            LaborPeriodicLayout = ProjectReportLaborLayout.EmployeeMatrix,
+            ShowLaborFinancials = false,
+            ShowPurchasesSection = false,
+            ShowExpensesSection = false,
+            ShowBillingHistory = false,
+            ShowCommissionsSection = false,
+            ShowOverheadSection = false,
+            ShowTimelineNotes = true
+        };
+    }
+
+    private async Task<(Spokes_Server.Core.Models.HR.Employee Actor, Project Project)?> AuthorizeSaveAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        if (emp == null || liveProject == null || !UserService.CanEditProject(emp, liveProject))
+        {
+            _canEditAuthorized = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+
+        if (ExistingReport != null)
+        {
+            var liveExisting = Db.ProjectReports.GetById(ExistingReport.Id);
+            if (liveExisting != null && !string.Equals(liveExisting.ProjectId, liveProject.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                _canEditAuthorized = false;
+                Snackbar.Add("Access denied.", Severity.Error);
+                return null;
+            }
+
+            var isFinal = string.Equals(liveExisting?.Status ?? ExistingReport.Status, ProjectReportStatus.Final, StringComparison.OrdinalIgnoreCase);
+            if (isFinal && (!ForceUnlockEdit || (!emp.IsEffectiveAdmin && !emp.HasPermission(AppPermissions.Projects.Delete))))
+            {
+                _canUnlockFinalAuthorized = false;
+                Snackbar.Add("Access denied.", Severity.Error);
+                return null;
+            }
+        }
+
+        UpdateViewerPermissions(emp);
+        _currentUserName = emp.FullName ?? "Unknown";
+        return (emp, liveProject);
+    }
+
+    private async Task Save()
+    {
+        var auth = await AuthorizeSaveAsync();
+        if (auth == null) return;
+
+        if (string.IsNullOrWhiteSpace(_report.Title))
+        {
+            Snackbar.Add(BizLoc["Please enter a report title."], Severity.Warning);
+            return;
+        }
+
+        string? unlockReason = null;
+        if (ForceUnlockEdit && ExistingReport != null)
+        {
+            var parameters = new DialogParameters<ConfirmDialog>
+            {
+                { x => x.ContentText, BizLoc["This report is already in Final status. Saving changes will update the finalized report and invalidate any cached PDF. Do you want to save your changes?"].Value },
+                { x => x.ButtonText, BizLoc["Save Changes"].Value },
+                { x => x.Color, Color.Warning },
+                { x => x.ShowReasonInput, true },
+                { x => x.ReasonRequired, false },
+                { x => x.ReasonLabel, BizLoc["Edit Note / Reason (optional)"].Value },
+                { x => x.ReasonPlaceholder, BizLoc["Describe what was updated..."].Value }
+            };
+
+            var reasonDialog = await DialogService.ShowAsync<ConfirmDialog>(BizLoc["Confirm Final Report Edit"].Value, parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            var reasonResult = await reasonDialog.Result;
+            if (reasonResult == null || reasonResult.Canceled)
+            {
+                return;
+            }
+            unlockReason = reasonResult.Data as string;
+        }
+
+        var saveAuth = await AuthorizeSaveAsync();
+        if (saveAuth == null) return;
+
+        _project = saveAuth.Value.Project;
+        _report.ProjectId = _project.Id;
+        ClampRestrictedReportOptions();
+
+        // If the user changed dates on an existing report and forgot to click Refresh, refresh automatically so Snapshot matches PeriodStartDate..AsOfDate
+        if (_datesModifiedSinceSnapshot)
+        {
+            RebuildSnapshotInternal();
+        }
+
+        _report.UpdatedAt = DateTime.UtcNow;
+
+        if (ExistingReport == null)
+        {
+            _report.History.Add(new DocumentHistoryEntry
+            {
+                Timestamp = DateTime.UtcNow,
+                Action = DocumentHistoryActions.Created,
+                NewStatus = _report.Status,
+                ChangedBy = _currentUserName,
+                Summary = $"Created report #{_report.ReportNumber}"
+            });
+        }
+        else if (ForceUnlockEdit)
+        {
+            _report.History.Add(new DocumentHistoryEntry
+            {
+                Timestamp = DateTime.UtcNow,
+                Action = DocumentHistoryActions.EditedInFinal,
+                OldStatus = _report.Status,
+                NewStatus = _report.Status,
+                ChangedBy = _currentUserName,
+                Summary = "Edited report while in Final status",
+                Reason = string.IsNullOrWhiteSpace(unlockReason) ? null : unlockReason.Trim()
+            });
+        }
+        else
+        {
+            _report.History.Add(new DocumentHistoryEntry
+            {
+                Timestamp = DateTime.UtcNow,
+                Action = DocumentHistoryActions.StatusChanged,
+                OldStatus = _report.Status,
+                NewStatus = _report.Status,
+                ChangedBy = _currentUserName,
+                Summary = $"Updated report (As of {_report.AsOfDate:yyyy-MM-dd})"
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(_report.PdfPath) && System.IO.File.Exists(_report.PdfPath))
+        {
+            try { System.IO.File.Delete(_report.PdfPath); } catch { }
+            _report.PdfPath = string.Empty;
+        }
+
+        Db.ProjectReports.Save(_report);
+        MudDialog.Close(DialogResult.Ok(_report));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

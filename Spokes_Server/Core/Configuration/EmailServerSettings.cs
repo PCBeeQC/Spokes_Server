@@ -36,20 +36,14 @@ public class EmailServerSettings
     public bool AllowUsersToShareEmailEntities { get; set; } = true;
 }
 
-public class IncomingServerConfig
+public abstract class EmailServerConfigBase
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string Name { get; set; } = string.Empty;
     public string Domain { get; set; } = string.Empty;
     public string Host { get; set; } = string.Empty;
-    public int Port { get; set; } = 993;
+    public virtual int Port { get; set; }
     public bool UseSsl { get; set; } = true;
-
-    /// <summary>
-    /// ID of the default Outgoing Server (SendingServerConfig) paired with this Incoming Server.
-    /// Used when automatically creating a Sending Identity for a Real Inbox on this server.
-    /// </summary>
-    public string DefaultOutgoingServerId { get; set; } = string.Empty;
 
     public string OwnerEmployeeId { get; set; } = string.Empty;
     public bool IsSharedWithAllUsers { get; set; } = true;
@@ -67,14 +61,20 @@ public class IncomingServerConfig
     }
 }
 
-public class SendingServerConfig
+public class IncomingServerConfig : EmailServerConfigBase
 {
-    public string Id { get; set; } = Guid.NewGuid().ToString();
-    public string Name { get; set; } = string.Empty;
-    public string Domain { get; set; } = string.Empty;
-    public string Host { get; set; } = string.Empty;
-    public int Port { get; set; } = 465;
-    public bool UseSsl { get; set; } = true;
+    public override int Port { get; set; } = 993;
+
+    /// <summary>
+    /// ID of the default Outgoing Server (SendingServerConfig) paired with this Incoming Server.
+    /// Used when automatically creating a Sending Identity for a Real Inbox on this server.
+    /// </summary>
+    public string DefaultOutgoingServerId { get; set; } = string.Empty;
+}
+
+public class SendingServerConfig : EmailServerConfigBase
+{
+    public override int Port { get; set; } = 587;
 
     /// <summary>
     /// When true (e.g. Resend, Postmark, AWS SES), all Sending Identities on this server
@@ -84,19 +84,4 @@ public class SendingServerConfig
     public bool UseSharedCredentials { get; set; }
     public string SharedUsername { get; set; } = string.Empty;
     public string EncryptedSharedPassword { get; set; } = string.Empty;
-
-    public string OwnerEmployeeId { get; set; } = string.Empty;
-    public bool IsSharedWithAllUsers { get; set; } = true;
-    public List<string> AllowedUserIds { get; set; } = [];
-    public List<string> AllowedTeamIds { get; set; } = [];
-
-    public bool CanUserAccess(string employeeId, IEnumerable<string>? userTeamIds = null, bool isAdmin = false)
-    {
-        if (isAdmin || IsSharedWithAllUsers) return true;
-        if (string.IsNullOrWhiteSpace(employeeId)) return false;
-        if (string.Equals(OwnerEmployeeId, employeeId, StringComparison.OrdinalIgnoreCase)) return true;
-        if (AllowedUserIds != null && AllowedUserIds.Any(u => string.Equals(u, employeeId, StringComparison.OrdinalIgnoreCase))) return true;
-        if (userTeamIds != null && AllowedTeamIds != null && AllowedTeamIds.Intersect(userTeamIds, StringComparer.OrdinalIgnoreCase).Any()) return true;
-        return false;
-    }
 }

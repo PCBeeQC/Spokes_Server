@@ -8,33 +8,21 @@
     string teamInitial = !string.IsNullOrWhiteSpace(name)
         ? name.Trim()[..1].ToUpper()
         : "T";
-
-    string calculatedFontSize = !string.IsNullOrEmpty(FontSize)
-        ? FontSize
-        : (Size == Size.Small ? "0.8rem" : (Size == Size.Large ? "1.5rem" : "inherit"));
-
-    string iconFontSize = Size switch
-    {
-        Size.Small => "13px",
-        Size.Medium => "18px",
-        Size.Large => "28px",
-        _ => "14px"
-    };
 }
 
 <MudAvatar Size="@Size"
-           Class="@Class"
-           Style="@($"position: relative; font-size: {calculatedFontSize}; background-color: {safeColor}; color: {Colors.Shades.White}; overflow: hidden; {Style}")">
-    @if (UseIcon)
-    {
-        <MudIcon Icon="@Icons.Material.Filled.Groups" Style="@($"font-size: {iconFontSize};")" />
-    }
-    else
-    {
-        <div style="width: 100%; height: 100%; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center;">
-            @teamInitial
-        </div>
-    }
+           Class="@($"team-avatar {Class}".Trim())"
+           Style="@($"background-color: {safeColor}; color: {Colors.Shades.White}; {Style}")">
+    <div class="spokes-avatar-inner">
+        @if (UseIcon)
+        {
+            <MudIcon Icon="@Icons.Material.Filled.Groups" Class="spokes-avatar-icon" />
+        }
+        else
+        {
+            <span class="spokes-avatar-initials is-single-char">@teamInitial</span>
+        }
+    </div>
 </MudAvatar>
 
 @code {
@@ -45,5 +33,4 @@
     [Parameter] public bool UseIcon { get; set; } = false;
     [Parameter] public string Class { get; set; } = "";
     [Parameter] public string Style { get; set; } = "";
-    [Parameter] public string? FontSize { get; set; }
 }

@@ -1,5 +1,6 @@
 namespace Spokes_Server.Core.Services.Reports.Helpers;
 
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
 
 /// <summary>
@@ -44,16 +45,34 @@ public class WorkTypeSearchItem
 /// </summary>
 public static class TimesheetSearchHelper
 {
-    public static IEnumerable<string> SearchProjects(string? searchText, List<Project> projects)
+    public static IEnumerable<string> SearchProjects(string? searchText, List<Project> projects, bool includeLeaveOptions = false)
     {
+        var results = new List<string>();
+        if (includeLeaveOptions)
+        {
+            foreach (var leaveKey in TimeEntryTypes.AllLeaveRowKeys)
+            {
+                var label = TimeEntryTypes.GetDisplayLabel(leaveKey);
+                if (string.IsNullOrEmpty(searchText) || label.Contains(searchText, StringComparison.InvariantCultureIgnoreCase))
+                {
+                    results.Add(leaveKey);
+                }
+            }
+        }
+
         var matching = string.IsNullOrEmpty(searchText)
             ? projects
             : projects.Where(p => p.DisplayName.Contains(searchText, StringComparison.InvariantCultureIgnoreCase));
-        return matching.Select(p => p.Id);
+        results.AddRange(matching.Select(p => p.Id));
+        return results;
     }
 
     public static string GetProjectName(string id, List<Project> projects)
     {
+        if (TimeEntryTypes.IsLeaveProjectKey(id))
+        {
+            return TimeEntryTypes.GetDisplayLabel(id);
+        }
         return projects.FirstOrDefault(x => x.Id == id)?.DisplayName ?? "";
     }
 

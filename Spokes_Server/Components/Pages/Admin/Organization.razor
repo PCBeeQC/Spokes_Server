@@ -18,7 +18,7 @@
             <MudText Typo="Typo.h5" GutterBottom="true">@string.Format(Loc["{0} Directory"].Value, AppLabels.Company)</MudText>
             <MudText Typo="Typo.body1">@string.Format(Loc["View {0}, {1}, and organizational structure."].Value, AppLabels.Employees.ToLower(), AppLabels.Teams.ToLower())</MudText>
         </div>
-        @if (_hasAccess && Db.SystemConfigs.Get().ProviderType == IdpType.BuiltInCasdoor)
+        @if (IsFriendEdition && _hasAccess && Db.SystemConfigs.Get().ProviderType == IdpType.BuiltInCasdoor)
         {
             <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AdminPanelSettings" Href="@($"{Db.SystemConfigs.Get().ServerPublicUrl.TrimEnd('/')}/login/spokes-org")" Target="_blank">@Loc["Open Casdoor"]</MudButton>
         }
@@ -30,12 +30,12 @@
         {
             <MudToggleItem Value="@("employees")" Text="@AppLabels.Employees" UnselectedIcon="@Icons.Material.Filled.People" SelectedIcon="@Icons.Material.Filled.People" />
             <MudToggleItem Value="@("teams")" Text="@AppLabels.Teams" UnselectedIcon="@Icons.Material.Filled.Diversity3" SelectedIcon="@Icons.Material.Filled.Diversity3" />
+            @if (!IsFriendEdition)
+            {
+                <MudToggleItem Value="@("chart")" Text="@BizLoc["Org Chart"]" UnselectedIcon="@Icons.Material.Filled.AccountTree" SelectedIcon="@Icons.Material.Filled.AccountTree" />
+            }
         }
         <MudToggleItem Value="@("contacts")" Text="@Loc["My Contacts"]" UnselectedIcon="@Icons.Material.Filled.ContactPhone" SelectedIcon="@Icons.Material.Filled.ContactPhone" />
-        @if (_hasAccess && !IsFriendEdition && _canViewDirectory)
-        {
-            <MudToggleItem Value="@("chart")" Text="@BizLoc["Org Chart"]" UnselectedIcon="@Icons.Material.Filled.AccountTree" SelectedIcon="@Icons.Material.Filled.AccountTree" />
-        }
     </MudToggleGroup>
 
     @if (!_canViewDirectory && currentTab != "contacts")
@@ -48,19 +48,19 @@
     @* Content Area *@
     @if (currentTab == "employees" && _canViewDirectory)
     {
-        <EmployeesList />
+        <EmployeesList ReadOnly="@(!IsFriendEdition)" />
     }
     else if (currentTab == "teams" && _canViewDirectory)
     {
-        <TeamsList />
+        <TeamsList ReadOnly="@(!IsFriendEdition)" />
+    }
+    else if (currentTab == "chart" && !IsFriendEdition && _canViewDirectory)
+    {
+        <OrgTree ReadOnly="true" />
     }
     else if (currentTab == "contacts")
     {
         <UserContactsList />
-    }
-    else if (currentTab == "chart" && _hasAccess && !IsFriendEdition && _canViewDirectory)
-    {
-        <OrgTree />
     }
 
 </MudContainer>
@@ -72,18 +72,30 @@
     private string currentTab = "employees";
     private bool _hasAccess;
     private Employee? _currentUser;
-    private bool _canViewDirectory = true;
+    private bool _canViewDirectory = false;
 
     protected override void OnParametersSet()
     {
         if (!string.IsNullOrEmpty(Tab))
         {
+            if (Tab.Equals("salaries", StringComparison.OrdinalIgnoreCase) && !IsFriendEdition)
+            {
+                try
+                {
+                    Nav.NavigateTo("/business/hr?tab=salaries", replace: true);
+                }
+                catch (Microsoft.AspNetCore.Components.NavigationException)
+                {
+                }
+                return;
+            }
+
             currentTab = Tab.ToLower() switch
             {
                 "employees" or "members" when _canViewDirectory => "employees",
                 "teams" when _canViewDirectory => "teams",
+                "chart" when !IsFriendEdition && _canViewDirectory => "chart",
                 "contacts" => "contacts",
-                "chart" when _hasAccess && !IsFriendEdition && _canViewDirectory => "chart",
                 _ => _canViewDirectory ? "employees" : "contacts"
             };
         }
@@ -120,8 +132,8 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _currentUser = await UserService.GetEmployeeAsync();
-        _hasAccess = _currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageUsers));
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _hasAccess = _currentUser != null && _currentUser.IsActiveUnsuspended && (_currentUser.IsEffectiveAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageUsers));
         _canViewDirectory = PrivacyService.CanViewDirectory(_currentUser);
         if (!_canViewDirectory && currentTab != "contacts")
         {

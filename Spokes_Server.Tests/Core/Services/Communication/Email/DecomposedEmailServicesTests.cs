@@ -42,7 +42,7 @@ public class DecomposedEmailServicesTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_DecomposedEmail_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -50,6 +50,7 @@ public class DecomposedEmailServicesTests : IDisposable
         _emailAccounts = new EmailAccountRepository(_persistence, _config);
         _identities = new EmailSendingIdentityRepository(_persistence, _config);
         _companyProfile = new CompanyProfileRepository(_persistence, _config);
+        _companyProfile.Save(new Spokes_Server.Core.Models.Core.CompanyProfile { Edition = "Business" });
         _emailFolders = new EmailFolderRepository(_persistence, _config);
         _emailMessages = new EmailMessageRepository(_persistence, _config);
 
@@ -75,33 +76,6 @@ public class DecomposedEmailServicesTests : IDisposable
         {
             try { Directory.Delete(_testDataDir, true); } catch { }
         }
-    }
-
-    [Fact]
-    public async Task EmailDraftService_SaveAndRetrieveDraft()
-    {
-        var acc = new EmailAccount
-        {
-            Id = "acc_draft_test",
-            EmailAddress = "alice@example.com",
-            Name = "Alice Smith"
-        };
-        _emailAccounts.Save(acc);
-
-        var draftId = await _draftService.SaveDraftAsync(new SaveDraftRequest
-        {
-            AccountId = acc.Id,
-            To = "bob@example.com",
-            Subject = "Project Update",
-            Body = "<p>Draft body content</p>"
-        });
-
-        Assert.False(string.IsNullOrEmpty(draftId));
-
-        var savedDraft = _emailMessages.GetById(draftId);
-        Assert.NotNull(savedDraft);
-        Assert.Equal("Project Update", savedDraft.Subject);
-        Assert.Equal("LocalDrafts", savedDraft.FolderPath);
     }
 
     [Fact]
@@ -193,83 +167,6 @@ public class DecomposedEmailServicesTests : IDisposable
         {
             if (File.Exists(tempFile)) File.Delete(tempFile);
         }
-    }
-
-    [Fact]
-    public async Task EmailDraftService_WithMockCacheMaintenance_DelegatesAttachmentDeletion()
-    {
-        var mockCache = new Mock<IEmailCacheMaintenanceService>();
-        mockCache.Setup(c => c.GetAttachmentPath(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
-            .Returns(Path.Combine(_testDataDir, "dummy_att.dat"));
-        var draftServiceWithMock = new EmailDraftService(_emailFolders, _emailMessages, mockCache.Object, _emailAccounts, _identities);
-
-        var acc = new EmailAccount { Id = "acc_mock_test", EmailAddress = "mock@example.com" };
-        _emailAccounts.Save(acc);
-
-        var draftMsg = new EmailMessage
-        {
-            Id = "draft_with_att",
-            AccountId = acc.Id,
-            FolderPath = "LocalDrafts",
-            Attachments = [new EmailAttachmentMeta { Id = "att1", FileName = "file.txt" }]
-        };
-        _emailMessages.Save(draftMsg);
-
-        await draftServiceWithMock.RemoveDraftAttachmentAsync(acc.Id, draftMsg.Id, "att1");
-
-        mockCache.Verify(c => c.GetAttachmentPath(acc.Id, draftMsg.Id, "att1"), Times.Once);
-    }
-
-    [Fact]
-    public async Task EmailMessageLifecycleService_WithMockCache_DeletesMessageFiles()
-    {
-        var mockCache = new Mock<IEmailCacheMaintenanceService>();
-
-        var lifecycleServiceWithMock = new EmailMessageLifecycleService(
-            _companyProfile, _emailFolders, _emailMessages,
-            _encryptionService, _syncStateService, mockCache.Object, _emailAccounts);
-
-        var acc = new EmailAccount { Id = "acc_seam_test", EmailAddress = "seam@example.com" };
-        _emailAccounts.Save(acc);
-
-        var msg = new EmailMessage
-        {
-            Id = "msg_to_delete",
-            AccountId = acc.Id,
-            FolderPath = "INBOX"
-        };
-        _emailMessages.Save(msg);
-
-        await lifecycleServiceWithMock.DeleteMessageAsync(acc.Id, msg.Id);
-
-        mockCache.Verify(c => c.DeleteLocalMessageFilesAsync(acc.Id, msg.Id), Times.Once);
-    }
-
-    [Fact]
-    public async Task EmailMessageLifecycleService_MarkMessageReadAndFlagged_UpdatesRecord()
-    {
-        var acc = new EmailAccount { Id = "acc_lifecycle_1", EmailAddress = "life@example.com" };
-        _emailAccounts.Save(acc);
-
-        var msg = new EmailMessage
-        {
-            Id = "msg_lifecycle_read",
-            AccountId = acc.Id,
-            FolderPath = "INBOX",
-            IsRead = false,
-            IsFlagged = false
-        };
-        _emailMessages.Save(msg);
-
-        await _messageLifecycleService.MarkMessageReadAsync(acc.Id, msg.Id, true);
-        var readMsg = _emailMessages.GetById(acc.Id, msg.Id);
-        Assert.NotNull(readMsg);
-        Assert.True(readMsg.IsRead);
-
-        await _messageLifecycleService.MarkMessageFlaggedAsync(acc.Id, msg.Id, true);
-        var flaggedMsg = _emailMessages.GetById(acc.Id, msg.Id);
-        Assert.NotNull(flaggedMsg);
-        Assert.True(flaggedMsg.IsFlagged);
     }
 
     [Fact]

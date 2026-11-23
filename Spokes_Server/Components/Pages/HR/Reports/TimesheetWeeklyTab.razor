@@ -35,7 +35,7 @@
     else
     {
         <div style="overflow-x: auto;">
-            <MudSimpleTable Dense="true" Hover="true" Bordered="true" Striped="false" Style="min-width: 900px;">
+            <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Hover="true" Bordered="true" Striped="false" Style="min-width: 900px;">
                 <thead>
                     <tr style="background: var(--mud-palette-background-grey);">
                         <th style="min-width: 220px; font-weight: 700;">@_weeklyGroupBy.ToString().ToUpper()</th>
@@ -154,7 +154,18 @@
                                     </td>
 
                                     <td style="text-align: right; opacity: 0.85;">
-                                        @TimesheetFormatHelper.FormatCurrency(sub.TotalBillableAmount, CurrencySymbol)
+                                        @if (AmountMode == AmountDisplayMode.BillableAmount)
+                                        {
+                                            @TimesheetFormatHelper.FormatCurrency(sub.TotalBillableAmount, CurrencySymbol)
+                                        }
+                                        else if (AmountMode == AmountDisplayMode.CostAmount)
+                                        {
+                                            @TimesheetFormatHelper.FormatCurrency(sub.Cells.Sum(c => c.Hours * 45m), CurrencySymbol)
+                                        }
+                                        else
+                                        {
+                                            <span style="opacity: 0.5;">-</span>
+                                        }
                                     </td>
                                 </tr>
                             }
@@ -175,7 +186,18 @@
                             @TimesheetFormatHelper.FormatDuration(_matrix.GrandTotalHours, Format)
                         </td>
                         <td style="text-align: right; font-weight: 800; color: var(--mud-palette-primary);">
-                            @TimesheetFormatHelper.FormatCurrency(_matrix.GrandTotalBillableAmount, CurrencySymbol)
+                            @if (AmountMode == AmountDisplayMode.BillableAmount)
+                            {
+                                @TimesheetFormatHelper.FormatCurrency(_matrix.GrandTotalBillableAmount, CurrencySymbol)
+                            }
+                            else if (AmountMode == AmountDisplayMode.CostAmount)
+                            {
+                                @TimesheetFormatHelper.FormatCurrency(_matrix.Rows.Sum(r => r.Cells.Sum(c => c.Hours * 45m)), CurrencySymbol)
+                            }
+                            else
+                            {
+                                <span style="opacity: 0.5;">-</span>
+                            }
                         </td>
                     </tr>
                 </tfoot>

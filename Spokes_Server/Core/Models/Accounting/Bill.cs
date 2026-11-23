@@ -1,9 +1,13 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Models.Common;
+using Spokes_Server.Core.Services.Accounting;
 
-public class Bill : IDataEntity, IHasAssociatedFiles
+public class Bill : IDataEntity, IHasAssociatedFiles, IHasDocumentHistory
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -30,10 +34,18 @@ public class Bill : IDataEntity, IHasAssociatedFiles
     public decimal TaxAmount { get; set; } = 0;
     public decimal TpsAmount { get; set; } = 0;
     public decimal TvqAmount { get; set; } = 0;
+    public List<DocumentTaxLine> TaxComponents { get; set; } = [];
     public bool IsTaxExempt { get; set; }
     public string Currency { get; set; } = "CAD";
+    public decimal ExchangeRate { get; set; } = 1.0m;
     public bool IsCreditNote { get; set; }
     public string? LinkedRecurringExpenseId { get; set; }
+    public bool IsBusinessOverhead { get; set; }
+
+    /// <summary>True when imported as a pre-cutover open payable during accounting migration.</summary>
+    public bool IsOpeningBalance { get; set; }
+    /// <summary>Links this opening-balance bill to its AccountingMigrationBatch for rollback.</summary>
+    public string? MigrationBatchId { get; set; }
 
     // Origin & Ingestion Tracking
     public string? SourceEmailId { get; set; }
@@ -42,12 +54,8 @@ public class Bill : IDataEntity, IHasAssociatedFiles
     public bool AutoIngested { get; set; }
     public string? AutoMatchReason { get; set; }
 
-    // Accounting / Sage Export Tracking
-    public bool IsExported => ExportedToSageAt.HasValue;
-    public DateTime? ExportedToSageAt { get; set; }
-    public string? SageBatchId { get; set; }
+    // Chart of Accounts Mapping
     public string? GlAccountCode { get; set; }
-    public string? SageItemCode { get; set; }
 
     // Status
     public string Status { get; set; } = BillStatus.AwaitingApproval; // Awaiting Approval, Approved, Unpaid, Paid, Void
@@ -66,15 +74,50 @@ public class Bill : IDataEntity, IHasAssociatedFiles
     public string AttachmentPath { get; set; } = string.Empty; // Path to saved PDF/Image relative to storage
     public string AttachmentName { get; set; } = string.Empty; // Original filename
 
-    // Payment Info (optional tracking)
+    // Payment & Write-Off Info (optional tracking)
     public string PaymentReference { get; set; } = string.Empty; // Check #, Wire Ref
     public List<PaymentRecord> Payments { get; set; } = [];
+    public List<BalanceWriteOff> WriteOffs { get; set; } = [];
 
-    public decimal AmountPaid => Payments.Any() ? Payments.Sum(p => p.Amount) : (DatePaid.HasValue || Status == BillStatus.Paid ? Amount : 0);
-    public decimal BalanceDue => Status == BillStatus.Void ? 0m : Amount - AmountPaid;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public decimal AmountWrittenOff => WriteOffs.Sum(w => w.Amount);
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasWriteOffs => WriteOffs.Count > 0;
+
+    public decimal AmountPaid => Payments.Any()
+        ? Payments.Sum(p => p.Amount)
+        : ((DatePaid.HasValue || Status == BillStatus.Paid) && !HasWriteOffs && Status != BillStatus.WrittenOff ? Amount : 0);
+
+    public decimal BalanceDue => Status == BillStatus.Void
+        ? 0m
+        : Math.Round(Amount - AmountPaid - AmountWrittenOff, 2, MidpointRounding.AwayFromZero);
 
     // 3-Way Matching
     public List<BillLineItem> LineItems { get; set; } = [];
+
+    // Audit History
+    public List<DocumentHistoryEntry> History { get; set; } = [];
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Bill? LastSavedSnapshot { get; set; }
+
+    public void CaptureAuditSnapshot()
+    {
+        LastSavedSnapshot = new Bill
+        {
+            Id = Id,
+            SupplierName = SupplierName,
+            InvoiceNumber = InvoiceNumber,
+            Date = Date,
+            DueDate = DueDate,
+            Amount = Amount,
+            SubTotal = SubTotal,
+            TaxAmount = TaxAmount,
+            GlAccountCode = GlAccountCode,
+            Status = Status
+        };
+    }
 
     public IEnumerable<string> GetAssociatedFilePaths()
     {
@@ -90,6 +133,5 @@ public class BillLineItem
     public decimal Quantity { get; set; } = 1;
     public decimal UnitPrice { get; set; } = 0;
     public string? GlAccountCode { get; set; }
-    public string? SageItemCode { get; set; }
-    public decimal Total => Quantity * UnitPrice;
+    public decimal Total => FinancialCalculationEngine.RoundCurrency(Quantity * UnitPrice);
 }

@@ -65,22 +65,6 @@ public class PushController : SpokesControllerBase
         _routingService = routingService;
     }
 
-
-
-    /// <summary>
-    /// Get the VAPID public key for client-side subscription.
-    /// </summary>
-    [HttpGet("vapid-public-key")]
-    public IActionResult GetVapidPublicKey()
-    {
-        var publicKey = _webPush.GetVapidPublicKey();
-        if (string.IsNullOrEmpty(publicKey))
-        {
-            return BadRequestError("Push notifications not configured");
-        }
-        return Ok(new VapidPublicKeyResponse(publicKey));
-    }
-
     /// <summary>
     /// Subscribe to push notifications.
     /// Stamps push fields directly onto the caller's DeviceSession.
@@ -140,6 +124,25 @@ public class PushController : SpokesControllerBase
         }
 
 
+        // Gate NativeRelay registrations: require an active Spokes Pass or valid trial ticket
+        // and a valid RSA-2048+ encryption key BEFORE mutating or clearing any existing sessions.
+        string? effectivePublicKey = !string.IsNullOrWhiteSpace(request.PublicKey)
+            ? request.PublicKey.Trim()
+            : session.PushPublicKey;
+
+        if (subscriptionType == PushSubscriptionType.NativeRelay)
+        {
+            if (!_licenseEligibility.IsNativePushAllowed())
+            {
+                return ForbiddenError("Native push notifications require an active Spokes Pass.", "PASS_EXPIRED");
+            }
+
+            if (!PushPayloadBuilder.IsValidRsaPublicKey(effectivePublicKey))
+            {
+                return BadRequestError("A valid RSA-2048+ public key is required for NativeRelay push subscriptions.", "INVALID_PUSH_PUBLIC_KEY");
+            }
+        }
+
         // Dedup: If another session owned by the same user already has this push endpoint, clear it.
         // Never clear push endpoints on other users' sessions (prevents cross-user DoS).
         var existingWithEndpoint = _sessions.GetByPushEndpoint(request.Endpoint);
@@ -148,36 +151,16 @@ public class PushController : SpokesControllerBase
             _sessions.ClearPushFields(existingWithEndpoint);
         }
 
-        // Gate NativeRelay registrations: require an active Spokes Pass or valid trial ticket
-        if (subscriptionType == PushSubscriptionType.NativeRelay)
-        {
-            if (!_licenseEligibility.IsNativePushAllowed())
-            {
-                return ForbiddenError("Native push notifications require an active Spokes Pass.", "PASS_EXPIRED");
-            }
-        }
-
         // Stamp push fields onto the DeviceSession
         session.PushEndpoint = request.Endpoint;
         session.PushP256dh = request.P256dh;
         session.PushAuth = request.Auth;
         session.PushSubscriptionType = subscriptionType;
-        if (!string.IsNullOrWhiteSpace(request.PublicKey))
-        {
-            session.PushPublicKey = request.PublicKey.Trim();
-        }
-        else
-        {
-            if (subscriptionType != PushSubscriptionType.NativeRelay)
-            {
-                session.PushPublicKey = string.Empty;
-            }
-            else
-            {
-                session.PushPublicKey ??= string.Empty;
-            }
-        }
+        session.PushPublicKey = subscriptionType == PushSubscriptionType.NativeRelay
+            ? effectivePublicKey!
+            : string.Empty;
         session.PushEnabled = true;
+        session.PushExplicitlyDisabled = false;
         session.PushSubscribedAt = DateTime.UtcNow;
         session.PushUserAgent = Request.Headers.UserAgent.ToString();
 
@@ -256,9 +239,10 @@ public class PushController : SpokesControllerBase
     /// </summary>
     [HttpPost("unsubscribe")]
     [HttpDelete("unsubscribe")]
-    public IActionResult Unsubscribe([FromBody] UnsubscribeRequest request)
+    public IActionResult Unsubscribe([FromBody] UnsubscribeRequest? request)
     {
-        if (string.IsNullOrEmpty(request.Endpoint))
+        var sessionIdClaim = User?.FindFirst("SessionId")?.Value;
+        if (string.IsNullOrEmpty(request?.Endpoint) && string.IsNullOrEmpty(sessionIdClaim))
         {
             return BadRequestError("Endpoint is required");
         }
@@ -270,14 +254,42 @@ public class PushController : SpokesControllerBase
         }
 
         // Security: Only allow unsubscribing sessions owned by the current user
-        var session = _sessions.GetByPushEndpoint(request.Endpoint);
-        if (session == null || session.EmployeeId != userId)
+        DeviceSession? session = null;
+        if (!string.IsNullOrEmpty(request?.Endpoint))
+        {
+            var byEndpoint = _sessions.GetByPushEndpoint(request.Endpoint);
+            if (byEndpoint != null && byEndpoint.EmployeeId == userId)
+            {
+                session = byEndpoint;
+            }
+        }
+
+        DeviceSession? activeSession = null;
+        if (!string.IsNullOrEmpty(sessionIdClaim))
+        {
+            var candidate = _sessions.GetById(sessionIdClaim);
+            if (candidate != null && candidate.EmployeeId == userId && candidate.RevokedAt == null && candidate.ExpiresAt > DateTime.UtcNow)
+            {
+                activeSession = candidate;
+            }
+        }
+
+        if (session == null && activeSession == null)
         {
             // Don't reveal whether the subscription exists or belongs to someone else
             return Ok(new PushMessageResponse("No subscription found"));
         }
 
-        _sessions.ClearPushFields(session);
+        if (session != null)
+        {
+            _sessions.ClearPushFields(session, explicitlyDisabled: true);
+        }
+
+        if (activeSession != null && activeSession.Id != session?.Id)
+        {
+            _sessions.ClearPushFields(activeSession, explicitlyDisabled: true);
+        }
+
         return Ok(new PushMessageResponse("Unsubscribed successfully"));
     }
 
@@ -307,36 +319,26 @@ public class PushController : SpokesControllerBase
 
     // --- Device Management ---
 
-    /// <summary>
-    /// Get all registered notification devices for the current user.
-    /// Returns DeviceSession records directly — no join logic needed.
-    /// </summary>
-    [HttpGet("devices")]
-    public IActionResult GetDevices()
+    private bool TryGetOwnedDevice(string id, out DeviceSession? session, out IActionResult? errorResult)
     {
-        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: true);
+        session = null;
+        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: false);
         if (authError != null)
         {
-            return authError;
+            errorResult = authError;
+            return false;
         }
 
-        var sessions = _sessions.GetActiveByEmployeeId(userId);
-        var devices = sessions.Select(s => new DeviceListItemResponse(
-            s.Id,
-            s.DeviceType,
-            s.DeviceName,
-            s.DeviceInfo,
-            s.HasPush && s.PushEnabled,
-            s.PushSubscriptionType,
-            s.CreatedAt,
-            s.LastSeenAt,
-            s.HasPush,
-            s.PushEndpoint ?? string.Empty,
-            s.PushUserAgent,
-            s.DeviceId
-        )).ToList();
+        var found = _sessions.GetById(id);
+        if (found == null || found.EmployeeId != userId)
+        {
+            errorResult = NotFoundError("Device not found");
+            return false;
+        }
 
-        return Ok(devices);
+        session = found;
+        errorResult = null;
+        return true;
     }
 
     /// <summary>
@@ -345,28 +347,23 @@ public class PushController : SpokesControllerBase
     [HttpPut("devices/{id}")]
     public IActionResult UpdateDevice(string id, [FromBody] UpdateDeviceRequest request)
     {
-        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: false);
-        if (authError != null)
+        if (!TryGetOwnedDevice(id, out var session, out var errorResult))
         {
-            return authError;
-        }
-
-        var session = _sessions.GetById(id);
-        if (session == null || session.EmployeeId != userId)
-        {
-            return NotFoundError("Device not found");
+            return errorResult!;
         }
 
         if (request.DeviceName != null)
-            session.DeviceName = request.DeviceName;
-
+            session!.DeviceName = request.DeviceName;
 
         if (request.DeviceType != null)
-            session.DeviceType = request.DeviceType;
+            session!.DeviceType = request.DeviceType;
         if (request.IsEnabled.HasValue)
-            session.PushEnabled = request.IsEnabled.Value;
+        {
+            session!.PushEnabled = request.IsEnabled.Value;
+            session.PushExplicitlyDisabled = !request.IsEnabled.Value;
+        }
 
-        _sessions.Save(session);
+        _sessions.Save(session!);
         return Ok(new PushMessageResponse("Device updated"));
     }
 
@@ -376,19 +373,12 @@ public class PushController : SpokesControllerBase
     [HttpDelete("devices/{id}")]
     public IActionResult DeleteDevice(string id)
     {
-        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: false);
-        if (authError != null)
+        if (!TryGetOwnedDevice(id, out var session, out var errorResult))
         {
-            return authError;
+            return errorResult!;
         }
 
-        var session = _sessions.GetById(id);
-        if (session == null || session.EmployeeId != userId)
-        {
-            return NotFoundError("Device not found");
-        }
-
-        _sessions.ClearPushFields(session);
+        _sessions.ClearPushFields(session!, explicitlyDisabled: true);
         return Ok(new PushMessageResponse("Device deleted"));
     }
 
@@ -420,7 +410,9 @@ public class PushController : SpokesControllerBase
                 Icon = icon,
                 Category = category
             });
-            return Ok(new PushMessageResponse(testResult.IsPayloadEncrypted ? "Test notification sent (Encrypted)" : "Test notification sent (Encrypted Text)"));
+            return Ok(new PushMessageResponse(testResult.IsPayloadEncrypted
+                ? "Test notification sent (Encrypted)"
+                : "Test notification sent (Content-Free Wakeup - Re-enable Push to Encrypt)"));
         }
         catch (DomainException dex) when (!string.IsNullOrEmpty(dex.ErrorCode))
         {
@@ -437,33 +429,6 @@ public class PushController : SpokesControllerBase
             _systemLog?.LogError("Notifications", $"Test push failed for device {id}", ex.Message);
             return BadRequestError(ex.Message);
         }
-    }
-
-    /// <summary>
-    /// Send a test notification to the current user.
-    /// </summary>
-    [HttpPost("test")]
-    public async Task<IActionResult> SendTestNotification([FromQuery] string category = "chat")
-    {
-        var (userId, authError) = ResolveAuthorizedUserId(allowSuspended: false);
-        if (authError != null)
-        {
-            return authError;
-        }
-
-        var sender = _employees.GetById(userId);
-        var userSoundChoice = sender?.GetNotificationSound(category);
-        var sound = NotificationSoundCatalog.GetEffectivePushSound(category, userSoundChoice);
-
-        await _webPush.SendNotificationAsync(new PushNotificationRequest
-        {
-            UserId = userId,
-            Title = "Test Notification",
-            Body = "Push notifications are working!",
-            Category = category,
-            Sound = sound
-        });
-        return Ok(new PushMessageResponse("Test notification sent"));
     }
 
     /// <summary>
@@ -533,22 +498,6 @@ public class UpdateDeviceRequest
 public record PushSubscribeResponse(string Message, string Id, bool isNativePushLicensed);
 
 public record PushMessageResponse(string Message);
-
-public record DeviceListItemResponse(
-    string Id,
-    string? DeviceType,
-    string? DeviceName,
-    string? DeviceInfo,
-    bool IsEnabled,
-    string? PushSubscriptionType,
-    DateTime CreatedAt,
-    DateTime? LastSeenAt,
-    bool HasPush,
-    string Endpoint,
-    string? UserAgent,
-    string? DeviceId);
-
-public record VapidPublicKeyResponse([property: JsonPropertyName("publicKey")] string publicKey);
 
 public record NativePushStatusResponse(
     [property: JsonPropertyName("isAvailable")] bool isAvailable,

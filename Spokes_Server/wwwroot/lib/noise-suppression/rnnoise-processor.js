@@ -529,6 +529,8 @@
      * of denoised data not yet sent.
      */
     _denoisedBufferIndx = 0;
+    _vadHoldFrames = 0;
+    _vadGain = 1.0;
     /**
      * C'tor.
      */
@@ -538,6 +540,16 @@
       this._denoiseSampleSize = this._denoiseProcessor.getSampleLength();
       this._circularBufferLength = leastCommonMultiple(this._procNodeSampleRate, this._denoiseSampleSize);
       this._circularBuffer = new Float32Array(this._circularBufferLength);
+      this.port.onmessage = (event) => {
+        if (event.data && event.data.type === "FLUSH_BUFFER") {
+          this._inputBufferLength = 0;
+          this._denoisedBufferLength = 0;
+          this._denoisedBufferIndx = 0;
+          this._vadHoldFrames = 0;
+          this._vadGain = 1.0;
+          this._circularBuffer.fill(0);
+        }
+      };
     }
     /**
      * Worklet interface process method. The inputs parameter contains PCM audio that is then sent to rnnoise.
@@ -561,7 +573,22 @@
       this._inputBufferLength += inData.length;
       for (; this._denoisedBufferLength + this._denoiseSampleSize <= this._inputBufferLength; this._denoisedBufferLength += this._denoiseSampleSize) {
         const denoiseFrame = this._circularBuffer.subarray(this._denoisedBufferLength, this._denoisedBufferLength + this._denoiseSampleSize);
-        this._denoiseProcessor.processAudioFrame(denoiseFrame, true);
+        const vadScore = this._denoiseProcessor.processAudioFrame(denoiseFrame, true);
+        let targetVadGain = 1.0;
+        if (vadScore >= 0.12) {
+          this._vadHoldFrames = 65;
+        } else if (this._vadHoldFrames > 0) {
+          this._vadHoldFrames--;
+        } else {
+          targetVadGain = 0.25;
+        }
+        const vadAlpha = targetVadGain > this._vadGain ? 0.060 : 0.0005;
+        let g = this._vadGain;
+        for (let i = 0; i < denoiseFrame.length; i++) {
+          g += vadAlpha * (targetVadGain - g);
+          denoiseFrame[i] *= g;
+        }
+        this._vadGain = g;
       }
       let unsentDenoisedDataLength;
       if (this._denoisedBufferIndx > this._denoisedBufferLength) {

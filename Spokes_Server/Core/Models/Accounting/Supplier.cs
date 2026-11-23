@@ -29,14 +29,6 @@ public class Supplier : IDataEntity
         set { if (value != null) ContactInfo = value; }
     }
 
-    [Obsolete("Prefer ContactInfo for consistency across accounting models.")]
-    [JsonIgnore]
-    public PartyContactInfo Info
-    {
-        get => ContactInfo;
-        set => ContactInfo = value;
-    }
-
     // Helper for search
     public string Name => ContactInfo.BusinessName;
 

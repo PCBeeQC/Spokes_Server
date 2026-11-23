@@ -103,13 +103,11 @@ public abstract class JsonRepository<T> where T : class, IDataEntity
 
     public virtual void SaveBatch(IEnumerable<T> items)
     {
+        ArgumentNullException.ThrowIfNull(items);
         EnsureLoaded();
         foreach (var item in items)
         {
-            _cache[item.Id] = item;
-            var path = GetFilePath(item);
-            _writer.QueueWrite(path, item);
-            RaiseOnSaved(item);
+            Save(item);
         }
     }
 
@@ -132,7 +130,7 @@ public abstract class JsonRepository<T> where T : class, IDataEntity
         OnDeleted?.Invoke(item);
         if (item is IHasAssociatedFiles fileBearer)
         {
-            RepositoryFileCascade.HandleEntityDeleted(fileBearer);
+            _writer.NotifyEntityDeleted(fileBearer);
         }
     }
 
@@ -190,6 +188,51 @@ public abstract class JsonRepository<T> where T : class, IDataEntity
                 _storage[item.Id] = item;
             }
             _isLoaded = true;
+        }
+        RaiseOnLoaded();
+    }
+
+    protected List<T> DeserializeJsonFiles(IEnumerable<string> files, string entityLabel)
+    {
+        var items = new List<T>();
+        foreach (var file in files)
+        {
+            try
+            {
+                var json = File.ReadAllText(file);
+                var item = JsonSerializer.Deserialize<T>(json);
+                if (item != null) items.Add(item);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Error loading {EntityLabel} {File}", entityLabel, file);
+            }
+        }
+        return items;
+    }
+
+    protected void LoadProjectSubfolderFromDisk(string subfolderName, string entityLabel)
+    {
+        lock (_loadLock)
+        {
+            var projectsPath = Path.Combine(_basePath, "Projects");
+            if (!Directory.Exists(projectsPath))
+            {
+                _isLoaded = true;
+            }
+            else
+            {
+                var files = Directory.GetFiles(projectsPath, "*.json", SearchOption.AllDirectories)
+                    .Where(f => f.Contains(subfolderName + Path.DirectorySeparatorChar));
+                var items = DeserializeJsonFiles(files, entityLabel);
+
+                RawCache.Clear();
+                foreach (var item in items)
+                {
+                    RawCache[item.Id] = item;
+                }
+                _isLoaded = true;
+            }
         }
         RaiseOnLoaded();
     }

@@ -52,38 +52,6 @@ public class DocumentBlockLibraryTests
         };
     }
 
-    #region BlockFieldDefinition Tests
-
-    [Fact]
-    public void BlockFieldDefinition_DefaultValues_AreEmptyOrText()
-    {
-        var field = new BlockFieldDefinition();
-
-        Assert.Equal(string.Empty, field.Key);
-        Assert.Equal(string.Empty, field.Label);
-        Assert.Equal(string.Empty, field.DefaultValue);
-        Assert.Equal("text", field.FieldType);
-    }
-
-    [Fact]
-    public void BlockFieldDefinition_SetProperties_StoresValuesCorrectly()
-    {
-        var field = new BlockFieldDefinition
-        {
-            Key = "CustomKey",
-            Label = "Custom Label",
-            DefaultValue = "Default",
-            FieldType = "toggle"
-        };
-
-        Assert.Equal("CustomKey", field.Key);
-        Assert.Equal("Custom Label", field.Label);
-        Assert.Equal("Default", field.DefaultValue);
-        Assert.Equal("toggle", field.FieldType);
-    }
-
-    #endregion
-
     #region DocumentBlockLibrary Registry Tests
 
     [Fact]

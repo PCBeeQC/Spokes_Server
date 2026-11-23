@@ -104,6 +104,14 @@ public static class TimesheetFormatHelper
         return 0;
     }
 
+    private static (string Sign, int Hours, int Minutes) DeconstructHours(decimal hours)
+    {
+        var totalMinutes = (int)Math.Round(hours * 60m);
+        var sign = totalMinutes < 0 ? "-" : "";
+        totalMinutes = Math.Abs(totalMinutes);
+        return (sign, totalMinutes / 60, totalMinutes % 60);
+    }
+
     /// <summary>
     /// Formats decimal hours into a concise "H:mm" string for timesheet grid inputs.
     /// Returns empty string when hours == 0 to allow input placeholders to show.
@@ -112,11 +120,7 @@ public static class TimesheetFormatHelper
     public static string FormatHours(decimal hours)
     {
         if (hours == 0) return "";
-        var totalMinutes = (int)Math.Round(hours * 60m);
-        var sign = totalMinutes < 0 ? "-" : "";
-        totalMinutes = Math.Abs(totalMinutes);
-        var h = totalMinutes / 60;
-        var m = totalMinutes % 60;
+        var (sign, h, m) = DeconstructHours(hours);
         return $"{sign}{h}:{m:D2}";
     }
 
@@ -127,11 +131,7 @@ public static class TimesheetFormatHelper
             return $"{hours:0.00} h";
         }
 
-        var totalMinutes = (int)Math.Round(hours * 60m);
-        var sign = totalMinutes < 0 ? "-" : "";
-        totalMinutes = Math.Abs(totalMinutes);
-        var h = totalMinutes / 60;
-        var m = totalMinutes % 60;
+        var (sign, h, m) = DeconstructHours(hours);
         return $"{sign}{h}:{m:D2}";
     }
 
@@ -145,11 +145,7 @@ public static class TimesheetFormatHelper
     /// </summary>
     public static string FormatDurationHhMm(decimal hours)
     {
-        var totalMinutes = (int)Math.Round(hours * 60m);
-        var sign = totalMinutes < 0 ? "-" : "";
-        totalMinutes = Math.Abs(totalMinutes);
-        var h = totalMinutes / 60;
-        var m = totalMinutes % 60;
+        var (sign, h, m) = DeconstructHours(hours);
         return $"{sign}{h}h{m:D2}";
     }
 }

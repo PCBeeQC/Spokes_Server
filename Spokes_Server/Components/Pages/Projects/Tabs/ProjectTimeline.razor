@@ -1,10 +1,11 @@
 @using Spokes_Server.Core.Models.Core
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Communication
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Pages.Email
 @using Spokes_Server.Core.Services.Communication
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Core.Constants
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -12,7 +13,9 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IFileService FileService
 @inject MarkdownSanitizerService MarkdownSanitizer
+@inject FileUrlSigner FileUrls
 @inject ILogger<ProjectTimeline> Logger
+@inject UserService UserService
 
 <div class="d-flex flex-column gap-4 mb-4">
     <div class="d-flex justify-space-between align-center">
@@ -20,7 +23,10 @@
         <div class="d-flex gap-2">
              <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="ExpandAll">Expand All</MudButton>
              <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="CollapseAll">Collapse All</MudButton>
-             <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddNote">Add Note</MudButton>
+            @if (_canEdit)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddNote">Add Note</MudButton>
+            }
         </div>
     </div>
     
@@ -76,13 +82,19 @@ else
                                 </div>
                             </div>
                             
-                            <div class="d-flex" @onclick:stopPropagation="true" @onclick="@(() => {})">
-                                 @if (!note.IsEmail && !note.IsSystemEvent)
-                                 {
-                                     <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => EditNote(note))" />
-                                 }
-                                 <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteNote(note))" />
-                            </div>
+                            @if (_canEdit)
+                            {
+                                <div class="d-flex" @onclick:stopPropagation="true" @onclick="@(() => {})">
+                                     @if (!note.IsEmail && !note.IsSystemEvent)
+                                     {
+                                         <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => EditNote(note))" />
+                                     }
+                                     @if (!note.IsSystemEvent)
+                                     {
+                                         <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteNote(note))" />
+                                     }
+                                </div>
+                            }
                         </div>
 
                         @if (isExpanded)
@@ -193,9 +205,40 @@ else
     private HashSet<string> ExpandedNotes = [];
     private string CurrentUser = "Unknown";
     private Dictionary<string, string> _emailBodyCache = [];
+    private bool _canEdit;
+    private bool _hasAuthorizedAccess;
+    private string? _authorizedProjectId;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
+        if (!string.Equals(_authorizedProjectId, ProjectId, StringComparison.Ordinal))
+        {
+            Notes = [];
+            Years = [];
+            ExpandedNotes.Clear();
+            _emailBodyCache.Clear();
+            _canEdit = false;
+            _hasAuthorizedAccess = false;
+            _authorizedProjectId = null;
+        }
+
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        if (emp == null || liveProject == null || !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: false))
+        {
+            Notes = [];
+            Years = [];
+            ExpandedNotes.Clear();
+            _emailBodyCache.Clear();
+            _canEdit = false;
+            _hasAuthorizedAccess = false;
+            _authorizedProjectId = null;
+            return;
+        }
+
+        _hasAuthorizedAccess = true;
+        _canEdit = UserService.CanEditProject(emp, liveProject);
+        _authorizedProjectId = liveProject.Id;
         await LoadUser();
         Refresh();
     }
@@ -212,6 +255,13 @@ else
 
     private void Refresh()
     {
+        if (!_hasAuthorizedAccess || string.IsNullOrEmpty(ProjectId))
+        {
+            Notes = [];
+            Years = [];
+            return;
+        }
+
         Notes = Db.ProjectNotes.GetByProject(ProjectId);
         Years = Notes.Select(n => n.Date.Year).Distinct().OrderByDescending(y => y).ToList();
     }
@@ -288,13 +338,7 @@ else
         var note = Notes.FirstOrDefault(n => n.Date.Year == year);
         if (note != null)
         {
-            await JS.InvokeVoidAsync("document.getElementById", $"note-{note.Id}").AsTask().ContinueWith(t => 
-            {
-                 if (t.IsCompletedSuccessfully)
-                 {
-                     JS.InvokeVoidAsync("eval", $"document.getElementById('note-{note.Id}').scrollIntoView({{behavior: 'smooth', block: 'center'}})");
-                 }
-            });
+            await JS.InvokeVoidAsync("eval", $"document.getElementById('note-{note.Id}')?.scrollIntoView({{behavior: 'smooth', block: 'center'}})");
         }
     }
 
@@ -304,7 +348,7 @@ else
         try
         {
             var html = MarkdownSanitizer.RenderSanitizedHtml(text);
-            return new MarkupString(html);
+            return new MarkupString(FileUrls.SignHtmlFileUrls(html));
         }
         catch (Exception)
         {
@@ -313,30 +357,64 @@ else
     }
 
 
+    private async Task<(Spokes_Server.Core.Models.HR.Employee Actor, Project Project)?> AuthorizeEditAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        if (emp == null || liveProject == null || !UserService.CanEditProject(emp, liveProject))
+        {
+            _canEdit = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+        return (emp, liveProject);
+    }
+
     private async Task AddNote()
     {
+        var auth = await AuthorizeEditAsync();
+        if (auth == null) return;
+
         var note = new ProjectNote 
         { 
-            ProjectId = ProjectId, 
+            ProjectId = auth.Value.Project.Id, 
             Date = DateTime.Today,
             CreatedBy = CurrentUser,
-            Category = Project.NoteCategories.FirstOrDefault() ?? "General"
+            Category = auth.Value.Project.NoteCategories.FirstOrDefault() ?? "General"
         };
         await OpenDialog(note, "Add Note");
     }
 
     private async Task EditNote(ProjectNote note)
     {
-        await OpenDialog(note, "Edit Note");
+        var auth = await AuthorizeEditAsync();
+        if (auth == null) return;
+
+        var liveNote = Db.ProjectNotes.GetById(note.Id);
+        if (liveNote == null || liveNote.ProjectId != auth.Value.Project.Id)
+        {
+            Snackbar.Add("Timeline note not found.", Severity.Error);
+            return;
+        }
+        if (liveNote.IsEmail || liveNote.IsSystemEvent)
+        {
+            Snackbar.Add("System and email timeline events cannot be edited.", Severity.Warning);
+            return;
+        }
+
+        await OpenDialog(liveNote, "Edit Note");
     }
 
     private async Task OpenDialog(ProjectNote note, string title)
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(note);
-        var copy = System.Text.Json.JsonSerializer.Deserialize<ProjectNote>(json);
+        var auth = await AuthorizeEditAsync();
+        if (auth == null) return;
+
+        var copy = note.DeepClone();
         if (copy == null) return;
+        copy.ProjectId = auth.Value.Project.Id;
         
-        var parameters = new DialogParameters { ["Note"] = copy, ["Project"] = Project };
+        var parameters = new DialogParameters { ["Note"] = copy, ["Project"] = auth.Value.Project };
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
 
         var dialog = await DialogService.ShowAsync<ProjectNoteDialog>(title, parameters, options);
@@ -344,9 +422,18 @@ else
 
         if (result != null && !result.Canceled && result.Data is ProjectNote savedNote)
         {
+            var saveAuth = await AuthorizeEditAsync();
+            if (saveAuth == null) return;
+
+            savedNote.ProjectId = saveAuth.Value.Project.Id;
             var originalNote = Db.ProjectNotes.GetById(savedNote.Id);
             if (originalNote != null)
             {
+                if (originalNote.ProjectId != saveAuth.Value.Project.Id)
+                {
+                    Snackbar.Add("Access denied.", Severity.Error);
+                    return;
+                }
                 await FileService.DeleteDeltaFilesAsync(originalNote, savedNote);
             }
             Db.ProjectNotes.Save(savedNote);
@@ -360,10 +447,33 @@ else
 
     private async Task DeleteNote(ProjectNote note)
     {
+        var auth = await AuthorizeEditAsync();
+        if (auth == null) return;
+
+        var liveNote = Db.ProjectNotes.GetById(note.Id);
+        if (liveNote == null || liveNote.ProjectId != auth.Value.Project.Id)
+        {
+            Snackbar.Add("Timeline note not found.", Severity.Error);
+            return;
+        }
+        if (liveNote.IsSystemEvent)
+        {
+            Snackbar.Add("System timeline events cannot be deleted.", Severity.Warning);
+            return;
+        }
+
         var result = await DialogService.ShowMessageBoxAsync("Delete Note?", "Are you sure you want to delete this note irreversibly?", yesText:"Delete", cancelText:"Cancel");
         if (result == true)
         {
-            Db.ProjectNotes.Delete(note.Id);
+            var deleteAuth = await AuthorizeEditAsync();
+            if (deleteAuth == null) return;
+            var confirmNote = Db.ProjectNotes.GetById(liveNote.Id);
+            if (confirmNote == null || confirmNote.ProjectId != deleteAuth.Value.Project.Id || confirmNote.IsSystemEvent)
+            {
+                Snackbar.Add("Access denied.", Severity.Error);
+                return;
+            }
+            Db.ProjectNotes.Delete(confirmNote.Id);
             Refresh();
             Snackbar.Add("Note Deleted", Severity.Success);
         }
@@ -384,11 +494,12 @@ else
             {
                 Id = a.Id,
                 FileName = a.FileName,
-                FilePath = a.FilePath,
+                FilePath = FileUrls.SignUrl(a.FilePath),
                 ContentType = FileHelper.GetContentType(a.FileName, a.ContentType),
                 AddedAt = note.Date,
                 FileSizeBytes = a.FileSizeBytes,
-                HasServerThumbnail = a.HasServerThumbnail
+                HasServerThumbnail = a.HasServerThumbnail,
+                IsEncrypted = false
             }).ToList();
 
             var parameters = new DialogParameters
@@ -407,7 +518,7 @@ else
         }
         else if (!string.IsNullOrEmpty(att.FilePath))
         {
-            await JS.InvokeVoidAsync("window.open", att.FilePath, "_blank");
+            await JS.InvokeVoidAsync("window.open", FileUrls.SignUrl(att.FilePath), "_blank");
         }
     }
 

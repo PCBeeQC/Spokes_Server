@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Helpers;
@@ -13,13 +14,14 @@ public class AvatarMigrationStep : IMigrationStep
 {
     private readonly EmployeeRepository _employeeRepo;
     private readonly string _dataPath;
-    private readonly ILogger? _logger;
+    private readonly ILogger<AvatarMigrationStep>? _logger;
 
     public string MigrationKey => "20260103_AvatarFileCentric";
     public string Description => "Migrates inline Base64 employee avatars to disk files";
     public int Order => 30;
 
-    public AvatarMigrationStep(EmployeeRepository employeeRepo, IConfiguration config, ILogger? logger = null)
+    [ActivatorUtilitiesConstructor]
+    public AvatarMigrationStep(EmployeeRepository employeeRepo, IConfiguration config, ILogger<AvatarMigrationStep>? logger = null)
     {
         _employeeRepo = employeeRepo;
         _dataPath = config["DataPath"] ?? "Data";

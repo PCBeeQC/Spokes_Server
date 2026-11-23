@@ -22,6 +22,7 @@ public class SpokesProxyConfigProviderTests : TestDataTestBase
     {
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var writer = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
         _systemConfigRepo = new SystemConfigRepository(writer, mockConfig.Object);

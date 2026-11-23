@@ -35,12 +35,10 @@ public class ChatChannelRepositoryTests : RepositoryTestFixture<ChatChannelRepos
     }
 
     [Fact]
-    public void ProjectChannels_GetOrCreate_Works()
+    public void ProjectChannels_GetProjectChannel_Works()
     {
-        var channel = _repo.GetOrCreateProjectChannel("proj1", "Project Alpha");
-        Assert.NotNull(channel);
-        Assert.Equal("proj1", channel.LinkedEntityId);
-        Assert.Equal(ChatChannelType.Project, channel.ChannelType);
+        var channel = new ChatChannel { Id = "chan-proj1", Name = "Project Alpha", ChannelType = ChatChannelType.Project, LinkedEntityId = "proj1" };
+        _repo.Save(channel);
 
         var existing = _repo.GetProjectChannel("proj1");
         Assert.NotNull(existing);
@@ -51,12 +49,10 @@ public class ChatChannelRepositoryTests : RepositoryTestFixture<ChatChannelRepos
     }
 
     [Fact]
-    public void TeamChannels_GetOrCreate_Works()
+    public void TeamChannels_GetTeamChannel_Works()
     {
-        var channel = _repo.GetOrCreateTeamChannel("team1", "Sales Team");
-        Assert.NotNull(channel);
-        Assert.Equal("team1", channel.LinkedEntityId);
-        Assert.Equal(ChatChannelType.Team, channel.ChannelType);
+        var channel = new ChatChannel { Id = "chan-team1", Name = "Sales Team", ChannelType = ChatChannelType.Team, LinkedEntityId = "team1", AllowedTeamIds = ["team1"] };
+        _repo.Save(channel);
 
         var existing = _repo.GetTeamChannel("team1");
         Assert.NotNull(existing);
@@ -75,18 +71,6 @@ public class ChatChannelRepositoryTests : RepositoryTestFixture<ChatChannelRepos
         // Deterministic ID check (userA_userB vs userB_userA)
         var channel2 = _repo.GetOrCreateDirectChannel("userB", "userA");
         Assert.Equal(channel.Id, channel2.Id);
-    }
-
-    [Fact]
-    public void GetDirectChannelsForUser_ReturnsCorrectChannels()
-    {
-        _repo.GetOrCreateDirectChannel("user1", "user2");
-        _repo.GetOrCreateDirectChannel("user1", "user3");
-        _repo.GetOrCreateDirectChannel("user2", "user3"); // user1 not in this
-
-        var channels = _repo.GetDirectChannelsForUser("user1");
-        Assert.Equal(2, channels.Count);
-        Assert.All(channels, c => Assert.Contains("user1", c.ParticipantIds));
     }
 
     [Fact]

@@ -34,7 +34,7 @@ public class ChatAuthorizationServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_ChatAuth_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir } };
+        var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
         var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
@@ -68,7 +68,7 @@ public class ChatAuthorizationServiceTests : IDisposable
             TeamId = teamId,
             IsActive = isActive,
             IsSuspended = isSuspended,
-            Permissions = permissions ?? new List<string>()
+            Permissions = permissions ?? [AppPermissions.Chat.Use]
         };
         _employees.Save(emp);
         return emp;
@@ -275,9 +275,9 @@ public class ChatAuthorizationServiceTests : IDisposable
     [Fact]
     public void CanUserAccessChannel_ProjectChannel_PublicOrMember_ReturnsTrue()
     {
-        var member = CreateEmployee("proj_member", permissions: [AppPermissions.Projects.View]);
-        var teamMember = CreateEmployee("proj_team_member", teamId: "arch_team", permissions: [AppPermissions.Projects.View]);
-        var nonMember = CreateEmployee("proj_non_member", permissions: [AppPermissions.Projects.View]);
+        var member = CreateEmployee("proj_member", permissions: [AppPermissions.Projects.View, AppPermissions.Chat.Use]);
+        var teamMember = CreateEmployee("proj_team_member", teamId: "arch_team", permissions: [AppPermissions.Projects.View, AppPermissions.Chat.Use]);
+        var nonMember = CreateEmployee("proj_non_member", permissions: [AppPermissions.Projects.View, AppPermissions.Chat.Use]);
 
         var project = new Project
         {
@@ -328,7 +328,7 @@ public class ChatAuthorizationServiceTests : IDisposable
     [Fact]
     public void CanUserAccessChannel_ProjectChannel_ProjectManager_ReturnsTrue()
     {
-        var pm = CreateEmployee("proj_pm_user", permissions: [AppPermissions.Projects.View]);
+        var pm = CreateEmployee("proj_pm_user", permissions: [AppPermissions.Projects.View, AppPermissions.Chat.Use]);
         var project = new Project
         {
             Id = "proj_pm_id",
@@ -351,8 +351,8 @@ public class ChatAuthorizationServiceTests : IDisposable
     [Fact]
     public void GetUserProjectIds_ConsistentWithPermissionsAndPMAndLedTeams()
     {
-        var pm = CreateEmployee("user_pm", permissions: [AppPermissions.Projects.View]);
-        var teamLeader = CreateEmployee("user_leader", teamId: "unrelated_team", permissions: [AppPermissions.Projects.View]);
+        var pm = CreateEmployee("user_pm", permissions: [AppPermissions.Projects.View, AppPermissions.Chat.Use]);
+        var teamLeader = CreateEmployee("user_leader", teamId: "unrelated_team", permissions: [AppPermissions.Projects.View, AppPermissions.Chat.Use]);
         var ledTeam = new Team { Id = "team_managed", LeaderId = teamLeader.Id };
         _teams.Save(ledTeam);
 
@@ -703,28 +703,18 @@ public class ChatAuthorizationServiceTests : IDisposable
         Assert.Empty(resultNonExistent);
     }
 
-    [Fact]
-    public void Constructor_NullChannels_ThrowsArgumentNullException()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void Constructor_NullDependency_ThrowsArgumentNullException(int nullIndex)
     {
-        Assert.Throws<ArgumentNullException>(() => new ChatAuthorizationService(null!, _projects, _teams, _employees));
-    }
-
-    [Fact]
-    public void Constructor_NullProjects_ThrowsArgumentNullException()
-    {
-        Assert.Throws<ArgumentNullException>(() => new ChatAuthorizationService(_channels, null!, _teams, _employees));
-    }
-
-    [Fact]
-    public void Constructor_NullTeams_ThrowsArgumentNullException()
-    {
-        Assert.Throws<ArgumentNullException>(() => new ChatAuthorizationService(_channels, _projects, null!, _employees));
-    }
-
-    [Fact]
-    public void Constructor_NullEmployees_ThrowsArgumentNullException()
-    {
-        Assert.Throws<ArgumentNullException>(() => new ChatAuthorizationService(_channels, _projects, _teams, null!));
+        Assert.Throws<ArgumentNullException>(() => new ChatAuthorizationService(
+            nullIndex == 0 ? null! : _channels,
+            nullIndex == 1 ? null! : _projects,
+            nullIndex == 2 ? null! : _teams,
+            nullIndex == 3 ? null! : _employees));
     }
 
     #endregion
@@ -980,7 +970,7 @@ public class ChatAuthorizationServiceTests : IDisposable
         var regularMemberWithPublicEdit = CreateEmployee(
             "grp-member-pub-edit",
             isAdmin: false,
-            permissions: [AppPermissions.Chat.EditAllPublicChannels]);
+            permissions: [AppPermissions.Chat.EditAllPublicChannels, AppPermissions.Chat.Use]);
         var participantAdmin = CreateEmployee("grp-admin-member", isAdmin: true);
         var nonParticipantAdmin = CreateEmployee("grp-admin-outsider", isAdmin: true);
 

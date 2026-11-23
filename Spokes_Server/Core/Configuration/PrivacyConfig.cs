@@ -23,7 +23,6 @@ public enum UserDiscoveryMethod
     OpenSearch = 0,
     ExactEmailOnly = 1,
     ExactEmailOrUsername = 2,
-    ExactEmailOrFullName = 2,
     None = 3
 }
 

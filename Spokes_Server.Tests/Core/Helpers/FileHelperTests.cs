@@ -141,20 +141,4 @@ public class FileHelperTests
         var result = FileHelper.GetContentType(fileName, fallback);
         Assert.Equal(expected, result);
     }
-
-    [Theory]
-    [InlineData("photo.jpg", null, MudBlazor.Icons.Material.Filled.Image)]
-    [InlineData("video.mp4", null, MudBlazor.Icons.Material.Filled.Videocam)]
-    [InlineData("audio.mp3", null, MudBlazor.Icons.Material.Filled.AudioFile)]
-    [InlineData("doc.pdf", null, MudBlazor.Icons.Material.Filled.PictureAsPdf)]
-    [InlineData("sheet.xlsx", null, MudBlazor.Icons.Material.Filled.TableChart)]
-    [InlineData("archive.zip", null, MudBlazor.Icons.Material.Filled.FolderZip)]
-    [InlineData("file.bin", "image/webp", MudBlazor.Icons.Material.Filled.Image)]
-    [InlineData("file.bin", "video/webm", MudBlazor.Icons.Material.Filled.Videocam)]
-    [InlineData("other.xyz", null, MudBlazor.Icons.Material.Filled.AttachFile)]
-    public void GetFileIcon_ReturnsExpectedIcon(string fileName, string? contentType, string expectedIcon)
-    {
-        var result = FileHelper.GetFileIcon(fileName, contentType);
-        Assert.Equal(expectedIcon, result);
-    }
 }

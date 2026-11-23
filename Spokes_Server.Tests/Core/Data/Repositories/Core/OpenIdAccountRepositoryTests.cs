@@ -40,24 +40,6 @@ public class OpenIdAccountRepositoryTests : RepositoryTestFixture<OpenIdAccountR
     }
 
     [Fact]
-    public void GetUnlinked_ReturnsOnlyAccountsWithoutLinkedEmployeeId()
-    {
-        var acc1 = new OpenIdAccount { Id = "unlinked1", Sub = "sub-u1", LinkedEmployeeId = string.Empty };
-        var acc2 = new OpenIdAccount { Id = "unlinked2", Sub = "sub-u2", LinkedEmployeeId = null! };
-        var acc3 = new OpenIdAccount { Id = "linked", Sub = "sub-l1", LinkedEmployeeId = "emp1" };
-
-        _repo.Save(acc1);
-        _repo.Save(acc2);
-        _repo.Save(acc3);
-
-        var unlinked = _repo.GetUnlinked();
-        Assert.Equal(2, unlinked.Count);
-        Assert.Contains(unlinked, a => a.Id == "unlinked1");
-        Assert.Contains(unlinked, a => a.Id == "unlinked2");
-        Assert.DoesNotContain(unlinked, a => a.Id == "linked");
-    }
-
-    [Fact]
     public void GetFilePath_SavesInOpenIdAccountsFolder()
     {
         var acc = new OpenIdAccount { Id = "acc-disk", Sub = "sub-disk" };

@@ -105,11 +105,7 @@ public class ChatMessageCacheService
 
                 if (cache.TryRemove(id, out _))
                 {
-                    if (_messageSizes.TryRemove(id, out var size))
-                    {
-                        Interlocked.Add(ref _totalCacheSizeBytes, -size);
-                    }
-                    _messageAccessTimes.TryRemove(id, out _);
+                    Remove(id);
                 }
             }
         }

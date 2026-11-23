@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using MimeKit;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Services.Communication.Notifications.Routing;
 using Spokes_Server.Core.Services.Security;
@@ -42,7 +43,6 @@ public class EmailSyncService : IEmailSyncService
     private readonly CompanyProfileRepository _companyProfile;
     private readonly EmailFolderRepository _emailFolders;
     private readonly EmailMessageRepository _emailMessages;
-    private readonly EncryptionService _encryptionService;
     private readonly EmailSyncStateService _syncStateService;
     private readonly INotificationRoutingService _notificationRouting;
     private readonly IEmailDraftService _draftService;
@@ -69,7 +69,6 @@ public class EmailSyncService : IEmailSyncService
         _companyProfile = companyProfile;
         _emailFolders = emailFolders;
         _emailMessages = emailMessages;
-        _encryptionService = encryptionService;
         _syncStateService = syncStateService;
         _notificationRouting = notificationRouting;
         _draftService = draftService;
@@ -78,7 +77,76 @@ public class EmailSyncService : IEmailSyncService
         _imapFactory = imapFactory ?? new ImapConnectionFactory(companyProfile, encryptionService, accounts);
     }
 
-    public async Task SyncAccountAsync(string accountId, CancellationToken cancellationToken = default)
+    public Task SyncAccountAsync(string accountId, CancellationToken cancellationToken = default) =>
+        ExecuteWithAccountSyncLockAsync(
+            accountId,
+            "SyncAccountAsync",
+            "Starting Sync...",
+            "Connecting to Server...",
+            useDetailedConnectionFailure: true,
+            "Error connecting",
+            $"Email sync failed for account {accountId}",
+            beforeConnectAsync: async (acc, ct) => await _draftService.RepairLocalDraftsAsync(acc.Id, ct),
+            syncAction: async (acc, client, isInitialSync, ct) =>
+            {
+                _syncStateService.SetState(acc.Id, "Fetching Folders...");
+                var personalNamespaces = client.PersonalNamespaces;
+                var folders = await client.GetFoldersAsync(personalNamespaces[0], false, ct);
+
+                foreach (var folder in folders)
+                {
+                    try
+                    {
+                        _syncStateService.SetState(acc.Id, $"Syncing Folder: {folder.Name}...");
+                        await SyncFolderAsync(folder, acc, isInitialSync, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "Failed to sync folder {FolderPath} for account {AccountId}", folder.FullName, acc.Id);
+                    }
+                }
+
+                acc.LastSyncedAt = DateTime.UtcNow;
+                _accounts.Save(acc);
+            },
+            cancellationToken);
+
+    public Task SyncSingleFolderAsync(string accountId, string folderPath, CancellationToken cancellationToken = default) =>
+        ExecuteWithAccountSyncLockAsync(
+            accountId,
+            $"SyncSingleFolderAsync (folder {folderPath})",
+            initialState: null,
+            $"Connecting to sync {folderPath}...",
+            useDetailedConnectionFailure: false,
+            "Error syncing folder",
+            $"Single Folder Sync Failed for {folderPath}",
+            beforeConnectAsync: null,
+            syncAction: async (acc, client, isInitialSync, ct) =>
+            {
+                var folder = await client.GetFolderAsync(folderPath, ct);
+                _syncStateService.SetState(acc.Id, $"Syncing Folder: {folder.Name}...");
+                await SyncFolderAsync(folder, acc, isInitialSync, ct);
+
+                if (!acc.LastSyncedAt.HasValue &&
+                    (folder.Attributes.HasFlag(FolderAttributes.Inbox) || folder.Name.Equals("Inbox", StringComparison.OrdinalIgnoreCase)))
+                {
+                    acc.LastSyncedAt = DateTime.UtcNow;
+                    _accounts.Save(acc);
+                }
+            },
+            cancellationToken);
+
+    private async Task ExecuteWithAccountSyncLockAsync(
+        string accountId,
+        string lockOperationName,
+        string? initialState,
+        string connectingState,
+        bool useDetailedConnectionFailure,
+        string errorStatePrefix,
+        string errorLogContext,
+        Func<EmailAccount, CancellationToken, Task>? beforeConnectAsync,
+        Func<EmailAccount, ImapClient, bool, CancellationToken, Task> syncAction,
+        CancellationToken cancellationToken)
     {
         if (string.Equals(_companyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
             return;
@@ -89,7 +157,7 @@ public class EmailSyncService : IEmailSyncService
         var syncLock = _accountSyncLocks.GetOrAdd(accountId, _ => new SemaphoreSlim(1, 1));
         if (!await syncLock.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken))
         {
-            _logger?.LogWarning("SyncAccountAsync skipped for account {AccountId} due to lock timeout", accountId);
+            _logger?.LogWarning("{Operation} skipped for account {AccountId} due to lock timeout", lockOperationName, accountId);
             return;
         }
 
@@ -97,13 +165,19 @@ public class EmailSyncService : IEmailSyncService
         {
             bool isInitialAccountSync = !account.LastSyncedAt.HasValue;
 
-            _syncStateService.SetState(accountId, "Starting Sync...");
+            if (initialState != null)
+            {
+                _syncStateService.SetState(accountId, initialState);
+            }
 
-            await _draftService.RepairLocalDraftsAsync(accountId, cancellationToken);
+            if (beforeConnectAsync != null)
+            {
+                await beforeConnectAsync(account, cancellationToken);
+            }
 
             try
             {
-                _syncStateService.SetState(accountId, "Connecting to Server...");
+                _syncStateService.SetState(accountId, connectingState);
 
                 using var connectionResult = await _imapFactory.ConnectAsync(account, cancellationToken);
                 if (!connectionResult.IsSuccess)
@@ -113,41 +187,24 @@ public class EmailSyncService : IEmailSyncService
                         ImapConnectionStatus.MissingCredentials => "Missing Credentials",
                         ImapConnectionStatus.DecryptionError => "Decryption Error",
                         ImapConnectionStatus.ServerNotConfigured => "Server Not Configured",
-                        _ => $"Connection Failed: {connectionResult.ErrorMessage}"
+                        _ => useDetailedConnectionFailure
+                            ? $"Connection Failed: {connectionResult.ErrorMessage}"
+                            : "Server Not Configured"
                     };
                     _syncStateService.SetState(accountId, state);
                     return;
                 }
 
                 var client = connectionResult.Client!;
-
-                _syncStateService.SetState(accountId, "Fetching Folders...");
-                var personalNamespaces = client.PersonalNamespaces;
-                var folders = await client.GetFoldersAsync(personalNamespaces[0], false, cancellationToken);
-
-                foreach (var folder in folders)
-                {
-                    try
-                    {
-                        _syncStateService.SetState(accountId, $"Syncing Folder: {folder.Name}...");
-                        await SyncFolderAsync(client, folder, account, isInitialAccountSync, cancellationToken);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogWarning(ex, "Failed to sync folder {FolderPath} for account {AccountId}", folder.FullName, account.Id);
-                    }
-                }
-
-                account.LastSyncedAt = DateTime.UtcNow;
-                _accounts.Save(account);
+                await syncAction(account, client, isInitialAccountSync, cancellationToken);
 
                 await client.DisconnectAsync(true, cancellationToken);
                 _syncStateService.SetState(accountId, "Idle");
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "Email sync failed for account {Email}", account.EmailAddress);
-                _syncStateService.SetState(accountId, $"Error connecting: {ex.Message}");
+                _logger?.LogError(ex, "{ErrorContext} ({Email})", errorLogContext, account.EmailAddress);
+                _syncStateService.SetState(accountId, $"{errorStatePrefix}: {ex.Message}");
             }
         }
         finally
@@ -156,75 +213,17 @@ public class EmailSyncService : IEmailSyncService
         }
     }
 
-    public async Task SyncSingleFolderAsync(string accountId, string folderPath, CancellationToken cancellationToken = default)
-    {
-        if (string.Equals(_companyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
-            return;
-
-        var account = _accounts.GetById(accountId);
-        if (account == null) return;
-
-        var syncLock = _accountSyncLocks.GetOrAdd(accountId, _ => new SemaphoreSlim(1, 1));
-        if (!await syncLock.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken))
-        {
-            _logger?.LogWarning("SyncSingleFolderAsync skipped for account {AccountId} folder {FolderPath} due to lock timeout", accountId, folderPath);
-            return;
-        }
-
-        try
-        {
-            bool isInitialAccountSync = !account.LastSyncedAt.HasValue;
-
-            try
-            {
-                _syncStateService.SetState(accountId, $"Connecting to sync {folderPath}...");
-
-                using var connectionResult = await _imapFactory.ConnectAsync(account, cancellationToken);
-                if (!connectionResult.IsSuccess)
-                {
-                    var state = connectionResult.Status switch
-                    {
-                        ImapConnectionStatus.MissingCredentials => "Missing Credentials",
-                        ImapConnectionStatus.DecryptionError => "Decryption Error",
-                        _ => "Server Not Configured"
-                    };
-                    _syncStateService.SetState(accountId, state);
-                    return;
-                }
-
-                var client = connectionResult.Client!;
-                var folder = await client.GetFolderAsync(folderPath, cancellationToken);
-                _syncStateService.SetState(accountId, $"Syncing Folder: {folder.Name}...");
-                await SyncFolderAsync(client, folder, account, isInitialAccountSync, cancellationToken);
-
-                if (!account.LastSyncedAt.HasValue &&
-                    (folder.Attributes.HasFlag(FolderAttributes.Inbox) || folder.Name.Equals("Inbox", StringComparison.OrdinalIgnoreCase)))
-                {
-                    account.LastSyncedAt = DateTime.UtcNow;
-                    _accounts.Save(account);
-                }
-
-                await client.DisconnectAsync(true, cancellationToken);
-                _syncStateService.SetState(accountId, "Idle");
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Single Folder Sync Failed for {FolderPath}", folderPath);
-                _syncStateService.SetState(accountId, $"Error syncing folder: {ex.Message}");
-            }
-        }
-        finally
-        {
-            syncLock.Release();
-        }
-    }
-
-    internal async Task SyncFolderAsync(ImapClient? client, IMailFolder imapFolder, EmailAccount account, bool isInitialAccountSync, CancellationToken cancellationToken = default)
+    internal async Task SyncFolderAsync(IMailFolder imapFolder, EmailAccount account, bool isInitialAccountSync, CancellationToken cancellationToken = default)
     {
         var accountId = account.Id;
         var existingFolders = _emailFolders.GetByAccount(accountId);
         var localFolder = existingFolders.FirstOrDefault(f => f.Path == imapFolder.FullName);
         bool hadExistingLocalFolder = localFolder != null;
+
+        var parentPath = EmailFolderService.GetParentPath(imapFolder);
+        bool isRootInbox = string.IsNullOrEmpty(parentPath) &&
+                           (imapFolder.Attributes.HasFlag(FolderAttributes.Inbox) ||
+                            imapFolder.FullName.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
 
         if (localFolder == null)
         {
@@ -233,28 +232,27 @@ public class EmailSyncService : IEmailSyncService
                 AccountId = accountId,
                 Name = imapFolder.Name,
                 Path = imapFolder.FullName,
-                ParentPath = GetParentPath(imapFolder),
+                ParentPath = parentPath,
                 Delimiter = imapFolder.DirectorySeparator.ToString(),
                 IsSelectable = !imapFolder.Attributes.HasFlag(FolderAttributes.NoSelect),
-                IsInbox = imapFolder.Attributes.HasFlag(FolderAttributes.Inbox),
+                IsInbox = isRootInbox,
                 IsSent = imapFolder.Attributes.HasFlag(FolderAttributes.Sent),
                 IsTrash = imapFolder.Attributes.HasFlag(FolderAttributes.Trash),
                 IsDrafts = imapFolder.Attributes.HasFlag(FolderAttributes.Drafts),
                 IsArchive = imapFolder.Attributes.HasFlag(FolderAttributes.Archive),
                 IsJunk = imapFolder.Attributes.HasFlag(FolderAttributes.Junk)
             };
-            if (imapFolder.Name.Equals("Inbox", StringComparison.OrdinalIgnoreCase)) localFolder.IsInbox = true;
 
             _emailFolders.Save(localFolder);
         }
         else
         {
             bool modified = false;
-            var parentPath = GetParentPath(imapFolder);
             if (localFolder.ParentPath != parentPath) { localFolder.ParentPath = parentPath; modified = true; }
             if (localFolder.Delimiter != imapFolder.DirectorySeparator.ToString()) { localFolder.Delimiter = imapFolder.DirectorySeparator.ToString(); modified = true; }
             bool isSelectable = !imapFolder.Attributes.HasFlag(FolderAttributes.NoSelect);
             if (localFolder.IsSelectable != isSelectable) { localFolder.IsSelectable = isSelectable; modified = true; }
+            if (localFolder.IsInbox != isRootInbox) { localFolder.IsInbox = isRootInbox; modified = true; }
             if (modified) _emailFolders.Save(localFolder);
         }
 
@@ -278,26 +276,9 @@ public class EmailSyncService : IEmailSyncService
         foreach (var missingUid in missingUids)
         {
             var localId = _emailMessages.GetIdByUid(accountId, localFolder.Path, missingUid);
-            if (localId != null)
+            if (localId != null && await HandleRemovedServerMessageAsync(accountId, localId, localFolder, requireNonLocalOnly: true))
             {
-                var msg = _emailMessages.GetByIdOrLoad(accountId, localId);
-                if (msg != null && !msg.IsLocalOnly)
-                {
-                    var otherCopies = _emailMessages.GetAllByGlobalMessageId(accountId, msg.GlobalMessageId)
-                        .Where(m => m.Id != msg.Id && m.FolderPath != localFolder.Path).ToList();
-
-                    if (otherCopies.Any())
-                    {
-                        await _cacheMaintenance.DeleteLocalMessageFilesAsync(accountId, localId);
-                        _emailMessages.Delete(accountId, localId);
-                        flagsOrDeletionsChanged = true;
-                    }
-                    else if (!localFolder.IsTrash)
-                    {
-                        MoveMessageToLocalTrash(accountId, msg);
-                        flagsOrDeletionsChanged = true;
-                    }
-                }
+                flagsOrDeletionsChanged = true;
             }
         }
 
@@ -311,26 +292,9 @@ public class EmailSyncService : IEmailSyncService
                 if (_emailMessages.Exists(accountId, localFolder.Path, uid))
                 {
                     var localId = _emailMessages.GetIdByUid(accountId, localFolder.Path, uid);
-                    if (localId != null)
+                    if (localId != null && await HandleRemovedServerMessageAsync(accountId, localId, localFolder, requireNonLocalOnly: false))
                     {
-                        var msg = _emailMessages.GetByIdOrLoad(accountId, localId);
-                        if (msg != null)
-                        {
-                            var otherCopies = _emailMessages.GetAllByGlobalMessageId(accountId, msg.GlobalMessageId)
-                                .Where(m => m.Id != msg.Id && m.FolderPath != localFolder.Path).ToList();
-
-                            if (otherCopies.Any())
-                            {
-                                await _cacheMaintenance.DeleteLocalMessageFilesAsync(accountId, localId);
-                                _emailMessages.Delete(accountId, localId);
-                                flagsOrDeletionsChanged = true;
-                            }
-                            else if (!localFolder.IsTrash)
-                            {
-                                MoveMessageToLocalTrash(accountId, msg);
-                                flagsOrDeletionsChanged = true;
-                            }
-                        }
+                        flagsOrDeletionsChanged = true;
                     }
                 }
                 continue;
@@ -514,7 +478,7 @@ public class EmailSyncService : IEmailSyncService
             var existingId = _emailMessages.GetIdByUid(accountId, folder.Path, uid.Id);
             if (existingId != null)
             {
-                var existing = _emailMessages.GetByIdOrLoad(accountId, existingId);
+                var existing = _emailMessages.GetById(accountId, existingId);
                 if (existing != null) return existing;
             }
             return null;
@@ -656,26 +620,31 @@ public class EmailSyncService : IEmailSyncService
         _emailFolders.Save(trashFolder);
     }
 
-    private string GetParentPath(IMailFolder folder)
+    private async Task<bool> HandleRemovedServerMessageAsync(string accountId, string localId, EmailFolder localFolder, bool requireNonLocalOnly)
     {
-        if (string.IsNullOrEmpty(folder.FullName)) return string.Empty;
-        var sep = folder.DirectorySeparator.ToString();
-        var lastIdx = folder.FullName.LastIndexOf(sep, StringComparison.Ordinal);
-        return lastIdx > 0 ? folder.FullName[..lastIdx] : string.Empty;
+        var msg = _emailMessages.GetById(accountId, localId);
+        if (msg == null || (requireNonLocalOnly && msg.IsLocalOnly))
+            return false;
+
+        var otherCopies = _emailMessages.GetAllByGlobalMessageId(accountId, msg.GlobalMessageId)
+            .Where(m => m.Id != msg.Id && m.FolderPath != localFolder.Path).ToList();
+
+        if (otherCopies.Any())
+        {
+            await _cacheMaintenance.DeleteLocalMessageFilesAsync(accountId, localId);
+            _emailMessages.Delete(accountId, localId);
+            return true;
+        }
+
+        if (!localFolder.IsTrash)
+        {
+            MoveMessageToLocalTrash(accountId, msg);
+            return true;
+        }
+
+        return false;
     }
 
-    internal Task SafeDispatchNotificationAsync(Func<Task> routeAction, string operation)
-    {
-        return Task.Run(async () =>
-        {
-            try
-            {
-                await routeAction();
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Failed to dispatch {Operation} in background", operation);
-            }
-        });
-    }
+    internal Task SafeDispatchNotificationAsync(Func<Task> routeAction, string operation) =>
+        NotificationDispatchHelper.SafeDispatchAsync(routeAction, operation, _logger);
 }

@@ -1,13 +1,15 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Helpers;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Core.Services.Storage;
@@ -15,16 +17,19 @@ namespace Spokes_Server.Core.Services.Storage;
 public interface IFileService
 {
     Task<string> UploadStreamAsync(string category, string contextId, Stream stream, string fileName, string? encryptionKey = null, string? predefinedSafeName = null);
-    Task<string> UploadThumbnailAsync(string category, string contextId, Stream thumbStream, string baseFileName, string? encryptionKey = null);
+    Task<string> UploadThumbnailAsync(string category, string contextId, Stream thumbStream, string baseFileName, string? encryptionKey = null, bool small = false);
     string GenerateSafeName(string originalFileName);
     Task<bool> DeleteAsync(string? fileIdentifier);
     Task<int> DeleteAssociatedFilesAsync(object? target);
     Task<int> DeleteDeltaFilesAsync(IHasAssociatedFiles? original, IHasAssociatedFiles? updated);
     Task<bool> DeleteFileAsync(string category, string contextId, string fileName);
+    Task<string?> CloneFileAsync(string? sourceFileIdentifier, string destinationCategory, string destinationContextId, Employee? actor = null, bool allowSystemMigration = false);
+    bool TryResolveScopedFileName(string? fileIdentifier, string expectedCategory, string expectedContextId, out string safeName);
     string GetPhysicalPath(string category, string contextId, string fileName);
     bool FileExists(string category, string contextId, string fileName);
     Stream? OpenRead(string category, string contextId, string fileName, string? encryptionKey = null);
     Stream OpenDecryptedStream(string physicalPath, string encryptionKey);
+    Stream OpenDecryptedStream(byte[] encryptedBytes, string encryptionKey);
     string GetContentType(string fileName);
     void CleanTempContext(string contextId);
     void PurgeStaleTempFiles(TimeSpan? maxAge = null);
@@ -41,26 +46,35 @@ public class FileService : IFileService
     private readonly IConfiguration _configuration;
     private readonly ILogger<FileService> _logger;
     private readonly ICryptoService _crypto;
+    private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly ThumbnailCacheService? _thumbnailCache;
     private readonly string _baseDataPath;
     private readonly string _basePath;
-    private static readonly FileExtensionContentTypeProvider _contentTypeProvider = new();
 
-    public FileService(IConfiguration configuration, ILogger<FileService> logger, ICryptoService crypto)
+    public FileService(
+        IConfiguration configuration,
+        ILogger<FileService> logger,
+        ICryptoService crypto,
+        IServiceScopeFactory? scopeFactory = null,
+        ThumbnailCacheService? thumbnailCache = null)
     {
         _configuration = configuration;
         _logger = logger;
         _crypto = crypto;
+        _scopeFactory = scopeFactory;
+        _thumbnailCache = thumbnailCache;
 
         _baseDataPath = _configuration["DataPath"] ?? "Data";
         _basePath = Path.Combine(_baseDataPath, "Uploads");
     }
 
 
-    public static string GetThumbnailFileName(string baseFileName) => $"{baseFileName}_thumb.jpg";
+    public static string GetThumbnailFileName(string baseFileName, bool small = false) =>
+        small ? $"{baseFileName}_thumb_sm.jpg" : $"{baseFileName}_thumb.jpg";
 
-    public async Task<string> UploadThumbnailAsync(string category, string contextId, Stream thumbStream, string baseFileName, string? encryptionKey = null)
+    public async Task<string> UploadThumbnailAsync(string category, string contextId, Stream thumbStream, string baseFileName, string? encryptionKey = null, bool small = false)
     {
-        var thumbFileName = GetThumbnailFileName(baseFileName);
+        var thumbFileName = GetThumbnailFileName(baseFileName, small);
         return await UploadStreamAsync(category, contextId, thumbStream, thumbFileName, encryptionKey, predefinedSafeName: thumbFileName);
     }
 
@@ -90,15 +104,41 @@ public class FileService : IFileService
 
             var fullPath = Path.Combine(folder, safeName);
 
-            using var fileStream = new FileStream(fullPath, FileMode.Create);
-
-            if (!string.IsNullOrEmpty(encryptionKey))
+            if (_thumbnailCache != null && ThumbnailCacheService.IsThumbnailFileName(safeName))
             {
-                await _crypto.EncryptStreamAsync(stream, fileStream, encryptionKey);
+                using var diskBuffer = new MemoryStream();
+                if (!string.IsNullOrEmpty(encryptionKey))
+                {
+                    await _crypto.EncryptStreamAsync(stream, diskBuffer, encryptionKey);
+                }
+                else
+                {
+                    await stream.CopyToAsync(diskBuffer);
+                }
+
+                var rawDiskBytes = diskBuffer.ToArray();
+                await using (var fileStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 65536, useAsync: true))
+                {
+                    await fileStream.WriteAsync(rawDiskBytes);
+                }
+
+                _thumbnailCache.Set(fullPath, rawDiskBytes, DateTimeOffset.UtcNow, GetContentType(safeName));
             }
             else
             {
-                await stream.CopyToAsync(fileStream);
+                await using (var fileStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 65536, useAsync: true))
+                {
+                    if (!string.IsNullOrEmpty(encryptionKey))
+                    {
+                        await _crypto.EncryptStreamAsync(stream, fileStream, encryptionKey);
+                    }
+                    else
+                    {
+                        await stream.CopyToAsync(fileStream);
+                    }
+                }
+
+                _thumbnailCache?.Invalidate(fullPath);
             }
 
             _logger.LogInformation("File uploaded to {Path}", fullPath);
@@ -134,7 +174,7 @@ public class FileService : IFileService
                 var category = parts[0];
                 var contextId = parts[1];
                 var fileName = parts[2];
-                return await DeleteFileAsync(category, contextId, fileName);
+                return await DeleteFileAsync(category, contextId, fileName).ConfigureAwait(false);
             }
         }
 
@@ -147,7 +187,7 @@ public class FileService : IFileService
                 var category = parts[0];
                 var contextId = parts[1];
                 var fileName = parts[2];
-                return await DeleteFileAsync(category, contextId, fileName);
+                return await DeleteFileAsync(category, contextId, fileName).ConfigureAwait(false);
             }
         }
 
@@ -191,7 +231,7 @@ public class FileService : IFileService
         {
             Path.GetFullPath(_basePath) + Path.DirectorySeparatorChar,
             Path.GetFullPath(Path.Combine(_baseDataPath, "Attachments")) + Path.DirectorySeparatorChar,
-            Path.GetFullPath(Path.Combine(_baseDataPath, "EmailAccounts")) + Path.DirectorySeparatorChar
+            Path.GetFullPath(Path.Combine(_baseDataPath, "PDFs")) + Path.DirectorySeparatorChar
         };
 
         if (!allowedRoots.Any(root => physicalPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)))
@@ -204,44 +244,9 @@ public class FileService : IFileService
 
         try
         {
-            await Task.Run(() => File.Delete(physicalPath));
+            await Task.Run(() => File.Delete(physicalPath)).ConfigureAwait(false);
             _logger.LogInformation("File deleted: {Path}", physicalPath);
-
-            // Clean companion thumbnail if it exists
-            var dir = Path.GetDirectoryName(physicalPath);
-            var fileName = Path.GetFileName(physicalPath);
-            var fileNameNoExt = Path.GetFileNameWithoutExtension(physicalPath);
-            if (!string.IsNullOrEmpty(dir) &&
-                !fileName.EndsWith("_thumb.jpg", StringComparison.OrdinalIgnoreCase) &&
-                !fileNameNoExt.EndsWith("_thumb", StringComparison.OrdinalIgnoreCase))
-            {
-                var thumbPath = Path.Combine(dir, GetThumbnailFileName(fileName));
-                if (File.Exists(thumbPath))
-                {
-                    try { File.Delete(thumbPath); } catch { /* Ignore thumbnail delete error */ }
-                }
-
-                var legacyThumbPath = Path.Combine(dir, $"{fileNameNoExt}_thumb.jpg");
-                if (File.Exists(legacyThumbPath))
-                {
-                    try { File.Delete(legacyThumbPath); } catch { /* Ignore thumbnail delete error */ }
-                }
-            }
-
-            // Prune context directory if empty and within _basePath
-            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
-            {
-                var fullDirPath = Path.GetFullPath(dir);
-                var fullBasePath = Path.GetFullPath(_basePath);
-                if (fullDirPath.StartsWith(fullBasePath, StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(fullDirPath, fullBasePath, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!Directory.EnumerateFileSystemEntries(fullDirPath).Any())
-                    {
-                        try { Directory.Delete(fullDirPath); } catch { /* Ignore */ }
-                    }
-                }
-            }
+            CleanupCompanionThumbnailsAndEmptyDir(physicalPath);
 
             return true;
         }
@@ -258,7 +263,7 @@ public class FileService : IFileService
 
         if (target is string path)
         {
-            return await DeleteAsync(path) ? 1 : 0;
+            return await DeleteAsync(path).ConfigureAwait(false) ? 1 : 0;
         }
 
         if (target is IHasAssociatedFiles entity)
@@ -269,7 +274,7 @@ public class FileService : IFileService
             {
                 foreach (var p in paths)
                 {
-                    if (await DeleteAsync(p)) count++;
+                    if (await DeleteAsync(p).ConfigureAwait(false)) count++;
                 }
             }
             return count;
@@ -280,7 +285,7 @@ public class FileService : IFileService
             int total = 0;
             foreach (var item in enumerable)
             {
-                total += await DeleteAssociatedFilesAsync(item);
+                total += await DeleteAssociatedFilesAsync(item).ConfigureAwait(false);
             }
             return total;
         }
@@ -305,9 +310,152 @@ public class FileService : IFileService
         int count = 0;
         foreach (var p in removedPaths)
         {
-            if (await DeleteAsync(p)) count++;
+            if (await DeleteAsync(p).ConfigureAwait(false)) count++;
         }
         return count;
+    }
+
+    public async Task<string?> CloneFileAsync(
+        string? sourceFileIdentifier,
+        string destinationCategory,
+        string destinationContextId,
+        Employee? actor = null,
+        bool allowSystemMigration = false)
+    {
+        if (string.IsNullOrWhiteSpace(sourceFileIdentifier) ||
+            string.IsNullOrWhiteSpace(destinationCategory) ||
+            string.IsNullOrWhiteSpace(destinationContextId))
+        {
+            return null;
+        }
+
+        ValidatePathSegment(destinationCategory, nameof(destinationCategory));
+        ValidatePathSegment(destinationContextId, nameof(destinationContextId));
+
+        var clean = sourceFileIdentifier.Split('?', '#')[0].Trim();
+        const string prefix = "/spokesapi/files/";
+        if (!clean.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var parts = clean[prefix.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 3 ||
+            !IsValidPathSegment(parts[0]) ||
+            !IsValidPathSegment(parts[1]) ||
+            !IsValidPathSegment(parts[2]))
+        {
+            return null;
+        }
+
+        var srcCat = parts[0];
+        var srcCtx = parts[1];
+        var srcFile = parts[2];
+
+        // Fail closed unless authorized for a live unsuspended actor or explicit system migration.
+        if (!allowSystemMigration && (actor == null || !actor.IsActiveUnsuspended || _scopeFactory == null))
+        {
+            _logger.LogWarning(
+                "Rejected unauthorized or unattributed CloneFileAsync call from {SrcCat}/{SrcCtx} to {DstCat}/{DstCtx}.",
+                srcCat,
+                srcCtx,
+                destinationCategory,
+                destinationContextId);
+            return null;
+        }
+
+        if (srcCat.Equals("temp", StringComparison.OrdinalIgnoreCase) && !allowSystemMigration)
+        {
+            _logger.LogWarning("Rejected CloneFileAsync from temp storage for {SrcCtx}/{SrcFile}.", srcCtx, srcFile);
+            return null;
+        }
+
+        string? srcEncryptionKey = null;
+        string? dstEncryptionKey = null;
+
+        if (!allowSystemMigration)
+        {
+            using var scope = _scopeFactory!.CreateScope();
+            var authService = scope.ServiceProvider.GetService<IFileAuthorizationService>();
+            if (authService == null ||
+                !authService.CanAccess(srcCat, srcCtx, actor!) ||
+                !authService.CanUpload(destinationCategory, destinationContextId, actor!))
+            {
+                _logger.LogWarning(
+                    "Rejected CloneFileAsync: actor {ActorId} lacks authorization for {SrcCat}/{SrcCtx} -> {DstCat}/{DstCtx}.",
+                    actor!.Id,
+                    srcCat,
+                    srcCtx,
+                    destinationCategory,
+                    destinationContextId);
+                return null;
+            }
+
+            var srcKeyRes = authService.ResolveDownloadKey(srcCat, srcCtx, actor!, tokenEncryptionKey: null, httpContext: null, fileName: srcFile);
+            if (srcKeyRes.IsEncrypted)
+            {
+                if (string.IsNullOrEmpty(srcKeyRes.EncryptionKey))
+                {
+                    _logger.LogWarning("Rejected CloneFileAsync: source encryption key unavailable for {SrcCat}/{SrcCtx}.", srcCat, srcCtx);
+                    return null;
+                }
+                srcEncryptionKey = srcKeyRes.EncryptionKey;
+            }
+
+            var dstKeyRes = authService.ResolveUploadKey(new FileUploadKeyRequest(destinationCategory, destinationContextId, actor!));
+            if (dstKeyRes.IsEncrypted)
+            {
+                if (string.IsNullOrEmpty(dstKeyRes.EncryptionKey))
+                {
+                    _logger.LogWarning("Rejected CloneFileAsync: destination encryption key unavailable for {DstCat}/{DstCtx}.", destinationCategory, destinationContextId);
+                    return null;
+                }
+                dstEncryptionKey = dstKeyRes.EncryptionKey;
+            }
+        }
+
+        await using var stream = OpenRead(srcCat, srcCtx, srcFile, srcEncryptionKey);
+        if (stream == null)
+        {
+            return null;
+        }
+
+        return await UploadStreamAsync(destinationCategory, destinationContextId, stream, srcFile, dstEncryptionKey);
+    }
+
+    public bool TryResolveScopedFileName(string? fileIdentifier, string expectedCategory, string expectedContextId, out string safeName)
+    {
+        safeName = string.Empty;
+        if (string.IsNullOrWhiteSpace(fileIdentifier) ||
+            !IsValidPathSegment(expectedCategory) ||
+            !IsValidPathSegment(expectedContextId))
+        {
+            return false;
+        }
+
+        var clean = fileIdentifier.Split('?', '#')[0].Trim();
+        const string prefix = "/spokesapi/files/";
+        if (!clean.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var parts = clean[prefix.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 3 ||
+            !parts[0].Equals(expectedCategory, StringComparison.OrdinalIgnoreCase) ||
+            !parts[1].Equals(expectedContextId, StringComparison.OrdinalIgnoreCase) ||
+            !IsValidPathSegment(parts[2]))
+        {
+            return false;
+        }
+
+        if (!FileExists(expectedCategory, expectedContextId, parts[2]))
+        {
+            return false;
+        }
+
+        safeName = parts[2];
+        return true;
     }
 
     public async Task<bool> DeleteFileAsync(string category, string contextId, string fileName)
@@ -325,33 +473,9 @@ public class FileService : IFileService
 
         try
         {
-            await Task.Run(() => File.Delete(path));
+            await Task.Run(() => File.Delete(path)).ConfigureAwait(false);
             _logger.LogInformation("File deleted: {Path}", path);
-
-            // Also delete companion thumbnail if present
-            var fileNameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-            if (!fileName.EndsWith("_thumb.jpg", StringComparison.OrdinalIgnoreCase) &&
-                !fileNameWithoutExt.EndsWith("_thumb", StringComparison.OrdinalIgnoreCase))
-            {
-                var thumbPath = GetPhysicalPath(category, contextId, GetThumbnailFileName(fileName));
-                if (File.Exists(thumbPath))
-                {
-                    try { File.Delete(thumbPath); } catch { }
-                }
-
-                var legacyThumbPath = GetPhysicalPath(category, contextId, $"{fileNameWithoutExt}_thumb.jpg");
-                if (File.Exists(legacyThumbPath))
-                {
-                    try { File.Delete(legacyThumbPath); } catch { }
-                }
-            }
-
-            // Prune parent context folder if empty
-            var folder = Path.Combine(_basePath, category, contextId);
-            if (Directory.Exists(folder) && !Directory.EnumerateFileSystemEntries(folder).Any())
-            {
-                try { Directory.Delete(folder); } catch { }
-            }
+            CleanupCompanionThumbnailsAndEmptyDir(path);
 
             return true;
         }
@@ -364,12 +488,14 @@ public class FileService : IFileService
 
     public string GetPhysicalPath(string category, string contextId, string fileName)
     {
-        // Sanitize inputs
-        category = Path.GetFileName(category);
-        contextId = Path.GetFileName(contextId);
-        fileName = Path.GetFileName(fileName);
+        ValidatePathSegment(category, nameof(category));
+        ValidatePathSegment(contextId, nameof(contextId));
+        if (!string.IsNullOrEmpty(fileName))
+        {
+            ValidatePathSegment(fileName, nameof(fileName));
+        }
 
-        return Path.Combine(_basePath, category, contextId, fileName);
+        return Path.Combine(_basePath, category, contextId, fileName ?? string.Empty);
     }
 
     public bool FileExists(string category, string contextId, string fileName)
@@ -398,6 +524,24 @@ public class FileService : IFileService
         catch
         {
             fileStream.Dispose();
+            throw;
+        }
+    }
+
+    public Stream OpenDecryptedStream(byte[] encryptedBytes, string encryptionKey)
+    {
+        ArgumentNullException.ThrowIfNull(encryptedBytes);
+        ArgumentException.ThrowIfNullOrWhiteSpace(encryptionKey);
+
+        var memoryStream = new MemoryStream(encryptedBytes, writable: false);
+        try
+        {
+            var keyBytes = Convert.FromBase64String(encryptionKey);
+            return new SeekableAesStream(memoryStream, keyBytes);
+        }
+        catch
+        {
+            memoryStream.Dispose();
             throw;
         }
     }
@@ -488,15 +632,21 @@ public class FileService : IFileService
         }
     }
 
-    public async Task EncryptFileAsync(string physicalPath, string encryptionKey, CancellationToken cancellationToken = default)
+    public Task EncryptFileAsync(string physicalPath, string encryptionKey, CancellationToken cancellationToken = default) =>
+        TransformFileAsync(physicalPath, encryptionKey, encrypt: true, cancellationToken);
+
+    public Task DecryptFileAsync(string physicalPath, string encryptionKey, CancellationToken cancellationToken = default) =>
+        TransformFileAsync(physicalPath, encryptionKey, encrypt: false, cancellationToken);
+
+    private async Task TransformFileAsync(string physicalPath, string encryptionKey, bool encrypt, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(physicalPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(encryptionKey);
 
         if (!File.Exists(physicalPath)) return;
 
-        // Idempotency: skip if already encrypted with this key
-        if (IsFileEncrypted(physicalPath, encryptionKey)) return;
+        // Idempotency: skip if already in desired encryption state
+        if (IsFileEncrypted(physicalPath, encryptionKey) == encrypt) return;
 
         var tempPath = $"{physicalPath}.tmp.{Guid.NewGuid():N}";
         try
@@ -504,51 +654,23 @@ public class FileService : IFileService
             await using (var input = new FileStream(physicalPath, FileMode.Open, FileAccess.Read, FileShare.Read))
             await using (var output = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                await _crypto.EncryptStreamAsync(input, output, encryptionKey, cancellationToken);
+                if (encrypt)
+                {
+                    await _crypto.EncryptStreamAsync(input, output, encryptionKey, cancellationToken);
+                }
+                else
+                {
+                    await _crypto.DecryptStreamAsync(input, output, encryptionKey, cancellationToken);
+                }
             }
 
             File.Move(tempPath, physicalPath, overwrite: true);
-            _logger.LogInformation("File encrypted at {Path}", physicalPath);
+            _thumbnailCache?.InvalidateFileAndThumbnails(physicalPath);
+            _logger.LogInformation(encrypt ? "File encrypted at {Path}" : "File decrypted at {Path}", physicalPath);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to encrypt file at {Path}", physicalPath);
-            throw;
-        }
-        finally
-        {
-            if (File.Exists(tempPath))
-            {
-                try { File.Delete(tempPath); } catch { }
-            }
-        }
-    }
-
-    public async Task DecryptFileAsync(string physicalPath, string encryptionKey, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(physicalPath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(encryptionKey);
-
-        if (!File.Exists(physicalPath)) return;
-
-        // Idempotency: skip if already decrypted (plaintext)
-        if (!IsFileEncrypted(physicalPath, encryptionKey)) return;
-
-        var tempPath = $"{physicalPath}.tmp.{Guid.NewGuid():N}";
-        try
-        {
-            await using (var input = new FileStream(physicalPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-            await using (var output = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
-            {
-                await _crypto.DecryptStreamAsync(input, output, encryptionKey, cancellationToken);
-            }
-
-            File.Move(tempPath, physicalPath, overwrite: true);
-            _logger.LogInformation("File decrypted at {Path}", physicalPath);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to decrypt file at {Path}", physicalPath);
+            _logger.LogError(ex, encrypt ? "Failed to encrypt file at {Path}" : "Failed to decrypt file at {Path}", physicalPath);
             throw;
         }
         finally
@@ -573,14 +695,7 @@ public class FileService : IFileService
         return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
     }
 
-    public string GetContentType(string fileName)
-    {
-        if (_contentTypeProvider.TryGetContentType(fileName, out var contentType))
-        {
-            return contentType;
-        }
-        return "application/octet-stream";
-    }
+    public string GetContentType(string fileName) => FileHelper.GetContentType(fileName);
 
     public string GetAttachmentPhysicalPath(string channelId, string fileName, bool thumb = false)
     {
@@ -607,17 +722,6 @@ public class FileService : IFileService
         if (!accountFilePath.StartsWith(accountDirPath, StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException("Invalid path traversal detected");
-        }
-        if (File.Exists(accountFilePath))
-        {
-            return accountFilePath;
-        }
-
-        var legacyDirPath = Path.GetFullPath(Path.Combine(_baseDataPath, "Employees", accountId, "Email", "Attachments", messageId));
-        var legacyFilePath = Path.GetFullPath(Path.Combine(legacyDirPath, attachmentId));
-        if (legacyFilePath.StartsWith(legacyDirPath, StringComparison.OrdinalIgnoreCase) && File.Exists(legacyFilePath))
-        {
-            return legacyFilePath;
         }
 
         return accountFilePath;
@@ -692,24 +796,57 @@ public class FileService : IFileService
         }
     }
 
+    private void CleanupCompanionThumbnailsAndEmptyDir(string physicalPath)
+    {
+        _thumbnailCache?.InvalidateFileAndThumbnails(physicalPath);
+        var dir = Path.GetDirectoryName(physicalPath);
+        var fileName = Path.GetFileName(physicalPath);
+        var fileNameNoExt = Path.GetFileNameWithoutExtension(physicalPath);
+        if (!string.IsNullOrEmpty(dir) &&
+            !fileName.EndsWith("_thumb.jpg", StringComparison.OrdinalIgnoreCase) &&
+            !fileName.EndsWith("_thumb_sm.jpg", StringComparison.OrdinalIgnoreCase) &&
+            !fileNameNoExt.EndsWith("_thumb", StringComparison.OrdinalIgnoreCase) &&
+            !fileNameNoExt.EndsWith("_thumb_sm", StringComparison.OrdinalIgnoreCase))
+        {
+            var thumbPath = Path.Combine(dir, GetThumbnailFileName(fileName));
+            if (File.Exists(thumbPath))
+            {
+                try { File.Delete(thumbPath); } catch { /* Ignore thumbnail delete error */ }
+            }
+
+            var smallThumbPath = Path.Combine(dir, GetThumbnailFileName(fileName, small: true));
+            if (File.Exists(smallThumbPath))
+            {
+                try { File.Delete(smallThumbPath); } catch { /* Ignore thumbnail delete error */ }
+            }
+
+            var legacyThumbPath = Path.Combine(dir, $"{fileNameNoExt}_thumb.jpg");
+            if (File.Exists(legacyThumbPath))
+            {
+                try { File.Delete(legacyThumbPath); } catch { /* Ignore thumbnail delete error */ }
+            }
+        }
+
+        if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+        {
+            var fullDirPath = Path.GetFullPath(dir);
+            var fullBasePath = Path.GetFullPath(_basePath);
+            if (fullDirPath.StartsWith(fullBasePath, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(fullDirPath, fullBasePath, StringComparison.OrdinalIgnoreCase) &&
+                !Directory.EnumerateFileSystemEntries(fullDirPath).Any())
+            {
+                try { Directory.Delete(fullDirPath); } catch { /* Ignore */ }
+            }
+        }
+    }
+
     private static void ValidatePathSegment(string? segment, string paramName = "path")
     {
-        if (string.IsNullOrWhiteSpace(segment) ||
-            segment.Contains("..") ||
-            segment.Contains('/') ||
-            segment.Contains('\\') ||
-            segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        if (!FileHelper.IsValidPathSegment(segment))
         {
             throw new ArgumentException($"Invalid path parameter: {paramName}", paramName);
         }
     }
 
-    private static bool IsValidPathSegment(string? segment)
-    {
-        return !string.IsNullOrWhiteSpace(segment) &&
-               !segment.Contains("..") &&
-               !segment.Contains('/') &&
-               !segment.Contains('\\') &&
-               segment.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
-    }
+    private static bool IsValidPathSegment(string? segment) => FileHelper.IsValidPathSegment(segment);
 }

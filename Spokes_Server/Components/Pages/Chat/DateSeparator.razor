@@ -1,16 +1,29 @@
 @* Horizontal date divider between message groups *@
 
-<div class="d-flex align-center my-1" style="width: 100%;">
-    <MudDivider Style="flex: 1;" />
-    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Default"
-        Style="font-weight: 600; cursor: default; pointer-events: none;">
+<div class="chat-date-separator">
+    <hr class="mud-divider" />
+    <span class="mud-chip mud-chip-text mud-chip-size-small mud-chip-color-default chat-date-chip">
         @GetLabel()
-    </MudChip>
-    <MudDivider Style="flex: 1;" />
+    </span>
+    <hr class="mud-divider" />
 </div>
+@{
+    _lastRenderedDate = Date.ToLocalTime().Date;
+    _lastToday = DateTime.Today;
+    _hasRenderedOnce = true;
+}
 
 @code {
     [Parameter] public DateTime Date { get; set; }
+
+    private DateTime _lastRenderedDate;
+    private DateTime _lastToday;
+    private bool _hasRenderedOnce;
+
+    protected override bool ShouldRender() =>
+        !_hasRenderedOnce ||
+        Date.ToLocalTime().Date != _lastRenderedDate ||
+        DateTime.Today != _lastToday;
 
     private string GetLabel()
     {

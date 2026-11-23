@@ -35,6 +35,15 @@
 </MudContainer>
 
 @code {
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    public string? ReturnUrl { get; set; }
+
+    private string GetSafeReturnUrl()
+    {
+        var expectedHost = Uri.TryCreate(Nav.BaseUri, UriKind.Absolute, out var baseUri) ? baseUri.Host : "localhost";
+        return Spokes_Server.Core.Security.RedirectHelper.GetSafeRedirectUrl(ReturnUrl, expectedHost, "/");
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -42,7 +51,7 @@
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
             if (authState.User.Identity?.IsAuthenticated == true)
             {
-                Nav.NavigateTo("/", forceLoad: true);
+                Nav.NavigateTo(GetSafeReturnUrl(), forceLoad: true);
             }
         }
     }
@@ -50,27 +59,23 @@
     private async Task GoLogin()
     {
         bool isNative = false;
-        try 
+        try
         {
-            isNative = await JSRuntime.InvokeAsync<bool>("eval", "!!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())");
-            await JSRuntime.InvokeVoidAsync("console.log", "[SSO] SessionExpired evaluated isNative:", isNative);
+            isNative = await JSRuntime.InvokeAsync<bool>("window.checkIsCapacitorNative");
         }
-        catch (Exception ex) 
-        { 
-            await JSRuntime.InvokeVoidAsync("console.error", "[SSO] SessionExpired isNative eval threw exception:", ex.Message);
-        }
+        catch { }
 
         string deviceId = "";
         try {
             deviceId = await JSRuntime.InvokeAsync<string>("pushNotifications.getDeviceId");
         } catch { }
 
+        var returnUrlParam = Uri.EscapeDataString(GetSafeReturnUrl());
+        var url = $"/sso/login/auto?deviceId={Uri.EscapeDataString(deviceId)}&returnUrl={returnUrlParam}";
         if (isNative)
         {
-            await JSRuntime.InvokeVoidAsync("console.log", "[SSO] SessionExpired routing to openSsoAuth...");
             // Use SsoAuthPlugin (ASWebAuthenticationSession/AuthTabIntent) with fallback
             var hasSsoAuth = await JSRuntime.InvokeAsync<bool>("eval", "typeof window.openSsoAuth === 'function'");
-            var url = $"/sso/login/auto?deviceId={Uri.EscapeDataString(deviceId)}&returnUrl=/";
             if (hasSsoAuth)
             {
                 await JSRuntime.InvokeVoidAsync("openSsoAuth", url);
@@ -82,8 +87,7 @@
         }
         else
         {
-            await JSRuntime.InvokeVoidAsync("console.log", "[SSO] SessionExpired routing to /sso/login/auto...");
-            Nav.NavigateTo($"/sso/login/auto?deviceId={Uri.EscapeDataString(deviceId)}&returnUrl=/", forceLoad: true);
+            Nav.NavigateTo(url, forceLoad: true);
         }
     }
 }

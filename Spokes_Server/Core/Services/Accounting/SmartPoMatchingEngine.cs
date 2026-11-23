@@ -4,8 +4,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Services.Accounting.InvoiceExtraction;
+using Spokes_Server.Core.Services.Projects;
 
 public record MatchingPoResult(PurchaseOrder? MatchedPo, string Confidence, string Reason)
 {
@@ -26,16 +30,32 @@ public class SmartPoMatchingEngine
 
     /// <summary>
     /// Evaluates open purchase orders to find the best match for the extracted invoice data.
+    /// Interactive callers must supply an active, authorized employee; background ingestion passes <paramref name="isSystemExtraction"/>.
     /// </summary>
-    public MatchingPoResult FindMatch(ExtractedInvoiceData data, string? matchedSupplierId = null)
+    public MatchingPoResult FindMatch(
+        ExtractedInvoiceData data,
+        string? matchedSupplierId = null,
+        Employee? actor = null,
+        bool isSystemExtraction = false)
     {
         if (data == null) return MatchingPoResult.None;
+
+        if (!isSystemExtraction)
+        {
+            if (actor == null ||
+                !actor.IsActiveUnsuspended ||
+                (!actor.HasPermission(AppPermissions.Purchases.ViewPOs) && !actor.HasPermission(AppPermissions.Purchases.ManagePOs)))
+            {
+                return MatchingPoResult.None;
+            }
+        }
 
         var openPos = _db.PurchaseOrders.GetAll()
             .Where(po => po.Status != PurchaseOrderStatus.FullyBilled &&
                          po.Status != PurchaseOrderStatus.Closed &&
                          po.Status != PurchaseOrderStatus.Void &&
-                         po.Status != PurchaseOrderStatus.Draft)
+                         po.Status != PurchaseOrderStatus.Draft &&
+                         (isSystemExtraction || IsPoAccessibleToActor(po, actor!)))
             .ToList();
 
         if (openPos.Count == 0) return MatchingPoResult.None;
@@ -124,5 +144,19 @@ public class SmartPoMatchingEngine
         }
 
         return MatchingPoResult.None;
+    }
+
+    private bool IsPoAccessibleToActor(PurchaseOrder po, Employee actor)
+    {
+        if (actor.IsEffectiveAdmin) return true;
+        foreach (var item in po.LineItems)
+        {
+            if (!string.IsNullOrWhiteSpace(item.ProjectId) &&
+                !ProjectAccessHelper.HasAccess(_db.Projects, _db.Teams, actor, item.ProjectId))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 }

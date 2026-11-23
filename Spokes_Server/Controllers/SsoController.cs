@@ -8,6 +8,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Aggregate.Contexts;
+using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Security;
@@ -27,7 +28,6 @@ public class SsoController : SpokesControllerBase
     private readonly SessionService _sessionService;
     private readonly IConfiguration _config;
     private readonly IMemoryCache _cache;
-    private readonly IOptionsMonitor<OpenIdConnectOptions> _oidcOptionsMonitor;
     private readonly ILogger<SsoController> _logger;
 
     [ActivatorUtilitiesConstructor]
@@ -37,7 +37,6 @@ public class SsoController : SpokesControllerBase
         SessionService sessionService,
         IConfiguration config,
         IMemoryCache cache,
-        IOptionsMonitor<OpenIdConnectOptions> oidcOptionsMonitor,
         ILogger<SsoController> logger)
     {
         _coreContext = coreContext ?? throw new ArgumentNullException(nameof(coreContext));
@@ -45,7 +44,6 @@ public class SsoController : SpokesControllerBase
         _sessionService = sessionService;
         _config = config;
         _cache = cache;
-        _oidcOptionsMonitor = oidcOptionsMonitor;
         _logger = logger;
     }
 
@@ -129,26 +127,10 @@ public class SsoController : SpokesControllerBase
         }
 
         // Demo mode auto-login
-        if (_config.GetValue<bool>("Spokes_DemoMode") && Request.Query["admin_login"] != "1")
+        var demoEmployee = await TrySignInDemoUserAsync(deviceId);
+        if (demoEmployee != null)
         {
-            var demoConfig = _coreContext.DemoConfigs.Get();
-            if (demoConfig.AutoLoginEmployeeIds.Any())
-            {
-                var random = new Random();
-                var employeeId = demoConfig.AutoLoginEmployeeIds[random.Next(demoConfig.AutoLoginEmployeeIds.Count)];
-                var employee = _hrContext.Employees.GetById(employeeId);
-                
-                if (employee != null && employee.IsActive && !employee.IsSuspended && !employee.IsBanned)
-                {
-                    var devId = deviceId ?? Request.Headers["X-Device-Id"].FirstOrDefault() ?? Request.Cookies["Spokes_Device"];
-                    
-                    var (deviceSession, _) = _sessionService.CreateSession(
-                        HttpContext, employee.Id, devId, issueCookie: true);
-                    
-                    await _sessionService.SignInAndExtendAsync(HttpContext, deviceSession, employee);
-                    return Redirect(ResolveTargetWithLandingPage(target, employee));
-                }
-            }
+            return Redirect(ResolveTargetWithLandingPage(target, demoEmployee));
         }
 
         // Refresh token auto-renewal
@@ -179,22 +161,21 @@ public class SsoController : SpokesControllerBase
                 return Redirect(ResolveTargetWithLandingPage(target, employee));
             }
 
-            var refreshDeleteCookieOptions = new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = Request.IsHttps,
-                SameSite = SameSiteMode.Lax,
-                Path = "/"
-            };
-            Response.Cookies.Delete("Spokes_Refresh", refreshDeleteCookieOptions);
+            VaultCookieProtector.DeleteRefreshCookie(HttpContext);
             _logger.LogWarning("[SSO] Silent renewal failed. Token invalid or expired.");
         }
 
         var userAgent = Request.Headers["User-Agent"].ToString();
         var isNativeBrowser = Request.Query.ContainsKey("native_browser");
-        var isMobileFlow = !isNativeBrowser && (target.Contains("client=mobile", StringComparison.OrdinalIgnoreCase) 
+        var isMobileQuery = string.Equals(Request.Query["client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase);
+        var isMobileFlow = !isNativeBrowser && (isMobileQuery
+            || target.Contains("client=mobile", StringComparison.OrdinalIgnoreCase)
             || userAgent.Contains("Capacitor", StringComparison.OrdinalIgnoreCase));
             
+        var sessionExpiredUrl = string.IsNullOrEmpty(target) || target == "/"
+            ? "/session-expired"
+            : $"/session-expired?returnUrl={Uri.EscapeDataString(target)}";
+
         if (sso_error == "1")
         {
             Response.Cookies.Delete("Spokes_SSO_Attempt");
@@ -202,7 +183,7 @@ public class SsoController : SpokesControllerBase
             {
                 return Redirect($"/mobile-login?sso_error=1&returnUrl={Uri.EscapeDataString(target)}");
             }
-            return Redirect("/session-expired");
+            return Redirect(sessionExpiredUrl);
         }
 
         if (Request.Cookies.ContainsKey("Spokes_SSO_Attempt"))
@@ -212,7 +193,7 @@ public class SsoController : SpokesControllerBase
             {
                 return Redirect($"/mobile-login?no_auto=1&returnUrl={Uri.EscapeDataString(target)}");
             }
-            return Redirect("/session-expired");
+            return Redirect(sessionExpiredUrl);
         }
 
         if (isMobileFlow)
@@ -250,29 +231,11 @@ public class SsoController : SpokesControllerBase
     {
         var url = RedirectHelper.GetSafeRedirectUrl(returnUrl, HttpContext);
 
-        if (_config.GetValue<bool>("Spokes_DemoMode") && Request.Query["admin_login"] != "1")
+        if (await TrySignInDemoUserAsync(deviceId) != null)
         {
-            var demoConfig = _coreContext.DemoConfigs.Get();
-            if (demoConfig.AutoLoginEmployeeIds.Any())
-            {
-                var random = new Random();
-                var employeeId = demoConfig.AutoLoginEmployeeIds[random.Next(demoConfig.AutoLoginEmployeeIds.Count)];
-                var employee = _hrContext.Employees.GetById(employeeId);
-                
-                if (employee != null && employee.IsActive && !employee.IsSuspended && !employee.IsBanned)
-                {
-                    var devId = deviceId ?? Request.Headers["X-Device-Id"].FirstOrDefault() ?? Request.Cookies["Spokes_Device"];
-                    
-                    var (deviceSession, _) = _sessionService.CreateSession(
-                        HttpContext, employee.Id, devId, issueCookie: true);
-                    
-                    await _sessionService.SignInAndExtendAsync(HttpContext, deviceSession, employee);
-
-                    var encodedUrl = JavaScriptEncoder.Default.Encode(url);
-                    var html = MobileSsoHelper.CreateJsRedirectPage(encodedUrl);
-                    return Content(html, "text/html");
-                }
-            }
+            var encodedUrl = JavaScriptEncoder.Default.Encode(url);
+            var html = MobileSsoHelper.CreateJsRedirectPage(encodedUrl);
+            return Content(html, "text/html");
         }
 
         var props = new AuthenticationProperties
@@ -286,6 +249,28 @@ public class SsoController : SpokesControllerBase
         return Challenge(props, OpenIdConnectDefaults.AuthenticationScheme);
     }
 
+    private async Task<Employee?> TrySignInDemoUserAsync(string? deviceId)
+    {
+        if (!_config.GetValue<bool>("Spokes_DemoMode") || Request.Query["admin_login"] == "1")
+        {
+            return null;
+        }
+
+        var demoConfig = _coreContext.DemoConfigs.Get();
+        var employee = SelectDemoAutoLoginEmployee(demoConfig.AutoLoginEmployeeIds, _hrContext.Employees);
+        if (employee == null)
+        {
+            return null;
+        }
+
+        var devId = deviceId ?? Request.Headers["X-Device-Id"].FirstOrDefault() ?? Request.Cookies["Spokes_Device"];
+        var (deviceSession, _) = _sessionService.CreateSession(
+            HttpContext, employee.Id, devId, issueCookie: true);
+
+        await _sessionService.SignInAndExtendAsync(HttpContext, deviceSession, employee);
+        return employee;
+    }
+
     /// <summary>
     /// Mobile logout form bridge page for in-browser IdP end-session sign-out.
     /// </summary>
@@ -296,37 +281,9 @@ public class SsoController : SpokesControllerBase
         if (_cache.TryGetValue<Tuple<string, string>>(key, out var data) && data != null)
         {
             _cache.Remove(key);
-            string idToken = data.Item1;
-            string endSessionUrl = data.Item2;
-
             var serverBase = ServerUrlResolver.GetSafeServerBaseUrl(HttpContext, _coreContext.SystemConfigs.Get().ServerPublicUrl);
             var postLogoutRedirect = $"{serverBase}/sso/mobile-logout-complete";
-
-            var html = $@"
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset='utf-8' />
-                    <meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0'>
-                    <title>Logging out...</title>
-                    <style>
-                        body {{ background-color: #1e1e2d; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; font-family: 'Roboto', sans-serif; }}
-                        .spinner {{ width: 40px; height: 40px; border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid #594ae2; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }}
-                        @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-                    </style>
-                </head>
-                <body>
-                    <div style='display:flex;flex-direction:column;align-items:center;text-align:center;padding:40px;'>
-                        <div class='spinner'></div>
-                        <p>Securely signing out...</p>
-                    </div>
-                    <form id='logoutForm' method='GET' action='{HtmlEncoder.Default.Encode(endSessionUrl ?? "")}'>
-                        <input type='hidden' name='id_token_hint' value='{HtmlEncoder.Default.Encode(idToken)}' />
-                        <input type='hidden' name='post_logout_redirect_uri' value='{HtmlEncoder.Default.Encode(postLogoutRedirect)}' />
-                    </form>
-                    <script>document.getElementById('logoutForm').submit();</script>
-                </body>
-                </html>";
+            var html = MobileSsoHelper.CreateAutoSubmitLogoutFormPage(data.Item2, data.Item1, postLogoutRedirect);
             return Content(html, "text/html");
         }
 
@@ -364,6 +321,29 @@ public class SsoController : SpokesControllerBase
             redirectUri: "/");
 
         return ProcessLogoutHandoff(handoff);
+    }
+
+    internal static Employee? SelectDemoAutoLoginEmployee(IReadOnlyList<string>? configuredIds, EmployeeRepository employees)
+    {
+        if (configuredIds == null || configuredIds.Count == 0 || employees == null)
+            return null;
+
+        var eligible = new List<Employee>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in configuredIds)
+        {
+            if (string.IsNullOrWhiteSpace(id) || !seen.Add(id)) continue;
+            var emp = employees.GetById(id);
+            if (emp != null && emp.IsSelectable && !emp.IsAdmin)
+            {
+                eligible.Add(emp);
+            }
+        }
+
+        if (eligible.Count == 0)
+            return null;
+
+        return eligible[Random.Shared.Next(eligible.Count)];
     }
 
     private string ResolveTargetWithLandingPage(string target, Employee? employee)

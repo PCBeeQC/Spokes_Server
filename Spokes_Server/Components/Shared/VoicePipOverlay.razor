@@ -6,112 +6,121 @@
 @inject GlobalVoiceService VoiceService
 @inject IVoiceUiStateService VoiceUiState
 @inject IDemoVoiceAdapter DemoVoiceAdapter
-@inject ChatStateService ChatState
+@inject VoiceStateService VoiceState
 @inject UserCircuitContext CircuitContext
+@inject IUserPrivacyService PrivacyService
 @inject Database Db
 @inject NavigationManager Nav
 @inject IConfiguration Config
+@inject StartupTimingService StartupTimings
 @implements IDisposable
+
+@if (StartupTimings.IsChatProfilerEnabled)
+{
+    StartupTimings.AddChatTransition($"Server: RenderTree VoicePipOverlay[{_diagTag}] Markup Start (inCall={VoiceService.IsInVoiceCall}, showPip={VoiceUiState.ShouldShowInAppPip})");
+}
 
 @if (VoiceService.IsInVoiceCall)
 {
     var channel = !string.IsNullOrEmpty(VoiceService.CurrentChannelId)
         ? Db.ChatChannels.GetById(VoiceService.CurrentChannelId)
         : null;
-    var channelName = channel?.Name ?? Loc["Voice channel"].Value;
-    var displayEmp = ResolveDisplayEmployee();
-    var displayId = displayEmp?.Id ?? VoiceService.CurrentUserId ?? string.Empty;
-    var isSelfDisplay = displayId == VoiceService.CurrentUserId;
-    var isDisplayMuted = isSelfDisplay
-        ? VoiceService.IsMuted
-        : (!string.IsNullOrEmpty(displayId) &&
-           (VoiceService.MutedParticipants.Contains(displayId) ||
-            (!string.IsNullOrEmpty(VoiceService.CurrentChannelId) && ChatState.GetMutedUsers(VoiceService.CurrentChannelId).Contains(displayId))));
-    var isDisplaySpeaking = !isDisplayMuted && !string.IsNullOrEmpty(displayId) && VoiceService.ActiveSpeakers.Contains(displayId);
-    var hasVideo = VoiceService.IsScreenSharing
-        || VoiceService.ActiveScreenShareParticipants.Count > 0
-        || VoiceService.ActiveCameraParticipants.Any(id => id != VoiceService.CurrentUserId);
+    var channelName = channel?.Name ?? Loc["Voice Channel"].Value;
+    var isNativeMobileClient = CircuitContext.IsCapacitorApp || VoiceService.IsNativePlatform;
+    var isMobileClient = isNativeMobileClient || CircuitContext.IsMobile;
+    var verifiedParticipants = !string.IsNullOrEmpty(VoiceService.CurrentChannelId)
+        ? VoiceState.GetVoiceParticipants(VoiceService.CurrentChannelId).ToHashSet(StringComparer.Ordinal)
+        : new HashSet<string>(StringComparer.Ordinal);
+    var presentation = VoiceUiState.ComputePipPresentationState(isNativeMobileClient, verifiedParticipants);
+    var displayEmp = ResolveDisplayEmployee(presentation, verifiedParticipants);
+    var displayId = displayEmp?.Id ?? presentation.DisplayParticipantId ?? VoiceService.CurrentUserId ?? string.Empty;
+    var isDisplayMuted = !string.IsNullOrEmpty(displayId) && VoiceService.IsParticipantMuted(displayId);
+    var hasPrimaryVideo = presentation.HasPrimaryVideo;
+    var hasFilmstrip = presentation.HasFilmstrip;
+    var modeClass = presentation.ModeClass;
     var displayTitle = displayEmp?.FullName ?? channelName;
     var isDemo = Config.GetValue<bool>("Spokes_DemoMode");
     var isStageHidden = !VoiceUiState.ShouldShowInAppPip;
     var isCollapsedPill = VoiceUiState.IsInAppPipCollapsedPill;
-    var isMobileClient = CircuitContext.IsCapacitorApp || CircuitContext.IsMobile || VoiceService.IsNativePlatform;
+    var showSpeakerInPill = isCollapsedPill || hasPrimaryVideo;
+    var voiceChannelId = VoiceService.CurrentChannelId ?? string.Empty;
 
     <MudPaper id="spokes-voice-pip-overlay"
               Elevation="12"
-              Class="@($"voice-pip-overlay {(hasVideo ? "mode-video" : "mode-avatar")} {(isStageHidden ? "is-stage-hidden" : "")} {(isCollapsedPill ? "is-minimized-pill" : "")} {(VoiceUiState.IsNativeMobilePipMode ? "is-native-pip" : "")}")"
-              data-corner="bottom-right">
+              Class="@($"voice-pip-overlay {modeClass} {(hasFilmstrip ? "has-filmstrip" : "")} {(isStageHidden ? "is-stage-hidden" : "")} {(isCollapsedPill ? "is-minimized-pill" : "")} {(VoiceUiState.IsNativeMobilePipMode ? "is-native-pip" : "")}")">
 
         @* Video streams managed directly by voicePip.js *@
         <div class="voice-pip-video-stage" @ondblclick="ReturnToCall">
             <VoicePipVideoSlot />
         </div>
 
-        @* Top header pill (speaker/channel badge + popout/minimize/expand actions) *@
-        <div class="voice-pip-top-bar">
-            <div class="voice-pip-speaker-pill" @onclick="ReturnToCall" title="@Loc["Return to Call"]">
-                <span class="@($"voice-pip-live-dot {(isDisplaySpeaking ? "is-speaking" : "")}")"></span>
-                <MudText Typo="Typo.caption" Class="voice-pip-pill-text">@((isCollapsedPill || hasVideo) ? displayTitle : channelName)</MudText>
-            </div>
-
-            @if (!VoiceUiState.IsNativeMobilePipMode)
-            {
-                <div class="d-flex align-center gap-1 voice-pip-no-drag voice-pip-header-actions">
-                    @if (!isCollapsedPill && VoiceService.CallParticipants.Count > 1)
+        @if (!isStageHidden || VoiceUiState.IsNativeMobilePipMode)
+        {
+        @* Top header pill (speaker/channel badge + popout/minimize/expand actions; hidden in Android OS PiP) *@
+        @if (!VoiceUiState.IsNativeMobilePipMode)
+        {
+            <div class="voice-pip-top-bar">
+                <div class="voice-pip-speaker-pill" @onclick="ReturnToCall" title="@Loc["Return to Call"]">
+                    @if (showSpeakerInPill)
                     {
-                        var isFocusedLayout = !string.IsNullOrEmpty(VoiceUiState.FocusedParticipantId);
-                        <MudTooltip Text="@(isFocusedLayout ? Loc["All Users View"] : Loc["Focus Speaker"])">
-                            <MudIconButton Icon="@(isFocusedLayout ? Icons.Material.Filled.GridView : Icons.Material.Filled.Fullscreen)"
-                                           Size="Size.Small"
-                                           Class="voice-pip-mini-btn"
-                                           OnClick="ToggleGridOrFocusLayout"
-                                           aria-label="@(isFocusedLayout ? Loc["All Users View"] : Loc["Focus Speaker"])" />
-                        </MudTooltip>
-                    }
-                    @if (_isOsPipSupported && !isDemo && !isMobileClient && !isCollapsedPill)
-                    {
-                        <MudTooltip Text="@Loc["Picture in Picture"]">
-                            <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
-                                           Size="Size.Small"
-                                           Class="voice-pip-mini-btn"
-                                           OnClick="PopOutOsPipAsync"
-                                           aria-label="@Loc["Picture in Picture"]" />
-                        </MudTooltip>
-                    }
-                    @if (isCollapsedPill)
-                    {
-                        <MudTooltip Text="@Loc["Expand"]">
-                            <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp"
-                                           Size="Size.Small"
-                                           Class="voice-pip-mini-btn"
-                                           OnClick="RestorePip"
-                                           aria-label="@Loc["Expand"]" />
-                        </MudTooltip>
+                        <span class="voice-pip-live-dot"
+                              data-voice-speaker-channel="@voiceChannelId"
+                              data-voice-speaker-user="@displayId"
+                              data-voice-muted="@(isDisplayMuted ? "true" : null)"></span>
                     }
                     else
                     {
-                        <MudTooltip Text="@Loc["Minimize"]">
-                            <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown"
-                                           Size="Size.Small"
-                                           Class="voice-pip-mini-btn"
-                                           OnClick="MinimizePip"
-                                           aria-label="@Loc["Minimize"]" />
-                        </MudTooltip>
+                        <span class="voice-pip-live-dot"
+                              data-voice-channel-any-speaking="@voiceChannelId"></span>
+                    }
+                    <MudText Typo="Typo.caption" Class="voice-pip-pill-text">@(showSpeakerInPill ? displayTitle : channelName)</MudText>
+                </div>
+
+                <div class="d-flex align-center gap-1 voice-pip-no-drag voice-pip-header-actions">
+                    @if (_isOsPipSupported && !isDemo && !isMobileClient && !isCollapsedPill)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                       Size="Size.Small"
+                                       Class="voice-pip-mini-btn"
+                                       OnClick="PopOutOsPipAsync"
+                                       title="@Loc["Picture in Picture"]"
+                                       aria-label="@Loc["Picture in Picture"]" />
+                    }
+                    @if (isCollapsedPill)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp"
+                                       Size="Size.Small"
+                                       Class="voice-pip-mini-btn"
+                                       OnClick="RestorePip"
+                                       title="@Loc["Expand"]"
+                                       aria-label="@Loc["Expand"]" />
+                    }
+                    else
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown"
+                                       Size="Size.Small"
+                                       Class="voice-pip-mini-btn"
+                                       OnClick="MinimizePip"
+                                       title="@Loc["Minimize"]"
+                                       aria-label="@Loc["Minimize"]" />
                     }
                 </div>
-            }
-        </div>
+            </div>
+        }
 
-        @* Voice-only Active Speaker Avatar Card (CSS hides in mode-video / minimized-pill for 0ms client transitions) *@
+        @* Voice-only Active Speaker Avatar Card (CSS hides in mode-video / mode-grid / minimized-pill for 0ms client transitions) *@
         <div class="voice-pip-avatar-stage" @ondblclick="ReturnToCall">
-            <div class="@($"voice-pip-avatar-ring {(isDisplaySpeaking ? "is-speaking" : "")}")">
+            <div class="voice-pip-avatar-ring"
+                 data-voice-speaker-channel="@voiceChannelId"
+                 data-voice-speaker-user="@displayId"
+                 data-voice-muted="@(isDisplayMuted ? "true" : null)">
                 @if (displayEmp != null)
                 {
-                    <EmployeeAvatar Employee="@displayEmp" ShowPresence="false" Style="width: 56px; height: 56px; font-size: 1.35rem;" />
+                    <EmployeeAvatar Employee="@displayEmp" ShowPresence="false" Class="voice-pip-primary-avatar" Style="width: 56px; height: 56px;" />
                 }
                 else
                 {
-                    <MudAvatar Style="width: 56px; height: 56px; background: #262638; color: white;">
+                    <MudAvatar Class="voice-pip-primary-avatar" Style="width: 56px; height: 56px; background: #262638; color: white;">
                         <MudIcon Icon="@Icons.Material.Filled.RecordVoiceOver" />
                     </MudAvatar>
                 }
@@ -123,7 +132,7 @@
                 }
             </div>
             <MudText Typo="Typo.subtitle2" Class="voice-pip-speaker-name">@displayTitle</MudText>
-            @if (displayEmp != null)
+            @if (displayEmp != null && !hasFilmstrip)
             {
                 <MudText Typo="Typo.caption" Class="voice-pip-channel-sub">@channelName</MudText>
             }
@@ -135,13 +144,12 @@
             <div class="voice-pip-controls voice-pip-no-drag">
                 @if (!isDemo)
                 {
-                    <MudTooltip Text="@(VoiceService.IsMuted ? Loc["Unmute"] : Loc["Mute"])">
-                        <MudIconButton Icon="@(VoiceService.IsMuted ? Icons.Material.Filled.MicOff : Icons.Material.Filled.Mic)"
-                                       Size="Size.Small"
-                                       Class="@($"voice-pip-ctrl-btn {(VoiceService.IsMuted ? "is-muted" : "is-active-media")}")"
-                                       OnClick="@(() => VoiceService.ToggleMuteAsync())"
-                                       aria-label="@(VoiceService.IsMuted ? Loc["Unmute"] : Loc["Mute"])" />
-                    </MudTooltip>
+                    <MudIconButton Icon="@(VoiceService.IsMuted ? Icons.Material.Filled.MicOff : Icons.Material.Filled.Mic)"
+                                   Size="Size.Small"
+                                   Class="@($"voice-pip-ctrl-btn {(VoiceService.IsMuted ? "is-muted" : "is-active-media")}")"
+                                   OnClick="@(() => VoiceService.ToggleMuteAsync())"
+                                   title="@(VoiceService.IsMuted ? Loc["Unmute"] : Loc["Mute"])"
+                                   aria-label="@(VoiceService.IsMuted ? Loc["Unmute"] : Loc["Mute"])" />
                     @if (VoiceService.IsTogglingVideo)
                     {
                         <div class="voice-pip-ctrl-btn d-flex align-center justify-center" title="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])">
@@ -150,54 +158,136 @@
                     }
                     else
                     {
-                        <MudTooltip Text="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])">
-                            <MudIconButton Icon="@(VoiceService.IsVideoOn ? Icons.Material.Filled.Videocam : Icons.Material.Filled.VideocamOff)"
-                                           Size="Size.Small"
-                                           Class="@($"voice-pip-ctrl-btn {(VoiceService.IsVideoOn ? "is-active-media" : "")}")"
-                                           OnClick="@(() => VoiceService.ToggleVideoAsync(VoiceUiState.MaxVideoSendQuality, VoiceUiState.MaxVideoSendFps, VoiceUiState.ActiveCameraDeviceId))"
-                                           aria-label="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])" />
-                        </MudTooltip>
+                        <MudIconButton Icon="@(VoiceService.IsVideoOn ? Icons.Material.Filled.Videocam : Icons.Material.Filled.VideocamOff)"
+                                       Size="Size.Small"
+                                       Class="@($"voice-pip-ctrl-btn {(VoiceService.IsVideoOn ? "is-active-media" : "")}")"
+                                       OnClick="@(() => VoiceService.ToggleVideoAsync(VoiceUiState.MaxVideoSendQuality, VoiceUiState.MaxVideoSendFps, VoiceUiState.ActiveCameraDeviceId))"
+                                       title="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])"
+                                       aria-label="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])" />
+                    }
+                    @if (!isMobileClient)
+                    {
+                        <MudIconButton Icon="@(VoiceService.IsScreenSharing ? Icons.Material.Filled.StopScreenShare : Icons.Material.Filled.ScreenShare)"
+                                       Size="Size.Small"
+                                       Class="@($"voice-pip-ctrl-btn {(VoiceService.IsScreenSharing ? "is-active-media" : "")}")"
+                                       OnClick="@(() => VoiceService.ToggleScreenShareAsync(VoiceUiState.MaxScreenShareQuality, VoiceUiState.MaxScreenShareFps, VoiceUiState.ScreenShareMode, VoiceUiState.IsScreenShareAudioEnabled))"
+                                       title="@(VoiceService.IsScreenSharing ? Loc["Stop Sharing"] : Loc["Share Screen"])"
+                                       aria-label="@(VoiceService.IsScreenSharing ? Loc["Stop Sharing"] : Loc["Share Screen"])" />
                     }
                 }
-                @if (VoiceService.CallParticipants.Count > 1)
+                @if (presentation.CanUseGrid)
                 {
-                    var isGridLayoutActive = string.IsNullOrEmpty(VoiceUiState.FocusedParticipantId);
-                    <MudTooltip Text="@(isGridLayoutActive ? Loc["Focus Speaker"] : Loc["All Users View"])">
-                        <MudIconButton Icon="@Icons.Material.Filled.GridView"
-                                       Size="Size.Small"
-                                       Class="@($"voice-pip-ctrl-btn {(isGridLayoutActive ? "is-active-media" : "")}")"
-                                       OnClick="ToggleGridOrFocusLayout"
-                                       aria-label="@(isGridLayoutActive ? Loc["Focus Speaker"] : Loc["All Users View"])" />
-                    </MudTooltip>
+                    var isGridLayoutActive = presentation.IsGridMode;
+                    <MudIconButton Icon="@(isGridLayoutActive ? Icons.Material.Filled.Fullscreen : Icons.Material.Filled.GridView)"
+                                   Size="Size.Small"
+                                   Class="@($"voice-pip-ctrl-btn {(isGridLayoutActive ? "is-active-media" : "")}")"
+                                   OnClick="ToggleGridOrFocusLayout"
+                                   title="@(isGridLayoutActive ? Loc["Focus Speaker"] : Loc["All Users View"])"
+                                   aria-label="@(isGridLayoutActive ? Loc["Focus Speaker"] : Loc["All Users View"])" />
                 }
-                <MudTooltip Text="@Loc["Return to Call"]">
-                    <MudIconButton Icon="@Icons.Material.Filled.CallMade"
-                                   Size="Size.Small"
-                                   Class="voice-pip-ctrl-btn"
-                                   OnClick="ReturnToCall"
-                                   aria-label="@Loc["Return to Call"]" />
-                </MudTooltip>
-                <MudTooltip Text="@Loc["Disconnect"]">
-                    <MudIconButton Icon="@Icons.Material.Filled.CallEnd"
-                                   Size="Size.Small"
-                                   Class="voice-pip-ctrl-btn is-hangup"
-                                   OnClick="DisconnectAsync"
-                                   aria-label="@Loc["Disconnect"]" />
-                </MudTooltip>
+                <MudIconButton Icon="@Icons.Material.Filled.CallMade"
+                               Size="Size.Small"
+                               Class="voice-pip-ctrl-btn"
+                               OnClick="ReturnToCall"
+                               title="@Loc["Return to Call"]"
+                               aria-label="@Loc["Return to Call"]" />
+                <MudIconButton Icon="@Icons.Material.Filled.CallEnd"
+                               Size="Size.Small"
+                               Class="voice-pip-ctrl-btn is-hangup"
+                               OnClick="DisconnectAsync"
+                               title="@Loc["Disconnect"]"
+                               aria-label="@Loc["Disconnect"]" />
             </div>
+        }
         }
     </MudPaper>
 }
+@if (StartupTimings.IsChatProfilerEnabled)
+{
+    StartupTimings.AddChatTransition($"Server: RenderTree VoicePipOverlay[{_diagTag}] Markup End");
+}
 
 @code {
-    private static readonly TimeSpan SpeakerHysteresis = TimeSpan.FromMilliseconds(1500);
-    private string? _stickySpeakerId;
-    private DateTime _stickySpeakerUntilUtc = DateTime.MinValue;
+    private readonly string _diagTag = Guid.NewGuid().ToString("N")[..4];
     private bool _wasShowingInAppPip;
     private bool _wasCollapsedPill;
     private bool _isOsPipSupported;
     private bool _checkedOsPipSupport;
     private string _lastMetadataSignature = string.Empty;
+    private int _lastRenderFingerprint;
+    private bool _hasRenderedOnce;
+
+    private int ComputePipRenderFingerprint()
+    {
+        var hash = new HashCode();
+        bool inCall = VoiceService.IsInVoiceCall;
+        hash.Add(inCall);
+        if (!inCall)
+        {
+            return hash.ToHashCode();
+        }
+
+        bool isStageHidden = !VoiceUiState.ShouldShowInAppPip;
+        bool isNativePip = VoiceUiState.IsNativeMobilePipMode;
+        bool isVisible = !isStageHidden || isNativePip;
+        hash.Add(VoiceService.CurrentChannelId, StringComparer.Ordinal);
+        hash.Add(isVisible);
+        hash.Add(isNativePip);
+
+        // When hidden behind the active call stage, only OS PiP metadata/support or call-stage exit matters.
+        if (!isVisible)
+        {
+            hash.Add(VoiceService.CallParticipants.Count);
+            foreach (var p in VoiceService.CallParticipants)
+            {
+                hash.Add(p, StringComparer.Ordinal);
+            }
+            hash.Add(VoiceService.IsVideoOn);
+            hash.Add(VoiceService.IsScreenSharing);
+            hash.Add(VoiceService.ActiveCameraParticipants.Count);
+            hash.Add(VoiceService.ActiveScreenShareParticipants.Count);
+            hash.Add(VoiceUiState.IsOsPipActive);
+            return hash.ToHashCode();
+        }
+
+        var isNativeMobileClient = CircuitContext.IsCapacitorApp || VoiceService.IsNativePlatform;
+        var verifiedParticipants = !string.IsNullOrEmpty(VoiceService.CurrentChannelId)
+            ? VoiceState.GetVoiceParticipants(VoiceService.CurrentChannelId).ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+        var presentation = VoiceUiState.ComputePipPresentationState(isNativeMobileClient, verifiedParticipants);
+
+        hash.Add(VoiceUiState.IsInAppPipCollapsedPill);
+        hash.Add(_isOsPipSupported);
+        hash.Add(CircuitContext.IsMobile);
+        hash.Add(presentation.ModeClass, StringComparer.Ordinal);
+        hash.Add(presentation.DisplayParticipantId, StringComparer.Ordinal);
+        hash.Add(presentation.HasPrimaryVideo);
+        hash.Add(presentation.HasFilmstrip);
+        hash.Add(presentation.CanUseGrid);
+        hash.Add(presentation.IsGridMode);
+        hash.Add(VoiceService.IsMuted);
+        hash.Add(VoiceService.IsVideoOn);
+        hash.Add(VoiceService.IsTogglingVideo);
+        hash.Add(VoiceService.IsScreenSharing);
+        foreach (var p in VoiceService.CallParticipants)
+        {
+            hash.Add(p, StringComparer.Ordinal);
+            hash.Add(VoiceService.IsParticipantMuted(p));
+        }
+        return hash.ToHashCode();
+    }
+
+    protected override bool ShouldRender()
+    {
+        var fp = ComputePipRenderFingerprint();
+        if (!_hasRenderedOnce || fp != _lastRenderFingerprint)
+        {
+            _hasRenderedOnce = true;
+            _lastRenderFingerprint = fp;
+            return true;
+        }
+        return false;
+    }
 
     protected override void OnInitialized()
     {
@@ -217,7 +307,6 @@
 
     private void HandleStateChanged()
     {
-        UpdateStickySpeaker();
         _ = InvokeAsync(StateHasChanged);
     }
 
@@ -230,65 +319,63 @@
         });
     }
 
-    private void UpdateStickySpeaker()
+    private Employee? ResolveLiveCurrentUser()
     {
-        if (!VoiceService.IsInVoiceCall)
-        {
-            _stickySpeakerId = null;
-            _stickySpeakerUntilUtc = DateTime.MinValue;
-            return;
-        }
-
-        var now = DateTime.UtcNow;
-        var remoteSpeaking = VoiceService.ActiveSpeakers
-            .FirstOrDefault(id => id != VoiceService.CurrentUserId && !id.StartsWith("bot:", StringComparison.OrdinalIgnoreCase));
-
-        if (!string.IsNullOrEmpty(remoteSpeaking))
-        {
-            if (!string.IsNullOrEmpty(_stickySpeakerId) && VoiceService.ActiveSpeakers.Contains(_stickySpeakerId))
-            {
-                _stickySpeakerUntilUtc = now + SpeakerHysteresis;
-            }
-            else if (string.IsNullOrEmpty(_stickySpeakerId) || now >= _stickySpeakerUntilUtc || !VoiceService.CallParticipants.Contains(_stickySpeakerId))
-            {
-                _stickySpeakerId = remoteSpeaking;
-                _stickySpeakerUntilUtc = now + SpeakerHysteresis;
-            }
-        }
-        else if (!string.IsNullOrEmpty(VoiceService.CurrentUserId) && VoiceService.ActiveSpeakers.Contains(VoiceService.CurrentUserId))
-        {
-            if (string.IsNullOrEmpty(_stickySpeakerId) || now >= _stickySpeakerUntilUtc)
-            {
-                _stickySpeakerId = VoiceService.CurrentUserId;
-                _stickySpeakerUntilUtc = now + SpeakerHysteresis;
-            }
-        }
+        var currentId = !string.IsNullOrWhiteSpace(CircuitContext.UserId) ? CircuitContext.UserId : VoiceService.CurrentUserId;
+        return !string.IsNullOrWhiteSpace(currentId) ? Db.Employees.GetById(currentId) : null;
     }
 
-    private Employee? ResolveDisplayEmployee()
+    private Employee? ResolveVisibleCallParticipant(string? participantId, Employee? currentUser, IReadOnlySet<string>? verifiedParticipants = null)
     {
-        if (!string.IsNullOrEmpty(VoiceUiState.FocusedParticipantId) && VoiceService.CallParticipants.Contains(VoiceUiState.FocusedParticipantId))
+        if (string.IsNullOrWhiteSpace(participantId) || !VoiceService.IsInVoiceCall || string.IsNullOrEmpty(VoiceService.CurrentChannelId))
         {
-            var focused = Db.Employees.GetById(VoiceUiState.FocusedParticipantId);
-            if (focused != null) return focused;
+            return null;
         }
 
-        if (!string.IsNullOrEmpty(_stickySpeakerId) && VoiceService.CallParticipants.Contains(_stickySpeakerId))
+        if (!string.Equals(participantId, VoiceService.CurrentUserId, StringComparison.Ordinal))
         {
-            var sticky = Db.Employees.GetById(_stickySpeakerId);
-            if (sticky != null) return sticky;
+            bool isVerified = verifiedParticipants != null
+                ? verifiedParticipants.Contains(participantId)
+                : VoiceState.GetVoiceParticipants(VoiceService.CurrentChannelId).Contains(participantId);
+            if (!isVerified)
+            {
+                return null;
+            }
         }
 
-        var firstRemoteId = VoiceService.CallParticipants.FirstOrDefault(id => id != VoiceService.CurrentUserId);
-        if (!string.IsNullOrEmpty(firstRemoteId))
+        var target = Db.Employees.GetById(participantId);
+        if (target == null || currentUser == null)
         {
-            var remote = Db.Employees.GetById(firstRemoteId);
+            return null;
+        }
+
+        return PrivacyService.CanDiscoverUser(currentUser, target) ? target : null;
+    }
+
+    private Employee? ResolveDisplayEmployee(VoicePipPresentationState presentation, IReadOnlySet<string> verifiedParticipants)
+    {
+        if (!VoiceService.IsInVoiceCall || string.IsNullOrEmpty(VoiceService.CurrentChannelId))
+        {
+            return null;
+        }
+
+        var currentUser = ResolveLiveCurrentUser();
+
+        if (!string.IsNullOrEmpty(presentation.DisplayParticipantId))
+        {
+            var preferred = ResolveVisibleCallParticipant(presentation.DisplayParticipantId, currentUser, verifiedParticipants);
+            if (preferred != null) return preferred;
+        }
+
+        foreach (var candidateId in VoiceService.CallParticipants.Where(id => id != VoiceService.CurrentUserId))
+        {
+            var remote = ResolveVisibleCallParticipant(candidateId, currentUser, verifiedParticipants);
             if (remote != null) return remote;
         }
 
         if (!string.IsNullOrEmpty(VoiceService.CurrentUserId))
         {
-            return Db.Employees.GetById(VoiceService.CurrentUserId);
+            return ResolveVisibleCallParticipant(VoiceService.CurrentUserId, currentUser, verifiedParticipants);
         }
 
         return null;
@@ -326,6 +413,10 @@
             _wasShowingInAppPip = inAppFloatingActive;
             _wasCollapsedPill = collapsedNow;
             await VoiceUiState.SetInAppPipActiveAsync(inAppFloatingActive);
+            if (inAppFloatingActive)
+            {
+                await VoiceUiState.SyncSpeakingParticipantsAsync(VoiceService.CurrentChannelId, VoiceService.ActiveSpeakers.ToArray());
+            }
         }
     }
 
@@ -333,38 +424,57 @@
     {
         var channelId = VoiceService.CurrentChannelId ?? string.Empty;
         var channel = !string.IsNullOrEmpty(channelId) ? Db.ChatChannels.GetById(channelId) : null;
-        var channelName = channel?.Name ?? Loc["Voice channel"].Value;
+        var channelName = channel?.Name ?? Loc["Voice Channel"].Value;
         var serverName = Db.CompanyProfile.Get()?.CompanyName ?? string.Empty;
-        var channelMuted = !string.IsNullOrEmpty(channelId) ? ChatState.GetMutedUsers(channelId) : [];
+
+        var currentUser = ResolveLiveCurrentUser();
+        var verifiedParticipants = !string.IsNullOrEmpty(channelId)
+            ? VoiceState.GetVoiceParticipants(channelId).ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
 
         var participantDtos = new List<VoicePipParticipantDto>();
         foreach (var pid in VoiceService.CallParticipants.OrderBy(x => x, StringComparer.Ordinal))
         {
             if (string.IsNullOrEmpty(pid) || pid.StartsWith("bot:", StringComparison.OrdinalIgnoreCase)) continue;
-            var emp = Db.Employees.GetById(pid);
-            var fullName = emp?.FullName ?? pid;
+            if (!string.Equals(pid, VoiceService.CurrentUserId, StringComparison.Ordinal) && !verifiedParticipants.Contains(pid)) continue;
+
+            var emp = ResolveVisibleCallParticipant(pid, currentUser, verifiedParticipants);
+            var fullName = emp?.FullName ?? Loc["Unknown Participant"].Value;
             var initials = emp != null
                 ? (string.IsNullOrEmpty(emp.Initials) ? $"{emp.FirstName?.FirstOrDefault()}{emp.LastName?.FirstOrDefault()}" : emp.Initials)
-                : pid[..Math.Min(2, pid.Length)].ToUpperInvariant();
+                : "?";
             var avatarUrl = (emp != null && emp.HasCustomAvatar)
                 ? $"/spokesapi/Media/Avatar/{emp.Id}?v={emp.AvatarVersion}"
                 : string.Empty;
-            var muted = pid == VoiceService.CurrentUserId
-                ? VoiceService.IsMuted
-                : (VoiceService.MutedParticipants.Contains(pid) || channelMuted.Contains(pid));
+            var profileColor = string.IsNullOrEmpty(emp?.ProfileColor) ? Colors.DeepPurple.Default : emp.ProfileColor;
+            var muted = VoiceService.IsParticipantMuted(pid);
 
             participantDtos.Add(new VoicePipParticipantDto
             {
-                Id = pid,
+                Id = emp != null ? pid : string.Empty,
                 Name = fullName,
                 AvatarUrl = avatarUrl,
                 Initials = initials,
+                ProfileColor = profileColor,
                 IsMuted = muted
             });
         }
 
-        var sig = $"{channelId}|{channelName}|{serverName}|{VoiceService.IsMuted}|{VoiceService.IsVideoOn}|{VoiceService.IsScreenSharing}|{VoiceUiState.FocusedParticipantId}|" +
-                  string.Join(";", participantDtos.Select(p => $"{p.Id}:{p.Name}:{p.AvatarUrl}:{p.IsMuted}"));
+        var isNativeMobileClient = CircuitContext.IsCapacitorApp || VoiceService.IsNativePlatform;
+        var presentation = VoiceUiState.ComputePipPresentationState(isNativeMobileClient, verifiedParticipants);
+        var safeFocusedId = ResolveVisibleCallParticipant(VoiceUiState.FocusedParticipantId, currentUser, verifiedParticipants) != null
+            ? VoiceUiState.FocusedParticipantId ?? string.Empty
+            : string.Empty;
+        var safeDisplaySpeakerId = ResolveVisibleCallParticipant(presentation.DisplayParticipantId, currentUser, verifiedParticipants) != null
+            ? presentation.DisplayParticipantId ?? string.Empty
+            : string.Empty;
+        var safePrimaryVideoId = ResolveVisibleCallParticipant(presentation.PrimaryTargetId, currentUser, verifiedParticipants) != null && presentation.HasPrimaryVideo
+            ? presentation.PrimaryTargetId
+            : string.Empty;
+        var layoutMode = presentation.IsGridMode ? "grid" : "focus";
+
+        var sig = $"{channelId}|{channelName}|{serverName}|{isNativeMobileClient}|{VoiceService.IsMuted}|{VoiceService.IsVideoOn}|{VoiceService.IsScreenSharing}|{safeFocusedId}|{layoutMode}|{presentation.ModeClass}|{safeDisplaySpeakerId}|{safePrimaryVideoId}|{presentation.PrimaryVideoSource}|" +
+                  string.Join(";", participantDtos.Select(p => $"{p.Id}:{p.Name}:{p.AvatarUrl}:{p.ProfileColor}:{p.IsMuted}"));
         if (sig == _lastMetadataSignature) return;
         _lastMetadataSignature = sig;
 
@@ -375,12 +485,19 @@
             ChannelName = channelName,
             ServerName = serverName,
             LocalUserId = VoiceService.CurrentUserId ?? string.Empty,
+            IsNativePlatform = isNativeMobileClient,
             IsMuted = VoiceService.IsMuted,
             IsVideoOn = VoiceService.IsVideoOn,
             IsScreenSharing = VoiceService.IsScreenSharing,
-            FocusedParticipantId = VoiceUiState.FocusedParticipantId ?? string.Empty,
+            FocusedParticipantId = safeFocusedId,
+            LayoutMode = layoutMode,
+            ModeClass = presentation.ModeClass,
+            DisplaySpeakerId = safeDisplaySpeakerId,
+            PrimaryVideoParticipantId = safePrimaryVideoId,
+            PrimaryVideoSource = presentation.PrimaryVideoSource,
             Participants = participantDtos
         });
+        await VoiceUiState.SyncSpeakingParticipantsAsync(channelId, VoiceService.ActiveSpeakers.ToArray());
     }
 
     private void MinimizePip()
@@ -395,19 +512,7 @@
 
     private void ToggleGridOrFocusLayout()
     {
-        if (!string.IsNullOrEmpty(VoiceUiState.FocusedParticipantId))
-        {
-            VoiceUiState.SetFocusedParticipant(null, userInitiated: true);
-        }
-        else
-        {
-            var nextFocus = VoiceService.ActiveScreenShareParticipants.FirstOrDefault(id => id != VoiceService.CurrentUserId)
-                ?? (VoiceService.IsScreenSharing ? VoiceService.CurrentUserId : null)
-                ?? _stickySpeakerId
-                ?? VoiceService.CallParticipants.FirstOrDefault(id => id != VoiceService.CurrentUserId)
-                ?? VoiceService.CurrentUserId;
-            VoiceUiState.SetFocusedParticipant(nextFocus, userInitiated: true);
-        }
+        VoiceUiState.TogglePipGridOrFocusLayout();
     }
 
     private async Task PopOutOsPipAsync()

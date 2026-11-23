@@ -8,7 +8,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Constants;
+using Spokes_Server.Core.Exceptions;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Services.Projects;
 using Spokes_Server.Core.Services.Storage;
@@ -32,6 +35,7 @@ public class ProjectNoteServiceTests : IDisposable
         var services = new ServiceCollection();
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());
@@ -57,37 +61,74 @@ public class ProjectNoteServiceTests : IDisposable
         }
     }
 
-    [Fact]
-    public void SaveNote_And_GetNotesForProject_Works()
+    private static Employee CreateEditor(string id = "editor-1") => new()
     {
-        var note = new ProjectNote
+        Id = id,
+        FirstName = "Editor",
+        LastName = "User",
+        IsActive = true,
+        Permissions = [AppPermissions.Projects.View, AppPermissions.Projects.Edit]
+    };
+
+    [Fact]
+    public void SearchActiveProjects_WhenActorNullSuspendedOrRestrictedNonMember_ReturnsEmpty()
+    {
+        var restricted = new Project
         {
-            Id = "note-1",
-            ProjectId = "proj-1",
-            Title = "Meeting notes",
-            Content = "Discussed roadmap"
+            Id = "proj-restricted-note",
+            Name = "Classified Build",
+            IsActive = true,
+            AccessPolicy = ProjectAccessPolicy.Restricted,
+            AllowedUserIds = ["allowed-only"]
         };
+        _db.Projects.Save(restricted);
 
-        _service.SaveNote(note);
+        var suspendedEditor = CreateEditor("suspended-ed");
+        suspendedEditor.IsSuspended = true;
 
-        var notes = _service.GetNotesForProject("proj-1");
-        Assert.Single(notes);
-        Assert.Equal("Meeting notes", notes[0].Title);
+        var nonMemberEditor = CreateEditor("non-member-ed");
 
-        var emptyNotes = _service.GetNotesForProject("proj-2");
-        Assert.Empty(emptyNotes);
+        Assert.Empty(_service.SearchActiveProjects("Classified", actor: null));
+        Assert.Empty(_service.SearchActiveProjects("Classified", actor: suspendedEditor));
+        Assert.Empty(_service.SearchActiveProjects("Classified", actor: nonMemberEditor));
     }
 
     [Fact]
-    public void DeleteNote_RemovesNote()
+    public async Task AddEmailToTimelineAsync_WhenActorUnauthorizedOrRestrictedNonMember_ThrowsAccessDenied()
     {
-        var note = new ProjectNote { Id = "note-del", ProjectId = "proj-1", Title = "To Delete" };
-        _service.SaveNote(note);
+        var restricted = new Project
+        {
+            Id = "proj-restricted-tl",
+            Name = "Secret Timeline",
+            IsActive = true,
+            AccessPolicy = ProjectAccessPolicy.Restricted,
+            AllowedUserIds = ["allowed-only"]
+        };
+        _db.Projects.Save(restricted);
 
-        _service.DeleteNote("note-del");
+        var emlPath = Path.Combine(_testDataDir, "secret.eml");
+        await File.WriteAllTextAsync(emlPath, "Subject: Secret");
 
-        var notes = _service.GetNotesForProject("proj-1");
-        Assert.Empty(notes);
+        var request = new AddEmailTimelineEntryRequest
+        {
+            ProjectId = restricted.Id,
+            EmailId = "email-secret",
+            MimeFilePath = emlPath,
+            Title = "Email: Subject",
+            FromName = "Sender",
+            FromAddress = "sender@example.com",
+            ToAddresses = ["to@example.com"],
+            Date = DateTime.Today,
+            Subject = "Subject",
+            UserNotes = "Notes",
+            CreatedBy = "Employee One"
+        };
+
+        await Assert.ThrowsAsync<DomainException>(() => _service.AddEmailToTimelineAsync(request, actor: null));
+
+        var nonMember = CreateEditor("outsider");
+        var ex = await Assert.ThrowsAsync<DomainException>(() => _service.AddEmailToTimelineAsync(request, actor: nonMember));
+        Assert.Equal("ACCESS_DENIED", ex.ErrorCode);
     }
 
     [Fact]
@@ -101,11 +142,12 @@ public class ProjectNoteServiceTests : IDisposable
         _db.Projects.Save(p2);
         _db.Projects.Save(p3);
 
-        var searchAlpha = _service.SearchActiveProjects("Alpha");
+        var editor = CreateEditor();
+        var searchAlpha = _service.SearchActiveProjects("Alpha", editor);
         Assert.Single(searchAlpha);
         Assert.Equal("Alpha Robot", searchAlpha[0].DisplayName);
 
-        var allActive = _service.SearchActiveProjects("");
+        var allActive = _service.SearchActiveProjects("", editor);
         Assert.Equal(2, allActive.Count);
         // Ordered by descending CreatedAt
         Assert.Equal("Beta Drone", allActive[0].DisplayName);
@@ -139,7 +181,7 @@ public class ProjectNoteServiceTests : IDisposable
             CreatedBy = "Charlie"
         };
 
-        var created = await _service.AddEmailToTimelineAsync(request);
+        var created = await _service.AddEmailToTimelineAsync(request, CreateEditor());
 
         Assert.NotNull(created);
         Assert.Equal("Important Update", created.Title);
@@ -182,7 +224,7 @@ public class ProjectNoteServiceTests : IDisposable
             date: new DateTime(2026, 2, 1),
             userNotes: "Attached for reference",
             createdBy: "Frank");
-        var created = await _service.AddEmailToTimelineAsync(request);
+        var created = await _service.AddEmailToTimelineAsync(request, CreateEditor());
 
         Assert.NotNull(created);
         Assert.Equal("Discussion Note", created.Title);

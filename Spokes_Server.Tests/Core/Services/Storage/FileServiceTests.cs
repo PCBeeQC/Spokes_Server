@@ -23,7 +23,7 @@ public class FileServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_FileService_" + Guid.NewGuid().ToString());
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir } };
+        var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _mockLogger = new Mock<ILogger<FileService>>();
@@ -62,14 +62,11 @@ public class FileServiceTests : IDisposable
         }
 
         [Fact]
-        public async Task UploadAsync_CalculatesSafeName_AndSavesFile()
+        public async Task UploadStreamAsync_CalculatesSafeName_AndSavesFile()
         {
-            var mockFile = new Mock<IBrowserFile>();
-            mockFile.Setup(f => f.Name).Returns("my image.png");
-            mockFile.Setup(f => f.OpenReadStream(It.IsAny<long>(), default))
-                    .Returns(new MemoryStream(Encoding.UTF8.GetBytes("fake-image-bytes")));
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes("fake-image-bytes"));
 
-            var url = await _service.UploadAsync("images", "user-123", mockFile.Object);
+            var url = await _service.UploadStreamAsync("images", "user-123", stream, "my image.png");
 
             Assert.EndsWith(".png", url);
             Assert.Contains("/images/user-123/", url);
@@ -110,13 +107,15 @@ public class FileServiceTests : IDisposable
         }
 
         [Fact]
-        public void GetPhysicalPath_SanitizesFilenames()
+        public void GetPhysicalPath_RejectsTraversalAndSeparators_AllowsEmptyFileName()
         {
-            var path = _service.GetPhysicalPath("cat/../traversal", "ctx", "file.txt");
+            Assert.Throws<ArgumentException>(() => _service.GetPhysicalPath("cat/../traversal", "ctx", "file.txt"));
+            Assert.Throws<ArgumentException>(() => _service.GetPhysicalPath("cat", "..", "file.txt"));
+            Assert.Throws<ArgumentException>(() => _service.GetPhysicalPath("cat", "ctx", "sub/file.txt"));
+            Assert.Throws<ArgumentException>(() => _service.GetPhysicalPath("cat", "ctx", "sub\\file.txt"));
 
-            // Path.GetFileName("cat/../traversal") should be "traversal"
-            Assert.Contains(Path.Combine("Uploads", "traversal", "ctx", "file.txt"), path);
-            Assert.DoesNotContain("..", path);
+            var folder = _service.GetPhysicalPath("cat", "ctx", "");
+            Assert.EndsWith(Path.Combine("Uploads", "cat", "ctx"), folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         }
 
         [Fact]
@@ -263,16 +262,6 @@ public class FileServiceTests : IDisposable
             Assert.NotEqual(name1, name2);
             Assert.DoesNotContain("/", name1);
             Assert.DoesNotContain("\\", name1);
-        }
-
-        [Fact]
-        public async Task UploadAsync_WhenExceptionThrown_LogsAndRethrows()
-        {
-            var mockFile = new Mock<IBrowserFile>();
-            mockFile.Setup(f => f.Name).Returns("test.txt");
-            mockFile.Setup(f => f.OpenReadStream(It.IsAny<long>(), default)).Throws(new IOException("Disk error"));
-
-            await Assert.ThrowsAsync<IOException>(() => _service.UploadAsync("cat", "ctx", mockFile.Object));
         }
 
         [Fact]
@@ -513,7 +502,7 @@ public class FileServiceTests : IDisposable
         [Fact]
         public async Task RepositoryFileCascade_DeletesFilesOnEntityDelete()
         {
-            RepositoryFileCascade.Initialize(_service, _mockLogger.Object);
+            var cascade = new RepositoryFileCascade(_service, _mockLogger.Object);
 
             var category = "notes";
             var contextId = "cascade-test";
@@ -529,11 +518,76 @@ public class FileServiceTests : IDisposable
             var filePath = Path.Combine(_testDataDir, "Uploads", category, contextId, parts[^1]);
             Assert.True(File.Exists(filePath));
 
-            RepositoryFileCascade.HandleEntityDeleted(note);
+            cascade.HandleEntityDeleted(note);
 
-            // Wait a brief moment as cascade handles it asynchronously
-            await Task.Delay(200);
+            // Wait for background cascade deletion without flaking under parallel test load
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (File.Exists(filePath) && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(25);
+            }
             Assert.False(File.Exists(filePath));
+        }
+
+        [Fact]
+        public async Task DiskPersistenceService_FileCascade_IsIsolatedPerInstance()
+        {
+            var otherDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_FileService_Other_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(otherDataDir);
+            try
+            {
+                var otherConfig = new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["DataPath"] = otherDataDir,
+                        ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"
+                    })
+                    .Build();
+                var otherFileService = new FileService(otherConfig, _mockLogger.Object, _mockCrypto.Object);
+
+                var writerA = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
+                writerA.AttachFileCascade(new RepositoryFileCascade(_service, _mockLogger.Object));
+
+                // Attaching a second cascade to a different DiskPersistenceService (e.g. a concurrent host)
+                // must NOT clobber writerA's cascade.
+                var writerB = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
+                writerB.AttachFileCascade(new RepositoryFileCascade(otherFileService, _mockLogger.Object));
+
+                var repoA = new Spokes_Server.Core.Data.Repositories.Projects.ProjectNoteRepository(writerA, _config);
+
+                using var sA = new MemoryStream(Encoding.UTF8.GetBytes("host A file"));
+                var urlA = await _service.UploadStreamAsync("notes", "iso-a", sA, "a.txt");
+                var filePathA = Path.Combine(_testDataDir, "Uploads", "notes", "iso-a", urlA.Split('/')[^1]);
+
+                using var sB = new MemoryStream(Encoding.UTF8.GetBytes("host B file"));
+                var urlB = await otherFileService.UploadStreamAsync("notes", "iso-b", sB, "b.txt");
+                var filePathB = Path.Combine(otherDataDir, "Uploads", "notes", "iso-b", urlB.Split('/')[^1]);
+
+                var noteA = new ProjectNote
+                {
+                    Id = "note-iso-a",
+                    ProjectId = "proj-1",
+                    Attachments = [new NoteAttachment { FilePath = urlA }]
+                };
+                repoA.Save(noteA);
+                repoA.Delete(noteA.Id);
+
+                var deadline = DateTime.UtcNow.AddSeconds(5);
+                while (File.Exists(filePathA) && DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(25);
+                }
+
+                Assert.False(File.Exists(filePathA));
+                Assert.True(File.Exists(filePathB));
+            }
+            finally
+            {
+                if (Directory.Exists(otherDataDir))
+                {
+                    try { Directory.Delete(otherDataDir, true); } catch { }
+                }
+            }
         }
     }
 

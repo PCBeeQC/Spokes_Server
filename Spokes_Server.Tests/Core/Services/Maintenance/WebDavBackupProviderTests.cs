@@ -31,7 +31,7 @@ public class WebDavBackupProviderTests : IDisposable
         Directory.CreateDirectory(_testDir);
 
         _config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testDir })
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"})
             .Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);

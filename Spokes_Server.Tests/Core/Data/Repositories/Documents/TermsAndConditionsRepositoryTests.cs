@@ -41,19 +41,6 @@ public class TermsAndConditionsRepositoryTests : RepositoryTestFixture<TermsAndC
     }
 
     [Fact]
-    public void EnsureSeeded_SeedsDefaultWhenEmpty()
-    {
-        var seeded = _repo.EnsureSeeded("Custom seeded terms");
-        Assert.NotNull(seeded);
-        Assert.Equal("Custom seeded terms", seeded.Content);
-        Assert.True(seeded.IsDefault);
-
-        _writer.FlushAll();
-        var expectedPath = Path.Combine(_testDataDir, "Settings", "TermsAndConditions", $"{seeded.Id}.json");
-        Assert.True(File.Exists(expectedPath));
-    }
-
-    [Fact]
     public void GetFilePath_SavesInSettingsTermsAndConditionsFolder()
     {
         var terms = new TermsAndConditions { Id = "tc-disk", Name = "Disk Terms" };

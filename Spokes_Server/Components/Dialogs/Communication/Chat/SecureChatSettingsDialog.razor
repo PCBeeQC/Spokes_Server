@@ -7,6 +7,7 @@
 @inject ScopedKeystoreService ScopedKeystore
 @inject ChatSecurityService ChatSecurityService
 @inject FileTokenService FileTokens
+@inject SessionService SessionService
 @inject UserCircuitContext CircuitContext
 @inject IJSRuntime JS
 @inject IConfiguration Config
@@ -14,14 +15,22 @@
 <MudDialog>
     <DialogContent>
         @{
-            string vaultUsername = !string.IsNullOrWhiteSpace(Employee?.FullName) ? Employee.FullName : Employee?.Id ?? "";
+            var effectiveEmployee = LiveEmployee;
+            string vaultUsername = !string.IsNullOrWhiteSpace(effectiveEmployee?.FullName) ? effectiveEmployee.FullName : effectiveEmployee?.Id ?? "";
             bool IsDemo = Config.GetValue<bool>("Spokes_DemoMode");
+            bool IsSuspendedOrInactive = effectiveEmployee is not { IsActiveUnsuspended: true };
         }
         
         @if (IsDemo)
         {
             <MudAlert Severity="Severity.Warning" Class="mb-4">
                 <b>@Loc["Demo Mode:"]</b> @Loc["Setting a secure vault password is disabled in the demo."]
+            </MudAlert>
+        }
+        @if (IsSuspendedOrInactive)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-4">
+                @Loc["Your account is currently suspended or restricted. Creating or changing your Vault password is disabled."]
             </MudAlert>
         }
 
@@ -74,7 +83,7 @@
                 }
             }
 
-            @if (!_isCheckingCookie && !_hasDeviceCookie && !ScopedKeystore.IsUnlocked)
+            @if (!_isCheckingCookie && !_hasDeviceCookie && !ScopedKeystore.IsUnlocked && effectiveEmployee?.IsActive == true && !effectiveEmployee.IsBanned)
             {
                 <MudText Typo="Typo.subtitle2" Class="mb-2 mt-4">@Loc["Login to Vault"]</MudText>
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-4">
@@ -84,7 +93,7 @@
                 <MudTextField @bind-Value="_oldPassword" Label="@Loc["Vault Password"]" InputType="@(_showOldPassword ? InputType.Text : InputType.Password)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-4" Adornment="Adornment.End" AdornmentIcon="@(_showOldPassword ? Icons.Material.Filled.Visibility : Icons.Material.Filled.VisibilityOff)" OnAdornmentClick="@(() => _showOldPassword = !_showOldPassword)" AdornmentAriaLabel="@Loc["Show/hide password"]" UserAttributes="@(new Dictionary<string,object>{{ "autocomplete", "current-password" }})" Disabled="@IsDemo" />
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LoginToVault" FullWidth="true" Disabled="@IsDemo">@Loc["Unlock Vault"]</MudButton>
             }
-            else
+            else if (!IsSuspendedOrInactive)
             {
                 <MudText Typo="Typo.subtitle2" Class="mb-2 mt-4">@Loc["Change Password"]</MudText>
                 <input type="text" autocomplete="username" value="@($"{vaultUsername} (Chat Vault)")" style="position: absolute; left: -9999px;" tabindex="-1" aria-hidden="true" />
@@ -95,7 +104,7 @@
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ChangePassword" FullWidth="true" Disabled="@IsDemo">@Loc["Update Password"]</MudButton>
             }
         }
-        else
+        else if (!IsSuspendedOrInactive)
         {
              <MudAlert Severity="Severity.Warning" Class="mb-4">@Loc["Secure Chat Disabled. You must set a password to use secure channels."]</MudAlert>
 
@@ -126,11 +135,16 @@
     private bool _isCheckingCookie = true;
     private bool _hasDeviceCookie = false;
 
+    private Employee? LiveEmployee =>
+        !string.IsNullOrEmpty(Employee?.Id)
+            ? (Db.Employees.GetById(Employee.Id) ?? Employee)
+            : Employee;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && Employee.HasVaultPassword)
+        if (firstRender && LiveEmployee?.HasVaultPassword == true)
         {
-            _hasDeviceCookie = await ScopedKeystore.HasDeviceCookieAsync(JS);
+            _hasDeviceCookie = LiveEmployee.IsActiveUnsuspended && await ScopedKeystore.HasDeviceCookieAsync(JS);
             _isCheckingCookie = false;
             StateHasChanged();
         }
@@ -138,10 +152,17 @@
 
     private async Task LoginToVault()
     {
-        var unlocked = await ScopedKeystore.UnlockWithPasswordAsync(JS, Employee, _oldPassword, rememberDevice: true);
+        var liveEmp = !string.IsNullOrEmpty(Employee?.Id) ? Db.Employees.GetById(Employee.Id) : null;
+        if (liveEmp == null || !liveEmp.IsActive || liveEmp.IsBanned)
+        {
+            Snackbar.Add(Loc["Your account is not permitted to unlock the vault."].Value, Severity.Error);
+            return;
+        }
+
+        var unlocked = await ScopedKeystore.UnlockWithPasswordAsync(JS, liveEmp, _oldPassword, rememberDevice: !liveEmp.IsSuspended);
         if (unlocked)
         {
-            _hasDeviceCookie = true;
+            _hasDeviceCookie = !liveEmp.IsSuspended;
             _oldPassword = "";
             Snackbar.Add(Loc["Vault unlocked successfully!"].Value, Severity.Success);
             StateHasChanged();
@@ -154,24 +175,32 @@
 
     private async Task SetupInitialPassword()
     {
+        if (Config.GetValue<bool>("Spokes_DemoMode"))
+        {
+            Snackbar.Add(Loc["Setting a secure vault password is disabled in the demo."].Value, Severity.Error);
+            return;
+        }
+
+        var liveEmp = !string.IsNullOrEmpty(Employee?.Id) ? Db.Employees.GetById(Employee.Id) : null;
+        if (liveEmp is not { IsActive: true, IsSuspended: false, IsBanned: false })
+        {
+            Snackbar.Add(Loc["Your account is not authorized to configure a vault password."].Value, Severity.Error);
+            return;
+        }
+
         if (string.IsNullOrEmpty(_newPassword)) { Snackbar.Add(Loc["Password required"].Value, Severity.Error); return; }
         if (_newPassword != _confirmPassword) { Snackbar.Add(Loc["Passwords do not match"].Value, Severity.Error); return; }
 
-        var keys = Crypto.GenerateRsaKeyPair();
-        var kek = Crypto.DeriveKeyFromPassword(_newPassword, Employee.Id);
-        var encryptedPrivate = Crypto.EncryptAes(keys.PrivateKey, kek);
-
-        Employee.PublicKey = keys.PublicKey;
-        Employee.EncryptedPrivateKey = encryptedPrivate;
-        Db.Employees.Save(Employee);
+        var (plainPrivateKey, encryptedPrivateKey) = ChatSecurityService.ProvisionUserVaultKeys(liveEmp, _newPassword);
+        Employee = liveEmp;
 
         // Auto-unlock the vault and drop the cookie
-        ScopedKeystore.Unlock(keys.PrivateKey, Employee.Id);
-        Keystore.UnlockVault(Employee.Id, Employee.EncryptedPrivateKey, _newPassword, Crypto);
+        ScopedKeystore.Unlock(plainPrivateKey, liveEmp.Id);
+        Keystore.StoreVerifiedPrivateKey(liveEmp.Id, encryptedPrivateKey, _newPassword, plainPrivateKey);
         await SetVaultCookie(_newPassword);
 
         // Claim any escrowed public/team channel keys and albums specifically for this user
-        await ChatSecurityService.ClaimEscrowedKeysAsync(Employee.Id);
+        await ChatSecurityService.ClaimEscrowedKeysAsync(liveEmp.Id);
 
         Snackbar.Add(Loc["Secure chat enabled successfully!"].Value, Severity.Success);
         MudDialog.Close(DialogResult.Ok(true));
@@ -179,33 +208,54 @@
 
     private async Task ChangePassword()
     {
+        if (Config.GetValue<bool>("Spokes_DemoMode"))
+        {
+            Snackbar.Add(Loc["Setting a secure vault password is disabled in the demo."].Value, Severity.Error);
+            return;
+        }
+
+        var liveEmp = !string.IsNullOrEmpty(Employee?.Id) ? Db.Employees.GetById(Employee.Id) : null;
+        if (liveEmp is not { IsActive: true, IsSuspended: false, IsBanned: false } || string.IsNullOrEmpty(liveEmp.EncryptedPrivateKey))
+        {
+            Snackbar.Add(Loc["Your account is not authorized to change your vault password."].Value, Severity.Error);
+            return;
+        }
+
         if (string.IsNullOrEmpty(_oldPassword)) { Snackbar.Add(Loc["Current password required"].Value, Severity.Error); return; }
         if (string.IsNullOrEmpty(_newPassword)) { Snackbar.Add(Loc["New password required"].Value, Severity.Error); return; }
         if (_newPassword != _confirmPassword) { Snackbar.Add(Loc["Passwords do not match"].Value, Severity.Error); return; }
 
         try 
         {
-            var oldKek = Crypto.DeriveKeyFromPassword(_oldPassword, Employee.Id);
-            var plainPrivateKey = Crypto.DecryptAes(Employee.EncryptedPrivateKey!, oldKek);
+            var oldKek = Crypto.DeriveKeyFromPassword(_oldPassword, liveEmp.Id);
+            var plainPrivateKey = Crypto.DecryptAes(liveEmp.EncryptedPrivateKey, oldKek);
+            if (string.IsNullOrEmpty(plainPrivateKey) || !plainPrivateKey.Contains("<RSAKeyValue>", StringComparison.Ordinal))
+            {
+                Snackbar.Add(Loc["Current password is incorrect."].Value, Severity.Error);
+                return;
+            }
 
-            var newKek = Crypto.DeriveKeyFromPassword(_newPassword, Employee.Id);
+            var newKek = Crypto.DeriveKeyFromPassword(_newPassword, liveEmp.Id);
             var newEncryptedPrivate = Crypto.EncryptAes(plainPrivateKey, newKek);
 
-            Employee.EncryptedPrivateKey = newEncryptedPrivate;
-            Db.Employees.Save(Employee);
+            liveEmp.EncryptedPrivateKey = newEncryptedPrivate;
+            Db.Employees.Save(liveEmp);
+            Employee = liveEmp;
 
-            foreach (var otherSession in Db.DeviceSessions.GetByEmployeeId(Employee.Id))
+            foreach (var otherSession in Db.DeviceSessions.GetByEmployeeId(liveEmp.Id))
             {
                 if (!string.Equals(otherSession.Id, CircuitContext?.SessionId, StringComparison.Ordinal) && otherSession.HasVaultCookie)
                 {
                     otherSession.HasVaultCookie = false;
+                    otherSession.VaultNonce = Guid.NewGuid().ToString("N");
                     Db.DeviceSessions.Save(otherSession);
+                    SessionService.TriggerRemoteVaultLock(otherSession.Id);
                 }
             }
-            FileTokens.InvalidateUserEncryptedTokens(Employee.Id);
+            FileTokens.InvalidateUserEncryptedTokens(liveEmp.Id);
 
-            ScopedKeystore.Unlock(plainPrivateKey, Employee.Id);
-            Keystore.UnlockVault(Employee.Id, Employee.EncryptedPrivateKey, _newPassword, Crypto);
+            ScopedKeystore.Unlock(plainPrivateKey, liveEmp.Id);
+            Keystore.StoreVerifiedPrivateKey(liveEmp.Id, liveEmp.EncryptedPrivateKey, _newPassword, plainPrivateKey);
             await SetVaultCookie(_newPassword);
 
             Snackbar.Add(Loc["Vault password updated!"].Value, Severity.Success);

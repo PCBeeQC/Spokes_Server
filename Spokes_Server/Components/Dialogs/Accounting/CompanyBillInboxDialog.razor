@@ -1,87 +1,120 @@
 @using Spokes_Server.Aggregate
+@using Spokes_Server.Components.Dialogs.Communication.Email
 @using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Services.Accounting
-@using Spokes_Server.Core.Services.Security
 @inject Database Db
 @inject CompanyBillInboxService BillInboxService
-@inject EncryptionService EncryptionService
+@inject UserService UserService
+@inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject IStringLocalizer<BusinessResources> BizLoc
+@inject IStringLocalizer<AppResources> Loc
 
 <MudDialog>
     <DialogContent>
         <MudText Typo="Typo.body2" Class="mb-3 text-muted">
-            Configure the central company-wide billing mailbox (e.g. <code>factures@poly-robotics.com</code>).
-            Incoming emails and invoices sent to this address are monitored and automatically extracted into draft bills.
+            @BizLoc["Configure the central company-wide billing mailbox by selecting an Email Account (Real Inbox) and optional Virtual Inbox filter. Incoming invoices sent to this mailbox are monitored and automatically extracted into draft bills."]
         </MudText>
 
         <MudForm @ref="_form">
-            <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" Class="pt-3">
-                <!-- Tab 1: Server Connection -->
-                <MudTabPanel Text="Connection" Icon="@Icons.Material.Filled.Email">
+            <MudTabs Elevation="0" Outlined="true" Rounded="true" ApplyEffectsToContainer="true" Class="pt-3">
+                <!-- Tab 1: Mailbox Binding -->
+                <MudTabPanel Text="@BizLoc["Mailbox"]" Icon="@Icons.Material.Filled.Email">
                     <MudGrid>
                         <!-- Master Enable -->
                         <MudItem xs="12">
-                            <MudSwitch @bind-Value="Settings.Enabled" Color="Color.Primary" Label="Enable Company Billing Inbox Automated Ingestion" />
+                            <MudSwitch @bind-Value="Settings.Enabled" Color="Color.Primary" Label="@BizLoc["Enable Company Billing Inbox Automated Ingestion"]" />
                         </MudItem>
 
-                        <!-- Core Identity -->
-                        <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="Settings.EmailAddress" Label="Billing Email Address" Required="true"
-                                          Placeholder="factures@yourcompany.com" HelperText="Central address where suppliers send bills" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="Settings.DisplayName" Label="Display Name" Required="true"
-                                          Placeholder="Facturation Poly-Robotics" HelperText="Name shown when replying to suppliers" />
-                        </MudItem>
-
-                        <!-- IMAP Settings -->
+                        <!-- Real Inbox Selection -->
                         <MudItem xs="12">
-                            <MudDivider Class="my-2" />
-                            <MudText Typo="Typo.subtitle2" Color="Color.Primary">Incoming Mail (IMAP)</MudText>
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="Settings.ImapHost" Label="IMAP Host" Placeholder="mail.yourcompany.com or imap.gmail.com" />
-                        </MudItem>
-                        <MudItem xs="6" sm="3">
-                            <MudNumericField @bind-Value="Settings.ImapPort" Label="IMAP Port" />
-                        </MudItem>
-                        <MudItem xs="6" sm="3" Class="d-flex align-center">
-                            <MudSwitch @bind-Value="Settings.ImapSsl" Color="Color.Primary" Label="Use SSL" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="Settings.ImapUsername" Label="IMAP Username" HelperText="Leave empty if same as email" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="_plainImapPassword" Label="IMAP Password" InputType="InputType.Password"
-                                          HelperText="@(!string.IsNullOrEmpty(Settings.EncryptedImapPassword) ? "Password is saved. Enter new password to change." : "Password required to authenticate.")" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="Settings.FolderToMonitor" Label="Folder to Monitor" Placeholder="INBOX" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudNumericField @bind-Value="Settings.CheckIntervalMinutes" Label="Sync Interval (Minutes)" Min="2" Max="1440" />
+                            <div class="d-flex align-center gap-2 flex-wrap">
+                                <div class="flex-grow-1" style="min-width: 240px;">
+                                    <MudSelect T="string"
+                                               Value="Settings.AccountId"
+                                               ValueChanged="OnAccountIdChanged"
+                                               Label="@BizLoc["Real Inbox (Email Account)"]"
+                                               Variant="Variant.Outlined"
+                                               Margin="Margin.Dense"
+                                               HelperText="@BizLoc["Select the IMAP mailbox to monitor for incoming supplier bills"]">
+                                        <MudSelectItem Value="@string.Empty">@BizLoc["-- Select Real Inbox --"]</MudSelectItem>
+                                        @foreach (var acc in _accounts)
+                                        {
+                                            <MudSelectItem Value="@acc.Id">
+                                                @(string.IsNullOrWhiteSpace(acc.Name) ? acc.EmailAddress : $"{acc.Name} ({acc.EmailAddress})")
+                                            </MudSelectItem>
+                                        }
+                                    </MudSelect>
+                                </div>
+                                @if (_canManageServerMailboxes)
+                                {
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Primary"
+                                               Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Add"
+                                               OnClick="CreateNewRealInboxAsync">
+                                        @BizLoc["New Real Inbox"]
+                                    </MudButton>
+                                    @if (!string.IsNullOrWhiteSpace(Settings.AccountId))
+                                    {
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Default"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.Edit"
+                                                   OnClick="EditSelectedRealInboxAsync">
+                                            @BizLoc["Edit Real Inbox"]
+                                        </MudButton>
+                                    }
+                                }
+                            </div>
                         </MudItem>
 
-                        <!-- SMTP Settings -->
-                        <MudItem xs="12">
-                            <MudDivider Class="my-2" />
-                            <MudText Typo="Typo.subtitle2" Color="Color.Primary">Outgoing Mail (SMTP - For Inquiries & Replies)</MudText>
+                        <!-- Virtual Inbox Filter (Optional) -->
+                        <MudItem xs="12" sm="6">
+                            <MudSelect T="string"
+                                       Value="Settings.InboxId"
+                                       ValueChanged="OnInboxIdChanged"
+                                       Label="@BizLoc["Virtual Inbox Filter (Optional)"]"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       Disabled="@string.IsNullOrWhiteSpace(Settings.AccountId)"
+                                       HelperText="@BizLoc["Optionally restrict bill ingestion to a specific Virtual Inbox alias on this account"]">
+                                <MudSelectItem Value="@string.Empty">@BizLoc["All messages in Real Inbox"]</MudSelectItem>
+                                @foreach (var inbox in AvailableVirtualInboxes)
+                                {
+                                    <MudSelectItem Value="@inbox.Id">
+                                        @inbox.Name @(!string.IsNullOrWhiteSpace(inbox.PrimaryAddress) ? $"({inbox.PrimaryAddress})" : "")
+                                    </MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+
+                        <!-- Outbound Sending Identity -->
+                        <MudItem xs="12" sm="6">
+                            <MudSelect T="string"
+                                       @bind-Value="Settings.SendingIdentityId"
+                                       Label="@BizLoc["Outbound Sending Identity"]"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       Disabled="@string.IsNullOrWhiteSpace(Settings.AccountId)"
+                                       HelperText="@BizLoc["Identity used when composing or replying to suppliers from the Bill Inbox"]">
+                                <MudSelectItem Value="@string.Empty">@BizLoc["Use Inbox Default Identity"]</MudSelectItem>
+                                @foreach (var identity in _identities)
+                                {
+                                    <MudSelectItem Value="@identity.Id">
+                                        @(!string.IsNullOrWhiteSpace(identity.DisplayName) ? $"{identity.DisplayName} <{identity.EmailAddress}>" : identity.EmailAddress)
+                                    </MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="Settings.FolderToMonitor" Label="@BizLoc["Folder to Monitor"]" Placeholder="INBOX" Variant="Variant.Outlined" Margin="Margin.Dense" />
                         </MudItem>
                         <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="Settings.SmtpHost" Label="SMTP Host" Placeholder="mail.yourcompany.com or smtp.gmail.com" />
-                        </MudItem>
-                        <MudItem xs="6" sm="3">
-                            <MudNumericField @bind-Value="Settings.SmtpPort" Label="SMTP Port" />
-                        </MudItem>
-                        <MudItem xs="6" sm="3" Class="d-flex align-center">
-                            <MudSwitch @bind-Value="Settings.SmtpSsl" Color="Color.Primary" Label="Use SSL" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="Settings.SmtpUsername" Label="SMTP Username" HelperText="Leave empty if same as IMAP/Email" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="_plainSmtpPassword" Label="SMTP Password" InputType="InputType.Password"
-                                          HelperText="@(!string.IsNullOrEmpty(Settings.EncryptedSmtpPassword) ? "Password is saved. Enter new password to change." : "Leave empty if same as IMAP password.")" />
+                            <MudNumericField @bind-Value="Settings.CheckIntervalMinutes" Label="@BizLoc["Sync Interval (Minutes)"]" Min="2" Max="1440" Variant="Variant.Outlined" Margin="Margin.Dense" />
                         </MudItem>
 
                         <!-- Status Info & Force Redownload -->
@@ -93,39 +126,39 @@
                                         @if (Settings.LastCheckedAt.HasValue)
                                         {
                                             <MudText Typo="Typo.caption" Class="d-block">
-                                                <b>Last Checked:</b> @Settings.LastCheckedAt.Value.ToLocalTime().ToString("g")
+                                                <b>@BizLoc["Last Checked:"]</b> @Settings.LastCheckedAt.Value.ToLocalTime().ToString("g")
                                             </MudText>
                                             <MudText Typo="Typo.caption" Class="d-block">
-                                                <b>Status:</b> @(Settings.LastCheckStatus ?? "OK")
+                                                <b>@BizLoc["Status:"]</b> @(Settings.LastCheckStatus ?? "OK")
                                             </MudText>
                                             <MudText Typo="Typo.caption" Class="d-block">
-                                                <b>Last Batch Ingested:</b> @Settings.LastIngestedCount message(s)
+                                                <b>@BizLoc["Last Batch Ingested:"]</b> @Settings.LastIngestedCount message(s)
                                             </MudText>
                                         }
                                         else
                                         {
                                             <MudText Typo="Typo.caption" Class="d-block">
-                                                <b>Status:</b> Mailbox has not been synced yet.
+                                                <b>@BizLoc["Status:"]</b> @BizLoc["Mailbox has not been synced yet."]
                                             </MudText>
                                         }
                                     </div>
                                     <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
                                                StartIcon="@Icons.Material.Filled.CloudDownload"
-                                               Disabled="@(_isRedownloading || !Settings.Enabled)"
+                                               Disabled="@(_isRedownloading || !Settings.Enabled || string.IsNullOrWhiteSpace(Settings.AccountId))"
                                                OnClick="ForceRedownload">
                                         @if (_isRedownloading)
                                         {
                                             <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
-                                            <span>Redownloading...</span>
+                                            <span>@BizLoc["Redownloading..."]</span>
                                         }
                                         else
                                         {
-                                            <span>Force Redownload Mailbox</span>
+                                            <span>@BizLoc["Force Redownload Mailbox"]</span>
                                         }
                                     </MudButton>
                                 </div>
                                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-block">
-                                    Re-fetches recent emails directly from IMAP to repair missing email bodies, cache raw MIME, and re-run bill extraction.
+                                    @BizLoc["Re-fetches recent emails directly from IMAP to repair missing email bodies, cache raw MIME, and re-run bill extraction."]
                                 </MudText>
                             </MudPaper>
                         </MudItem>
@@ -199,20 +232,20 @@
         </MudForm>
     </DialogContent>
     <DialogActions>
-        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="TestConnection" Disabled="_isTesting">
+        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="TestConnection" Disabled="@(_isTesting || string.IsNullOrWhiteSpace(Settings.AccountId))">
             @if (_isTesting)
             {
                 <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                <span>Testing...</span>
+                <span>@Loc["Testing..."]</span>
             }
             else
             {
-                <span>Test Connection</span>
+                <span>@Loc["Test Connection"]</span>
             }
         </MudButton>
         <MudSpacer />
-        <MudButton OnClick="Cancel">Cancel</MudButton>
-        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save Settings</MudButton>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">@BizLoc["Save Settings"]</MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -221,34 +254,47 @@
 
     private MudForm _form = default!;
     private CompanyBillInboxSettings Settings = new();
-    private string _plainImapPassword = "";
-    private string _plainSmtpPassword = "";
+    private List<EmailAccount> _accounts = [];
+    private List<EmailInbox> _inboxes = [];
+    private List<EmailSendingIdentity> _identities = [];
     private bool _isTesting = false;
     private bool _isRedownloading = false;
+    private Employee? _currentEmployee;
+    private bool _canManageServerMailboxes =>
+        _currentEmployee is { IsActive: true, IsBanned: false, IsSuspended: false } &&
+        (_currentEmployee.IsAdmin || _currentEmployee.HasEffectivePermission(AppPermissions.Admin.ManageSettings));
 
     private string _ignoredSenderDomainsText = "";
 
-    protected override void OnInitialized()
+    private IEnumerable<EmailInbox> AvailableVirtualInboxes =>
+        string.IsNullOrWhiteSpace(Settings.AccountId)
+            ? []
+            : _inboxes.Where(i => string.Equals(i.AccountId, Settings.AccountId, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.IsActive || emp.IsBanned || emp.IsSuspended || !emp.HasEffectivePermission(AppPermissions.Admin.ManageSettings))
+        {
+            Snackbar.Add(Loc["Access Denied"].Value, Severity.Error);
+            MudDialog.Cancel();
+            return;
+        }
+
+        _currentEmployee = emp;
+        ReloadEmailEntities();
+
         var current = BillInboxService.GetSettings();
-        // Clone
         Settings = new CompanyBillInboxSettings
         {
             Enabled = current.Enabled,
+            AccountId = current.AccountId,
+            InboxId = current.InboxId,
+            SendingIdentityId = current.SendingIdentityId,
             EmailAddress = current.EmailAddress,
             DisplayName = current.DisplayName,
-            ImapHost = current.ImapHost,
-            ImapPort = current.ImapPort,
-            ImapSsl = current.ImapSsl,
-            ImapUsername = current.ImapUsername,
-            EncryptedImapPassword = current.EncryptedImapPassword,
             FolderToMonitor = current.FolderToMonitor,
             CheckIntervalMinutes = current.CheckIntervalMinutes,
-            SmtpHost = current.SmtpHost,
-            SmtpPort = current.SmtpPort,
-            SmtpSsl = current.SmtpSsl,
-            SmtpUsername = current.SmtpUsername,
-            EncryptedSmtpPassword = current.EncryptedSmtpPassword,
             DefaultCurrency = current.DefaultCurrency,
             DuplicateDateWindowDays = current.DuplicateDateWindowDays,
             PoMatchToleranceAmount = current.PoMatchToleranceAmount,
@@ -270,12 +316,179 @@
         _ignoredSenderDomainsText = string.Join(", ", Settings.IgnoredSenderDomains);
     }
 
+    private void ReloadEmailEntities()
+    {
+        _accounts = Db.EmailAccounts.GetAll().Where(a => a.IsServerManaged && !a.IsArchived).OrderBy(a => a.Name).ToList();
+        _inboxes = Db.EmailInboxes.GetAll().Where(i => i.IsServerManaged).OrderBy(i => i.SortOrder).ThenBy(i => i.Name).ToList();
+        _identities = Db.EmailSendingIdentities.GetAll().Where(i => i.IsServerManaged).OrderBy(i => i.DisplayName).ThenBy(i => i.EmailAddress).ToList();
+    }
+
+    private void OnAccountIdChanged(string accountId)
+    {
+        Settings.AccountId = accountId ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(Settings.InboxId))
+        {
+            var inbox = _inboxes.FirstOrDefault(i => i.Id == Settings.InboxId);
+            if (inbox == null || !string.Equals(inbox.AccountId, Settings.AccountId, StringComparison.OrdinalIgnoreCase))
+            {
+                Settings.InboxId = string.Empty;
+            }
+        }
+    }
+
+    private void OnInboxIdChanged(string inboxId)
+    {
+        Settings.InboxId = inboxId ?? string.Empty;
+    }
+
+    private async Task CreateNewRealInboxAsync()
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor is not { IsActive: true, IsBanned: false, IsSuspended: false } ||
+            !(actor.IsAdmin || actor.HasEffectivePermission(AppPermissions.Admin.ManageSettings)))
+        {
+            Snackbar.Add(Loc["Access Denied"].Value, Severity.Error);
+            return;
+        }
+
+        var newAccount = new EmailAccount
+        {
+            OwnerEmployeeId = actor.Id,
+            IsServerManaged = true,
+            Name = "Company Billing Inbox"
+        };
+
+        var parameters = new DialogParameters<EmailAccountDialog>
+        {
+            { x => x.Account, newAccount },
+            { x => x.IsNew, true },
+            { x => x.AllowCustomServer, actor.IsAdmin },
+            { x => x.CurrentUserId, actor.Id },
+            { x => x.IsAdmin, actor.IsAdmin }
+        };
+
+        var dialog = await DialogService.ShowAsync<EmailAccountDialog>(BizLoc["Add Real Inbox"], parameters, new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = true
+        });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: EmailAccount createdAccount })
+        {
+            if (!createdAccount.IsServerManaged)
+            {
+                createdAccount.IsServerManaged = true;
+                Db.EmailAccounts.Save(createdAccount);
+            }
+            ReloadEmailEntities();
+            Settings.AccountId = createdAccount.Id;
+            Settings.InboxId = string.Empty;
+            if (!string.IsNullOrWhiteSpace(createdAccount.DefaultIdentityId))
+            {
+                Settings.SendingIdentityId = createdAccount.DefaultIdentityId;
+            }
+            StateHasChanged();
+        }
+    }
+
+    private async Task EditSelectedRealInboxAsync()
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor is not { IsActive: true, IsBanned: false, IsSuspended: false } ||
+            !(actor.IsAdmin || actor.HasEffectivePermission(AppPermissions.Admin.ManageSettings)))
+        {
+            Snackbar.Add(Loc["Access Denied"].Value, Severity.Error);
+            return;
+        }
+
+        var account = Db.EmailAccounts.GetById(Settings.AccountId);
+        if (account == null || !account.IsServerManaged)
+        {
+            Snackbar.Add(Loc["Access Denied"].Value, Severity.Error);
+            return;
+        }
+
+        var parameters = new DialogParameters<EmailAccountDialog>
+        {
+            { x => x.Account, account },
+            { x => x.IsNew, false },
+            { x => x.AllowCustomServer, actor.IsAdmin },
+            { x => x.CurrentUserId, actor.Id },
+            { x => x.IsAdmin, actor.IsAdmin }
+        };
+
+        var dialog = await DialogService.ShowAsync<EmailAccountDialog>(BizLoc["Edit Real Inbox"], parameters, new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = true
+        });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            ReloadEmailEntities();
+            StateHasChanged();
+        }
+    }
+
+    private bool ValidateServerManagedSelections()
+    {
+        if (!string.IsNullOrWhiteSpace(Settings.AccountId))
+        {
+            var account = Db.EmailAccounts.GetById(Settings.AccountId.Trim());
+            if (account == null || !account.IsServerManaged)
+            {
+                Snackbar.Add(Loc["Company Bill Inbox can only bind to a server-managed Email Account."].Value, Severity.Error);
+                return false;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(Settings.InboxId))
+        {
+            var inbox = Db.EmailInboxes.GetById(Settings.InboxId.Trim());
+            if (inbox == null || !inbox.IsServerManaged ||
+                (!string.IsNullOrWhiteSpace(Settings.AccountId) &&
+                 !string.Equals(inbox.AccountId, Settings.AccountId.Trim(), StringComparison.OrdinalIgnoreCase)))
+            {
+                Snackbar.Add(Loc["Company Bill Inbox can only bind to a server-managed Virtual Inbox on the selected account."].Value, Severity.Error);
+                return false;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(Settings.SendingIdentityId))
+        {
+            var identity = Db.EmailSendingIdentities.GetById(Settings.SendingIdentityId.Trim());
+            if (identity == null || !identity.IsServerManaged)
+            {
+                Snackbar.Add(Loc["Company Bill Inbox can only use a server-managed Sending Identity."].Value, Severity.Error);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private async Task TestConnection()
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.IsActive || emp.IsBanned || emp.IsSuspended || !emp.HasEffectivePermission(AppPermissions.Admin.ManageSettings))
+        {
+            Snackbar.Add(Loc["Access Denied"].Value, Severity.Error);
+            return;
+        }
+
+        if (!ValidateServerManagedSelections())
+        {
+            return;
+        }
+
         _isTesting = true;
         try
         {
-            var result = await BillInboxService.TestConnectionAsync(Settings, string.IsNullOrEmpty(_plainImapPassword) ? null : _plainImapPassword);
+            var result = await BillInboxService.TestConnectionAsync(Settings, emp);
             if (result.Success)
             {
                 Snackbar.Add(result.Message, Severity.Success);
@@ -297,23 +510,25 @@
 
     private async Task ForceRedownload()
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.IsActive || emp.IsBanned || emp.IsSuspended || !emp.HasEffectivePermission(AppPermissions.Admin.ManageSettings))
+        {
+            Snackbar.Add(Loc["Access Denied"].Value, Severity.Error);
+            return;
+        }
+
+        if (!ValidateServerManagedSelections())
+        {
+            return;
+        }
+
         _isRedownloading = true;
         try
         {
-            if (!string.IsNullOrEmpty(_plainImapPassword))
-            {
-                Settings.EncryptedImapPassword = EncryptionService.Encrypt(_plainImapPassword);
-            }
-            if (!string.IsNullOrEmpty(_plainSmtpPassword))
-            {
-                Settings.EncryptedSmtpPassword = EncryptionService.Encrypt(_plainSmtpPassword);
-            }
-
             Settings.IgnoredSenderDomains = ParseList(_ignoredSenderDomainsText);
+            BillInboxService.SaveSettings(Settings, emp);
 
-            BillInboxService.SaveSettings(Settings);
-
-            var (refreshed, newlyAdded) = await BillInboxService.ForceRedownloadAsync();
+            var (refreshed, newlyAdded) = await BillInboxService.ForceRedownloadAsync(actor: emp);
             Snackbar.Add($"Mailbox redownload complete: {refreshed} existing email(s) repaired/refreshed, {newlyAdded} new email(s) ingested.", Severity.Success);
 
             var current = BillInboxService.GetSettings();
@@ -331,21 +546,30 @@
         }
     }
 
-    private void Save()
+    private async Task Save()
     {
-        if (!string.IsNullOrEmpty(_plainImapPassword))
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.IsActive || emp.IsBanned || emp.IsSuspended || !emp.HasEffectivePermission(AppPermissions.Admin.ManageSettings))
         {
-            Settings.EncryptedImapPassword = EncryptionService.Encrypt(_plainImapPassword);
+            Snackbar.Add(Loc["Access Denied"].Value, Severity.Error);
+            return;
         }
-        if (!string.IsNullOrEmpty(_plainSmtpPassword))
+
+        if (Settings.Enabled && string.IsNullOrWhiteSpace(Settings.AccountId))
         {
-            Settings.EncryptedSmtpPassword = EncryptionService.Encrypt(_plainSmtpPassword);
+            Snackbar.Add(BizLoc["Please select a Real Inbox (Email Account) when automated ingestion is enabled."].Value, Severity.Warning);
+            return;
+        }
+
+        if (!ValidateServerManagedSelections())
+        {
+            return;
         }
 
         Settings.IgnoredSenderDomains = ParseList(_ignoredSenderDomainsText);
 
-        BillInboxService.SaveSettings(Settings);
-        Snackbar.Add("Company billing inbox settings saved", Severity.Success);
+        BillInboxService.SaveSettings(Settings, emp);
+        Snackbar.Add(BizLoc["Company billing inbox settings saved"].Value, Severity.Success);
         MudDialog.Close(DialogResult.Ok(Settings));
     }
 

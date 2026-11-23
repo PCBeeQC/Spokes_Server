@@ -4,13 +4,15 @@
 @attribute [AllowAnonymous]
 @using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Communication.Presence
 @using Spokes_Server.Components.Layout
 @inject ISlideshowSessionService SessionService
+@inject UserCircuitContext CircuitContext
 @inject IHttpContextAccessor HttpContextAccessor
-@inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ILogger<SlideshowPair> Logger
 @implements IDisposable
+@implements IAsyncDisposable
 
 <PageTitle>@(IsPresenting ? _stagePayload?.AlbumTitle ?? Loc["Slideshow Stage"].Value : Loc["Spokes TV Pairing"].Value)</PageTitle>
 
@@ -225,6 +227,8 @@
 
     private SlideshowSession? _currentSession;
     private bool _ownsCurrentSession;
+    private bool _disposed;
+    private bool _connectionDown;
     private string? _ownedTvConnectionId;
     private string? _stageCircuitToken;
     private string? _creatorIp;
@@ -328,6 +332,9 @@
         SessionService.OnZoomUpdated += HandleZoomUpdated;
         SessionService.OnVideoControlUpdated += HandleVideoControlUpdated;
         SessionService.OnSessionEnded += HandleSessionEnded;
+        CircuitContext.OnConnectionDown += HandleCircuitConnectionDown;
+        CircuitContext.OnConnectionUp += HandleCircuitConnectionUp;
+        CircuitContext.OnCircuitClosed += HandleCircuitClosed;
 
         if (!string.IsNullOrWhiteSpace(DirectSessionId))
         {
@@ -359,10 +366,12 @@
         // Refresh PIN every 4 minutes if still on pairing screen
         _pinRefreshTimer = new System.Threading.Timer(_ =>
         {
+            if (_disposed || _connectionDown) return;
             if (!IsPresenting && string.IsNullOrWhiteSpace(DirectSessionId))
             {
                 InvokeAsync(() =>
                 {
+                    if (_disposed || _connectionDown || IsPresenting || !string.IsNullOrWhiteSpace(DirectSessionId)) return;
                     CreateNewSession();
                     StateHasChanged();
                 });
@@ -370,16 +379,7 @@
         }, null, TimeSpan.FromMinutes(4), TimeSpan.FromMinutes(4));
     }
 
-    private void RegeneratePin()
-    {
-        if (!IsPresenting && string.IsNullOrWhiteSpace(DirectSessionId))
-        {
-            CreateNewSession();
-            StateHasChanged();
-        }
-    }
-
-    private void CreateNewSession()
+    private void EndOwnedUnpairedSession()
     {
         if (_ownsCurrentSession && _currentSession is { IsPaired: false } && !string.IsNullOrEmpty(_ownedTvConnectionId))
         {
@@ -390,6 +390,57 @@
         _ownedTvConnectionId = null;
         _currentSession = null;
         _pairingPin = string.Empty;
+    }
+
+    private void HandleCircuitConnectionDown()
+    {
+        if (_disposed) return;
+        _connectionDown = true;
+
+        if (string.IsNullOrWhiteSpace(DirectSessionId) && !IsPresenting)
+        {
+            _pinRefreshTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+            EndOwnedUnpairedSession();
+        }
+    }
+
+    private void HandleCircuitConnectionUp()
+    {
+        if (_disposed) return;
+        _connectionDown = false;
+
+        if (string.IsNullOrWhiteSpace(DirectSessionId) && !IsPresenting && _currentSession == null)
+        {
+            _ = InvokeAsync(() =>
+            {
+                if (_disposed || _connectionDown || IsPresenting || _currentSession != null) return;
+                CreateNewSession();
+                _pinRefreshTimer?.Change(TimeSpan.FromMinutes(4), TimeSpan.FromMinutes(4));
+                StateHasChanged();
+            });
+        }
+    }
+
+    private void HandleCircuitClosed()
+    {
+        CleanupSessionAndSubscriptions();
+    }
+
+    private void RegeneratePin()
+    {
+        if (_disposed || _connectionDown) return;
+        if (!IsPresenting && string.IsNullOrWhiteSpace(DirectSessionId))
+        {
+            CreateNewSession();
+            StateHasChanged();
+        }
+    }
+
+    private void CreateNewSession()
+    {
+        if (_disposed || _connectionDown) return;
+
+        EndOwnedUnpairedSession();
         _pairingError = null;
 
         try
@@ -470,10 +521,11 @@
 
     private void HandleSessionEnded(string sessionId)
     {
-        if (_currentSession?.SessionId != sessionId) return;
+        if (_disposed || _currentSession?.SessionId != sessionId) return;
 
         InvokeAsync(() =>
         {
+            if (_disposed) return;
             _stagePayload = null;
             _pairingPin = string.Empty;
             _ownsCurrentSession = false;
@@ -489,7 +541,10 @@
             _activeBgSlot = 'A';
             if (string.IsNullOrWhiteSpace(DirectSessionId))
             {
-                CreateNewSession();
+                if (!_connectionDown)
+                {
+                    CreateNewSession();
+                }
             }
             else
             {
@@ -636,9 +691,19 @@
         return pin;
     }
 
-    public void Dispose()
+    private void CleanupSessionAndSubscriptions()
     {
+        if (_disposed) return;
+        _disposed = true;
+        _connectionDown = true;
+
         _pinRefreshTimer?.Dispose();
+        _pinRefreshTimer = null;
+
+        CircuitContext.OnConnectionDown -= HandleCircuitConnectionDown;
+        CircuitContext.OnConnectionUp -= HandleCircuitConnectionUp;
+        CircuitContext.OnCircuitClosed -= HandleCircuitClosed;
+
         SessionService.OnSessionStarted -= HandleSessionStarted;
         SessionService.OnSlideChanged -= HandleSlideChanged;
         SessionService.OnZoomUpdated -= HandleZoomUpdated;
@@ -647,12 +712,38 @@
 
         _dotNetRef?.Dispose();
         _dotNetRef = null;
-        try { JS.InvokeVoidAsync("spokesSlideshowVideo.cleanupTvVideo", "stage-video"); } catch { }
 
         if (_ownsCurrentSession && _currentSession != null)
         {
             SessionService.EndSessionIfStageOwner(_currentSession.SessionId, _ownedTvConnectionId, _stageCircuitToken);
             _ownsCurrentSession = false;
+            _ownedTvConnectionId = null;
+            _stageCircuitToken = null;
+            _currentSession = null;
+        }
+    }
+
+    public void Dispose()
+    {
+        CleanupSessionAndSubscriptions();
+        try { _ = JS.InvokeVoidAsync("spokesSlideshowVideo.cleanupTvVideo", "stage-video"); } catch { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        CleanupSessionAndSubscriptions();
+        try
+        {
+            await JS.InvokeVoidAsync("spokesSlideshowVideo.cleanupTvVideo", "stage-video");
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
         }
     }
 }

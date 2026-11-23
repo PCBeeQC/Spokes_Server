@@ -1,0 +1,116 @@
+@namespace Spokes_Server.Components.Pages.Planning
+@using Spokes_Server.Core.Models.HR
+
+@if (!ShowEmptyStateWhenEmpty || Entries.Any())
+{
+    <MudTable Items="@Entries" Dense="true" Hover="true" Elevation="0" Outlined="true">
+        <HeaderContent>
+            <MudTh>@BizLoc["Project"]</MudTh>
+            <MudTh>@BizLoc["Hours"]</MudTh>
+            <MudTh>@BizLoc["Notes"]</MudTh>
+            <MudTh Style="width: 50px;"></MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            @if (CanAccessEntry(context))
+            {
+                <MudTd>
+                    <MudAutocomplete T="string"
+                                     Label="@(ShowProjectLabel ? BizLoc["Project"].Value : null)"
+                                     Value="@context.ProjectName"
+                                     ValueChanged="@((name) => OnProjectChanged.InvokeAsync((context, name)))"
+                                     SearchFunc="@SearchProjects"
+                                     Variant="Variant.Text"
+                                     Margin="Margin.Dense"
+                                     ResetValueOnEmptyText="true"
+                                     CoerceText="true"
+                                     Disabled="@(!CanEdit)" />
+                </MudTd>
+                <MudTd>
+                    <MudNumericField Value="@context.Hours"
+                                     ValueChanged="@((decimal v) => OnHoursChanged.InvokeAsync((context, v)))"
+                                     Min="0"
+                                     Max="100"
+                                     Step="0.5M"
+                                     Margin="Margin.Dense"
+                                     HideSpinButtons="true"
+                                     Disabled="@(!CanEdit)" />
+                </MudTd>
+                <MudTd>
+                    <MudTextField Value="@context.Note"
+                                  ValueChanged="@((string v) => OnNoteChanged.InvokeAsync((context, v)))"
+                                  Placeholder="@NotePlaceholder"
+                                  Margin="Margin.Dense"
+                                  Underline="false"
+                                  DebounceInterval="500"
+                                  Disabled="@(!CanEdit)" />
+                </MudTd>
+                <MudTd>
+                    @if (!HideActionButtonsWhenReadOnly || CanEdit)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Size="Size.Small"
+                                       Color="Color.Error"
+                                       Disabled="@(!CanEdit)"
+                                       OnClick="@(() => OnRemoveEntry.InvokeAsync(context))" />
+                    }
+                </MudTd>
+            }
+            else
+            {
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" Icon="@Icons.Material.Filled.Lock">
+                        @BizLoc["Restricted Project"]
+                    </MudChip>
+                </MudTd>
+                <MudTd>
+                    <MudNumericField T="decimal" Value="@context.Hours" Disabled="true" Margin="Margin.Dense" HideSpinButtons="true" />
+                </MudTd>
+                <MudTd>
+                    <MudTextField T="string" Value="@string.Empty" Placeholder="@BizLoc["Restricted"]" Disabled="true" Margin="Margin.Dense" Underline="false" />
+                </MudTd>
+                <MudTd>
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Default" Disabled="true" />
+                </MudTd>
+            }
+        </RowTemplate>
+    </MudTable>
+}
+else if (!string.IsNullOrEmpty(EmptyStateMessage))
+{
+    <MudAlert Severity="Severity.Info" Class="mb-4">@EmptyStateMessage</MudAlert>
+}
+
+@if (!HideActionButtonsWhenReadOnly || CanEdit)
+{
+    <div class="@AddButtonContainerClass">
+        <MudButton StartIcon="@Icons.Material.Filled.Add"
+                   Disabled="@(!CanEdit)"
+                   OnClick="OnAddEntry"
+                   Variant="@AddButtonVariant"
+                   Size="@AddButtonSize"
+                   Color="Color.Primary">@BizLoc["Add Activity"]</MudButton>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public List<PlanEntry> Entries { get; set; } = [];
+    [Parameter] public bool CanEdit { get; set; }
+    [Parameter, EditorRequired] public Func<PlanEntry, bool> CanAccessEntry { get; set; } = _ => true;
+    [Parameter, EditorRequired] public Func<string, CancellationToken, Task<IEnumerable<string>>> SearchProjects { get; set; } = default!;
+
+    [Parameter] public bool ShowProjectLabel { get; set; }
+    [Parameter] public string NotePlaceholder { get; set; } = "...";
+    [Parameter] public bool ShowEmptyStateWhenEmpty { get; set; }
+    [Parameter] public string? EmptyStateMessage { get; set; }
+    [Parameter] public bool HideActionButtonsWhenReadOnly { get; set; }
+
+    [Parameter] public Variant AddButtonVariant { get; set; } = Variant.Text;
+    [Parameter] public Size AddButtonSize { get; set; } = Size.Small;
+    [Parameter] public string AddButtonContainerClass { get; set; } = "d-flex justify-end gap-2 mt-2";
+
+    [Parameter] public EventCallback<(PlanEntry Entry, string ProjectName)> OnProjectChanged { get; set; }
+    [Parameter] public EventCallback<(PlanEntry Entry, decimal Hours)> OnHoursChanged { get; set; }
+    [Parameter] public EventCallback<(PlanEntry Entry, string Note)> OnNoteChanged { get; set; }
+    [Parameter] public EventCallback<PlanEntry> OnRemoveEntry { get; set; }
+    [Parameter] public EventCallback OnAddEntry { get; set; }
+}

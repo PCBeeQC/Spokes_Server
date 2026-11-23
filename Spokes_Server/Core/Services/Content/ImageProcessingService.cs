@@ -2,12 +2,26 @@ using SkiaSharp;
 
 namespace Spokes_Server.Core.Services.Content;
 
-public sealed record ProcessedUploadImage(Stream ProcessedStream, int? Width, int? Height, byte[]? ThumbnailBytes);
+public sealed record ProcessedUploadImage(
+    Stream ProcessedStream,
+    int? Width,
+    int? Height,
+    byte[]? ThumbnailBytes,
+    byte[]? SmallThumbnailBytes = null);
 public sealed record OptimizedImageResult(byte[] Bytes, string MimeType);
 
 public class ImageProcessingService
 {
-    public bool TryGenerateThumbnail(Stream inputStream, out Stream? thumbnailData)
+    public const int StandardThumbMaxDim = 1280;
+    public const int StandardThumbQuality = 82;
+    public const int SmallThumbMaxDim = 400;
+    public const int SmallThumbQuality = 82;
+
+    public bool TryGenerateThumbnail(
+        Stream inputStream,
+        out Stream? thumbnailData,
+        int maxDim = StandardThumbMaxDim,
+        int quality = StandardThumbQuality)
     {
         thumbnailData = null;
         try
@@ -26,30 +40,37 @@ public class ImageProcessingService
             using var bitmap = SKBitmap.Decode(inputStream);
             if (bitmap == null) return false;
 
-            const int maxThumbDim = 1280;
-            int thumbWidth = bitmap.Width;
-            int thumbHeight = bitmap.Height;
-
-            if (thumbWidth > maxThumbDim || thumbHeight > maxThumbDim)
+            var orientedBitmap = bitmap;
+            if (codec != null && codec.EncodedOrigin != SKEncodedOrigin.TopLeft && codec.EncodedOrigin != SKEncodedOrigin.Default)
             {
-                if (thumbWidth > thumbHeight)
-                {
-                    thumbHeight = (int)Math.Round((double)thumbHeight * maxThumbDim / thumbWidth);
-                    thumbWidth = maxThumbDim;
-                }
-                else
-                {
-                    thumbWidth = (int)Math.Round((double)thumbWidth * maxThumbDim / thumbHeight);
-                    thumbHeight = maxThumbDim;
-                }
+                orientedBitmap = AutoOrientBitmap(bitmap, codec.EncodedOrigin);
             }
 
-            using var thumbBitmap = bitmap.Resize(new SKImageInfo(thumbWidth, thumbHeight), new SKSamplingOptions(new SKCubicResampler(1/3.0f, 1/3.0f)));
-            var ms = new MemoryStream();
-            (thumbBitmap ?? bitmap).Encode(SKEncodedImageFormat.Jpeg, 88).SaveTo(ms);
-            ms.Position = 0;
-            thumbnailData = ms;
-            return true;
+            try
+            {
+                var (thumbWidth, thumbHeight) = CalculateFitDimensions(orientedBitmap.Width, orientedBitmap.Height, maxDim);
+                using var thumbBitmap = (thumbWidth != orientedBitmap.Width || thumbHeight != orientedBitmap.Height)
+                    ? orientedBitmap.Resize(new SKImageInfo(thumbWidth, thumbHeight), new SKSamplingOptions(new SKCubicResampler(1 / 3.0f, 1 / 3.0f)))
+                    : null;
+                var ms = new MemoryStream();
+                using var encoded = (thumbBitmap ?? orientedBitmap).Encode(SKEncodedImageFormat.Jpeg, Math.Clamp(quality, 1, 100));
+                if (encoded == null)
+                {
+                    ms.Dispose();
+                    return false;
+                }
+                encoded.SaveTo(ms);
+                ms.Position = 0;
+                thumbnailData = ms;
+                return true;
+            }
+            finally
+            {
+                if (!ReferenceEquals(orientedBitmap, bitmap))
+                {
+                    orientedBitmap.Dispose();
+                }
+            }
         }
         catch
         {
@@ -68,24 +89,12 @@ public class ImageProcessingService
                 return new OptimizedImageResult(inputBytes, "image/png");
             }
 
-            int width = bitmap.Width;
-            int height = bitmap.Height;
+            var (width, height) = CalculateFitDimensions(bitmap.Width, bitmap.Height, maxDimension);
             SKBitmap workingBitmap = bitmap;
             bool wasResized = false;
 
-            if (width > maxDimension || height > maxDimension)
+            if (width != bitmap.Width || height != bitmap.Height)
             {
-                if (width > height)
-                {
-                    height = Math.Max(1, (int)Math.Round((double)height * maxDimension / width));
-                    width = maxDimension;
-                }
-                else
-                {
-                    width = Math.Max(1, (int)Math.Round((double)width * maxDimension / height));
-                    height = maxDimension;
-                }
-
                 var resized = bitmap.Resize(new SKImageInfo(width, height), new SKSamplingOptions(new SKCubicResampler(1/3.0f, 1/3.0f)));
                 if (resized != null)
                 {
@@ -173,22 +182,12 @@ public class ImageProcessingService
             }
 
             // Check if main image needs downscaling (maxMainDim > 0; 0 = original/pass-through)
-            int mainWidth = orientedBitmap.Width;
-            int mainHeight = orientedBitmap.Height;
+            var (mainWidth, mainHeight) = maxMainDim > 0
+                ? CalculateFitDimensions(orientedBitmap.Width, orientedBitmap.Height, maxMainDim)
+                : (orientedBitmap.Width, orientedBitmap.Height);
 
-            if (maxMainDim > 0 && (mainWidth > maxMainDim || mainHeight > maxMainDim))
+            if (mainWidth != orientedBitmap.Width || mainHeight != orientedBitmap.Height)
             {
-                if (mainWidth > mainHeight)
-                {
-                    mainHeight = (int)Math.Round((double)mainHeight * maxMainDim / mainWidth);
-                    mainWidth = maxMainDim;
-                }
-                else
-                {
-                    mainWidth = (int)Math.Round((double)mainWidth * maxMainDim / mainHeight);
-                    mainHeight = maxMainDim;
-                }
-
                 var resizedBitmap = orientedBitmap.Resize(new SKImageInfo(mainWidth, mainHeight), new SKSamplingOptions(SKFilterMode.Linear));
                 if (orientedBitmap != bitmap) orientedBitmap.Dispose();
                 orientedBitmap = resizedBitmap;
@@ -214,38 +213,43 @@ public class ImageProcessingService
                 if (inputStream.CanSeek) inputStream.Position = 0;
             }
 
-            // GENERATE THUMBNAIL
-            const int maxThumbDim = 1280;
-            int thumbWidth = orientedBitmap.Width;
-            int thumbHeight = orientedBitmap.Height;
-
-            if (thumbWidth > maxThumbDim || thumbHeight > maxThumbDim)
-            {
-                if (thumbWidth > thumbHeight)
-                {
-                    thumbHeight = (int)Math.Round((double)thumbHeight * maxThumbDim / thumbWidth);
-                    thumbWidth = maxThumbDim;
-                }
-                else
-                {
-                    thumbWidth = (int)Math.Round((double)thumbWidth * maxThumbDim / thumbHeight);
-                    thumbHeight = maxThumbDim;
-                }
-            }
+            // GENERATE STANDARD (1280px q88) & SMALL GRID (400px q82) THUMBNAILS IN ONE PASS
+            var (thumbWidth, thumbHeight) = CalculateFitDimensions(orientedBitmap.Width, orientedBitmap.Height, StandardThumbMaxDim);
 
             bool didResize = false;
             SKBitmap thumbBitmap = orientedBitmap;
             if (thumbWidth != orientedBitmap.Width || thumbHeight != orientedBitmap.Height)
             {
-                thumbBitmap = orientedBitmap.Resize(new SKImageInfo(thumbWidth, thumbHeight), new SKSamplingOptions(new SKCubicResampler(1/3.0f, 1/3.0f)));
-                didResize = true;
+                var resizedThumb = orientedBitmap.Resize(new SKImageInfo(thumbWidth, thumbHeight), new SKSamplingOptions(new SKCubicResampler(1/3.0f, 1/3.0f)));
+                if (resizedThumb != null)
+                {
+                    thumbBitmap = resizedThumb;
+                    didResize = true;
+                }
             }
 
             byte[]? thumbBytes = null;
+            byte[]? smallThumbBytes = null;
             if (thumbBitmap != null)
             {
-                using var thumbData = thumbBitmap.Encode(SKEncodedImageFormat.Jpeg, 88);
-                thumbBytes = thumbData.ToArray();
+                using var thumbData = thumbBitmap.Encode(SKEncodedImageFormat.Jpeg, StandardThumbQuality);
+                thumbBytes = thumbData?.ToArray();
+
+                var (smWidth, smHeight) = CalculateFitDimensions(thumbBitmap.Width, thumbBitmap.Height, SmallThumbMaxDim);
+                if (smWidth != thumbBitmap.Width || smHeight != thumbBitmap.Height)
+                {
+                    using var smallBitmap = thumbBitmap.Resize(new SKImageInfo(smWidth, smHeight), new SKSamplingOptions(new SKCubicResampler(1/3.0f, 1/3.0f)));
+                    if (smallBitmap != null)
+                    {
+                        using var smallData = smallBitmap.Encode(SKEncodedImageFormat.Jpeg, SmallThumbQuality);
+                        smallThumbBytes = smallData?.ToArray();
+                    }
+                }
+                else
+                {
+                    using var smallData = thumbBitmap.Encode(SKEncodedImageFormat.Jpeg, SmallThumbQuality);
+                    smallThumbBytes = smallData?.ToArray();
+                }
 
                 if (didResize && thumbBitmap != orientedBitmap)
                 {
@@ -258,7 +262,7 @@ public class ImageProcessingService
                 orientedBitmap.Dispose();
             }
 
-            result = new ProcessedUploadImage(processedStream, imageWidth, imageHeight, thumbBytes);
+            result = new ProcessedUploadImage(processedStream, imageWidth, imageHeight, thumbBytes, smallThumbBytes);
             return true;
         }
         catch
@@ -318,5 +322,20 @@ public class ImageProcessingService
 
         canvas.DrawBitmap(bitmap, 0, 0, new SKSamplingOptions(SKFilterMode.Linear));
         return oriented;
+    }
+
+    private static (int Width, int Height) CalculateFitDimensions(int srcWidth, int srcHeight, int maxDimension)
+    {
+        if (maxDimension <= 0 || (srcWidth <= maxDimension && srcHeight <= maxDimension))
+        {
+            return (srcWidth, srcHeight);
+        }
+
+        if (srcWidth > srcHeight)
+        {
+            return (maxDimension, Math.Max(1, (int)Math.Round((double)srcHeight * maxDimension / srcWidth)));
+        }
+
+        return (Math.Max(1, (int)Math.Round((double)srcWidth * maxDimension / srcHeight)), maxDimension);
     }
 }

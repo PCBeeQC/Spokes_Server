@@ -13,7 +13,6 @@
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
 
     [Parameter] public string Note { get; set; } = "";
-    [Parameter] public string Title { get; set; } = "Edit Note";
 
     private void Cancel() => MudDialog.Cancel();
     private void Submit() => MudDialog.Close(DialogResult.Ok(Note));

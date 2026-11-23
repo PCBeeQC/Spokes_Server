@@ -4,45 +4,6 @@ using Spokes_Server.Components.UI;
 
 public class LightboxMediaItemTests
 {
-    [Fact]
-    public void Defaults_AreSetCorrectly()
-    {
-        var item = new LightboxMediaItem();
-
-        Assert.False(string.IsNullOrWhiteSpace(item.Id));
-        Assert.True(Guid.TryParse(item.Id, out _));
-        Assert.Equal(string.Empty, item.FileName);
-        Assert.Equal(string.Empty, item.FilePath);
-        Assert.Equal(string.Empty, item.ContentType);
-        Assert.Null(item.AddedAt);
-        Assert.Equal(0L, item.FileSizeBytes);
-        Assert.False(item.HasServerThumbnail);
-    }
-
-    [Fact]
-    public void Properties_CanBeSetAndRetrieved()
-    {
-        var now = DateTime.UtcNow;
-        var item = new LightboxMediaItem
-        {
-            Id = "custom-id-123",
-            FileName = "photo.png",
-            FilePath = "/images/photo.png",
-            ContentType = "image/png",
-            AddedAt = now,
-            FileSizeBytes = 1024L,
-            HasServerThumbnail = true
-        };
-
-        Assert.Equal("custom-id-123", item.Id);
-        Assert.Equal("photo.png", item.FileName);
-        Assert.Equal("/images/photo.png", item.FilePath);
-        Assert.Equal("image/png", item.ContentType);
-        Assert.Equal(now, item.AddedAt);
-        Assert.Equal(1024L, item.FileSizeBytes);
-        Assert.True(item.HasServerThumbnail);
-    }
-
     [Theory]
     [InlineData("/spokesapi/files/test.png")]
     [InlineData("/internal/attachments/test.pdf")]

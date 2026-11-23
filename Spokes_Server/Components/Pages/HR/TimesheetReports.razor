@@ -6,16 +6,18 @@
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Reports
+@using Spokes_Server.Core.Services.HR
+@using Spokes_Server.Core.Services.Projects
 @using Spokes_Server.Core.Services.Reports
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Pages.HR.Reports
 @using Spokes_Server.Components.UI
 
 @inject Database Db
+@inject HRService HRService
 @inject TimesheetReportService ReportService
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
-@inject IDialogService DialogService
 @inject NavigationManager NavManager
 @inject AuthenticationStateProvider AuthStateProvider
 @inject UserService UserService
@@ -94,11 +96,17 @@
 
                 <!-- Amount Display Dropdown -->
                 <MudMenu Label="@GetAmountModeLabel()" Variant="Variant.Outlined" Size="Size.Small" EndIcon="@Icons.Material.Filled.ArrowDropDown">
-                    <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.BillableAmount))">Billable Amount ($)</MudMenuItem>
+                    @if (_canViewBillingRates)
+                    {
+                        <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.BillableAmount))">Billable Amount ($)</MudMenuItem>
+                    }
                     @if (_canViewCostRates)
                     {
                         <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.CostAmount))">Labor Cost ($)</MudMenuItem>
-                        <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.ProfitMargin))">Profit Margin ($)</MudMenuItem>
+                        @if (_canViewBillingRates)
+                        {
+                            <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.ProfitMargin))">Profit Margin ($)</MudMenuItem>
+                        }
                     }
                     <MudMenuItem OnClick="@(() => SetAmountMode(AmountDisplayMode.HideAmounts))">Hide Financials</MudMenuItem>
                 </MudMenu>
@@ -106,7 +114,7 @@
         </MudStack>
 
         <!-- Filter Bar -->
-        <TimesheetFilterBar Criteria="@_criteria" DateRange="@_dateRange" DateRangeChanged="@(r => _dateRange = r)" OnFiltersApplied="ApplyFilters" OnPresetSelected="HandlePresetSelected" OnShiftDate="HandleShiftDate" AllEmployees="@_allEmployees" AllTeams="@_allTeams" AllProjects="@_allProjects" AllProjectGroups="@_allProjectGroups" AllClients="@_allClients" AllTasks="@_allTasks" />
+        <TimesheetFilterBar Criteria="@_criteria" DateRange="@_dateRange" DateRangeChanged="@(r => _dateRange = r)" OnFiltersApplied="ApplyFilters" OnPresetSelected="HandlePresetSelected" OnShiftDate="HandleShiftDate" AllEmployees="@_allEmployees" AllTeams="@_allTeams" AllProjects="@_allProjects" AllClients="@_allClients" AllTasks="@_allTasks" />
 
         <div id="printable-area">
             <!-- Print-Only Header -->
@@ -154,24 +162,36 @@
 
                     <MudItem xs="12" sm="6" md="3" Class="border-r">
                         <MudText Typo="Typo.caption" Color="Color.Secondary" Style="text-transform: uppercase; font-weight: 600;">
-                            @(_amountMode == AmountDisplayMode.CostAmount ? "Total Labor Cost" : _amountMode == AmountDisplayMode.ProfitMargin ? "Net Profit" : "Billable Revenue")
+                            @(_amountMode == AmountDisplayMode.HideAmounts ? "Financials" : _amountMode == AmountDisplayMode.CostAmount ? "Total Labor Cost" : _amountMode == AmountDisplayMode.ProfitMargin ? "Net Profit" : "Billable Revenue")
                         </MudText>
                         <MudText Typo="Typo.h4" Style="font-weight: 800; color: var(--mud-palette-primary);">
-                            @if (_amountMode == AmountDisplayMode.CostAmount)
+                            @if (_amountMode == AmountDisplayMode.HideAmounts)
+                            {
+                                <span style="opacity: 0.6;">&mdash;</span>
+                            }
+                            else if (_amountMode == AmountDisplayMode.CostAmount && _canViewCostRates)
                             {
                                 @TimesheetFormatHelper.FormatCurrency(_kpiSummary.CostAmount, _companyProfile?.CurrencySymbol ?? "$")
                             }
-                            else if (_amountMode == AmountDisplayMode.ProfitMargin)
+                            else if (_amountMode == AmountDisplayMode.ProfitMargin && _canViewCostRates && _canViewBillingRates)
                             {
                                 <span>@TimesheetFormatHelper.FormatCurrency(_kpiSummary.ProfitAmount, _companyProfile?.CurrencySymbol ?? "$")</span>
                             }
-                            else
+                            else if (_canViewBillingRates)
                             {
                                 @TimesheetFormatHelper.FormatCurrency(_kpiSummary.BillableAmount, _companyProfile?.CurrencySymbol ?? "$")
                             }
+                            else
+                            {
+                                <span style="opacity: 0.6;">&mdash;</span>
+                            }
                         </MudText>
                         <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @if (_amountMode == AmountDisplayMode.ProfitMargin)
+                            @if (_amountMode == AmountDisplayMode.HideAmounts || (!_canViewBillingRates && _amountMode != AmountDisplayMode.CostAmount))
+                            {
+                                <span>Financials hidden</span>
+                            }
+                            else if (_amountMode == AmountDisplayMode.ProfitMargin)
                             {
                                 <span>Margin: @_kpiSummary.ProfitMarginPercentage%</span>
                             }
@@ -200,13 +220,13 @@
             </MudPaper>
 
             <!-- Report Tabs: Summary, Detailed, Weekly -->
-            <MudTabs @bind-ActivePanelIndex="_activeTabIndex" ApplyEffectsToContainer="true" Elevation="0" Rounded="true" TabPanelsClass="pt-4" TabHeaderClass="d-print-none">
+            <MudTabs @bind-ActivePanelIndex="_activeTabIndex" ApplyEffectsToContainer="true" Elevation="0" Outlined="true" Border="true" Rounded="true" TabPanelsClass="pa-4" TabHeaderClass="d-print-none">
                 <MudTabPanel Text="Summary" Icon="@Icons.Material.Filled.PieChart">
-                    <TimesheetSummaryTab Entries="@_filteredEntries" Format="@_format" AmountMode="@_amountMode" ApplyRounding="@_applyRounding" CurrencySymbol="@(_companyProfile?.CurrencySymbol ?? "$")" />
+                    <TimesheetSummaryTab Entries="@_filteredEntries" Format="@_format" AmountMode="@_amountMode" ApplyRounding="@_applyRounding" CanViewBillingRates="@_canViewBillingRates" CurrencySymbol="@(_companyProfile?.CurrencySymbol ?? "$")" />
                 </MudTabPanel>
 
                 <MudTabPanel Text="Detailed" Icon="@Icons.Material.Filled.List">
-                    <TimesheetDetailedTab Entries="@_filteredEntries" Format="@_format" AmountMode="@_amountMode" CurrencySymbol="@(_companyProfile?.CurrencySymbol ?? "$")" />
+                    <TimesheetDetailedTab Entries="@_filteredEntries" Format="@_format" AmountMode="@_amountMode" CanViewBillingRates="@_canViewBillingRates" CurrencySymbol="@(_companyProfile?.CurrencySymbol ?? "$")" />
                 </MudTabPanel>
 
                 <MudTabPanel Text="Weekly" Icon="@Icons.Material.Filled.CalendarViewWeek">
@@ -226,6 +246,7 @@
     private TimesheetReportFilterCriteria _criteria = new();
     private bool _applyRounding = false;
     private bool _canViewCostRates = false;
+    private bool _canViewBillingRates = false;
     private TimeDisplayFormat _format = TimeDisplayFormat.DurationHhmm;
     private AmountDisplayMode _amountMode = AmountDisplayMode.BillableAmount;
 
@@ -236,7 +257,6 @@
     private List<Employee> _allEmployees = [];
     private List<Team> _allTeams = [];
     private List<Project> _allProjects = [];
-    private List<ProjectGroup> _allProjectGroups = [];
     private List<string> _allClients = [];
     private List<WorkType> _allTasks = [];
 
@@ -249,30 +269,68 @@
             return;
         }
 
-        var currentUser = await UserService.GetEmployeeAsync();
-        _canViewCostRates = currentUser != null && (currentUser.IsAdmin ||
-                            currentUser.HasPermission(AppPermissions.Admin.ManageUsers) ||
-                            currentUser.HasPermission(AppPermissions.Finance.AccessAccounting));
+        var currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        if (currentUser == null || !currentUser.HasEffectivePermission(AppPermissions.Timesheets.ViewReport, allowSuspended: true))
+        {
+            NavManager.NavigateTo("/", true);
+            return;
+        }
+
+        bool hasCompanyWideReportAccess =
+            currentUser.IsAdmin ||
+            currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: true) ||
+            currentUser.HasEffectivePermission(AppPermissions.Finance.TeamCapacity, allowSuspended: true);
+        _canViewCostRates =
+            currentUser.IsAdmin ||
+            currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: true);
+        _canViewBillingRates =
+            currentUser.IsAdmin ||
+            currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: true) ||
+            currentUser.HasEffectivePermission(AppPermissions.Projects.ApproveQuotes, allowSuspended: true);
+
+        if (!_canViewBillingRates)
+        {
+            _amountMode = AmountDisplayMode.HideAmounts;
+        }
 
         _companyProfile = Db.CompanyProfile.Get();
-        _allEmployees = Db.Employees.GetAll();
-        _allTeams = Db.Teams.GetAll();
+
+        var allowedEmployeeIds = hasCompanyWideReportAccess
+            ? Db.Employees.GetAll()
+                .Where(e => !e.IsSystem && !e.IsBanned)
+                .Select(e => e.Id)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : HRService.GetManagedEmployeeIds(currentUser, includeSelf: true);
+
+        _allEmployees = Db.Employees.GetAll()
+            .Where(e => !e.IsSystem && !e.IsBanned && allowedEmployeeIds.Contains(e.Id))
+            .ToList();
+
+        var managedTeamIds = _allEmployees
+            .Select(e => e.TeamId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Concat(Db.Teams.GetAll().Where(t => t.LeaderId == currentUser.Id).Select(t => t.Id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        _allTeams = hasCompanyWideReportAccess
+            ? Db.Teams.GetAll()
+            : Db.Teams.GetAll().Where(t => managedTeamIds.Contains(t.Id)).ToList();
 
         var allDbProjects = Db.Projects.GetAll();
         var viewableProjects = new List<Project>();
         foreach (var p in allDbProjects)
         {
-            if (await UserService.CanViewProjectAsync(p))
+            bool canView = UserService.CanViewProject(currentUser, p, allowAccountingFinancialRead: false)
+                || (!hasCompanyWideReportAccess
+                    && !currentUser.HasEffectivePermission(AppPermissions.Projects.View, allowSuspended: true)
+                    && ProjectAccessHelper.CanAccessProjectForContribution(currentUser, p, Db.Teams, allowSuspended: true));
+            if (canView)
             {
                 viewableProjects.Add(p);
             }
         }
         _allProjects = viewableProjects;
         var allowedProjectIds = _allProjects.Select(p => p.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        _allProjectGroups = Db.ProjectGroups.GetAll()
-            .Where(g => g.ProjectIds.Any(pid => allowedProjectIds.Contains(pid)))
-            .ToList();
         _allTasks = Db.WorkTypes.GetAll();
 
         _allClients = _allProjects
@@ -299,7 +357,7 @@
         _criteria.TotalTasksCount = _allTasks.Count;
         _criteria.BillableStatus = BillableFilterStatus.All;
 
-        _allEntries = await ReportService.LoadAllEntriesAsync(_canViewCostRates, allowedProjectIds);
+        _allEntries = await ReportService.LoadAllEntriesAsync(_canViewCostRates, allowedProjectIds, allowedEmployeeIds, _canViewBillingRates);
         ApplyFilters();
 
         _loading = false;
@@ -343,6 +401,10 @@
 
     private void SetAmountMode(AmountDisplayMode mode)
     {
+        if (!_canViewBillingRates && (mode == AmountDisplayMode.BillableAmount || mode == AmountDisplayMode.ProfitMargin))
+        {
+            return;
+        }
         if (!_canViewCostRates && (mode == AmountDisplayMode.CostAmount || mode == AmountDisplayMode.ProfitMargin))
         {
             return;
@@ -375,7 +437,7 @@
     private async Task ExportSummaryCsv()
     {
         var groups = TimesheetCalculationHelper.BuildSummaryGroups(_filteredEntries, ReportGroupBy.Project, ReportSubGroupBy.Description);
-        var csv = TimesheetCsvExportHelper.GenerateSummaryCsv(groups, _format);
+        var csv = TimesheetCsvExportHelper.GenerateSummaryCsv(groups, _format, _canViewBillingRates, _canViewCostRates);
         var fileName = $"timesheet_summary_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
         await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", csv);
         Snackbar.Add("Summary CSV exported", Severity.Success);
@@ -383,7 +445,7 @@
 
     private async Task ExportDetailedCsv()
     {
-        var csv = TimesheetCsvExportHelper.GenerateDetailedCsv(_filteredEntries, _format);
+        var csv = TimesheetCsvExportHelper.GenerateDetailedCsv(_filteredEntries, _format, _canViewBillingRates);
         var fileName = $"timesheet_detailed_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
         await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", csv);
         Snackbar.Add("Detailed CSV exported", Severity.Success);
@@ -392,7 +454,7 @@
     private async Task ExportWeeklyCsv()
     {
         var matrix = TimesheetCalculationHelper.BuildWeeklyMatrix(_filteredEntries, _dateRange.Start ?? DateTime.Now, WeeklyGroupBy.Employee);
-        var csv = TimesheetCsvExportHelper.GenerateWeeklyCsv(matrix, _format);
+        var csv = TimesheetCsvExportHelper.GenerateWeeklyCsv(matrix, _format, _canViewBillingRates);
         var fileName = $"timesheet_weekly_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
         await JS.InvokeVoidAsync("downloadFile", fileName, "text/csv", csv);
         Snackbar.Add("Weekly matrix CSV exported", Severity.Success);

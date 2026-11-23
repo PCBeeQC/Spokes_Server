@@ -51,4 +51,27 @@ public static class TimeZoneHelper
 
         return utc.Value.Kind == DateTimeKind.Utc ? utc.Value.ToLocalTime() : utc.Value;
     }
+
+    /// <summary>
+    /// Converts a <see cref="DateTimeOffset"/> to the local wall-clock time in <paramref name="timeZoneId"/>,
+    /// falling back safely to <see cref="DateTimeOffset.LocalDateTime"/> when unconfigured or invalid.
+    /// </summary>
+    public static DateTime ConvertOffsetToLocalTime(string? timeZoneId, DateTimeOffset date)
+    {
+        if (!string.IsNullOrWhiteSpace(timeZoneId))
+        {
+            try
+            {
+                return TimeZoneInfo.ConvertTimeBySystemTimeZoneId(date, timeZoneId).DateTime;
+            }
+            catch (TimeZoneNotFoundException)
+            {
+            }
+            catch (InvalidTimeZoneException)
+            {
+            }
+        }
+
+        return date.LocalDateTime;
+    }
 }

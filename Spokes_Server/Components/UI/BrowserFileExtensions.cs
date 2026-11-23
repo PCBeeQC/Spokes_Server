@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components.Forms;
 using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Services.Storage;
 
 namespace Spokes_Server.Components.UI;
 
@@ -13,17 +12,6 @@ namespace Spokes_Server.Components.UI;
 /// </summary>
 public static class BrowserFileExtensions
 {
-    public static async Task<string> UploadAsync(
-        this IFileService fileService,
-        string category,
-        string contextId,
-        IBrowserFile file,
-        long maxAllowedSize = 50 * 1024 * 1024)
-    {
-        using var stream = file.OpenReadStream(maxAllowedSize);
-        return await fileService.UploadStreamAsync(category, contextId, stream, file.Name);
-    }
-
     public static async Task<EmailAttachment> ToEmailAttachmentAsync(
         this IBrowserFile file,
         long maxAllowedSize = 10 * 1024 * 1024,

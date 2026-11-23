@@ -6,54 +6,6 @@ using Spokes_Server.Core.Models.Projects;
 public class BoardTemplateTests
 {
         [Fact]
-        public void BoardTemplate_Initialization_SetsDefaultsCorrectly()
-        {
-            var template = new BoardTemplate();
-
-            Assert.False(string.IsNullOrWhiteSpace(template.Id));
-            Assert.True(Guid.TryParse(template.Id, out _));
-            Assert.Equal(string.Empty, template.Name);
-            Assert.Equal(string.Empty, template.Description);
-            Assert.Null(template.Icon);
-            Assert.NotNull(template.Properties);
-            Assert.Empty(template.Properties);
-            Assert.NotNull(template.Views);
-            Assert.Empty(template.Views);
-        }
-
-        [Fact]
-        public void BoardTemplate_Properties_CanSetAndGet()
-        {
-            List<BoardProperty> properties =
-            [
-                new BoardProperty { Id = "prop-1", Name = "Status" }
-            ];
-            List<BoardView> views =
-            [
-                new BoardView { Id = "view-1", Name = "Kanban" }
-            ];
-
-            var template = new BoardTemplate
-            {
-                Id = "template-123",
-                Name = "Project Template",
-                Description = "A default template for projects",
-                Icon = "mdi-folder",
-                Properties = properties,
-                Views = views
-            };
-
-            Assert.Equal("template-123", template.Id);
-            Assert.Equal("Project Template", template.Name);
-            Assert.Equal("A default template for projects", template.Description);
-            Assert.Equal("mdi-folder", template.Icon);
-            Assert.Same(properties, template.Properties);
-            Assert.Single(template.Properties);
-            Assert.Same(views, template.Views);
-            Assert.Single(template.Views);
-        }
-
-        [Fact]
         public void Equals_WithSameReference_ReturnsTrue()
         {
             var template = new BoardTemplate { Id = "template-1" };

@@ -15,7 +15,7 @@ export class NoiseSuppressionManager {
                 sampleRate: 48000,
                 noiseReductionLevel: 40,
                 enabled: true,
-                stationaryRoomMode: Boolean(options.stationaryRoomMode),
+                autoGainEnabled: options.autoGainEnabled !== false,
                 assetConfig: { cdnUrl: '/lib/noise-suppression/deepfilternet3' }
             });
         });

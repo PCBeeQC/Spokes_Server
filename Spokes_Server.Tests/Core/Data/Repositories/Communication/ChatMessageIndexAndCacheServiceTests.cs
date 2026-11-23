@@ -93,6 +93,7 @@ public class ChatMessageIndexAndCacheServiceTests : IDisposable
     {
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         var companyProfileRepo = new CompanyProfileRepository(_persistence, mockConfig.Object);
 
         // Set max cache size to 1 MB
@@ -128,6 +129,7 @@ public class ChatMessageIndexAndCacheServiceTests : IDisposable
     {
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         var companyProfileRepo = new CompanyProfileRepository(_persistence, mockConfig.Object);
         var cacheService = new ChatMessageCacheService(companyProfileRepo);
 
@@ -252,9 +254,11 @@ public class ChatMessageIndexAndCacheServiceTests : IDisposable
         var chanADir = Path.Combine(_testDataDir, "chanA", "messages");
         var chanBDir = Path.Combine(_testDataDir, "chanB", "messages");
         var orphanDir = Path.Combine(_testDataDir, "orphaned");
+        var readStatesDir = Path.Combine(_testDataDir, "readstates");
         Directory.CreateDirectory(chanADir);
         Directory.CreateDirectory(chanBDir);
         Directory.CreateDirectory(orphanDir);
+        Directory.CreateDirectory(readStatesDir);
 
         var msgA = new ChatMessage { Id = "mA", ChannelId = "chanA", SenderId = "u1", Content = "Alpha", SentAt = DateTime.UtcNow };
         var msgB = new ChatMessage { Id = "mB", ChannelId = "chanB", SenderId = "u2", Content = "Beta", SentAt = DateTime.UtcNow };
@@ -263,6 +267,7 @@ public class ChatMessageIndexAndCacheServiceTests : IDisposable
         File.WriteAllText(Path.Combine(chanADir, "mA.json"), System.Text.Json.JsonSerializer.Serialize(msgA));
         File.WriteAllText(Path.Combine(chanBDir, "mB.json"), System.Text.Json.JsonSerializer.Serialize(msgB));
         File.WriteAllText(Path.Combine(orphanDir, "mO.json"), System.Text.Json.JsonSerializer.Serialize(msgOrphan));
+        File.WriteAllText(Path.Combine(readStatesDir, "rs1.json"), "{}");
 
         // Ensure single
         indexService.EnsureIndexBuilt("chanA");
@@ -274,6 +279,28 @@ public class ChatMessageIndexAndCacheServiceTests : IDisposable
         Assert.Single(indexService.GetIndexForChannel("chanA"));
         Assert.Single(indexService.GetIndexForChannel("chanB"));
         Assert.Empty(indexService.GetIndexForChannel("orphaned"));
+        Assert.False(indexService.GetChannelIndexesSnapshot().ContainsKey("readstates"));
+    }
+
+    [Fact]
+    public void ChatMessageIndexService_TryLoadMasterIndex_PrunesNonChannelKeys()
+    {
+        var indexPath = Path.Combine(_testDataDir, "index.json");
+        var polluted = new Dictionary<string, List<ChatIndexEntry>>
+        {
+            ["chanA"] = new() { new ChatIndexEntry { Id = "m1", SentAt = DateTime.UtcNow } },
+            ["readstates"] = new(),
+            ["orphaned"] = new()
+        };
+        File.WriteAllText(indexPath, System.Text.Json.JsonSerializer.Serialize(polluted));
+
+        var indexService = new ChatMessageIndexService(_persistence, _testDataDir);
+        Assert.True(indexService.TryLoadMasterIndex(out var loaded));
+        Assert.NotNull(loaded);
+        Assert.True(loaded!.ContainsKey("chanA"));
+        Assert.False(loaded.ContainsKey("readstates"));
+        Assert.False(loaded.ContainsKey("orphaned"));
+        Assert.False(indexService.GetChannelIndexesSnapshot().ContainsKey("readstates"));
     }
 }
 

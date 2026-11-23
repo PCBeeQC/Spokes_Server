@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.WebUtilities;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Models.Communication.Notifications;
 using Spokes_Server.Core.Services.Communication.Notifications;
 using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
 using Spokes_Server.Core.Services.Communication.Notifications.Routing;
@@ -24,6 +25,83 @@ public class PushPayloadBuilder
     public const int CalendarTtlSeconds = 2 * 3600;
     public const int ClearNotificationTtlSeconds = 24 * 3600;
     public const int DefaultTtlSeconds = 7 * 24 * 3600;
+    public const int MinRsaPublicKeyBits = 2048;
+
+    public static bool TryValidateRsaPublicKey(string? base64PublicKey, out RSA? rsa, out string? error)
+    {
+        rsa = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(base64PublicKey))
+        {
+            error = "Push encryption public key is required for NativeRelay subscriptions.";
+            return false;
+        }
+
+        byte[] keyBytes;
+        try
+        {
+            keyBytes = Convert.FromBase64String(base64PublicKey.Trim());
+        }
+        catch (FormatException)
+        {
+            error = "Push encryption public key is not valid Base64.";
+            return false;
+        }
+
+        RSA? candidate = null;
+        try
+        {
+            candidate = RSA.Create();
+            try
+            {
+                candidate.ImportSubjectPublicKeyInfo(keyBytes, out int bytesRead);
+                if (bytesRead != keyBytes.Length)
+                {
+                    candidate.Dispose();
+                    error = "Push encryption public key contains trailing bytes.";
+                    return false;
+                }
+            }
+            catch (CryptographicException)
+            {
+                candidate.Dispose();
+                candidate = RSA.Create();
+                candidate.ImportRSAPublicKey(keyBytes, out int bytesRead);
+                if (bytesRead != keyBytes.Length)
+                {
+                    candidate.Dispose();
+                    error = "Push encryption public key contains trailing bytes.";
+                    return false;
+                }
+            }
+
+            if (candidate.KeySize < MinRsaPublicKeyBits)
+            {
+                candidate.Dispose();
+                error = $"Push encryption RSA key must be at least {MinRsaPublicKeyBits} bits.";
+                return false;
+            }
+
+            rsa = candidate;
+            return true;
+        }
+        catch (Exception ex) when (ex is CryptographicException or PlatformNotSupportedException)
+        {
+            candidate?.Dispose();
+            error = "Push encryption public key is not a valid RSA SubjectPublicKeyInfo or RSAPublicKey.";
+            return false;
+        }
+    }
+
+    public static bool IsValidRsaPublicKey(string? base64PublicKey)
+    {
+        if (!TryValidateRsaPublicKey(base64PublicKey, out var rsa, out _))
+            return false;
+
+        rsa?.Dispose();
+        return true;
+    }
 
     public virtual string GetEffectiveServerName(PushNotificationRequest request, CompanyProfile profile)
     {
@@ -169,48 +247,61 @@ public class PushPayloadBuilder
             payload.ServerIconUrl = null;
             payload.SentAtUtc = null;
         }
-        else if (!string.IsNullOrEmpty(sub.PushPublicKey))
+        else if (TryValidateRsaPublicKey(sub.PushPublicKey, out var rsaKey, out _))
         {
-            var innerPayload = new
+            using (rsaKey)
             {
-                Title = request.Title,
-                Body = request.Body,
-                Url = request.Url ?? (request.Category == "calendar" ? "/planning/calendar" : "/chat"),
-                Category = request.Category,
-                ImageUrl = absoluteImageUrl,
-                OriginUrl = context.OriginUrl,
-                ThreadId = effectiveThreadId,
-                ServerName = effectiveServerName,
-                ChannelName = request.ChannelName,
-                IsGroupChat = request.IsGroupChat,
-                ServerIconUrl = payload.ServerIconUrl,
-                IsSilent = request.IsSilent,
-                Sound = effectiveSound,
-                SentAtUtc = sentAtUtc
-            };
-            var innerPayloadBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(innerPayload));
-            var (encryptedKey, nonce, ciphertext, tag) = EncryptInnerPayload(innerPayloadBytes, sub.PushPublicKey);
+                var innerPayload = new
+                {
+                    Title = request.Title,
+                    Body = request.Body,
+                    Url = request.Url ?? (request.Category == "calendar" ? "/planning/calendar" : "/chat"),
+                    Category = request.Category,
+                    ImageUrl = absoluteImageUrl,
+                    OriginUrl = context.OriginUrl,
+                    ThreadId = effectiveThreadId,
+                    ServerName = effectiveServerName,
+                    ChannelName = request.ChannelName,
+                    IsGroupChat = request.IsGroupChat,
+                    ServerIconUrl = payload.ServerIconUrl,
+                    IsSilent = request.IsSilent,
+                    Sound = effectiveSound,
+                    SentAtUtc = sentAtUtc
+                };
+                var innerPayloadBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(innerPayload));
+                var (encryptedKey, nonce, ciphertext, tag) = EncryptInnerPayload(innerPayloadBytes, rsaKey!);
 
-            payload.IsEncrypted = true;
-            payload.EncryptedKey = encryptedKey;
-            payload.Nonce = nonce;
-            payload.Ciphertext = ciphertext;
-            payload.Tag = tag;
+                payload.IsEncrypted = true;
+                payload.EncryptedKey = encryptedKey;
+                payload.Nonce = nonce;
+                payload.Ciphertext = ciphertext;
+                payload.Tag = tag;
 
-            // Clear sensitive metadata from outer envelope so relay and APNs/FCM cannot read them
+                // Clear sensitive metadata from outer envelope so relay and APNs/FCM cannot read them
+                payload.ServerName = null;
+                payload.ChannelName = null;
+                payload.OriginUrl = null;
+                payload.ServerIconUrl = null;
+                payload.SentAtUtc = null;
+            }
+        }
+        else
+        {
+            // Content-free wakeup fallback for legacy sessions without a valid RSA-2048+ public key (NV-8)
+            payload.IsEncrypted = false;
+            payload.Title = string.Equals(request.Category, NotificationCategories.Call, StringComparison.OrdinalIgnoreCase)
+                ? "Incoming call"
+                : "New notification";
+            payload.Body = "Open Spokes to view.";
+            payload.Url = null;
+            payload.ImageUrl = null;
+            payload.ThreadId = null;
+            payload.IsGroupChat = false;
             payload.ServerName = null;
             payload.ChannelName = null;
             payload.OriginUrl = null;
             payload.ServerIconUrl = null;
             payload.SentAtUtc = null;
-        }
-        else
-        {
-            payload.Title = request.Title;
-            payload.Body = request.Body;
-            payload.Url = request.Url ?? (request.Category == "calendar" ? "/planning/calendar" : "/chat");
-            payload.ImageUrl = absoluteImageUrl;
-            payload.SentAtUtc = sentAtUtc;
         }
 
         return payload;
@@ -247,7 +338,7 @@ public class PushPayloadBuilder
 
     private static (string EncryptedKey, string Nonce, string Ciphertext, string Tag) EncryptInnerPayload(
         byte[] innerPayloadBytes,
-        string pushPublicKey)
+        RSA rsa)
     {
         var aesKey = new byte[32];
         RandomNumberGenerator.Fill(aesKey);
@@ -261,16 +352,6 @@ public class PushPayloadBuilder
 
         aesGcm.Encrypt(nonce, innerPayloadBytes, ciphertext, authTag);
 
-        using var rsa = RSA.Create();
-        var keyBytes = Convert.FromBase64String(pushPublicKey);
-        try
-        {
-            rsa.ImportSubjectPublicKeyInfo(keyBytes, out _);
-        }
-        catch (CryptographicException)
-        {
-            rsa.ImportRSAPublicKey(keyBytes, out _);
-        }
         var encryptedKey = rsa.Encrypt(aesKey, RSAEncryptionPadding.OaepSHA1);
 
         return (

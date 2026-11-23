@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
@@ -53,6 +54,7 @@ public class SlideshowHubTests : IDisposable
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
         _writer = new DiskPersistenceService(mockPersistenceLogger.Object);
@@ -80,7 +82,7 @@ public class SlideshowHubTests : IDisposable
         var companyProfiles = new CompanyProfileRepository(_writer, mockConfig.Object);
         var serverConfigs = new ServerConfigRepository(_writer, mockConfig.Object);
         var escrow = new Mock<ServerEscrowService>(companyProfiles, serverConfigs, new Mock<ICryptoService>().Object, new Mock<ILogger<ServerEscrowService>>().Object, mockConfig.Object);
-        _albumService = new AlbumService(_albums, _channels, new Mock<ICryptoService>().Object, escrow.Object, _employees);
+        _albumService = new AlbumService(_albums, _channels, new Mock<ICryptoService>().Object, escrow.Object, _employees, new ChatAuthorizationService(_channels, new Spokes_Server.Core.Data.Repositories.Projects.ProjectRepository(_writer, mockConfig.Object), new Spokes_Server.Core.Data.Repositories.HR.TeamRepository(_writer, mockConfig.Object), _employees));
 
         var mockAuthState = new Mock<Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider>();
         _userService = new UserService(mockAuthState.Object, _employees, openIdAccounts);
@@ -126,9 +128,7 @@ public class SlideshowHubTests : IDisposable
             _mockDb.Object,
             _albumService,
             _userService,
-            _fileTokenService,
             _keystoreService,
-            _mockChatAccess.Object,
             new ServiceCollection().BuildServiceProvider(),
             new Mock<ILogger<SlideshowHub>>().Object)
         {
@@ -165,7 +165,7 @@ public class SlideshowHubTests : IDisposable
     [Fact]
     public async Task PairWithTv_Succeeds_ForAlbumOwner()
     {
-        var emp = new Employee { Id = "owner-1", FirstName = "Alice", LastName = "Smith" };
+        var emp = new Employee { Id = "owner-1", FirstName = "Alice", LastName = "Smith", Permissions = [AppPermissions.Albums.View] };
         _employees.Save(emp);
 
         var album = new Album
@@ -173,6 +173,7 @@ public class SlideshowHubTests : IDisposable
             Id = "album-owner",
             Title = "Vacation Photos",
             OwnerId = "owner-1",
+            IsEncrypted = false,
             Media = [new AlbumMedia { Id = "m1", FileName = "beach.jpg", FilePath = "/spokesapi/files/albums/album-owner/beach.jpg", ContentType = "image/jpeg" }]
         };
         _albums.Save(album);

@@ -72,22 +72,18 @@ public class BackupEncryptionService : IBackupEncryptionService
         try
         {
             var magic = new byte[MagicLength];
-            if (inputEncryptedStream.Read(magic, 0, MagicLength) < MagicLength || !CryptographicOperations.FixedTimeEquals(magic, MagicBytes))
+            if (ReadExact(inputEncryptedStream, magic, MagicLength) < MagicLength || !CryptographicOperations.FixedTimeEquals(magic, MagicBytes))
             {
                 return false;
             }
 
             var salt = new byte[SaltLength];
-            if (inputEncryptedStream.Read(salt, 0, SaltLength) < SaltLength) return false;
+            if (ReadExact(inputEncryptedStream, salt, SaltLength) < SaltLength) return false;
 
             var expectedTag = new byte[TagLength];
-            if (inputEncryptedStream.Read(expectedTag, 0, TagLength) < TagLength) return false;
+            if (ReadExact(inputEncryptedStream, expectedTag, TagLength) < TagLength) return false;
 
-            var (_, verifyKey) = DeriveKeys(masterPassword, salt);
-            using var hmac = new HMACSHA256(verifyKey);
-            var actualTag = hmac.ComputeHash(salt);
-
-            return CryptographicOperations.FixedTimeEquals(expectedTag, actualTag);
+            return VerifyHeaderTag(masterPassword, salt, expectedTag, out _);
         }
         finally
         {
@@ -96,6 +92,37 @@ public class BackupEncryptionService : IBackupEncryptionService
                 inputEncryptedStream.Position = initialPosition;
             }
         }
+    }
+
+    private static bool VerifyHeaderTag(string masterPassword, byte[] salt, byte[] expectedTag, out byte[] aesKey)
+    {
+        var (derivedAesKey, verifyKey) = DeriveKeys(masterPassword, salt);
+        using var hmac = new HMACSHA256(verifyKey);
+        var actualTag = hmac.ComputeHash(salt);
+        aesKey = derivedAesKey;
+        return CryptographicOperations.FixedTimeEquals(expectedTag, actualTag);
+    }
+
+    private static Aes CreateAesCbc(byte[] key, byte[] iv)
+    {
+        var aes = Aes.Create();
+        aes.Key = key;
+        aes.IV = iv;
+        aes.Mode = CipherMode.CBC;
+        aes.Padding = PaddingMode.PKCS7;
+        return aes;
+    }
+
+    private static int ReadExact(Stream stream, byte[] buffer, int count)
+    {
+        int totalRead = 0;
+        while (totalRead < count)
+        {
+            int read = stream.Read(buffer, totalRead, count - totalRead);
+            if (read == 0) break;
+            totalRead += read;
+        }
+        return totalRead;
     }
 
     public async Task EncryptBackupAsync(Stream inputZipStream, Stream outputEncryptedStream, string masterPassword, IProgress<long>? progress = null, CancellationToken cancellationToken = default)
@@ -124,11 +151,7 @@ public class BackupEncryptionService : IBackupEncryptionService
         await outputEncryptedStream.WriteAsync(iv, cancellationToken);
 
         // 6. Encrypt the zip stream with AES-256
-        using var aes = Aes.Create();
-        aes.Key = aesKey;
-        aes.IV = iv;
-        aes.Mode = CipherMode.CBC;
-        aes.Padding = PaddingMode.PKCS7;
+        using var aes = CreateAesCbc(aesKey, iv);
 
         using var encryptor = aes.CreateEncryptor();
         await using (var cryptoStream = new CryptoStream(outputEncryptedStream, encryptor, CryptoStreamMode.Write, leaveOpen: true))
@@ -177,11 +200,7 @@ public class BackupEncryptionService : IBackupEncryptionService
         }
 
         // 4. Derive keys and pre-verify master password in <1ms
-        var (aesKey, verifyKey) = DeriveKeys(masterPassword, salt);
-        using var hmac = new HMACSHA256(verifyKey);
-        var actualTag = hmac.ComputeHash(salt);
-
-        if (!CryptographicOperations.FixedTimeEquals(expectedTag, actualTag))
+        if (!VerifyHeaderTag(masterPassword, salt, expectedTag, out var aesKey))
         {
             throw new InvalidMasterPasswordException("The server's configured master password does not match the password used to encrypt this backup archive.");
         }
@@ -195,11 +214,7 @@ public class BackupEncryptionService : IBackupEncryptionService
         }
 
         // 6. Decrypt payload into output zip stream
-        using var aes = Aes.Create();
-        aes.Key = aesKey;
-        aes.IV = iv;
-        aes.Mode = CipherMode.CBC;
-        aes.Padding = PaddingMode.PKCS7;
+        using var aes = CreateAesCbc(aesKey, iv);
 
         using var decryptor = aes.CreateDecryptor();
         await using (var cryptoStream = new CryptoStream(inputEncryptedStream, decryptor, CryptoStreamMode.Read, leaveOpen: true))

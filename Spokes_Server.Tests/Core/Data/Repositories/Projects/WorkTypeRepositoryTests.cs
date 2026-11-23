@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Services.Migrations;
 using Spokes_Server.Tests.Helpers;
 using Xunit;
 
@@ -65,27 +64,5 @@ public class WorkTypeRepositoryTests : RepositoryTestFixture<WorkTypeRepository>
         Assert.NotNull(loaded);
         Assert.Single(loaded.SubTasks);
         Assert.Equal("Custom Task", loaded.SubTasks[0].Name);
-    }
-
-    [Fact]
-    public async Task WorkTypeSubTaskMigrationStep_WorkTypeWithNoSubTasks_AddsGeneralSubTask()
-    {
-        // Arrange
-        var workType = new WorkType { Id = Guid.NewGuid().ToString(), Name = "Migrated WorkType" };
-        workType.SubTasks.Clear();
-        _repo.Save(workType);
-
-        var step = new WorkTypeSubTaskMigrationStep(_repo);
-        Assert.Equal("20260106_WorkTypeDefaultSubTask", step.MigrationKey);
-        Assert.Equal(60, step.Order);
-
-        // Act
-        await step.ExecuteAsync();
-
-        // Assert
-        var updated = _repo.GetById(workType.Id);
-        Assert.NotNull(updated);
-        Assert.Single(updated.SubTasks);
-        Assert.Equal("General", updated.SubTasks[0].Name);
     }
 }

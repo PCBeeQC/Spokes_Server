@@ -24,6 +24,7 @@ using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Security;
+using Spokes_Server.Core.Services.Security;
 using Spokes_Server.Core.Helpers;
 using Xunit;
 
@@ -36,12 +37,15 @@ public class MobileAuthControllerTests : TestDataTestBase
     private readonly Database _db;
     private readonly SessionService _sessionService;
     private readonly UserService _userService;
+    private readonly MobileOAuthChallengeService _challengeService;
     private readonly RSA _rsa;
     private readonly RsaSecurityKey _securityKey;
     private readonly JsonWebKey _jwk;
     private const string TestAuthority = "http://auth.example.com";
     private const string TestClientId = "spokes-mobile-app";
     private const string TestClientSecret = "secret123";
+    private const string DefaultTestNonce = "test-mobile-oidc-nonce-value-0123456789";
+    private const string ValidTestVerifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
 
     public MobileAuthControllerTests()
     {
@@ -49,6 +53,7 @@ public class MobileAuthControllerTests : TestDataTestBase
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());
@@ -57,6 +62,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         services.AddSingleton(mockAuth.Object);
         services.AddSingleton<EncryptionService>();
         services.AddSingleton<IOpenIdConfigurationProvider, OpenIdConfigurationProvider>();
+        services.AddSingleton<MobileOAuthChallengeService>();
         services.AddSpokesDatabase();
         services.AddScoped<SessionService>();
         services.AddScoped<UserService>();
@@ -65,6 +71,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         _db = _serviceProvider.GetRequiredService<Database>();
         _sessionService = _serviceProvider.GetRequiredService<SessionService>();
         _userService = _serviceProvider.GetRequiredService<UserService>();
+        _challengeService = _serviceProvider.GetRequiredService<MobileOAuthChallengeService>();
 
         // Setup RSA key and JWK for token signing and validation
         _rsa = RSA.Create(2048);
@@ -124,7 +131,8 @@ public class MobileAuthControllerTests : TestDataTestBase
         string? email = "jane@example.com",
         string? audience = TestClientId,
         SecurityKey? signingKey = null,
-        TimeSpan? lifetime = null)
+        TimeSpan? lifetime = null,
+        string? nonce = DefaultTestNonce)
     {
         var key = signingKey ?? _securityKey;
         var signingCredentials = new SigningCredentials(key, SecurityAlgorithms.RsaSha256);
@@ -133,6 +141,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         if (sub != null) claims.Add(new Claim("sub", sub));
         if (name != null) claims.Add(new Claim("name", name));
         if (email != null) claims.Add(new Claim("email", email));
+        if (nonce != null) claims.Add(new Claim("nonce", nonce));
 
         var token = new JwtSecurityToken(
             issuer: TestAuthority,
@@ -214,12 +223,12 @@ public class MobileAuthControllerTests : TestDataTestBase
         var oidcProvider = _serviceProvider.GetRequiredService<IOpenIdConfigurationProvider>();
         var controller = new MobileAuthController(
             _db.CoreContext,
-            _db.HrContext,
             factory,
             _sessionService,
             _userService,
             logger,
-            openIdConfigurationProvider: oidcProvider)
+            openIdConfigurationProvider: oidcProvider,
+            challengeService: _challengeService)
         {
             ControllerContext = new ControllerContext
             {
@@ -230,6 +239,23 @@ public class MobileAuthControllerTests : TestDataTestBase
             }
         };
         return controller;
+    }
+
+    private MobileAuthController.MobileExchangeRequest CreateValidExchangeRequest(
+        string code = "code",
+        string deviceId = "dev_1",
+        string? codeVerifier = null,
+        string? redirectUri = null)
+    {
+        var state = _challengeService.SeedChallengeForTesting(deviceId, DefaultTestNonce);
+        return new MobileAuthController.MobileExchangeRequest
+        {
+            Code = code,
+            CodeVerifier = codeVerifier ?? ValidTestVerifier,
+            RedirectUri = redirectUri ?? MobileAuthController.AllowedMobileRedirectUri,
+            DeviceId = deviceId,
+            State = state
+        };
     }
 
     #endregion
@@ -446,13 +472,7 @@ public class MobileAuthControllerTests : TestDataTestBase
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "expired_code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_1"
-        };
+        var req = CreateValidExchangeRequest(code: "expired_code", deviceId: "dev_1");
 
         var result = await controller.Exchange(req);
 
@@ -493,13 +513,7 @@ public class MobileAuthControllerTests : TestDataTestBase
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_1"
-        };
+        var req = CreateValidExchangeRequest();
 
         var result = await controller.Exchange(req);
 
@@ -539,13 +553,7 @@ public class MobileAuthControllerTests : TestDataTestBase
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_1"
-        };
+        var req = CreateValidExchangeRequest();
 
         var result = await controller.Exchange(req);
 
@@ -565,13 +573,7 @@ public class MobileAuthControllerTests : TestDataTestBase
 
         var controller = CreateController(CreateDefaultIdpHandler(untrustedToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_1"
-        };
+        var req = CreateValidExchangeRequest();
 
         var result = await controller.Exchange(req);
 
@@ -588,13 +590,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var wrongAudienceToken = GenerateIdToken(audience: "wrong-audience-client");
         var controller = CreateController(CreateDefaultIdpHandler(wrongAudienceToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_1"
-        };
+        var req = CreateValidExchangeRequest();
 
         var result = await controller.Exchange(req);
 
@@ -611,13 +607,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var noSubToken = GenerateIdToken(sub: null);
         var controller = CreateController(CreateDefaultIdpHandler(noSubToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_1"
-        };
+        var req = CreateValidExchangeRequest();
 
         var result = await controller.Exchange(req);
 
@@ -646,13 +636,7 @@ public class MobileAuthControllerTests : TestDataTestBase
             return defaultHandler(req);
         });
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_1"
-        };
+        var req = CreateValidExchangeRequest();
 
         var result = await controller.Exchange(req);
 
@@ -695,13 +679,7 @@ public class MobileAuthControllerTests : TestDataTestBase
             return defaultHandler(req);
         }, mockLogger.Object);
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_1"
-        };
+        var req = CreateValidExchangeRequest();
 
         var result = await controller.Exchange(req);
 
@@ -731,13 +709,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "new_sub_admin", name: "Alice Admin", email: "alice@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "alice_phone"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "alice_phone");
 
         var result = await controller.Exchange(req);
 
@@ -797,13 +769,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_bob", name: "Bob Developer", email: "bob@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "bob_ipad"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "bob_ipad");
 
         var result = await controller.Exchange(req);
 
@@ -837,13 +803,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_charlie", name: "Charlie Member", email: "charlie@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "charlie_device"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "charlie_device");
 
         var result = await controller.Exchange(req);
 
@@ -865,13 +825,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_single", name: "Cher", email: "cher@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "device_single"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "device_single");
 
         var result = await controller.Exchange(req);
 
@@ -898,13 +852,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_unregistered", name: "Unregistered User", email: "unreg@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "device_unreg"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "device_unreg");
 
         var result = await controller.Exchange(req);
 
@@ -945,13 +893,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_existing_acc", name: "Updated Name", email: "updated@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "device_existing"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "device_existing");
 
         var result = await controller.Exchange(req);
 
@@ -983,13 +925,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_matched_by_field", name: "PreConfigured Employee", email: "preconfigured@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "device_match"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "device_match");
 
         var result = await controller.Exchange(req);
 
@@ -1017,13 +953,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_by_email", name: "Email Match", email: "matchme@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "device_email_match"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "device_email_match");
 
         var result = await controller.Exchange(req);
 
@@ -1059,13 +989,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_no_email", name: "NoEmail User", email: "populated@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "device_pop_email"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "device_pop_email");
 
         var result = await controller.Exchange(req);
 
@@ -1102,13 +1026,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_inactive", email: "inactive@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_inactive"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "dev_inactive");
 
         var result = await controller.Exchange(req);
 
@@ -1141,13 +1059,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_suspended", email: "suspended@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_suspended"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "dev_suspended");
 
         var result = await controller.Exchange(req);
 
@@ -1178,13 +1090,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_banned", email: "banned@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_banned"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "dev_banned");
 
         var result = await controller.Exchange(req);
 
@@ -1220,13 +1126,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_mobile_user", email: "mobile@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "valid_code",
-            CodeVerifier = "valid_verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "my_iphone_15"
-        };
+        var req = CreateValidExchangeRequest(code: "valid_code", deviceId: "my_iphone_15", codeVerifier: ValidTestVerifier);
 
         var result = await controller.Exchange(req);
 
@@ -1278,13 +1178,7 @@ public class MobileAuthControllerTests : TestDataTestBase
         var idToken = GenerateIdToken(sub: "sub_reuse_session", email: "mobileuser@example.com");
         var controller = CreateController(CreateDefaultIdpHandler(idToken));
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "my_reused_device"
-        };
+        var req = CreateValidExchangeRequest(deviceId: "my_reused_device");
 
         var result = await controller.Exchange(req);
 
@@ -1375,20 +1269,14 @@ public class MobileAuthControllerTests : TestDataTestBase
             return defaultHandler(req);
         });
 
-        var req1 = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code_1",
-            CodeVerifier = "verifier_1",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_1"
-        };
+        var req1 = CreateValidExchangeRequest(code: "code_1", deviceId: "dev_1");
         var result1 = await controller1.Exchange(req1);
         Assert.IsType<OkObjectResult>(result1);
         Assert.Equal(1, jwksRequestCount);
 
         // A second controller (simulating a subsequent request) should reuse the cached ConfigurationManager
         // rather than re-querying JWKS signing keys
-        var controller2 = new MobileAuthController(_db.CoreContext, _db.HrContext, CreateHttpClientFactory(req =>
+        var controller2 = new MobileAuthController(_db.CoreContext, CreateHttpClientFactory(req =>
         {
             var uri = req.RequestUri!.ToString();
             if (uri.Contains(".well-known/jwks.json"))
@@ -1404,13 +1292,7 @@ public class MobileAuthControllerTests : TestDataTestBase
             }
         };
 
-        var req2 = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code_2",
-            CodeVerifier = "verifier_2",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_2"
-        };
+        var req2 = CreateValidExchangeRequest(code: "code_2", deviceId: "dev_2");
         var result2 = await controller2.Exchange(req2);
         Assert.IsType<OkObjectResult>(result2);
         // JWKS should NOT have been fetched again because ConfigurationManager is cached
@@ -1430,7 +1312,6 @@ public class MobileAuthControllerTests : TestDataTestBase
         var factory = CreateHttpClientFactory(CreateDefaultIdpHandler());
         var controller = new MobileAuthController(
             _db.CoreContext,
-            _db.HrContext,
             factory,
             _sessionService,
             userService: _userService,
@@ -1444,13 +1325,7 @@ public class MobileAuthControllerTests : TestDataTestBase
             }
         };
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code_injected",
-            CodeVerifier = "verifier_injected",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_injected"
-        };
+        var req = CreateValidExchangeRequest(code: "code_injected", deviceId: "dev_injected");
 
         var result = await controller.Exchange(req);
         Assert.IsType<OkObjectResult>(result);
@@ -1479,7 +1354,6 @@ public class MobileAuthControllerTests : TestDataTestBase
         var factory = CreateHttpClientFactory(CreateDefaultIdpHandler());
         var controller = new MobileAuthController(
             _db.CoreContext,
-            _db.HrContext,
             factory,
             _sessionService,
             userService: _userService,
@@ -1492,13 +1366,7 @@ public class MobileAuthControllerTests : TestDataTestBase
             }
         };
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "code_monitor",
-            CodeVerifier = "verifier_monitor",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_monitor"
-        };
+        var req = CreateValidExchangeRequest(code: "code_monitor", deviceId: "dev_monitor");
 
         var result = await controller.Exchange(req);
         Assert.IsType<OkObjectResult>(result);
@@ -1520,7 +1388,6 @@ public class MobileAuthControllerTests : TestDataTestBase
         var factory = CreateHttpClientFactory(CreateDefaultIdpHandler());
         var controller = new MobileAuthController(
             _db.CoreContext,
-            _db.HrContext,
             factory,
             mockSessionService.Object,
             userService: _userService,
@@ -1532,13 +1399,7 @@ public class MobileAuthControllerTests : TestDataTestBase
             }
         };
 
-        var req = new MobileAuthController.MobileExchangeRequest
-        {
-            Code = "valid_code",
-            CodeVerifier = "verifier",
-            RedirectUri = "spokes://callback",
-            DeviceId = "dev_1"
-        };
+        var req = CreateValidExchangeRequest(code: "valid_code", deviceId: "dev_1");
 
         var result = await controller.Exchange(req);
         var objectResult = Assert.IsType<ObjectResult>(result);

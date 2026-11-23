@@ -1,0 +1,100 @@
+@using Spokes_Server.Components.Shared
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icon" Size="Size.Small" />
+            <MudText Typo="Typo.h6">@EffectiveTitle</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="d-flex flex-column gap-3 pb-2" style="max-height: 75vh; overflow-y: auto;">
+            @if (!string.IsNullOrWhiteSpace(Subtitle))
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary">@Subtitle</MudText>
+            }
+
+            @if (_sortedEmployees.Count > 0)
+            {
+                <MudCard Elevation="0" Class="pa-0" Style="border-radius: 12px; overflow: hidden; border: 1px solid var(--mud-palette-divider); flex-shrink: 0;">
+                    <div class="d-flex align-center justify-space-between px-4 py-3" style="background-color: var(--mud-palette-background-grey);">
+                        <div class="d-flex align-center gap-2" style="min-width: 0;">
+                            <MudIcon Icon="@Icon" Size="Size.Small" Color="Color.Primary" />
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@EffectiveTitle</MudText>
+                        </div>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" Class="flex-shrink-0">
+                            @(_sortedEmployees.Count == 1
+                                ? string.Format(Loc["{0} person"].Value, _sortedEmployees.Count)
+                                : string.Format(Loc["{0} people"].Value, _sortedEmployees.Count))
+                        </MudChip>
+                    </div>
+                    <MudDivider />
+                    <MudList T="string" Dense="true" Class="px-2 py-2">
+                        @foreach (var emp in _sortedEmployees)
+                        {
+                            <div class="d-flex align-center gap-3 py-2 px-2 rounded employee-list-dialog-row">
+                                <EmployeeAvatar Employee="@emp" Size="Size.Medium" />
+                                <div class="d-flex flex-column" style="min-width: 0;">
+                                    <MudText Typo="Typo.body1" Style="font-weight: 600; overflow-wrap: anywhere;">@emp.FullName</MudText>
+                                    @if (!string.IsNullOrWhiteSpace(emp.Position))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="overflow-wrap: anywhere;">@emp.Position</MudText>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </MudList>
+                </MudCard>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="text-center pa-4">
+                    @(string.IsNullOrWhiteSpace(EmptyText) ? Loc["No users to display."].Value : EmptyText)
+                </MudText>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CloseDialog" Color="Color.Default">@Loc["Close"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .employee-list-dialog-row {
+        transition: background-color 0.2s;
+    }
+    .employee-list-dialog-row:hover {
+        background-color: var(--mud-palette-action-default-hover);
+    }
+</style>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Title { get; set; } = string.Empty;
+    [Parameter] public string Icon { get; set; } = Icons.Material.Filled.People;
+    [Parameter] public IEnumerable<Employee>? Employees { get; set; }
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string? EmptyText { get; set; }
+
+    private List<Employee> _sortedEmployees = [];
+
+    private string EffectiveTitle => string.IsNullOrWhiteSpace(Title) ? Loc["People"].Value : Title;
+
+    protected override void OnParametersSet()
+    {
+        if (Employees == null)
+        {
+            _sortedEmployees = [];
+            return;
+        }
+
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        _sortedEmployees = Employees
+            .Where(e => e != null && (string.IsNullOrEmpty(e.Id) || seenIds.Add(e.Id)))
+            .OrderBy(e => e.FullName, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+    }
+
+    private void CloseDialog() => MudDialog.Close();
+}

@@ -40,6 +40,7 @@ public class PresenceController : SpokesControllerBase
         public string? SubscriptionId { get; set; }
         public string? State { get; set; }
         public string? PresenceToken { get; set; }
+        public long? Sequence { get; set; }
     }
 
     public PresenceController(
@@ -86,22 +87,18 @@ public class PresenceController : SpokesControllerBase
     public IActionResult MarkOffline(
         [FromQuery] string? subscriptionId = null,
         [FromBody] PresenceUpdateRequest? body = null,
-        [FromQuery] string? presenceToken = null)
+        [FromQuery] string? presenceToken = null,
+        [FromQuery] long? seq = null)
     {
-        if (!ServerUrlResolver.IsSameOriginRequest(HttpContext, GetConfiguredPublicUrl()))
+        if (!TryResolveAndAuthorize(subscriptionId, body, presenceToken, out var resolvedSubId, out var failureResult))
         {
-            return ForbiddenError("Cross-origin presence updates are not permitted.");
+            return failureResult!;
         }
 
-        var resolvedSubId = !string.IsNullOrWhiteSpace(body?.SubscriptionId) ? body.SubscriptionId : subscriptionId;
-        var resolvedToken = !string.IsNullOrWhiteSpace(body?.PresenceToken) ? body.PresenceToken : presenceToken;
         if (!string.IsNullOrEmpty(resolvedSubId))
         {
-            if (!IsCallerAuthorizedForSubscription(resolvedSubId, resolvedToken))
-            {
-                return ForbiddenError("Subscription does not belong to the authenticated user.");
-            }
-            _presence.RemoveConnection(resolvedSubId);
+            var resolvedSeq = body?.Sequence ?? seq;
+            _presence.MarkConnectionOffline(resolvedSubId, resolvedSeq);
         }
         return Ok();
     }
@@ -113,29 +110,22 @@ public class PresenceController : SpokesControllerBase
     public IActionResult Unfocus(
         [FromQuery] string? subscriptionId = null,
         [FromBody] PresenceUpdateRequest? body = null,
-        [FromQuery] string? presenceToken = null)
+        [FromQuery] string? presenceToken = null,
+        [FromQuery] long? seq = null)
     {
-        if (!ServerUrlResolver.IsSameOriginRequest(HttpContext, GetConfiguredPublicUrl()))
+        if (!TryResolveAndAuthorize(subscriptionId, body, presenceToken, out var resolvedSubId, out var failureResult))
         {
-            return ForbiddenError("Cross-origin presence updates are not permitted.");
+            return failureResult!;
         }
 
-        var resolvedSubId = !string.IsNullOrWhiteSpace(body?.SubscriptionId) ? body.SubscriptionId : subscriptionId;
-        var resolvedToken = !string.IsNullOrWhiteSpace(body?.PresenceToken) ? body.PresenceToken : presenceToken;
         _logger?.LogDebug("[PresenceController] Unfocus endpoint hit for subscriptionId: {SubscriptionId}", resolvedSubId);
         if (!string.IsNullOrEmpty(resolvedSubId))
         {
-            if (!IsCallerAuthorizedForSubscription(resolvedSubId, resolvedToken))
+            var resolvedSeq = body?.Sequence ?? seq;
+            if (_presence.SetConnectionFocusBySubscription(resolvedSubId, false, resolvedSeq))
             {
-                return ForbiddenError("Subscription does not belong to the authenticated user.");
+                StopActiveTypingForSubscription(resolvedSubId);
             }
-
-            var userId = _presence.GetUserIdBySubscription(resolvedSubId);
-            if (!string.IsNullOrEmpty(userId))
-            {
-                _clientStateService?.FlushToDiskIfUnsent(userId);
-            }
-            _presence.SetConnectionFocusBySubscription(resolvedSubId, false);
             _logger?.LogDebug("[PresenceController] SetConnectionFocusBySubscription called for {SubscriptionId}", resolvedSubId);
         }
         return Ok();
@@ -150,24 +140,18 @@ public class PresenceController : SpokesControllerBase
         [FromQuery] string? subscriptionId = null,
         [FromQuery] string? state = null,
         [FromBody] PresenceUpdateRequest? body = null,
-        [FromQuery] string? presenceToken = null)
+        [FromQuery] string? presenceToken = null,
+        [FromQuery] long? seq = null)
     {
-        if (!ServerUrlResolver.IsSameOriginRequest(HttpContext, GetConfiguredPublicUrl()))
-        {
-            return ForbiddenError("Cross-origin presence updates are not permitted.");
-        }
-
-        var resolvedSubId = !string.IsNullOrWhiteSpace(body?.SubscriptionId) ? body.SubscriptionId : subscriptionId;
         var resolvedState = !string.IsNullOrWhiteSpace(body?.State) ? body.State : state;
-        var resolvedToken = !string.IsNullOrWhiteSpace(body?.PresenceToken) ? body.PresenceToken : presenceToken;
+        if (!TryResolveAndAuthorize(subscriptionId, body, presenceToken, out var resolvedSubId, out var failureResult,
+                requireSubscriptionAuthWhenStateProvided: !string.IsNullOrEmpty(resolvedState)))
+        {
+            return failureResult!;
+        }
 
         if (!string.IsNullOrEmpty(resolvedSubId) && !string.IsNullOrEmpty(resolvedState))
         {
-            if (!IsCallerAuthorizedForSubscription(resolvedSubId, resolvedToken))
-            {
-                return ForbiddenError("Subscription does not belong to the authenticated user.");
-            }
-
             var normalized = resolvedState.Trim().ToLowerInvariant();
             var parsedState = normalized switch
             {
@@ -177,18 +161,36 @@ public class PresenceController : SpokesControllerBase
                 _ => ConnectionPresenceState.Active
             };
 
-            if (parsedState is ConnectionPresenceState.Idle or ConnectionPresenceState.Offline)
+            var resolvedSeq = body?.Sequence ?? seq;
+            if (_presence.SetConnectionPresenceState(resolvedSubId, parsedState, resolvedSeq) &&
+                parsedState is ConnectionPresenceState.Idle or ConnectionPresenceState.Offline)
             {
-                var userId = _presence.GetUserIdBySubscription(resolvedSubId);
-                if (!string.IsNullOrEmpty(userId))
-                {
-                    _clientStateService?.FlushToDiskIfUnsent(userId);
-                }
+                StopActiveTypingForSubscription(resolvedSubId);
             }
-
-            _presence.SetConnectionPresenceState(resolvedSubId, parsedState);
         }
         return Ok();
+    }
+
+    private bool TryResolveAndAuthorize(
+        string? subscriptionId,
+        PresenceUpdateRequest? body,
+        string? presenceToken,
+        out string? resolvedSubId,
+        out IActionResult? failureResult,
+        bool requireSubscriptionAuthWhenStateProvided = true)
+    {
+        resolvedSubId = !string.IsNullOrWhiteSpace(body?.SubscriptionId) ? body.SubscriptionId : subscriptionId;
+        var resolvedToken = !string.IsNullOrWhiteSpace(body?.PresenceToken) ? body.PresenceToken : presenceToken;
+        return TryAuthorizePresenceRequest(resolvedSubId, resolvedToken, out failureResult, requireSubscriptionAuthWhenStateProvided);
+    }
+
+    private void StopActiveTypingForSubscription(string subscriptionId)
+    {
+        var userId = _presence.GetUserIdBySubscription(subscriptionId);
+        if (!string.IsNullOrEmpty(userId))
+        {
+            _clientStateService?.StopActiveTyping(userId);
+        }
     }
 
     private string? GetConfiguredPublicUrl()
@@ -200,71 +202,105 @@ public class PresenceController : SpokesControllerBase
     private EmployeeRepository? GetEmployees() =>
         _employees ?? HttpContext?.RequestServices?.GetService<EmployeeRepository>();
 
-    private bool IsCallerAuthorizedForSubscription(string subscriptionId, string? presenceToken)
+    private bool TryAuthorizePresenceRequest(
+        string? subscriptionId,
+        string? presenceToken,
+        out IActionResult? failureResult,
+        bool requireSubscriptionAuthWhenStateProvided = true)
     {
-        var subscriptionUserId = _presence.GetUserIdBySubscription(subscriptionId);
+        failureResult = null;
+        bool hasVerifiedToken = !string.IsNullOrEmpty(subscriptionId) &&
+                                IsValidPresenceTokenForSubscription(subscriptionId, presenceToken);
+
+        if (!ServerUrlResolver.IsTrustedPresenceBeaconRequest(HttpContext, GetConfiguredPublicUrl(), hasVerifiedToken))
+        {
+            failureResult = ForbiddenError("Cross-origin presence updates are not permitted.");
+            return false;
+        }
+
+        if (string.IsNullOrEmpty(subscriptionId) || !requireSubscriptionAuthWhenStateProvided)
+        {
+            return true;
+        }
+
+        if (!hasVerifiedToken && !IsAuthenticatedCookieOwnerForSubscription(subscriptionId))
+        {
+            failureResult = ForbiddenError("Subscription does not belong to the authenticated user.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool IsAuthenticatedCookieOwnerForSubscription(string subscriptionId)
+    {
+        if (User?.Identity?.IsAuthenticated != true)
+        {
+            return false;
+        }
+
+        var callerId = User.FindFirst("EmployeeId")?.Value;
+        if (string.IsNullOrWhiteSpace(callerId) || User.HasClaim("PendingApproval", "true"))
+        {
+            return false;
+        }
+
         var employees = GetEmployees();
-
-        if (User?.Identity?.IsAuthenticated == true)
+        var employee = employees?.GetById(callerId);
+        if (employee != null && (!employee.IsActive || employee.IsBanned))
         {
-            var callerId = User.FindFirst("EmployeeId")?.Value;
-            if (!string.IsNullOrWhiteSpace(callerId))
-            {
-                if (User.HasClaim("PendingApproval", "true"))
-                {
-                    return false;
-                }
-
-                var employee = employees?.GetById(callerId);
-                if (employee != null && (!employee.IsActive || employee.IsBanned))
-                {
-                    return false;
-                }
-
-                if (!string.IsNullOrEmpty(subscriptionUserId))
-                {
-                    return string.Equals(callerId, subscriptionUserId, StringComparison.OrdinalIgnoreCase);
-                }
-
-                return true;
-            }
+            return false;
         }
 
-        if (!string.IsNullOrWhiteSpace(presenceToken))
+        var subscriptionUserId = _presence.GetUserIdBySubscription(subscriptionId);
+        if (!string.IsNullOrEmpty(subscriptionUserId))
         {
-            var provider = _dataProtection ?? HttpContext?.RequestServices?.GetService<IDataProtectionProvider>();
-            if (provider != null)
-            {
-                try
-                {
-                    var raw = provider.CreateProtector(PresenceTokenPurpose).Unprotect(presenceToken);
-                    var payload = JsonSerializer.Deserialize<PresenceBeaconTokenPayload>(raw);
-                    var nowUnix = _timeProvider.GetUtcNow().ToUnixTimeSeconds();
-                    if (payload != null &&
-                        payload.ExpiresUnixSeconds >= nowUnix &&
-                        string.Equals(payload.SubscriptionId, subscriptionId, StringComparison.Ordinal) &&
-                        !string.IsNullOrWhiteSpace(payload.EmployeeId))
-                    {
-                        var employee = employees?.GetById(payload.EmployeeId);
-                        if (employee != null && (!employee.IsActive || employee.IsBanned))
-                        {
-                            return false;
-                        }
-
-                        if (string.IsNullOrEmpty(subscriptionUserId) ||
-                            string.Equals(payload.EmployeeId, subscriptionUserId, StringComparison.OrdinalIgnoreCase))
-                        {
-                            return true;
-                        }
-                    }
-                }
-                catch
-                {
-                    return false;
-                }
-            }
+            return string.Equals(callerId, subscriptionUserId, StringComparison.OrdinalIgnoreCase);
         }
 
-        return false;
+        return true;
+    }
+
+    private bool IsValidPresenceTokenForSubscription(string subscriptionId, string? presenceToken)
+    {
+        if (string.IsNullOrWhiteSpace(presenceToken))
+        {
+            return false;
+        }
+
+        var provider = _dataProtection ?? HttpContext?.RequestServices?.GetService<IDataProtectionProvider>();
+        if (provider == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var raw = provider.CreateProtector(PresenceTokenPurpose).Unprotect(presenceToken);
+            var payload = JsonSerializer.Deserialize<PresenceBeaconTokenPayload>(raw);
+            var nowUnix = _timeProvider.GetUtcNow().ToUnixTimeSeconds();
+            if (payload == null ||
+                payload.ExpiresUnixSeconds < nowUnix ||
+                !string.Equals(payload.SubscriptionId, subscriptionId, StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(payload.EmployeeId))
+            {
+                return false;
+            }
+
+            var employees = GetEmployees();
+            var employee = employees?.GetById(payload.EmployeeId);
+            if (employee != null && (!employee.IsActive || employee.IsBanned))
+            {
+                return false;
+            }
+
+            var subscriptionUserId = _presence.GetUserIdBySubscription(subscriptionId);
+            return string.IsNullOrEmpty(subscriptionUserId) ||
+                   string.Equals(payload.EmployeeId, subscriptionUserId, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

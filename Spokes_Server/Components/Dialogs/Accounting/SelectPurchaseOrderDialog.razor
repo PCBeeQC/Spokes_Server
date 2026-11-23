@@ -1,6 +1,10 @@
 @using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
 @inject Database Db
+@inject CompanyBillInboxService BillInboxService
+@inject UserService UserService
 @inject IStringLocalizer<BusinessResources> BizLoc
 @inject IStringLocalizer<AppResources> Loc
 
@@ -16,7 +20,7 @@
                           AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" />
         </div>
 
-        <MudTable T="PurchaseOrder" Items="FilteredPurchaseOrders" Dense="true" Hover="true" FixedHeader="true" Height="300px"
+        <MudTable Elevation="0" Outlined="true" T="PurchaseOrder" Items="FilteredPurchaseOrders" Dense="true" Hover="true" FixedHeader="true" Height="300px"
                   SelectedItem="_selectedPo" SelectedItemChanged="@((PurchaseOrder? p) => OnPoSelected(p))"
                   RowClassFunc="@((p, i) => _selectedPo?.Id == p?.Id ? "mud-selected-item" : "")">
             <HeaderContent>
@@ -72,12 +76,23 @@
     private PurchaseOrder? _selectedPo;
     private string _searchQuery = "";
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || emp.IsSuspended ||
+            (!emp.HasEffectivePermission(AppPermissions.Purchases.ViewPOs) &&
+             !emp.HasEffectivePermission(AppPermissions.Purchases.ManagePOs)))
+        {
+            _allPos = [];
+            return;
+        }
+
         _allPos = Db.PurchaseOrders.GetAll()
-            .Where(p => p.Status != PurchaseOrderStatus.Closed &&
+            .Where(p => p.Status != PurchaseOrderStatus.Draft &&
+                        p.Status != PurchaseOrderStatus.Closed &&
                         p.Status != PurchaseOrderStatus.Void &&
                         p.Status != PurchaseOrderStatus.FullyBilled)
+            .Where(p => BillInboxService.IsPurchaseOrderAccessible(p, emp))
             .OrderByDescending(p => p.Date)
             .ToList();
 
@@ -114,10 +129,22 @@
 
     private void Cancel() => MudDialog.Cancel();
 
-    private void Submit()
+    private async Task Submit()
     {
         if (_selectedPo != null)
         {
+            var emp = await UserService.GetEmployeeAsync();
+            if (emp == null || emp.IsSuspended ||
+                (!emp.HasEffectivePermission(AppPermissions.Purchases.ViewPOs) &&
+                 !emp.HasEffectivePermission(AppPermissions.Purchases.ManagePOs)) ||
+                _selectedPo.Status == PurchaseOrderStatus.Draft ||
+                _selectedPo.Status == PurchaseOrderStatus.Void ||
+                !BillInboxService.IsPurchaseOrderAccessible(_selectedPo, emp))
+            {
+                MudDialog.Cancel();
+                return;
+            }
+
             MudDialog.Close(DialogResult.Ok(_selectedPo));
         }
     }

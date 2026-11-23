@@ -18,7 +18,7 @@
                     <MudGrid Class="mt-2">
                         @foreach (var category in AppPermissions.GetAll())
                         {
-                            if (IsFriendEdition && IsBusinessCategory(category.Key))
+                            if (IsFriendEdition && AppPermissions.IsBusinessCategory(category.Key))
                                 continue;
 
                             <MudItem xs="12" sm="6" md="4">
@@ -112,11 +112,4 @@
             Group.Permissions.Remove(p);
     }
 
-    private static readonly HashSet<string> BusinessCategories = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Email", "Projects", "Address Book", "Finance",
-        "Purchases", "Timesheets", "Business Documents", "My Week"
-    };
-
-    private static bool IsBusinessCategory(string categoryKey) => BusinessCategories.Contains(categoryKey);
 }

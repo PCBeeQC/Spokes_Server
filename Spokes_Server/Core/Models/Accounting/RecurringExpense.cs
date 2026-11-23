@@ -2,7 +2,9 @@ namespace Spokes_Server.Core.Models.Accounting;
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json.Serialization;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Models.Common;
 
 public class RecurringExpense : IDataEntity, IHasAssociatedFiles
 {
@@ -15,7 +17,7 @@ public class RecurringExpense : IDataEntity, IHasAssociatedFiles
     }
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
-    public bool IsEstimate { get; set; } = true; // True for Forward Planning, False for Actual Accounting Bills
+    public bool IsEstimate { get; set; } = false; // Unified Recurring Profile (legacy flag retained for JSON backwards compatibility)
     public string Name { get; set; } = string.Empty; // e.g. "Rent", "Internet"
     public string Supplier { get; set; } = string.Empty; // Vendor/Supplier name
     public string? SupplierId { get; set; }
@@ -24,7 +26,6 @@ public class RecurringExpense : IDataEntity, IHasAssociatedFiles
     public decimal Amount { get; set; } = 0; // Default amount
     public bool IsTaxExempt { get; set; }
     public string? GlAccountCode { get; set; }
-    public string? SageItemCode { get; set; }
     public string Frequency { get; set; } = RecurringExpenseFrequency.Monthly;
 
     public DateTime CreatedDate { get; set; } = DateTime.Today; // When this recurring expense was set up
@@ -39,7 +40,7 @@ public class RecurringExpense : IDataEntity, IHasAssociatedFiles
     }
 }
 
-public class RecurringBillRecord : IHasAssociatedFiles
+public class RecurringBillRecord : IHasAssociatedFiles, IHasDocumentHistory
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string? InvoiceNumber { get; set; }
@@ -52,12 +53,8 @@ public class RecurringBillRecord : IHasAssociatedFiles
     public decimal TvqAmount { get; set; } = 0;
     public bool? IsTaxExempt { get; set; }
     public string? GlAccountCode { get; set; }
-    public string? SageItemCode { get; set; }
-
-    // Accounting / Sage Export Tracking
-    public bool IsExported => ExportedToSageAt.HasValue;
-    public DateTime? ExportedToSageAt { get; set; }
-    public string? SageBatchId { get; set; }
+    public string? PaymentSourceGlCode { get; set; }
+    public List<DocumentTaxLine> TaxComponents { get; set; } = [];
 
     // Attachment
     public string AttachmentPath { get; set; } = string.Empty;
@@ -68,9 +65,25 @@ public class RecurringBillRecord : IHasAssociatedFiles
     public DateTime? DatePaid { get; set; }
 
     public List<PaymentRecord> Payments { get; set; } = [];
-    
-    public decimal AmountPaid => Payments.Any() ? Payments.Sum(p => p.Amount) : (IsPaid ? Amount : 0);
-    public decimal BalanceDue => Amount - AmountPaid;
+    public List<BalanceWriteOff> WriteOffs { get; set; } = [];
+    public List<DocumentHistoryEntry> History { get; set; } = [];
+
+    [JsonIgnore]
+    public decimal AmountWrittenOff => WriteOffs.Sum(w => w.Amount);
+
+    [JsonIgnore]
+    public bool HasWriteOffs => WriteOffs.Count > 0;
+
+    public decimal AmountPaid => Payments.Any()
+        ? Payments.Sum(p => p.Amount)
+        : (IsPaid && !HasWriteOffs ? Amount : 0);
+
+    public decimal BalanceDue => Math.Round(Amount - AmountPaid - AmountWrittenOff, 2, MidpointRounding.AwayFromZero);
+
+    [JsonIgnore]
+    public string Status => BalanceDue <= 0m
+        ? (AmountPaid <= 0m && HasWriteOffs ? BillStatus.WrittenOff : BillStatus.Paid)
+        : (IsPaid ? BillStatus.Paid : BillStatus.Unpaid);
 
     public IEnumerable<string> GetAssociatedFilePaths()
     {
@@ -83,6 +96,7 @@ public static class RecurringExpenseFrequency
     public const string Weekly = "Weekly";
     public const string BiWeekly = "Bi-Weekly";
     public const string Monthly = "Monthly";
+    public const string Quarterly = "Quarterly";
     public const string Yearly = "Yearly";
     public const string OneTime = "One-Time";
     public const string AsNeeded = "As Needed";

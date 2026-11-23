@@ -80,6 +80,14 @@ public class LinkPreviewService : IDisposable
         @"https?://[^\s\)<>\]""'`]+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    private static readonly Regex BbCodeBlockStripRegex = new(
+        @"\[code(?:=([^\]]+))?\].*?\[/code\]",
+        RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+    private static readonly Regex MarkdownCodeBlockStripRegex = new(
+        @"```.*?```",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+
     // Regex to detect YouTube URLs
     private static readonly Regex YouTubeRegex = new(
         @"(?:https?:\/\/)?(?:(?:[a-zA-Z0-9-]+\.)?youtube\.com\/(?:watch\?.*v=|embed\/|v\/|live\/|shorts\/)|youtu\.be\/)([^#\&\?]{11})",
@@ -117,9 +125,22 @@ public class LinkPreviewService : IDisposable
         if (string.IsNullOrWhiteSpace(content))
             return [];
 
+        if (!content.Contains("http://", StringComparison.OrdinalIgnoreCase) &&
+            !content.Contains("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
         // Strip code blocks to avoid extracting URLs from code snippets
-        var strippedContent = Regex.Replace(content, @"\[code(?:=([^\]]+))?\].*?\[/code\]", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-        strippedContent = Regex.Replace(strippedContent, @"```.*?```", "", RegexOptions.Singleline);
+        var strippedContent = content;
+        if (strippedContent.Contains("[code", StringComparison.OrdinalIgnoreCase))
+        {
+            strippedContent = BbCodeBlockStripRegex.Replace(strippedContent, "");
+        }
+        if (strippedContent.Contains("```", StringComparison.Ordinal))
+        {
+            strippedContent = MarkdownCodeBlockStripRegex.Replace(strippedContent, "");
+        }
 
         return UrlRegex.Matches(strippedContent)
             .Select(m => m.Value.TrimEnd('.', ',', '!', '?', ')', ';', ':'))
@@ -129,21 +150,26 @@ public class LinkPreviewService : IDisposable
     }
 
     /// <summary>
-    /// Gets a cached preview for the specified URL, or returns null if not cached, expired, or previously failed.
-    /// Does not perform network requests; call <see cref="FetchPreviewAsync"/> to fetch and cache previews from the web.
+    /// Attempts to look up a non-expired cache entry for <paramref name="url"/> without initiating network I/O.
+    /// Returns <c>true</c> whenever the URL has already been evaluated (including cached negative/failed results,
+    /// where <paramref name="preview"/> will be <c>null</c>), and <c>false</c> only on a genuine cache miss.
     /// </summary>
-    public LinkPreview? GetPreview(string url)
+    public bool TryGetCachedPreview(string url, out LinkPreview? preview)
     {
         if (_cache.TryGetValue(url, out var cached))
         {
             if (DateTime.UtcNow - cached.FetchedAt < _cacheExpiry)
-                return cached.Failed ? null : cached;
+            {
+                preview = cached.Failed ? null : cached;
+                return true;
+            }
 
             // Expired — remove and refetch
             _cache.TryRemove(url, out _);
         }
 
-        return null;
+        preview = null;
+        return false;
     }
 
     /// <summary>

@@ -3,21 +3,29 @@
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Data.Repositories.Core
+@using Spokes_Server.Core.Data.Repositories.HR
 @inject UserService UserService
-@inject EncryptionService EncryptionService
 @inject CompanyProfileRepository CompanyProfile
+@inject EmployeeRepository Employees
 @inject AppLabelService AppLabels
+@inject ISnackbar Snackbar
 
 <MudDialog>
     <DialogContent>
         <MudForm @ref="form" @bind-IsValid="@success">
             <MudToggleGroup T="int" @bind-Value="activeTabIndex" Outlined="true" Delimiters="true" CheckMark="false" Class="mb-6 flex-wrap" >
-                <MudToggleItem Value="0" Text="@Loc["Profile"]" />
-                @if (!IsFriendEdition)
+                @if (CanManageProfile)
+                {
+                    <MudToggleItem Value="0" Text="@Loc["Profile"]" />
+                }
+                @if (!IsFriendEdition && CanManageHr)
                 {
                     <MudToggleItem Value="1" Text="@BizLoc["HR Details"]" />
                 }
-                <MudToggleItem Value="2" Text="@Loc["Access"]" />
+                @if (CanManageAccess)
+                {
+                    <MudToggleItem Value="2" Text="@Loc["Access"]" />
+                }
                 @if (CurrentUserIsAdmin)
                 {
                     <MudToggleItem Value="3" Text="@Loc["Identity"]" />
@@ -25,7 +33,7 @@
             </MudToggleGroup>
 
             <MudPaper Elevation="0" Outlined="true" Class="pa-4">
-            @if (activeTabIndex == 0)
+            @if (activeTabIndex == 0 && CanManageProfile)
             {
                     <MudGrid>
                         <MudItem xs="12" sm="6">
@@ -60,7 +68,7 @@
                         }
                     </MudGrid>
             }
-            else if (activeTabIndex == 1)
+            else if (activeTabIndex == 1 && !IsFriendEdition && CanManageHr)
             {
                     <MudGrid>
                         <MudItem xs="12" sm="6">
@@ -139,13 +147,14 @@
                         </MudItem>
                     </MudGrid>
             }
-            else if (activeTabIndex == 2)
+            else if (activeTabIndex == 2 && CanManageAccess)
             {
                     <MudGrid>
                         <MudItem xs="12">
-                            <MudSwitch @bind-Value="Employee.IsActive" Color="Color.Success" Label="@Loc["Active Account"]" />
+                            <MudSwitch @bind-Value="Employee.IsActive" Color="Color.Success"
+                                Label="@Loc["Active Account"]" Disabled="@IsEditingSoleActiveAdmin" />
                             <MudSwitch @bind-Value="Employee.IsAdmin" Color="Color.Error"
-                                Label="@Loc["Global Administrator (Super User)"]" Disabled="!CurrentUserIsAdmin" />
+                                Label="@Loc["Global Administrator (Super User)"]" Disabled="@(!CurrentUserIsAdmin || IsEditingSoleActiveAdmin)" />
                         </MudItem>
 
                         <MudItem xs="12">
@@ -172,7 +181,7 @@
                             <MudGrid Class="mt-2">
                             @foreach (var category in AppPermissions.GetAll())
                             {
-                                    if (IsFriendEdition && IsBusinessCategory(category.Key))
+                                    if (IsFriendEdition && AppPermissions.IsBusinessCategory(category.Key))
                                         continue;
 
                                     <MudItem xs="12" sm="6" md="4">
@@ -217,7 +226,7 @@
 
                             @if (LinkedOpenIdAccounts.Any())
                             {
-                                    <MudTable Items="@LinkedOpenIdAccounts" Dense="true" Hover="true" Striped="true"
+                                    <MudTable Elevation="0" Outlined="true" Items="@LinkedOpenIdAccounts" Dense="true" Hover="true" Striped="true"
                                         Class="mb-4">
                                         <HeaderContent>
                                             <MudTh>@Loc["Name"]</MudTh>
@@ -251,7 +260,7 @@
 
                             @if (UnlinkedOpenIdAccounts.Any())
                             {
-                                    <MudTable Items="@UnlinkedOpenIdAccounts" Dense="true" Hover="true" Class="mb-2">
+                                    <MudTable Elevation="0" Outlined="true" Items="@UnlinkedOpenIdAccounts" Dense="true" Hover="true" Class="mb-2">
                                         <HeaderContent>
                                             <MudTh>@Loc["Name"]</MudTh>
                                             <MudTh>@Loc["Email"]</MudTh>
@@ -285,7 +294,7 @@
                                 @Loc["Complete list of all OpenID accounts in the system."]
                             </MudText>
 
-                            <MudTable Items="@AllOpenIdAccounts" Dense="true" Hover="true" Striped="true">
+                            <MudTable Elevation="0" Outlined="true" Items="@AllOpenIdAccounts" Dense="true" Hover="true" Striped="true">
                                 <HeaderContent>
                                     <MudTh>@Loc["Name"]</MudTh>
                                     <MudTh>@Loc["Email"]</MudTh>
@@ -336,23 +345,43 @@
     private HashSet<string> _callerPermissions = new(StringComparer.OrdinalIgnoreCase);
     private List<string> _initialPermissions = [];
     private List<string> _initialGroupIds = [];
+    private bool _initialIsActive;
+    private bool _initialIsAdmin;
     private bool CurrentUserIsAdmin;
     private CompanyProfile Profile = default!;
     private int activeTabIndex;
     private bool IsFriendEdition => Profile?.Edition == "Family";
+    private bool IsEditingSoleActiveAdmin => UserService.IsSoleActiveAdmin(Employees, Employee?.Id);
+    private bool CanManageHr => CurrentUserIsAdmin || _callerPermissions.Contains(AppPermissions.Hr.ManageEmployees) || (IsFriendEdition && _callerPermissions.Contains(AppPermissions.Admin.ManageUsers));
+    private bool CanManageAccess => CurrentUserIsAdmin || _callerPermissions.Contains(AppPermissions.Admin.ManageUsers);
+    private bool CanManageProfile => CanManageHr || CanManageAccess;
 
     protected override async Task OnInitializedAsync()
     {
+        Profile = CompanyProfile.Get();
         _currentEmployee = await UserService.GetEmployeeAsync();
-        CurrentUserIsAdmin = _currentEmployee?.IsAdmin ?? false;
+        CurrentUserIsAdmin = _currentEmployee?.IsEffectiveAdmin ?? false;
         _callerPermissions = UserService.GetCallerEffectivePermissions(_currentEmployee);
         _initialPermissions = Employee.Permissions?.ToList() ?? [];
         _initialGroupIds = Employee.PermissionGroupIds?.ToList() ?? [];
+        _initialIsActive = Employee.IsActive;
+        _initialIsAdmin = Employee.IsAdmin;
         if (!CurrentUserIsAdmin && activeTabIndex == 3)
         {
             activeTabIndex = 0;
         }
-        Profile = CompanyProfile.Get();
+        if (activeTabIndex == 0 && !CanManageProfile)
+        {
+            activeTabIndex = CanManageAccess ? 2 : 0;
+        }
+        else if (activeTabIndex == 1 && (IsFriendEdition || !CanManageHr))
+        {
+            activeTabIndex = CanManageProfile ? 0 : (CanManageAccess ? 2 : 0);
+        }
+        else if (activeTabIndex == 2 && !CanManageAccess)
+        {
+            activeTabIndex = 0;
+        }
     }
 
     // OpenID Account Lists (computed from AllOpenIdAccounts)
@@ -365,9 +394,8 @@
     // Helper properties for Nullable Date conversion (MudBlazor DatePicker uses DateTime?, Model uses DateOnly)
     private DateTime? dateOfBirth
     {
-        get => Employee.DateOfBirth.ToDateTime(TimeOnly.MinValue);
-        set => Employee.DateOfBirth = value.HasValue ? DateOnly.FromDateTime(value.Value) :
-        DateOnly.FromDateTime(DateTime.UtcNow);
+        get => Employee.DateOfBirth?.ToDateTime(TimeOnly.MinValue);
+        set => Employee.DateOfBirth = value.HasValue ? DateOnly.FromDateTime(value.Value) : null;
     }
 
     private DateTime? dateOfJoining
@@ -387,10 +415,28 @@
 
     private async Task Submit()
     {
+        _currentEmployee = await UserService.GetEmployeeAsync();
+        CurrentUserIsAdmin = _currentEmployee?.IsEffectiveAdmin ?? false;
+        _callerPermissions = UserService.GetCallerEffectivePermissions(_currentEmployee);
+
+        var latestTarget = Employees.GetById(Employee.Id) ?? Employee;
+        if ((!CanManageProfile && !CanManageAccess) || !UserService.CanManageEmployeeTarget(_currentEmployee, latestTarget))
+        {
+            Snackbar.Add(Loc["You cannot modify or delete an Administrator account."].Value, Severity.Error);
+            return;
+        }
+
         await form.ValidateAsync();
         if (success)
         {
-            if (!CurrentUserIsAdmin)
+            if (!CanManageAccess)
+            {
+                Employee.IsActive = _initialIsActive;
+                Employee.IsAdmin = _initialIsAdmin;
+                Employee.Permissions = _initialPermissions;
+                Employee.PermissionGroupIds = _initialGroupIds;
+            }
+            else if (!CurrentUserIsAdmin)
             {
                 Employee.IsAdmin = false;
                 var allowed = UserService.FilterAllowedPermissions(_currentEmployee, Employee.Permissions);
@@ -409,6 +455,19 @@
                                   (allGroups.FirstOrDefault(g => g.Id == gid) is { } grp &&
                                    UserService.CanAssignPermissionGroup(_currentEmployee, grp)))
                     .ToList();
+            }
+
+            if (Employee.IsAdmin)
+            {
+                Employee.IsSuspended = false;
+            }
+
+            if (UserService.IsSoleActiveAdmin(Employees, Employee.Id) && (!Employee.IsActive || !Employee.IsAdmin))
+            {
+                Employee.IsActive = true;
+                Employee.IsAdmin = true;
+                Snackbar.Add(Loc["Cannot deactivate or demote the sole active administrator account."].Value, Severity.Error);
+                return;
             }
 
             MudDialog.Close(DialogResult.Ok(Employee));
@@ -464,13 +523,6 @@
         var groups = Profile?.PermissionGroups ?? new();
         return string.Join(", ", selectedValues.Select(id => groups.FirstOrDefault(g => g.Id == id)?.Name ?? id));
     }
-
-    private static readonly string[] BusinessCategories = [
-        "Email", "Projects", "Address Book", "Finance", 
-        "Purchases", "Timesheets", "Business Documents", "My Week" 
-    ];
-
-    private static bool IsBusinessCategory(string categoryKey) => BusinessCategories.Contains(categoryKey);
 
     private void AddWorkSchedule()
     {

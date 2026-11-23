@@ -52,52 +52,20 @@ public class ChatChannelFormatterTests
         _ => null
     };
 
-    [Fact]
-    public void IsSelfDirectMessage_ReturnsTrue_WhenTwoIdenticalParticipantIds()
+    [Theory]
+    [InlineData(ChatChannelType.Direct, new[] { "user1", "user1" }, true)]
+    [InlineData(ChatChannelType.Direct, new[] { "user1" }, true)]
+    [InlineData(ChatChannelType.Direct, new[] { "user1", "user2" }, false)]
+    [InlineData(ChatChannelType.General, new[] { "user1", "user1" }, false)]
+    public void IsSelfDirectMessage_EvaluatesChannelTypeAndParticipants(string channelType, string[] participantIds, bool expected)
     {
         var channel = new ChatChannel
         {
-            ChannelType = ChatChannelType.Direct,
-            ParticipantIds = new List<string> { "user1", "user1" }
+            ChannelType = channelType,
+            ParticipantIds = participantIds.ToList()
         };
 
-        Assert.True(ChatChannelFormatter.IsSelfDirectMessage(channel, "user1"));
-    }
-
-    [Fact]
-    public void IsSelfDirectMessage_ReturnsTrue_WhenSingleParticipantId()
-    {
-        var channel = new ChatChannel
-        {
-            ChannelType = ChatChannelType.Direct,
-            ParticipantIds = new List<string> { "user1" }
-        };
-
-        Assert.True(ChatChannelFormatter.IsSelfDirectMessage(channel, "user1"));
-    }
-
-    [Fact]
-    public void IsSelfDirectMessage_ReturnsFalse_WhenDirectMessageToOtherUser()
-    {
-        var channel = new ChatChannel
-        {
-            ChannelType = ChatChannelType.Direct,
-            ParticipantIds = new List<string> { "user1", "user2" }
-        };
-
-        Assert.False(ChatChannelFormatter.IsSelfDirectMessage(channel, "user1"));
-    }
-
-    [Fact]
-    public void IsSelfDirectMessage_ReturnsFalse_WhenNonDirectChannel()
-    {
-        var channel = new ChatChannel
-        {
-            ChannelType = ChatChannelType.General,
-            ParticipantIds = new List<string> { "user1", "user1" }
-        };
-
-        Assert.False(ChatChannelFormatter.IsSelfDirectMessage(channel, "user1"));
+        Assert.Equal(expected, ChatChannelFormatter.IsSelfDirectMessage(channel, "user1"));
     }
 
     [Fact]
@@ -395,5 +363,84 @@ public class ChatChannelFormatterTests
         var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", LookupEmployee);
 
         Assert.Equal("Unknown User", displayName);
+    }
+
+    [Fact]
+    public void GetDirectMessageParticipant_StandardDM_ReturnsOtherEmployee()
+    {
+        var employees = new List<Employee> { _currentUser, _otherUser };
+        var channel = new ChatChannel
+        {
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string> { "user1", "user2" }
+        };
+
+        var participant = ChatChannelFormatter.GetDirectMessageParticipant(channel, "user1", employees);
+
+        Assert.Same(_otherUser, participant);
+    }
+
+    [Fact]
+    public void GetDirectMessageParticipant_SelfDM_ReturnsCurrentEmployee()
+    {
+        var employees = new List<Employee> { _currentUser, _otherUser };
+        var channel = new ChatChannel
+        {
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string> { "user1", "user1" }
+        };
+
+        var participant = ChatChannelFormatter.GetDirectMessageParticipant(channel, "user1", employees);
+
+        Assert.Same(_currentUser, participant);
+    }
+
+    [Fact]
+    public void GetDirectMessageParticipant_LegacyGroupDM_ReturnsNull()
+    {
+        var employees = new List<Employee> { _currentUser, _otherUser, _thirdUser };
+        var channel = new ChatChannel
+        {
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string> { "user1", "user2", "user3" }
+        };
+
+        Assert.Null(ChatChannelFormatter.GetDirectMessageParticipantId(channel, "user1"));
+        Assert.Null(ChatChannelFormatter.GetDirectMessageParticipant(channel, "user1", employees));
+    }
+
+    [Theory]
+    [InlineData(ChatChannelType.General)]
+    [InlineData(ChatChannelType.Group)]
+    [InlineData(ChatChannelType.Team)]
+    [InlineData(ChatChannelType.Project)]
+    public void GetDirectMessageParticipantId_NonDirectChannel_ReturnsNull(string channelType)
+    {
+        var channel = new ChatChannel
+        {
+            ChannelType = channelType,
+            ParticipantIds = new List<string> { "user1", "user2" }
+        };
+
+        Assert.Null(ChatChannelFormatter.GetDirectMessageParticipantId(channel, "user1"));
+    }
+
+    [Fact]
+    public void GetDirectMessageParticipant_NullOrEmptyInputs_ReturnsNull()
+    {
+        var dmChannel = new ChatChannel
+        {
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string> { "user1", "user2" }
+        };
+        var emptyChannel = new ChatChannel
+        {
+            ChannelType = ChatChannelType.Direct,
+            ParticipantIds = new List<string>()
+        };
+
+        Assert.Null(ChatChannelFormatter.GetDirectMessageParticipant(null, "user1", new[] { _currentUser }));
+        Assert.Null(ChatChannelFormatter.GetDirectMessageParticipant(emptyChannel, "user1", new[] { _currentUser }));
+        Assert.Null(ChatChannelFormatter.GetDirectMessageParticipant(dmChannel, "user1", null));
     }
 }

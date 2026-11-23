@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate.Contexts;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
@@ -26,7 +27,6 @@ public class PollServiceTests : IDisposable
     private readonly EmployeeRepository _employees;
     private readonly TeamRepository _teams;
     private readonly ProjectRepository _projects;
-    private readonly Mock<IChatRealtimeGateway> _mockRealtimeGateway;
     private readonly ChatStateService _chatState;
     private readonly CryptoService _crypto;
     private readonly PollService _service;
@@ -36,7 +36,7 @@ public class PollServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_Polls_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir } };
+        var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
 
@@ -46,7 +46,6 @@ public class PollServiceTests : IDisposable
         _teams = new TeamRepository(_persistence, _config);
         _projects = new ProjectRepository(_persistence, _config);
 
-        _mockRealtimeGateway = new Mock<IChatRealtimeGateway>();
         _chatState = new ChatStateService();
         _crypto = new CryptoService();
 
@@ -65,16 +64,15 @@ public class PollServiceTests : IDisposable
             commContext.Object,
             hrContext.Object,
             projectsContext.Object,
-            realtimeGateway: _mockRealtimeGateway.Object,
             chatState: _chatState,
             crypto: _crypto);
     }
 
     private (ChatChannel Channel, Employee Creator, Employee Voter1, Employee Voter2) SeedBasicChannelAndUsers(bool isEncrypted = false)
     {
-        var creator = new Employee { Id = "emp-creator", FirstName = "Alice", LastName = "Smith", IsAdmin = false };
-        var voter1 = new Employee { Id = "emp-voter1", FirstName = "Bob", LastName = "Jones", IsAdmin = false };
-        var voter2 = new Employee { Id = "emp-voter2", FirstName = "Charlie", LastName = "Brown", IsAdmin = false };
+        var creator = new Employee { Id = "emp-creator", FirstName = "Alice", LastName = "Smith", IsAdmin = false, Permissions = [AppPermissions.Chat.Use] };
+        var voter1 = new Employee { Id = "emp-voter1", FirstName = "Bob", LastName = "Jones", IsAdmin = false, Permissions = [AppPermissions.Chat.Use] };
+        var voter2 = new Employee { Id = "emp-voter2", FirstName = "Charlie", LastName = "Brown", IsAdmin = false, Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(creator);
         _employees.Save(voter1);
         _employees.Save(voter2);
@@ -413,6 +411,7 @@ public class PollServiceTests : IDisposable
                 ChannelId = channel.Id,
                 Question = "Secret ballot?",
                 IsAnonymous = true,
+                AllowMultipleAnswers = true,
                 AllowAddOptions = true,
                 Options =
                 [
@@ -479,8 +478,8 @@ public class PollServiceTests : IDisposable
     [Fact]
     public void GetPollById_And_GetPollsForChannel_EnforceChannelAuthorizationAndExpectedChannelMatch()
     {
-        var member = new Employee { Id = "poll-member", FirstName = "Member", LastName = "One" };
-        var intruder = new Employee { Id = "poll-intruder", FirstName = "Intruder", LastName = "Two" };
+        var member = new Employee { Id = "poll-member", FirstName = "Member", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
+        var intruder = new Employee { Id = "poll-intruder", FirstName = "Intruder", LastName = "Two", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(member);
         _employees.Save(intruder);
 
@@ -630,7 +629,8 @@ public class PollServiceTests : IDisposable
             Id = "emp-no-enc-key",
             FirstName = "NoKey",
             LastName = "User",
-            EncryptedPrivateKey = "has-personal-vault"
+            EncryptedPrivateKey = "has-personal-vault",
+            Permissions = [AppPermissions.Chat.Use]
         };
         _employees.Save(outsiderWithPublicAccess);
 

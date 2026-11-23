@@ -12,16 +12,6 @@ public enum StorageStatus
     CriticalReadOnly
 }
 
-public class StorageHealthInfo
-{
-    public StorageStatus Status { get; set; } = StorageStatus.Normal;
-    public long AvailableFreeBytes { get; set; }
-    public long TotalBytes { get; set; }
-    public int AvailableFreeMegabytes => (int)(AvailableFreeBytes / (1024 * 1024));
-    public bool IsUploadAllowed => Status != StorageStatus.CriticalReadOnly;
-    public bool HasPersistenceFailure { get; set; }
-}
-
 public interface IStorageHealthService : IStorageHealthNotifier
 {
     StorageStatus Status { get; }
@@ -30,8 +20,6 @@ public interface IStorageHealthService : IStorageHealthNotifier
     int AvailableFreeMegabytes { get; }
     bool IsUploadAllowed { get; }
     bool HasPersistenceFailure { get; }
-    StorageHealthInfo GetHealthInfo();
-    void ForceRefresh();
 }
 
 public class StorageHealthService : IStorageHealthService
@@ -99,18 +87,6 @@ public class StorageHealthService : IStorageHealthService
         }
     }
 
-    public StorageHealthInfo GetHealthInfo()
-    {
-        RefreshIfStale();
-        return new StorageHealthInfo
-        {
-            Status = _status,
-            AvailableFreeBytes = _availableFreeBytes,
-            TotalBytes = _totalBytes,
-            HasPersistenceFailure = _hasPersistenceFailure
-        };
-    }
-
     public void RecordPersistenceFailure()
     {
         lock (_lock)
@@ -132,15 +108,6 @@ public class StorageHealthService : IStorageHealthService
                 _lastCheckedUtc = DateTime.MinValue; // Trigger immediate recheck
                 _logger.LogInformation("[StorageHealth] Persistence recovered.");
             }
-        }
-    }
-
-    public void ForceRefresh()
-    {
-        lock (_lock)
-        {
-            _lastCheckedUtc = DateTime.MinValue;
-            RefreshIfStale();
         }
     }
 

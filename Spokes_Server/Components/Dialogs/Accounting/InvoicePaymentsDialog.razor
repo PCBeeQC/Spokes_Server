@@ -3,6 +3,7 @@
 @using Spokes_Server.Core.Services.Accounting
 @using Spokes_Server.Core.Services.Identity
 @using Spokes_Server.Core.Data
+@using Spokes_Server.Components.Dialogs.Common
 @inject Database Db
 @inject IAccountingService AccountingService
 @inject UserService UserService
@@ -26,15 +27,22 @@
             <!-- Financial Summary Bar -->
             <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true" Style="background-color: var(--mud-palette-background-grey);">
                 <MudGrid Spacing="2" Class="align-center">
-                    <MudItem xs="6" sm="3">
+                    <MudItem xs="6" sm="@(Invoice.HasWriteOffs ? 2 : 3)">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Grand Total"]</MudText>
                         <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@Invoice.GrandTotal.ToString("C2")</MudText>
                     </MudItem>
-                    <MudItem xs="6" sm="3">
+                    <MudItem xs="6" sm="@(Invoice.HasWriteOffs ? 3 : 3)">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Amount Paid"]</MudText>
                         <MudText Typo="Typo.subtitle1" Color="Color.Success" Style="font-weight: 600;">@Invoice.AmountPaid.ToString("C2")</MudText>
                     </MudItem>
-                    <MudItem xs="6" sm="3">
+                    @if (Invoice.HasWriteOffs)
+                    {
+                        <MudItem xs="6" sm="2">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Written Off"]</MudText>
+                            <MudText Typo="Typo.subtitle1" Color="Color.Warning" Style="font-weight: 600;">@Invoice.AmountWrittenOff.ToString("C2")</MudText>
+                        </MudItem>
+                    }
+                    <MudItem xs="6" sm="@(Invoice.HasWriteOffs ? 2 : 3)">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Balance Due"]</MudText>
                         <MudText Typo="Typo.subtitle1" Color="@(Invoice.BalanceDue > 0 ? Color.Error : Color.Default)" Style="font-weight: 600;">@Invoice.BalanceDue.ToString("C2")</MudText>
                     </MudItem>
@@ -46,17 +54,29 @@
             </MudPaper>
 
             <!-- Actions Header -->
-            <div class="d-flex justify-space-between align-center mb-3">
+            <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-3">
                 <MudText Typo="Typo.subtitle2">@BizLoc["Recorded Payments"] (@Invoice.Payments.Count)</MudText>
-                @if (_canManageAccounting)
+                @if (_canManageAccounting && Invoice.Status != InvoiceStatus.Draft && Invoice.Status != InvoiceStatus.Void)
                 {
-                    <MudButton Variant="Variant.Filled"
-                               Color="Color.Primary"
-                               Size="Size.Small"
-                               StartIcon="@Icons.Material.Filled.Add"
-                               OnClick="AddPayment">
-                        @BizLoc["Record Payment"]
-                    </MudButton>
+                    <div class="d-flex align-center gap-2">
+                        @if (Invoice.BalanceDue > 0)
+                        {
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Warning"
+                                       Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Balance"
+                                       OnClick="CloseBalance">
+                                @BizLoc["Close Balance"]
+                            </MudButton>
+                        }
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Add"
+                                   OnClick="AddPayment">
+                            @BizLoc["Record Payment"]
+                        </MudButton>
+                    </div>
                 }
             </div>
 
@@ -111,15 +131,39 @@
                                                    Color="Color.Error"
                                                    OnClick="@(() => DeletePayment(payment))" />
                                 </MudTooltip>
-                                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
-                                    <MudMenuItem Icon="@Icons.Material.Filled.Edit" OnClick="@(() => EditPayment(payment))">
-                                        @BizLoc["Edit Payment"]
-                                    </MudMenuItem>
-                                    <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => DeletePayment(payment))">
-                                        @BizLoc["Delete Payment"]
-                                    </MudMenuItem>
-                                </MudMenu>
                             </div>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+
+            <!-- Non-Cash Balance Write-Offs / Adjustments -->
+            @if (Invoice.WriteOffs.Count > 0)
+            {
+                <MudDivider Class="my-4" />
+                <MudText Typo="Typo.subtitle2" Class="mb-2">@BizLoc["Balance Write-Offs / Adjustments"] (@Invoice.WriteOffs.Count)</MudText>
+                <MudTable Items="@Invoice.WriteOffs" Dense="true" Elevation="0" Outlined="true" Hover="true">
+                    <HeaderContent>
+                        <MudTh>@BizLoc["Date"]</MudTh>
+                        <MudTh>@BizLoc["Amount"]</MudTh>
+                        <MudTh>@BizLoc["GL Account"]</MudTh>
+                        <MudTh>@BizLoc["Reason"]</MudTh>
+                        <MudTh Style="width: 70px; text-align: right;">@Loc["Actions"]</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="wo">
+                        <MudTd DataLabel="Date">@wo.Date.ToShortDateString()</MudTd>
+                        <MudTd DataLabel="Amount">
+                            <span style="font-weight: 600; color: var(--mud-palette-warning);">@wo.Amount.ToString("C2")</span>
+                        </MudTd>
+                        <MudTd DataLabel="GL Account">@(string.IsNullOrWhiteSpace(wo.GlAccountCode) ? "5860" : wo.GlAccountCode)</MudTd>
+                        <MudTd DataLabel="Reason">@wo.Reason</MudTd>
+                        <MudTd Style="text-align: right; white-space: nowrap;">
+                            <MudTooltip Text="@BizLoc["Reverse Write-Off"]">
+                                <MudIconButton Icon="@Icons.Material.Filled.Undo"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => ReverseWriteOff(wo))" />
+                            </MudTooltip>
                         </MudTd>
                     </RowTemplate>
                 </MudTable>
@@ -142,7 +186,7 @@
     protected override async Task OnInitializedAsync()
     {
         var emp = await UserService.GetEmployeeAsync();
-        _canManageAccounting = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Finance.AccessAccounting));
+        _canManageAccounting = emp != null && (emp.HasPermission(AppPermissions.Finance.AccessAccounting) || emp.HasPermission(AppPermissions.Finance.ApproveInvoices));
         _currentUser = emp?.FullName ?? emp?.Email;
 
         if (!_canManageAccounting)
@@ -162,7 +206,14 @@
 
     private async Task AddPayment()
     {
-        if (!_canManageAccounting) return;
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null ||
+            (!actor.HasPermission(AppPermissions.Finance.AccessAccounting) && !actor.HasPermission(AppPermissions.Finance.ApproveInvoices)) ||
+            Invoice.Status == InvoiceStatus.Draft)
+        {
+            _canManageAccounting = false;
+            return;
+        }
 
         var parameters = new DialogParameters<RecordPaymentDialog>
         {
@@ -178,7 +229,10 @@
         {
             try
             {
-                AccountingService.RecordInvoicePayment(Invoice, newPayment, _currentUser);
+                actor = await UserService.GetEmployeeAsync();
+                if (actor == null) return;
+                _currentUser = actor.FullName ?? actor.Email;
+                AccountingService.RecordInvoicePayment(Invoice, newPayment, _currentUser, actor);
                 Invoice = Db.Invoices.GetById(Invoice.Id) ?? Invoice;
                 Snackbar.Add(string.Format(BizLoc["Payment of {0} recorded successfully."].Value, newPayment.Amount.ToString("C2")), Severity.Success);
             }
@@ -191,8 +245,15 @@
 
     private async Task EditPayment(PaymentRecord payment)
     {
-        if (!_canManageAccounting) return;
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null ||
+            (!actor.HasPermission(AppPermissions.Finance.AccessAccounting) && !actor.HasPermission(AppPermissions.Finance.ApproveInvoices)))
+        {
+            _canManageAccounting = false;
+            return;
+        }
 
+        var originalAmount = payment.Amount;
         var maxAmount = Math.Max(0, Invoice.BalanceDue + payment.Amount);
         var parameters = new DialogParameters<RecordPaymentDialog>
         {
@@ -209,7 +270,33 @@
         {
             try
             {
-                AccountingService.UpdateInvoicePayment(Invoice, updatedPayment, _currentUser);
+                string? reason = null;
+                if (updatedPayment.Amount < originalAmount)
+                {
+                    var confirmParams = new DialogParameters<ConfirmDialog>
+                    {
+                        { x => x.ContentText, string.Format(BizLoc["Reducing this payment from {0} to {1} may change the invoice status. Please provide a reason."].Value, originalAmount.ToString("C2"), updatedPayment.Amount.ToString("C2")) },
+                        { x => x.ButtonText, BizLoc["Save Changes"].Value },
+                        { x => x.Color, Color.Warning },
+                        { x => x.ShowReasonInput, true },
+                        { x => x.ReasonRequired, true },
+                        { x => x.ReasonLabel, BizLoc["Reason for reducing payment"].Value }
+                    };
+
+                    var confirmDialog = await DialogService.ShowAsync<ConfirmDialog>(BizLoc["Confirm Payment Reduction"].Value, confirmParams, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+                    var confirmResult = await confirmDialog.Result;
+                    if (confirmResult == null || confirmResult.Canceled || string.IsNullOrWhiteSpace(confirmResult.Data as string))
+                    {
+                        Invoice = Db.Invoices.GetById(Invoice.Id) ?? Invoice;
+                        return;
+                    }
+                    reason = (confirmResult.Data as string)?.Trim();
+                }
+
+                actor = await UserService.GetEmployeeAsync();
+                if (actor == null) return;
+                _currentUser = actor.FullName ?? actor.Email;
+                AccountingService.UpdateInvoicePayment(Invoice, updatedPayment, _currentUser, reason, actor);
                 Invoice = Db.Invoices.GetById(Invoice.Id) ?? Invoice;
                 Snackbar.Add(BizLoc["Payment updated successfully."], Severity.Success);
             }
@@ -222,21 +309,129 @@
 
     private async Task DeletePayment(PaymentRecord payment)
     {
-        if (!_canManageAccounting) return;
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null ||
+            (!actor.HasPermission(AppPermissions.Finance.AccessAccounting) && !actor.HasPermission(AppPermissions.Finance.ApproveInvoices)))
+        {
+            _canManageAccounting = false;
+            return;
+        }
 
-        var confirm = await DialogService.ShowMessageBoxAsync(
-            BizLoc["Delete Payment"].Value,
-            string.Format(BizLoc["Are you sure you want to delete the payment of {0} received on {1}?"].Value, payment.Amount.ToString("C2"), payment.Date.ToShortDateString()),
-            yesText: Loc["Delete"].Value,
-            cancelText: Loc["Cancel"].Value);
+        var confirmParams = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, string.Format(BizLoc["Are you sure you want to delete the payment of {0} received on {1}? Please provide a reason."].Value, payment.Amount.ToString("C2"), payment.Date.ToShortDateString()) },
+            { x => x.ButtonText, Loc["Delete"].Value },
+            { x => x.Color, Color.Error },
+            { x => x.ShowReasonInput, true },
+            { x => x.ReasonRequired, true },
+            { x => x.ReasonLabel, BizLoc["Reason for deleting payment"].Value },
+            { x => x.ReasonPlaceholder, BizLoc["Explain why this payment is being removed..."].Value }
+        };
 
-        if (confirm == true)
+        var confirmDialog = await DialogService.ShowAsync<ConfirmDialog>(BizLoc["Delete Payment"].Value, confirmParams, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var confirmResult = await confirmDialog.Result;
+
+        if (confirmResult is { Canceled: false } && !string.IsNullOrWhiteSpace(confirmResult.Data as string))
+        {
+            var reason = (confirmResult.Data as string)?.Trim();
+            try
+            {
+                actor = await UserService.GetEmployeeAsync();
+                if (actor == null) return;
+                _currentUser = actor.FullName ?? actor.Email;
+                AccountingService.DeleteInvoicePayment(Invoice, payment.Id, _currentUser, reason, actor);
+                Invoice = Db.Invoices.GetById(Invoice.Id) ?? Invoice;
+                Snackbar.Add(BizLoc["Payment deleted successfully."], Severity.Success);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Warning);
+            }
+        }
+    }
+
+    private async Task CloseBalance()
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null ||
+            (!actor.HasPermission(AppPermissions.Finance.AccessAccounting) && !actor.HasPermission(AppPermissions.Finance.ApproveInvoices)) ||
+            Invoice.Status == InvoiceStatus.Draft || Invoice.Status == InvoiceStatus.Void || Invoice.BalanceDue <= 0)
+        {
+            return;
+        }
+
+        var proj = !string.IsNullOrWhiteSpace(Invoice.ProjectId) ? Db.Projects.GetById(Invoice.ProjectId) : null;
+        var parameters = new DialogParameters<WriteOffBalanceDialog>
+        {
+            { x => x.DocumentTypeLabel, BizLoc["Invoice"].Value },
+            { x => x.DocumentNumber, Invoice.InvoiceNumber },
+            { x => x.PartyLabel, BizLoc["Client"].Value },
+            { x => x.PartyName, proj?.Client?.BusinessName ?? proj?.DisplayName ?? "-" },
+            { x => x.TotalAmount, Invoice.GrandTotal },
+            { x => x.AmountPaid, Invoice.AmountPaid },
+            { x => x.RemainingBalance, Invoice.BalanceDue },
+            { x => x.IsReceivable, true }
+        };
+
+        var dialog = await DialogService.ShowAsync<WriteOffBalanceDialog>(
+            BizLoc["Close / Write Off Balance"].Value,
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: BalanceWriteOff writeOff })
         {
             try
             {
-                AccountingService.DeleteInvoicePayment(Invoice, payment.Id, _currentUser);
+                actor = await UserService.GetEmployeeAsync();
+                if (actor == null) return;
+                _currentUser = actor.FullName ?? actor.Email;
+                AccountingService.RecordInvoiceWriteOff(Invoice, writeOff, _currentUser, actor);
                 Invoice = Db.Invoices.GetById(Invoice.Id) ?? Invoice;
-                Snackbar.Add(BizLoc["Payment deleted successfully."], Severity.Success);
+                Snackbar.Add(string.Format(BizLoc["Closed balance of {0} without creating a bank transaction."].Value, writeOff.Amount.ToString("C2")), Severity.Success);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Warning);
+            }
+        }
+    }
+
+    private async Task ReverseWriteOff(BalanceWriteOff writeOff)
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null ||
+            (!actor.HasPermission(AppPermissions.Finance.AccessAccounting) && !actor.HasPermission(AppPermissions.Finance.ApproveInvoices)))
+        {
+            _canManageAccounting = false;
+            return;
+        }
+
+        var confirmParams = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, string.Format(BizLoc["Are you sure you want to reverse the balance write-off of {0} recorded on {1}? This will reopen the balance and remove its write-off journal entry."].Value, writeOff.Amount.ToString("C2"), writeOff.Date.ToShortDateString()) },
+            { x => x.ButtonText, BizLoc["Reverse Write-Off"].Value },
+            { x => x.Color, Color.Error },
+            { x => x.ShowReasonInput, true },
+            { x => x.ReasonRequired, true },
+            { x => x.ReasonLabel, BizLoc["Reason for reversing write-off"].Value },
+            { x => x.ReasonPlaceholder, BizLoc["Explain why this balance write-off is being reversed..."].Value }
+        };
+
+        var confirmDialog = await DialogService.ShowAsync<ConfirmDialog>(BizLoc["Reverse Write-Off"].Value, confirmParams, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var confirmResult = await confirmDialog.Result;
+
+        if (confirmResult is { Canceled: false } && !string.IsNullOrWhiteSpace(confirmResult.Data as string))
+        {
+            var reason = (confirmResult.Data as string)?.Trim();
+            try
+            {
+                actor = await UserService.GetEmployeeAsync();
+                if (actor == null) return;
+                _currentUser = actor.FullName ?? actor.Email;
+                AccountingService.DeleteInvoiceWriteOff(Invoice, writeOff.Id, _currentUser, reason, actor);
+                Invoice = Db.Invoices.GetById(Invoice.Id) ?? Invoice;
+                Snackbar.Add(BizLoc["Balance write-off reversed successfully."], Severity.Success);
             }
             catch (Exception ex)
             {

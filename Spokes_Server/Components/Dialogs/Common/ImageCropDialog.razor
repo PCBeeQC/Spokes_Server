@@ -1,11 +1,13 @@
 @implements IAsyncDisposable
+@using Spokes_Server.Core.Services.Security
 @inject IJSRuntime JS
+@inject FileUrlSigner FileUrls
 @inject ILogger<ImageCropDialog> Logger
 
 <MudDialog>
     <DialogContent>
         <div style="max-height: 400px; display: flex; justify-content: center; overflow: hidden; background: #000;">
-            <img id="@_imgId" src="@ImageBase64" style="max-width: 100%; display: block;" />
+            <img id="@_imgId" src="@FileUrls.SignUrl(ImageBase64)" style="max-width: 100%; display: block;" />
         </div>
     </DialogContent>
     <DialogActions>

@@ -4,10 +4,14 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Configuration;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Exceptions;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Identity;
 using Spokes_Server.Core.Services.Security;
 using Spokes_Server.Core.Services.Storage;
 
@@ -25,10 +29,11 @@ public class ChatSecurityService
     private readonly ServerEscrowService _escrowService;
     private readonly ICryptoService _crypto;
     private readonly AlbumService _albumService;
-    private readonly IChatRealtimeGateway _realtimeGateway;
+    private readonly ChatStateService _chatState;
     private readonly IChatAuthorizationService _chatAuth;
     private readonly IFileService _fileService;
     private readonly ILogger<ChatSecurityService> _logger;
+    private readonly IUserPrivacyService? _privacyService;
 
     public ChatSecurityService(
         EmployeeRepository employees,
@@ -37,10 +42,11 @@ public class ChatSecurityService
         ServerEscrowService escrowService,
         ICryptoService crypto,
         AlbumService albumService,
-        IChatRealtimeGateway realtimeGateway,
+        ChatStateService chatState,
         IChatAuthorizationService chatAuth,
         IFileService fileService,
-        ILogger<ChatSecurityService> logger)
+        ILogger<ChatSecurityService> logger,
+        IUserPrivacyService? privacyService = null)
     {
         _employees = employees;
         _channels = channels;
@@ -48,10 +54,11 @@ public class ChatSecurityService
         _escrowService = escrowService;
         _crypto = crypto;
         _albumService = albumService;
-        _realtimeGateway = realtimeGateway;
+        _chatState = chatState;
         _chatAuth = chatAuth;
         _fileService = fileService;
         _logger = logger;
+        _privacyService = privacyService;
     }
 
     public virtual async Task ToggleChannelEncryptionAsync(
@@ -63,6 +70,27 @@ public class ChatSecurityService
     {
         var channel = _channels.GetById(channelId);
         if (channel == null) return;
+
+        if (string.IsNullOrWhiteSpace(requestingUserId))
+        {
+            throw new UnauthorizedAccessException("Requesting user ID is required to change channel encryption.");
+        }
+
+        var actor = _employees.GetById(requestingUserId);
+        if (actor == null || !actor.IsActive || actor.IsSuspended || actor.IsBanned ||
+            !actor.HasPermission(AppPermissions.Chat.Use))
+        {
+            throw new UnauthorizedAccessException("User is not authorized to modify channel encryption.");
+        }
+
+        bool isDirectCreator = channel.ChannelType == ChatChannelType.Direct &&
+                               string.Equals(channel.CreatedById, actor.Id, StringComparison.Ordinal) &&
+                               channel.ParticipantIds.Contains(actor.Id);
+
+        if (!_chatAuth.CanUserManageChannel(channel, actor, isSessionUnlocked: true) && !isDirectCreator)
+        {
+            throw new UnauthorizedAccessException("User is not authorized to change encryption on this channel.");
+        }
 
         if (channel.IsEncrypted == enableEncryption)
         {
@@ -83,6 +111,8 @@ public class ChatSecurityService
                              channel.ChannelType == ChatChannelType.Group;
 
         string? existingCipherKeyForDisable = null;
+        Dictionary<int, Dictionary<string, string>>? epochSnapshot = null;
+        int previousCurrentEpoch = channel.CurrentKeyEpoch;
 
         if (enableEncryption)
         {
@@ -91,10 +121,16 @@ public class ChatSecurityService
         else
         {
             existingCipherKeyForDisable = ValidateDecryptionPrerequisites(channel, requestingUserId, privateKeyContext);
+            epochSnapshot = BuildEpochSnapshot(channel);
         }
 
         channel.IsEncrypted = enableEncryption;
-        if (!enableEncryption) channel.EncryptedChannelKeys.Clear();
+        if (!enableEncryption)
+        {
+            channel.EncryptedChannelKeys.Clear();
+            channel.EncryptedEpochKeys.Clear();
+            channel.CurrentKeyEpoch = 0;
+        }
         _channels.Save(channel);
 
         await Task.Run(async () =>
@@ -106,6 +142,8 @@ public class ChatSecurityService
                 requestingUserId,
                 privateKeyContext,
                 existingCipherKeyForDisable,
+                epochSnapshot,
+                previousCurrentEpoch,
                 cancellationToken);
         }, cancellationToken);
     }
@@ -139,19 +177,35 @@ public class ChatSecurityService
         }
     }
 
-    private string ValidateDecryptionPrerequisites(ChatChannel channel, string requestingUserId, string? privateKeyContext)
+    private static string ValidateDecryptionPrerequisites(ChatChannel channel, string requestingUserId, string? privateKeyContext)
     {
         if (string.IsNullOrEmpty(privateKeyContext))
         {
             throw new DomainException("Private Key is required to disable encryption.", "PRIVATE_KEY_REQUIRED");
         }
 
-        if (!channel.EncryptedChannelKeys.TryGetValue(requestingUserId, out var existingCipherKey))
+        if (!channel.TryGetEncryptedKeyForEpoch(channel.CurrentKeyEpoch, requestingUserId, out var existingCipherKey))
         {
             throw new DomainException("Could not find your decryption key to disable encryption. Your session may be out of date.", "DECRYPTION_KEY_NOT_FOUND");
         }
 
         return existingCipherKey;
+    }
+
+    private static Dictionary<int, Dictionary<string, string>> BuildEpochSnapshot(ChatChannel channel)
+    {
+        var snapshot = new Dictionary<int, Dictionary<string, string>>();
+        foreach (var kvp in channel.EncryptedEpochKeys)
+        {
+            snapshot[kvp.Key] = new Dictionary<string, string>(kvp.Value);
+        }
+
+        if (channel.EncryptedChannelKeys.Count > 0 && !snapshot.ContainsKey(channel.CurrentKeyEpoch))
+        {
+            snapshot[channel.CurrentKeyEpoch] = new Dictionary<string, string>(channel.EncryptedChannelKeys);
+        }
+
+        return snapshot;
     }
 
     private async Task ProcessChannelEncryptionToggleAsync(
@@ -161,6 +215,8 @@ public class ChatSecurityService
         string requestingUserId,
         string? privateKeyContext,
         string? existingCipherKeyForDisable,
+        Dictionary<int, Dictionary<string, string>>? epochSnapshot,
+        int previousCurrentEpoch,
         CancellationToken cancellationToken)
     {
         try
@@ -173,11 +229,19 @@ public class ChatSecurityService
             }
             else
             {
-                await DecryptChannelAsync(channel, allMessages, privateKeyContext, existingCipherKeyForDisable, cancellationToken);
+                await DecryptChannelAsync(
+                    channel,
+                    allMessages,
+                    requestingUserId,
+                    privateKeyContext,
+                    existingCipherKeyForDisable,
+                    epochSnapshot,
+                    previousCurrentEpoch,
+                    cancellationToken);
             }
 
             _channels.Save(channel);
-            await _realtimeGateway.SendToChannelAsync(channel.Id, "ChannelUpdated", channel, cancellationToken);
+            _chatState.NotifyChannelUpdated(channel);
         }
         catch (Exception ex)
         {
@@ -203,7 +267,7 @@ public class ChatSecurityService
             var allMessages = LoadChannelMessages(channel.Id);
             await EncryptChannelAttachmentsAsync(channel, allMessages, plainChannelKey, cancellationToken);
             _logger.LogInformation("Completed media encryption sync for channel {ChannelId}", channel.Id);
-            await _realtimeGateway.SendToChannelAsync(channel.Id, "ChannelUpdated", channel, cancellationToken);
+            _chatState.NotifyChannelUpdated(channel);
         }
         catch (Exception ex)
         {
@@ -239,11 +303,13 @@ public class ChatSecurityService
         var newChannelKey = _crypto.GenerateAesKeyBase64();
         var allowedUserIds = ResolveAllowedUserIds(channel);
 
+        channel.CurrentKeyEpoch = 0;
         channel.EncryptedChannelKeys.Clear();
+        channel.EncryptedEpochKeys.Clear();
         foreach (var uid in allowedUserIds)
         {
             var user = _employees.GetById(uid);
-            if (user != null && !string.IsNullOrEmpty(user.PublicKey))
+            if (user != null && user.IsActive && !user.IsBanned && !string.IsNullOrEmpty(user.PublicKey))
             {
                 channel.EncryptedChannelKeys[uid] = _crypto.EncryptRsa(newChannelKey, user.PublicKey);
             }
@@ -254,12 +320,30 @@ public class ChatSecurityService
             channel.EncryptedChannelKeys["ServerMaster"] = _crypto.EncryptRsa(newChannelKey, _escrowService.EscrowPublicKey!);
         }
 
+        channel.EncryptedEpochKeys[0] = new Dictionary<string, string>(channel.EncryptedChannelKeys);
+
         foreach (var m in allMessages)
         {
+            bool changed = false;
             if (!m.IsEncrypted && !string.IsNullOrEmpty(m.Content))
             {
                 m.Content = _crypto.EncryptAes(m.Content, newChannelKey);
                 m.IsEncrypted = true;
+                m.KeyEpoch = 0;
+                changed = true;
+            }
+
+            if (m.Attachments != null && m.Attachments.Count > 0)
+            {
+                foreach (var att in m.Attachments)
+                {
+                    att.KeyEpoch = 0;
+                }
+                changed = true;
+            }
+
+            if (changed)
+            {
                 _messages.Save(m);
             }
         }
@@ -269,54 +353,114 @@ public class ChatSecurityService
         _albumService.ReEvaluateAlbumEncryptionForChannel(channel.Id, newChannelKey, requestingUserId, privateKeyContext);
     }
 
-    private async Task EncryptChannelAttachmentsAsync(ChatChannel channel, List<ChatMessage> allMessages, string channelAesKey, CancellationToken cancellationToken)
+    /// <summary>
+    /// Strips evicted or unauthorized users from all stored channel key epochs and, for encrypted
+    /// channels, archives the sanitized current epoch before rotating to a fresh AES-256 key
+    /// wrapped exclusively for remaining active authorized members.
+    /// </summary>
+    public virtual bool RotateChannelKeyOnEviction(
+        ChatChannel channel,
+        IEnumerable<string> evictedUserIds,
+        IEnumerable<Employee> remainingAuthorizedMembers)
     {
-        var processedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(evictedUserIds);
+        ArgumentNullException.ThrowIfNull(remainingAuthorizedMembers);
 
-        foreach (var m in allMessages)
+        var remainingMembers = remainingAuthorizedMembers
+            .Where(m => m.IsActive && !m.IsBanned)
+            .GroupBy(m => m.Id, StringComparer.Ordinal)
+            .Select(g => g.First())
+            .ToList();
+        var remainingIds = remainingMembers.Select(m => m.Id).ToHashSet(StringComparer.Ordinal);
+        var evictedSet = evictedUserIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+
+        // Include any stale non-escrow key holders no longer authorized so no unauthorized user keeps historical epochs.
+        foreach (var ownerId in channel.EncryptedChannelKeys.Keys)
         {
-            if (m.Attachments == null || m.Attachments.Count == 0) continue;
-
-            foreach (var att in m.Attachments)
+            if (!string.Equals(ownerId, "ServerMaster", StringComparison.Ordinal) && !remainingIds.Contains(ownerId))
             {
-                var candidatePaths = ResolveAttachmentPhysicalPaths(channel.Id, att);
-                foreach (var path in candidatePaths)
+                evictedSet.Add(ownerId);
+            }
+        }
+        foreach (var epochDict in channel.EncryptedEpochKeys.Values)
+        {
+            foreach (var ownerId in epochDict.Keys)
+            {
+                if (!string.Equals(ownerId, "ServerMaster", StringComparison.Ordinal) && !remainingIds.Contains(ownerId))
                 {
-                    if (processedPaths.Add(path) && File.Exists(path))
-                    {
-                        try
-                        {
-                            await _fileService.EncryptFileAsync(path, channelAesKey, cancellationToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "Failed to encrypt attachment at {Path} for channel {ChannelId}", path, channel.Id);
-                        }
-                    }
+                    evictedSet.Add(ownerId);
                 }
             }
         }
 
-        // Scan channel upload directory to ensure zero plaintext files remain
-        var channelUploadDir = _fileService.GetPhysicalPath("chat", channel.Id, "");
-        if (Directory.Exists(channelUploadDir))
+        if (evictedSet.Count == 0)
         {
-            foreach (var filePath in Directory.EnumerateFiles(channelUploadDir))
+            return false;
+        }
+
+        bool modified = false;
+        foreach (var uid in evictedSet)
+        {
+            if (channel.RemoveUserKeysFromAllEpochs(uid))
             {
-                if (processedPaths.Add(filePath) && File.Exists(filePath))
-                {
-                    try
-                    {
-                        await _fileService.EncryptFileAsync(filePath, channelAesKey, cancellationToken);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Failed to encrypt file at {Path} for channel {ChannelId}", filePath, channel.Id);
-                    }
-                }
+                modified = true;
             }
         }
+
+        if (!channel.IsEncrypted)
+        {
+            return modified;
+        }
+
+        // Preserve sanitized historical keys for remaining members under the outgoing epoch before rotating.
+        if (!channel.EncryptedEpochKeys.ContainsKey(channel.CurrentKeyEpoch) && channel.EncryptedChannelKeys.Count > 0)
+        {
+            channel.EncryptedEpochKeys[channel.CurrentKeyEpoch] = new Dictionary<string, string>(channel.EncryptedChannelKeys);
+        }
+
+        channel.CurrentKeyEpoch++;
+        var newChannelKey = _crypto.GenerateAesKeyBase64();
+        var newEpochKeys = new Dictionary<string, string>();
+
+        foreach (var member in remainingMembers)
+        {
+            if (!string.IsNullOrEmpty(member.PublicKey))
+            {
+                newEpochKeys[member.Id] = _crypto.EncryptRsa(newChannelKey, member.PublicKey);
+            }
+        }
+
+        var isDMRestricted = channel.ChannelType == ChatChannelType.Direct ||
+                             channel.ChannelType == ChatChannelType.Group;
+        if (!isDMRestricted && _escrowService.IsEscrowAvailable && !string.IsNullOrEmpty(_escrowService.EscrowPublicKey))
+        {
+            newEpochKeys["ServerMaster"] = _crypto.EncryptRsa(newChannelKey, _escrowService.EscrowPublicKey);
+        }
+
+        channel.EncryptedChannelKeys = new Dictionary<string, string>(newEpochKeys);
+        channel.EncryptedEpochKeys[channel.CurrentKeyEpoch] = new Dictionary<string, string>(newEpochKeys);
+
+        _logger.LogInformation(
+            "Rotated channel key for {ChannelId} to epoch {Epoch} after evicting {Count} user(s)",
+            channel.Id,
+            channel.CurrentKeyEpoch,
+            evictedSet.Count);
+
+        return true;
     }
+
+    private Task EncryptChannelAttachmentsAsync(ChatChannel channel, List<ChatMessage> allMessages, string channelAesKey, CancellationToken cancellationToken) =>
+        TransformChannelAttachmentsAsync(
+            channel,
+            allMessages,
+            channelAesKey,
+            (_, _) => channelAesKey,
+            (path, key, ct) => _fileService.EncryptFileAsync(path, key, ct),
+            "encrypt",
+            cancellationToken);
 
     private HashSet<string> ResolveAllowedUserIds(ChatChannel channel)
     {
@@ -333,7 +477,7 @@ public class ChatSecurityService
         if (channel.ChannelType != ChatChannelType.Direct && channel.ChannelType != ChatChannelType.Group)
         {
             var members = _employees.GetAll()
-                .Where(e => e.IsActive && e.HasVaultPassword && _chatAuth.CanUserAccessChannel(channel, e));
+                .Where(e => e.IsActive && !e.IsBanned && e.HasVaultPassword && _chatAuth.CanUserAccessChannel(channel, e));
 
             foreach (var m in members)
             {
@@ -347,8 +491,11 @@ public class ChatSecurityService
     private async Task DecryptChannelAsync(
         ChatChannel channel,
         List<ChatMessage> allMessages,
+        string requestingUserId,
         string? privateKeyContext,
         string? existingCipherKeyForDisable,
+        Dictionary<int, Dictionary<string, string>>? epochSnapshot,
+        int previousCurrentEpoch,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(existingCipherKeyForDisable) || string.IsNullOrEmpty(privateKeyContext))
@@ -358,29 +505,48 @@ public class ChatSecurityService
 
         try
         {
-            var plainChannelKey = _crypto.DecryptRsa(existingCipherKeyForDisable, privateKeyContext);
+            var plainCurrentKey = _crypto.DecryptRsa(existingCipherKeyForDisable, privateKeyContext);
+            var resolvedEpochKeys = ResolveDisableEpochKeys(
+                epochSnapshot,
+                previousCurrentEpoch,
+                plainCurrentKey,
+                requestingUserId,
+                privateKeyContext);
 
             foreach (var m in allMessages)
             {
-                if (!m.IsEncrypted || string.IsNullOrEmpty(m.Content))
-                {
-                    continue;
-                }
+                var epochKey = resolvedEpochKeys.TryGetValue(m.KeyEpoch, out var foundKey) ? foundKey : plainCurrentKey;
 
-                try
+                if (m.IsEncrypted && !string.IsNullOrEmpty(m.Content))
                 {
-                    m.Content = _crypto.DecryptAes(m.Content, plainChannelKey);
-                    m.IsEncrypted = false;
-                    _messages.Save(m);
+                    try
+                    {
+                        m.Content = _crypto.DecryptAes(m.Content, epochKey);
+                        m.IsEncrypted = false;
+                        m.KeyEpoch = 0;
+                        if (m.Attachments != null)
+                        {
+                            foreach (var att in m.Attachments)
+                            {
+                                att.KeyEpoch = 0;
+                            }
+                        }
+                        _messages.Save(m);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to decrypt message {MessageId} during encryption toggle.", m.Id);
+                    }
                 }
-                catch (Exception ex)
+                else if (m.KeyEpoch != 0)
                 {
-                    _logger.LogWarning(ex, "Failed to decrypt message {MessageId} during encryption toggle.", m.Id);
+                    m.KeyEpoch = 0;
+                    _messages.Save(m);
                 }
             }
 
-            await DecryptChannelAttachmentsAsync(channel, allMessages, plainChannelKey, cancellationToken);
-            _albumService.ReEvaluateAlbumDecryptionForChannel(channel.Id, plainChannelKey);
+            await DecryptChannelAttachmentsAsync(channel, allMessages, plainCurrentKey, resolvedEpochKeys, cancellationToken);
+            _albumService.ReEvaluateAlbumDecryptionForChannel(channel.Id, plainCurrentKey);
         }
         catch (Exception ex)
         {
@@ -388,7 +554,84 @@ public class ChatSecurityService
         }
     }
 
-    private async Task DecryptChannelAttachmentsAsync(ChatChannel channel, List<ChatMessage> allMessages, string channelAesKey, CancellationToken cancellationToken)
+    private Dictionary<int, string> ResolveDisableEpochKeys(
+        Dictionary<int, Dictionary<string, string>>? epochSnapshot,
+        int previousCurrentEpoch,
+        string plainCurrentKey,
+        string requestingUserId,
+        string privateKeyContext)
+    {
+        var resolved = new Dictionary<int, string>
+        {
+            [previousCurrentEpoch] = plainCurrentKey
+        };
+
+        if (epochSnapshot == null)
+        {
+            return resolved;
+        }
+
+        foreach (var (epoch, keys) in epochSnapshot)
+        {
+            if (resolved.ContainsKey(epoch))
+            {
+                continue;
+            }
+
+            if (keys.TryGetValue(requestingUserId, out var userKey))
+            {
+                try
+                {
+                    resolved[epoch] = _crypto.DecryptRsa(userKey, privateKeyContext);
+                    continue;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to decrypt historical epoch {Epoch} key with user private key.", epoch);
+                }
+            }
+
+            if (_escrowService.IsEscrowAvailable && keys.TryGetValue("ServerMaster", out var escrowKey))
+            {
+                try
+                {
+                    resolved[epoch] = _crypto.DecryptRsa(escrowKey, _escrowService.DecryptedEscrowPrivateKey!);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to decrypt historical epoch {Epoch} key with escrow.", epoch);
+                }
+            }
+        }
+
+        return resolved;
+    }
+
+    private Task DecryptChannelAttachmentsAsync(
+        ChatChannel channel,
+        List<ChatMessage> allMessages,
+        string channelAesKey,
+        Dictionary<int, string> resolvedEpochKeys,
+        CancellationToken cancellationToken) =>
+        TransformChannelAttachmentsAsync(
+            channel,
+            allMessages,
+            channelAesKey,
+            (m, att) => resolvedEpochKeys.TryGetValue(att.KeyEpoch, out var foundAttKey)
+                ? foundAttKey
+                : (resolvedEpochKeys.TryGetValue(m.KeyEpoch, out var foundMsgKey) ? foundMsgKey : channelAesKey),
+            (path, key, ct) => _fileService.DecryptFileAsync(path, key, ct),
+            "decrypt",
+            cancellationToken);
+
+    private async Task TransformChannelAttachmentsAsync(
+        ChatChannel channel,
+        List<ChatMessage> allMessages,
+        string fallbackChannelKey,
+        Func<ChatMessage, ChatAttachment, string> resolveAttachmentKey,
+        Func<string, string, CancellationToken, Task> transformFileAsync,
+        string actionVerb,
+        CancellationToken cancellationToken)
     {
         var processedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -398,24 +641,25 @@ public class ChatSecurityService
 
             foreach (var att in m.Attachments)
             {
-                var candidatePaths = ResolveAttachmentPhysicalPaths(channel.Id, att);
-                foreach (var path in candidatePaths)
+                var attKey = resolveAttachmentKey(m, att);
+                foreach (var path in ResolveAttachmentPhysicalPaths(channel.Id, att))
                 {
                     if (processedPaths.Add(path) && File.Exists(path))
                     {
                         try
                         {
-                            await _fileService.DecryptFileAsync(path, channelAesKey, cancellationToken);
+                            await transformFileAsync(path, attKey, cancellationToken);
                         }
                         catch (Exception ex)
                         {
-                            _logger.LogError(ex, "Failed to decrypt attachment at {Path} for channel {ChannelId}", path, channel.Id);
+                            _logger.LogError(ex, "Failed to {Action} attachment at {Path} for channel {ChannelId}", actionVerb, path, channel.Id);
                         }
                     }
                 }
             }
         }
 
+        // Scan channel upload directory to ensure no unprocessed files remain
         var channelUploadDir = _fileService.GetPhysicalPath("chat", channel.Id, "");
         if (Directory.Exists(channelUploadDir))
         {
@@ -425,11 +669,11 @@ public class ChatSecurityService
                 {
                     try
                     {
-                        await _fileService.DecryptFileAsync(filePath, channelAesKey, cancellationToken);
+                        await transformFileAsync(filePath, fallbackChannelKey, cancellationToken);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Failed to decrypt file at {Path} for channel {ChannelId}", filePath, channel.Id);
+                        _logger.LogError(ex, "Failed to {Action} file at {Path} for channel {ChannelId}", actionVerb, filePath, channel.Id);
                     }
                 }
             }
@@ -445,7 +689,8 @@ public class ChatSecurityService
         if (!string.IsNullOrEmpty(fileName))
         {
             paths.Add(_fileService.GetPhysicalPath("chat", channelId, fileName));
-            paths.Add(_fileService.GetPhysicalPath("chat", channelId, $"{fileName}_thumb.jpg"));
+            paths.Add(_fileService.GetPhysicalPath("chat", channelId, FileService.GetThumbnailFileName(fileName)));
+            paths.Add(_fileService.GetPhysicalPath("chat", channelId, FileService.GetThumbnailFileName(fileName, small: true)));
 
             try
             {
@@ -458,41 +703,79 @@ public class ChatSecurityService
         return paths;
     }
 
-    public virtual async Task ClaimEscrowedKeysAsync(string userId, CancellationToken cancellationToken = default)
+    public virtual Task ClaimEscrowedKeysAsync(string userId, CancellationToken cancellationToken = default)
     {
-        if (!_escrowService.IsEscrowAvailable) return;
+        if (!_escrowService.IsEscrowAvailable) return Task.CompletedTask;
 
         var user = _employees.GetById(userId);
-        if (user == null || string.IsNullOrEmpty(user.PublicKey)) return;
+        if (user is not { IsActive: true, IsSuspended: false, IsBanned: false } ||
+            !user.HasPermission(AppPermissions.Chat.Use) ||
+            string.IsNullOrEmpty(user.PublicKey))
+        {
+            return Task.CompletedTask;
+        }
 
-        _albumService.ClaimEscrowedAlbumsForUser(userId);
+        if (user.HasPermission(AppPermissions.Albums.View))
+        {
+            _albumService.ClaimEscrowedAlbumsForUser(userId);
+        }
 
         var allChannels = _channels.GetAll().Where(c => c.IsEncrypted).ToList();
 
         foreach (var channel in allChannels)
         {
-            if (channel.EncryptedChannelKeys.ContainsKey(userId)) continue;
-            if (!channel.EncryptedChannelKeys.TryGetValue("ServerMaster", out var encryptedEscrowKey)) continue;
-
             if (!_chatAuth.CanUserAccessChannel(channel, user)) continue;
+            if (channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group) continue;
 
-            try
+            bool modified = false;
+
+            // Ensure legacy CurrentKeyEpoch is materialized in EncryptedEpochKeys before healing all epochs.
+            if (channel.EncryptedChannelKeys.Count > 0 && !channel.EncryptedEpochKeys.ContainsKey(channel.CurrentKeyEpoch))
             {
-                var plainChannelKey = _crypto.DecryptRsa(encryptedEscrowKey, _escrowService.DecryptedEscrowPrivateKey!);
-                channel.EncryptedChannelKeys[userId] = _crypto.EncryptRsa(plainChannelKey, user.PublicKey);
-                _channels.Save(channel);
-
-                await _realtimeGateway.SendToChannelAsync(channel.Id, "ChannelUpdated", channel, cancellationToken);
-                _logger.LogInformation("Claimed escrow key for user {UserId} in channel {ChannelId}", userId, channel.Id);
+                channel.EncryptedEpochKeys[channel.CurrentKeyEpoch] = new Dictionary<string, string>(channel.EncryptedChannelKeys);
+                modified = true;
             }
-            catch (Exception ex)
+
+            foreach (var (epoch, epochKeys) in channel.EncryptedEpochKeys)
             {
-                _logger.LogError(ex, "Failed to claim escrow for user {UserId} in channel {ChannelId}", userId, channel.Id);
+                if (epochKeys.ContainsKey(userId)) continue;
+                if (!epochKeys.TryGetValue("ServerMaster", out var encryptedEscrowKey)) continue;
+
+                try
+                {
+                    var plainEpochKey = _crypto.DecryptRsa(encryptedEscrowKey, _escrowService.DecryptedEscrowPrivateKey!);
+                    var wrapped = _crypto.EncryptRsa(plainEpochKey, user.PublicKey);
+                    epochKeys[userId] = wrapped;
+                    if (epoch == channel.CurrentKeyEpoch)
+                    {
+                        channel.EncryptedChannelKeys[userId] = wrapped;
+                    }
+                    modified = true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to claim escrow for user {UserId} in channel {ChannelId} epoch {Epoch}", userId, channel.Id, epoch);
+                }
+            }
+
+            if (modified)
+            {
+                _channels.Save(channel);
+                _chatState.NotifyChannelUpdated(channel);
+                _logger.LogInformation("Claimed escrow key(s) for user {UserId} in channel {ChannelId}", userId, channel.Id);
             }
         }
+
+        return Task.CompletedTask;
     }
 
-    public virtual Task ShareKeyOpportunisticallyAsync(string channelId, string plainChannelKey, CancellationToken cancellationToken = default)
+    public virtual Task ShareKeyOpportunisticallyAsync(string channelId, string plainChannelKey, CancellationToken cancellationToken = default) =>
+        ShareKeyOpportunisticallyAsync(channelId, plainChannelKey, expectedEpoch: null, requestingUserId: null, cancellationToken);
+
+    public virtual Task ShareKeyOpportunisticallyAsync(string channelId, string plainChannelKey, int? expectedEpoch, CancellationToken cancellationToken = default) =>
+        ShareKeyOpportunisticallyAsync(channelId, plainChannelKey, expectedEpoch, requestingUserId: null, cancellationToken);
+
+    public virtual Task ShareKeyOpportunisticallyAsync(string channelId, string plainChannelKey, int? expectedEpoch, string? requestingUserId, CancellationToken cancellationToken = default)
     {
         return Task.Run(() =>
         {
@@ -501,34 +784,62 @@ public class ChatSecurityService
                 var channel = _channels.GetById(channelId);
                 if (channel == null || !channel.IsEncrypted) return;
 
+                if (!string.IsNullOrEmpty(requestingUserId))
+                {
+                    var caller = _employees.GetById(requestingUserId);
+                    if (caller is not { IsActive: true, IsSuspended: false, IsBanned: false } ||
+                        !caller.HasPermission(AppPermissions.Chat.Use) ||
+                        !_chatAuth.CanUserAccessChannel(channel, caller))
+                    {
+                        return;
+                    }
+                }
+
+                var targetEpoch = expectedEpoch ?? channel.CurrentKeyEpoch;
+                if (targetEpoch != channel.CurrentKeyEpoch)
+                {
+                    return;
+                }
+
                 bool modified = false;
+                if (!channel.EncryptedEpochKeys.TryGetValue(targetEpoch, out var epochKeys))
+                {
+                    epochKeys = new Dictionary<string, string>(channel.EncryptedChannelKeys);
+                    channel.EncryptedEpochKeys[targetEpoch] = epochKeys;
+                }
 
                 if (_escrowService.IsEscrowAvailable && !channel.EncryptedChannelKeys.ContainsKey("ServerMaster"))
                 {
                     bool isDMRestricted = channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group;
                     if (!isDMRestricted && !string.IsNullOrEmpty(_escrowService.EscrowPublicKey))
                     {
-                        channel.EncryptedChannelKeys["ServerMaster"] = _crypto.EncryptRsa(plainChannelKey, _escrowService.EscrowPublicKey);
+                        var wrappedEscrow = _crypto.EncryptRsa(plainChannelKey, _escrowService.EscrowPublicKey);
+                        channel.EncryptedChannelKeys["ServerMaster"] = wrappedEscrow;
+                        epochKeys["ServerMaster"] = wrappedEscrow;
                         modified = true;
                         _logger.LogInformation("Opportunistically healed ServerMaster escrow key for channel {ChannelId}", channelId);
                     }
                 }
 
                 var allActiveKeyedUsers = _employees.GetAll()
-                    .Where(e => e.IsActive && e.HasVaultPassword && !string.IsNullOrEmpty(e.PublicKey))
+                    .Where(e => e.IsActive && !e.IsSuspended && !e.IsBanned &&
+                                e.HasVaultPassword && !string.IsNullOrEmpty(e.PublicKey) &&
+                                e.HasPermission(AppPermissions.Chat.Use))
                     .ToList();
 
                 foreach (var u in allActiveKeyedUsers)
                 {
                     if (string.IsNullOrEmpty(u.PublicKey)) continue;
 
-                    if (channel.EncryptedChannelKeys.ContainsKey(u.Id)) continue;
+                    if (channel.EncryptedChannelKeys.ContainsKey(u.Id) && epochKeys.ContainsKey(u.Id)) continue;
 
                     if (!_chatAuth.CanUserAccessChannel(channel, u)) continue;
 
                     try
                     {
-                        channel.EncryptedChannelKeys[u.Id] = _crypto.EncryptRsa(plainChannelKey, u.PublicKey);
+                        var wrappedUserKey = _crypto.EncryptRsa(plainChannelKey, u.PublicKey);
+                        channel.EncryptedChannelKeys[u.Id] = wrappedUserKey;
+                        epochKeys[u.Id] = wrappedUserKey;
                         modified = true;
                         _logger.LogInformation("Opportunistically shared key with user {UserId} for channel {ChannelId}", u.Id, channelId);
                     }
@@ -541,7 +852,7 @@ public class ChatSecurityService
                 if (modified)
                 {
                     _channels.Save(channel);
-                    _ = _realtimeGateway.SendToChannelAsync(channelId, "ChannelUpdated", channel);
+                    _chatState.NotifyChannelUpdated(channel);
                 }
             }
             catch (Exception ex)
@@ -601,18 +912,13 @@ public class ChatSecurityService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            string? plainChannelKey = null;
-            if (channel.IsEncrypted)
+            if (channel.IsEncrypted && !HasAnyDecryptCandidateKey(channel, requestingUserId, requestingUserPrivateKey))
             {
-                plainChannelKey = TryResolveChannelKey(channel, requestingUserId, requestingUserPrivateKey);
-                if (plainChannelKey == null)
-                {
-                    // Cannot decrypt this channel without a valid key - skip it
-                    continue;
-                }
+                // Cannot decrypt any epoch of this channel without a user key or escrow - skip it
+                continue;
             }
 
-            var channelResults = SearchChannelMessages(channel, plainChannelKey, filter, resolvedSenderIds, resolvedMentionIds, cancellationToken);
+            var channelResults = SearchChannelMessages(channel, requestingUserId, requestingUserPrivateKey, filter, resolvedSenderIds, resolvedMentionIds, cancellationToken);
             allResults.AddRange(channelResults);
 
             if (allResults.Count >= 100) break;
@@ -628,22 +934,56 @@ public class ChatSecurityService
 
     private bool IsChannelAccessible(ChatChannel channel, string requestingUserId)
     {
-        if ((channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group) &&
-            !channel.ParticipantIds.Contains(requestingUserId))
+        var user = _employees.GetById(requestingUserId);
+        if (user == null || !user.IsActive || user.IsBanned)
         {
             return false;
         }
-        return true;
+
+        return _chatAuth.CanUserAccessChannel(channel, user);
     }
 
-    private HashSet<string>? ResolveSenderIds(List<string> senderIdentifiers, string requestingUserId)
+    private bool HasAnyDecryptCandidateKey(ChatChannel channel, string requestingUserId, string? requestingUserPrivateKey)
     {
-        if (senderIdentifiers.Count == 0) return null;
+        if (string.IsNullOrEmpty(requestingUserPrivateKey))
+        {
+            return false;
+        }
+
+        if (channel.HasAnyEpochKey(requestingUserId))
+        {
+            return true;
+        }
+
+        if (string.Equals(channel.ChannelType, ChatChannelType.Direct, StringComparison.Ordinal) ||
+            string.Equals(channel.ChannelType, ChatChannelType.Group, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return _escrowService.IsEscrowAvailable && channel.HasAnyEpochKey("ServerMaster");
+    }
+
+    private HashSet<string>? ResolveSenderIds(List<string> senderIdentifiers, string requestingUserId) =>
+        ResolveFilteredUserIds(senderIdentifiers, requestingUserId);
+
+    private HashSet<string>? ResolveMentionIds(List<string> mentionIdentifiers, string requestingUserId) =>
+        ResolveFilteredUserIds(mentionIdentifiers, requestingUserId);
+
+    private HashSet<string>? ResolveFilteredUserIds(List<string> identifiers, string requestingUserId)
+    {
+        if (identifiers.Count == 0) return null;
 
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var allEmployees = _employees.GetAll();
+        var requester = string.IsNullOrWhiteSpace(requestingUserId) ? null : _employees.GetById(requestingUserId);
+        var basePool = _employees.GetAll()
+            .Where(e => e.IsActive && !e.IsBanned && !e.IsSystem && e.Id != AccountDeletionService.SystemDeletedUserId);
+        var candidateEmployees = _privacyService != null
+            ? _privacyService.FilterDiscoverableEmployees(requester, basePool)
+            : basePool.ToList();
+        var privacyConfig = _privacyService?.GetPrivacyConfig();
 
-        foreach (var id in senderIdentifiers)
+        foreach (var id in identifiers)
         {
             if (id.Equals("me", StringComparison.OrdinalIgnoreCase))
             {
@@ -651,7 +991,7 @@ public class ChatSecurityService
                 continue;
             }
 
-            var empById = allEmployees.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            var empById = candidateEmployees.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
             if (empById != null)
             {
                 set.Add(empById.Id);
@@ -662,13 +1002,29 @@ public class ChatSecurityService
                                 id.Equals("administrator", StringComparison.OrdinalIgnoreCase) ||
                                 id.Equals("admins", StringComparison.OrdinalIgnoreCase);
 
-            var matched = allEmployees.Where(e =>
-                (isAdminQuery && e.IsAdmin) ||
-                e.FullName.Contains(id, StringComparison.OrdinalIgnoreCase) ||
-                (!string.IsNullOrEmpty(e.FirstName) && e.FirstName.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrEmpty(e.LastName) && e.LastName.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrEmpty(e.Email) && e.Email.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrEmpty(e.Position) && e.Position.Contains(id, StringComparison.OrdinalIgnoreCase)));
+            var matched = candidateEmployees.Where(e =>
+            {
+                bool matchesAdminQuery = isAdminQuery && e.IsEffectiveAdmin && (
+                    _privacyService == null ||
+                    requester?.IsEffectiveAdmin == true ||
+                    privacyConfig == null ||
+                    privacyConfig.AdminVisibility == AdminVisibilityMode.AllAdmins ||
+                    (privacyConfig.AdminVisibility == AdminVisibilityMode.DesignatedAdminsOnly &&
+                     privacyConfig.DesignatedAdminIds.Contains(e.Id)));
+
+                bool canSeeEmail = _privacyService != null
+                    ? _privacyService.CanViewUserEmail(requester, e)
+                    : (e.IsEmailPublic ||
+                       string.Equals(e.Id, requestingUserId, StringComparison.Ordinal) ||
+                       requester?.IsEffectiveAdmin == true);
+
+                return matchesAdminQuery ||
+                       e.FullName.Contains(id, StringComparison.OrdinalIgnoreCase) ||
+                       (!string.IsNullOrEmpty(e.FirstName) && e.FirstName.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
+                       (!string.IsNullOrEmpty(e.LastName) && e.LastName.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
+                       (canSeeEmail && !string.IsNullOrEmpty(e.Email) && e.Email.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
+                       (!string.IsNullOrEmpty(e.Position) && e.Position.Contains(id, StringComparison.OrdinalIgnoreCase));
+            });
 
             foreach (var m in matched)
             {
@@ -679,53 +1035,16 @@ public class ChatSecurityService
         return set;
     }
 
-    private HashSet<string>? ResolveMentionIds(List<string> mentionIdentifiers, string requestingUserId)
+    private string? TryResolveChannelKey(ChatChannel channel, string requestingUserId, string? requestingUserPrivateKey, int? epoch = null)
     {
-        if (mentionIdentifiers.Count == 0) return null;
-
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var allEmployees = _employees.GetAll();
-
-        foreach (var id in mentionIdentifiers)
+        if (string.IsNullOrEmpty(requestingUserPrivateKey))
         {
-            if (id.Equals("me", StringComparison.OrdinalIgnoreCase))
-            {
-                set.Add(requestingUserId);
-                continue;
-            }
-
-            var empById = allEmployees.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
-            if (empById != null)
-            {
-                set.Add(empById.Id);
-                continue;
-            }
-
-            bool isAdminQuery = id.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
-                                id.Equals("administrator", StringComparison.OrdinalIgnoreCase) ||
-                                id.Equals("admins", StringComparison.OrdinalIgnoreCase);
-
-            var matched = allEmployees.Where(e =>
-                (isAdminQuery && e.IsAdmin) ||
-                e.FullName.Contains(id, StringComparison.OrdinalIgnoreCase) ||
-                (!string.IsNullOrEmpty(e.FirstName) && e.FirstName.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrEmpty(e.LastName) && e.LastName.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrEmpty(e.Email) && e.Email.Contains(id, StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrEmpty(e.Position) && e.Position.Contains(id, StringComparison.OrdinalIgnoreCase)));
-
-            foreach (var m in matched)
-            {
-                set.Add(m.Id);
-            }
+            return null;
         }
 
-        return set;
-    }
+        var targetEpoch = epoch ?? channel.CurrentKeyEpoch;
 
-    private string? TryResolveChannelKey(ChatChannel channel, string requestingUserId, string? requestingUserPrivateKey)
-    {
-        if (!string.IsNullOrEmpty(requestingUserPrivateKey) &&
-            channel.EncryptedChannelKeys.TryGetValue(requestingUserId, out var userCipherKey))
+        if (channel.TryGetEncryptedKeyForEpoch(targetEpoch, requestingUserId, out var userCipherKey))
         {
             try
             {
@@ -737,8 +1056,10 @@ public class ChatSecurityService
             }
         }
 
-        if (_escrowService.IsEscrowAvailable &&
-            channel.EncryptedChannelKeys.TryGetValue("ServerMaster", out var escrowCipherKey))
+        if (!string.Equals(channel.ChannelType, ChatChannelType.Direct, StringComparison.Ordinal) &&
+            !string.Equals(channel.ChannelType, ChatChannelType.Group, StringComparison.Ordinal) &&
+            _escrowService.IsEscrowAvailable &&
+            channel.TryGetEncryptedKeyForEpoch(targetEpoch, "ServerMaster", out var escrowCipherKey))
         {
             try
             {
@@ -755,7 +1076,8 @@ public class ChatSecurityService
 
     private List<ChatMessage> SearchChannelMessages(
         ChatChannel channel,
-        string? plainChannelKey,
+        string requestingUserId,
+        string? requestingUserPrivateKey,
         ChatSearchFilter filter,
         HashSet<string>? resolvedSenderIds,
         HashSet<string>? resolvedMentionIds,
@@ -763,6 +1085,7 @@ public class ChatSecurityService
     {
         var results = new List<ChatMessage>();
         var index = _messages.GetIndexForChannel(channel.Id);
+        var epochKeys = new Dictionary<int, string?>();
 
         foreach (var entry in index.OrderByDescending(e => e.SentAt))
         {
@@ -812,9 +1135,9 @@ public class ChatSecurityService
                     results.Add(msg);
                 }
             }
-            else if (channel.IsEncrypted && entry.IsEncrypted && plainChannelKey != null)
+            else if (channel.IsEncrypted && entry.IsEncrypted)
             {
-                var match = TryDecryptAndMatchMessage(channel.Id, entry.Id, plainChannelKey, filter, resolvedMentionIds);
+                var match = TryDecryptAndMatchMessage(channel, entry.Id, requestingUserId, requestingUserPrivateKey, epochKeys, filter, resolvedMentionIds);
                 if (match != null) results.Add(match);
             }
 
@@ -866,14 +1189,27 @@ public class ChatSecurityService
     }
 
     private ChatMessage? TryDecryptAndMatchMessage(
-        string channelId,
+        ChatChannel channel,
         string messageId,
-        string plainChannelKey,
+        string requestingUserId,
+        string? requestingUserPrivateKey,
+        Dictionary<int, string?> epochKeys,
         ChatSearchFilter filter,
         HashSet<string>? resolvedMentionIds)
     {
-        var msg = _messages.GetMessageFromDisk(channelId, messageId);
+        var msg = _messages.GetMessageFromDisk(channel.Id, messageId);
         if (msg == null) return null;
+
+        if (!epochKeys.TryGetValue(msg.KeyEpoch, out var plainChannelKey))
+        {
+            plainChannelKey = TryResolveChannelKey(channel, requestingUserId, requestingUserPrivateKey, msg.KeyEpoch);
+            epochKeys[msg.KeyEpoch] = plainChannelKey;
+        }
+
+        if (plainChannelKey == null)
+        {
+            return null;
+        }
 
         string plainContent;
         try
@@ -924,6 +1260,23 @@ public class ChatSecurityService
 
         return null;
     }
+
+    /// <summary>
+    /// Generates an RSA key pair for <paramref name="employee"/>, encrypts the private key with
+    /// <paramref name="password"/>, persists the keys on the employee record, and returns both keys.
+    /// </summary>
+    public (string PlainPrivateKey, string EncryptedPrivateKey) ProvisionUserVaultKeys(Employee employee, string password)
+    {
+        var keys = _crypto.GenerateRsaKeyPair();
+        var kek = _crypto.DeriveKeyFromPassword(password, employee.Id);
+        var encryptedPrivate = _crypto.EncryptAes(keys.PrivateKey, kek);
+
+        employee.PublicKey = keys.PublicKey;
+        employee.EncryptedPrivateKey = encryptedPrivate;
+        _employees.Save(employee);
+        return (keys.PrivateKey, encryptedPrivate);
+    }
+
     public static bool IsPotentialBase64Cipher(string? content)
     {
         if (string.IsNullOrWhiteSpace(content)) return false;

@@ -9,7 +9,7 @@ using Spokes_Server.Core.Models.Core;
 
 /// <summary>
 /// Domain aggregate context managing project workspaces, estimation (quotes, rate cards, work types),
-/// task boards (Kanban boards, cards, templates), project notes, and documentation.
+/// task boards (Kanban boards, cards, templates), project notes, reports, and documentation.
 /// </summary>
 public class ProjectsContext
 {
@@ -25,6 +25,7 @@ public class ProjectsContext
     public virtual BoardCardRepository BoardCards { get; }
     public virtual BoardTemplateRepository BoardTemplates { get; }
     public virtual ProjectDocumentRepository ProjectDocuments { get; }
+    public virtual ProjectReportRepository ProjectReports { get; }
 
     protected ProjectsContext()
     {
@@ -38,6 +39,7 @@ public class ProjectsContext
         BoardCards = null!;
         BoardTemplates = null!;
         ProjectDocuments = null!;
+        ProjectReports = null!;
     }
 
     [ActivatorUtilitiesConstructor]
@@ -52,7 +54,8 @@ public class ProjectsContext
         BoardCardRepository boardCards,
         BoardTemplateRepository boardTemplates,
         ProjectDocumentRepository projectDocuments,
-        CompanyProfileRepository? companyProfile = null)
+        CompanyProfileRepository? companyProfile = null,
+        ProjectReportRepository? projectReports = null)
     {
         Projects = projects;
         ProjectGroups = projectGroups;
@@ -64,6 +67,7 @@ public class ProjectsContext
         BoardCards = boardCards;
         BoardTemplates = boardTemplates;
         ProjectDocuments = projectDocuments;
+        ProjectReports = projectReports!;
         _companyProfile = companyProfile;
     }
 
@@ -85,7 +89,8 @@ public class ProjectsContext
             () => Boards.LoadFromDisk(),
             () => BoardCards.LoadFromDisk(),
             () => BoardTemplates.LoadFromDisk(),
-            () => ProjectDocuments.LoadFromDisk()
+            () => ProjectDocuments.LoadFromDisk(),
+            () => ProjectReports?.LoadFromDisk()
         );
     }
 }

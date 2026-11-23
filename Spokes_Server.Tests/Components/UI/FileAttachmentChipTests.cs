@@ -1,7 +1,10 @@
 using Bunit;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using MudBlazor.Services;
 using Spokes_Server.Components.Shared;
+using Spokes_Server.Core.Services.Communication.Presence;
+using Spokes_Server.Core.Services.Security;
 using Xunit;
 
 namespace Spokes_Server.Tests.Components.UI;
@@ -13,6 +16,11 @@ public class FileAttachmentChipTests : BunitContext
         JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddMudServices();
         Services.AddLocalization();
+        Services.AddMemoryCache();
+        Services.AddDataProtection().UseEphemeralDataProtectionProvider();
+        Services.AddSingleton<FileTokenService>();
+        Services.AddScoped<UserCircuitContext>();
+        Services.AddScoped<FileUrlSigner>();
     }
 
     protected override void Dispose(bool disposing)
@@ -24,67 +32,25 @@ public class FileAttachmentChipTests : BunitContext
         base.Dispose(disposing);
     }
 
-    [Fact]
-    public void FileAttachmentChip_WhenUploading_DisplaysStatusAndPercentage()
+    [Theory]
+    [InlineData("Uploading...", 42.0, "(42%)", "42% (42%)")]
+    [InlineData("Compressing...", 75.0, "(75%)", "75% (75%)")]
+    [InlineData("Downloading from iCloud...", 15.0, "(15%)", "15% (15%)")]
+    [InlineData("Finishing up...", 100.0, "(100%)", null)]
+    public void FileAttachmentChip_WhenUploading_DisplaysStatusAndPercentage(string statusText, double progress, string expectedPercent, string? forbiddenDuplicate)
     {
-        // Act
         var cut = Render<FileAttachmentChip>(parameters => parameters
             .Add(p => p.IsUploading, true)
-            .Add(p => p.FileName, "Uploading...")
-            .Add(p => p.UploadProgress, 42.0));
+            .Add(p => p.FileName, statusText)
+            .Add(p => p.UploadProgress, progress));
 
-        // Assert: must render "Uploading... (42%)" and NOT "Uploading... 42% (42%)"
         var markup = cut.Markup;
-        Assert.Contains("Uploading...", markup);
-        Assert.Contains("(42%)", markup);
-        Assert.DoesNotContain("42% (42%)", markup);
-    }
-
-    [Fact]
-    public void FileAttachmentChip_WhenUploading_WithCompressingStatus_DisplaysCompressingAndPercentage()
-    {
-        // Act
-        var cut = Render<FileAttachmentChip>(parameters => parameters
-            .Add(p => p.IsUploading, true)
-            .Add(p => p.FileName, "Compressing...")
-            .Add(p => p.UploadProgress, 75.0));
-
-        // Assert: must render "Compressing... (75%)"
-        var markup = cut.Markup;
-        Assert.Contains("Compressing...", markup);
-        Assert.Contains("(75%)", markup);
-        Assert.DoesNotContain("75% (75%)", markup);
-    }
-
-    [Fact]
-    public void FileAttachmentChip_WhenUploading_WithDownloadingFromICloud_DisplaysStatusAndPercentage()
-    {
-        // Act
-        var cut = Render<FileAttachmentChip>(parameters => parameters
-            .Add(p => p.IsUploading, true)
-            .Add(p => p.FileName, "Downloading from iCloud...")
-            .Add(p => p.UploadProgress, 15.0));
-
-        // Assert
-        var markup = cut.Markup;
-        Assert.Contains("Downloading from iCloud...", markup);
-        Assert.Contains("(15%)", markup);
-        Assert.DoesNotContain("15% (15%)", markup);
-    }
-
-    [Fact]
-    public void FileAttachmentChip_WhenUploading_WithFinishingUp_DisplaysStatusAndPercentage()
-    {
-        // Act
-        var cut = Render<FileAttachmentChip>(parameters => parameters
-            .Add(p => p.IsUploading, true)
-            .Add(p => p.FileName, "Finishing up...")
-            .Add(p => p.UploadProgress, 100.0));
-
-        // Assert
-        var markup = cut.Markup;
-        Assert.Contains("Finishing up...", markup);
-        Assert.Contains("(100%)", markup);
+        Assert.Contains(statusText, markup);
+        Assert.Contains(expectedPercent, markup);
+        if (forbiddenDuplicate != null)
+        {
+            Assert.DoesNotContain(forbiddenDuplicate, markup);
+        }
     }
 
     [Fact]
@@ -131,9 +97,34 @@ public class FileAttachmentChipTests : BunitContext
             .Add(p => p.FileName, "document.pdf")
             .Add(p => p.FileSizeBytes, 1048576));
 
-        // Assert: normal display
+        // Assert: normal display with native title attribute and zero MudTooltip popover wrappers
         var markup = cut.Markup;
         Assert.Contains("document.pdf", markup);
         Assert.Contains("MB", markup);
+        Assert.Empty(cut.FindAll(".mud-tooltip-root"));
+        var chip = cut.Find(".file-attachment-chip");
+        Assert.Contains("document.pdf", chip.GetAttribute("title") ?? string.Empty);
+    }
+
+    [Fact]
+    public void FileAttachmentChip_TransitionFromUploadingToCompleted_KeepsUnifiedChipWithoutTooltip()
+    {
+        var cut = Render<FileAttachmentChip>(parameters => parameters
+            .Add(p => p.IsUploading, true)
+            .Add(p => p.FileName, "Uploading...")
+            .Add(p => p.UploadProgress, 50.0));
+
+        Assert.Contains("uploading", cut.Find(".file-attachment-chip").ClassList);
+        Assert.Null(cut.Find(".file-attachment-chip").GetAttribute("title"));
+
+        cut.Render(parameters => parameters
+            .Add(p => p.IsUploading, false)
+            .Add(p => p.FileName, "photo.jpg")
+            .Add(p => p.FileSizeBytes, 2048));
+
+        var chip = cut.Find(".file-attachment-chip");
+        Assert.DoesNotContain("uploading", chip.ClassList);
+        Assert.Contains("photo.jpg", chip.GetAttribute("title") ?? string.Empty);
+        Assert.Empty(cut.FindAll(".mud-tooltip-root"));
     }
 }

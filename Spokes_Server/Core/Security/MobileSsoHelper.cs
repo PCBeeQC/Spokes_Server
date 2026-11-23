@@ -7,8 +7,7 @@ namespace Spokes_Server.Core.Security;
 public static class MobileSsoHelper
 {
     /// <summary>
-    /// Creates a minimal HTML page that clears the mobile auto-login loop guard
-    /// and performs a client-side redirect via window.location.replace().
+    /// Creates a minimal HTML page that performs a client-side redirect via window.location.replace().
     /// The targetUrl must already be encoded with JavaScriptEncoder.
     /// </summary>
     public static string CreateJsRedirectPage(string jsEncodedTargetUrl)
@@ -20,7 +19,6 @@ public static class MobileSsoHelper
                 <meta charset='utf-8' />
                 <title>Redirecting...</title>
                 <script>
-                    sessionStorage.removeItem('mobile_auto_login_attempts');
                     window.location.replace('{jsEncodedTargetUrl}');
                 </script>
             </head>
@@ -133,17 +131,22 @@ public static class MobileSsoHelper
     }
 
     private static string BuildMobileStorageCleanupScript() => @"
-                            // Clear native persistent storage for the refresh token
+                            // Clear native persistent storage for the refresh token and chat vault key
                             try {
                                 if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Preferences) {
-                                    const refreshKey = 'spokes_refresh_' + window.location.hostname;
-                                    await window.Capacitor.Plugins.Preferences.remove({ key: refreshKey });
-                                    const vaultKey = 'chat_vault_key_' + window.location.hostname;
-                                    await window.Capacitor.Plugins.Preferences.remove({ key: vaultKey });
-                                    // Also clear legacy un-namespaced keys from pre-migration installs
-                                    await window.Capacitor.Plugins.Preferences.remove({ key: 'spokes_refresh' });
-                                    await window.Capacitor.Plugins.Preferences.remove({ key: 'chat_vault_key' });
-                                    console.log('[SSO] Cleared ' + refreshKey + ', ' + vaultKey + ', and legacy keys from Preferences.');
+                                    const origin = window.location.origin.toLowerCase();
+                                    const keysToClear = [
+                                        'spokes_refresh::' + origin,
+                                        'chat_vault_key::' + origin,
+                                        'spokes_refresh_' + window.location.hostname,
+                                        'chat_vault_key_' + window.location.hostname,
+                                        'spokes_refresh',
+                                        'chat_vault_key'
+                                    ];
+                                    for (const key of keysToClear) {
+                                        await window.Capacitor.Plugins.Preferences.remove({ key: key });
+                                    }
+                                    console.log('[SSO] Cleared origin-scoped and legacy auth/vault keys from Preferences.');
                                 }
                             } catch(e) { console.error('[SSO] Error clearing Preferences:', e); }
 
@@ -180,4 +183,44 @@ public static class MobileSsoHelper
 
                             // Set explicit logout flag to halt auto-login loops
                             localStorage.setItem('spokes_explicit_logout', 'true');";
+
+    /// <summary>
+    /// Creates an auto-submitting HTML form page that redirects the browser to the federated IdP end-session endpoint.
+    /// </summary>
+    public static string CreateAutoSubmitLogoutFormPage(
+        string? endSessionUrl,
+        string? idTokenHint,
+        string? postLogoutRedirectUri,
+        string? state = null)
+    {
+        var stateInput = state != null
+            ? $"\n                        <input type='hidden' name='state' value='{HtmlEncoder.Default.Encode(state)}' />"
+            : string.Empty;
+
+        return $@"
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset='utf-8' />
+                    <meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0'>
+                    <title>Logging out...</title>
+                    <style>
+                        body {{ background-color: #1e1e2d; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; font-family: 'Roboto', sans-serif; }}
+                        .spinner {{ width: 40px; height: 40px; border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid #594ae2; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }}
+                        @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
+                    </style>
+                </head>
+                <body>
+                    <div style='display:flex;flex-direction:column;align-items:center;text-align:center;padding:40px;'>
+                        <div class='spinner'></div>
+                        <p>Securely signing out...</p>
+                    </div>
+                    <form id='logoutForm' method='GET' action='{HtmlEncoder.Default.Encode(endSessionUrl ?? "")}'>
+                        <input type='hidden' name='id_token_hint' value='{HtmlEncoder.Default.Encode(idTokenHint ?? "")}' />
+                        <input type='hidden' name='post_logout_redirect_uri' value='{HtmlEncoder.Default.Encode(postLogoutRedirectUri ?? "")}' />{stateInput}
+                    </form>
+                    <script>document.getElementById('logoutForm').submit();</script>
+                </body>
+                </html>";
+    }
 }

@@ -61,26 +61,18 @@ public class SetupApiController : SpokesControllerBase
             ?? Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD");
 
         // Pre-validate encrypted backup password match before saving or extracting the archive on disk
+        bool verifiedOnUploadStream = false;
         if (_encryptionService != null)
         {
             await using var uploadInspectionStream = file.OpenReadStream();
             if (uploadInspectionStream.CanSeek)
             {
-                bool isEncryptedArchive = _encryptionService.IsEncryptedArchive(uploadInspectionStream);
-                uploadInspectionStream.Position = 0;
-
-                if (isEncryptedArchive)
+                var preValidationError = ValidateEncryptedBackupStream(uploadInspectionStream, configuredMasterPassword);
+                if (preValidationError != null)
                 {
-                    if (string.IsNullOrWhiteSpace(configuredMasterPassword))
-                    {
-                        return BadRequestError("Backup archive is encrypted, but SPOKES_MASTER_PASSWORD is not configured on this server.");
-                    }
-
-                    if (!_encryptionService.VerifyMasterPassword(uploadInspectionStream, configuredMasterPassword))
-                    {
-                        return BadRequestError("Backup master password does not match SPOKES_MASTER_PASSWORD.");
-                    }
+                    return preValidationError;
                 }
+                verifiedOnUploadStream = true;
             }
         }
 
@@ -98,18 +90,13 @@ public class SetupApiController : SpokesControllerBase
                 await file.CopyToAsync(fs, ct);
             }
 
-            if (_encryptionService != null)
+            if (_encryptionService != null && !verifiedOnUploadStream)
             {
                 await using var fileVerifyStream = System.IO.File.OpenRead(tempFile);
-                bool isEncrypted = _encryptionService.IsEncryptedArchive(fileVerifyStream);
-                fileVerifyStream.Position = 0;
-                if (isEncrypted)
+                var validationError = ValidateEncryptedBackupStream(fileVerifyStream, configuredMasterPassword);
+                if (validationError != null)
                 {
-                    if (string.IsNullOrWhiteSpace(configuredMasterPassword) ||
-                        !_encryptionService.VerifyMasterPassword(fileVerifyStream, configuredMasterPassword))
-                    {
-                        return BadRequestError("Backup master password does not match SPOKES_MASTER_PASSWORD.");
-                    }
+                    return validationError;
                 }
             }
 
@@ -145,5 +132,26 @@ public class SetupApiController : SpokesControllerBase
             }
             catch { }
         }
+    }
+
+    private IActionResult? ValidateEncryptedBackupStream(Stream stream, string? configuredMasterPassword)
+    {
+        if (_encryptionService == null) return null;
+
+        bool isEncrypted = _encryptionService.IsEncryptedArchive(stream);
+        stream.Position = 0;
+        if (!isEncrypted) return null;
+
+        if (string.IsNullOrWhiteSpace(configuredMasterPassword))
+        {
+            return BadRequestError("Backup archive is encrypted, but SPOKES_MASTER_PASSWORD is not configured on this server.");
+        }
+
+        if (!_encryptionService.VerifyMasterPassword(stream, configuredMasterPassword))
+        {
+            return BadRequestError("Backup master password does not match SPOKES_MASTER_PASSWORD.");
+        }
+
+        return null;
     }
 }

@@ -20,7 +20,7 @@
                                 @foreach (var prop in Board.Properties)
                                 {
                                     <MudStack Row="true" AlignItems="AlignItems.Center">
-                                        <MudIcon Icon="@GetPropertyIcon(prop.Type)" Size="Size.Small" Class="mr-2" Color="Color.Default" />
+                                        <MudIcon Icon="@BoardUiHelper.GetPropertyIcon(prop.Type)" Size="Size.Small" Class="mr-2" Color="Color.Default" />
                                         <MudText Style="width: 120px; font-weight: 500;">@prop.Name</MudText>
                                         
                                         @switch (prop.Type)
@@ -55,7 +55,7 @@
                                                             <div class="d-flex align-center gap-2">
                                                                 @if(!string.IsNullOrEmpty(opt.Color))
                                                                 {
-                                                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small" Style="@($"color: {GetColor(opt.Color)}")" />
+                                                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small" Style="@($"color: {BoardUiHelper.GetOptionCssColor(opt.Color)}")" />
                                                                 }
                                                                 @opt.Name
                                                             </div>
@@ -75,7 +75,7 @@
                                                             <div class="d-flex align-center gap-2">
                                                                 @if(!string.IsNullOrEmpty(opt.Color))
                                                                 {
-                                                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small" Style="@($"color: {GetColor(opt.Color)}")" />
+                                                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small" Style="@($"color: {BoardUiHelper.GetOptionCssColor(opt.Color)}")" />
                                                                 }
                                                                 @opt.Name
                                                             </div>
@@ -223,39 +223,6 @@
         {
             _currentUserId = emp.Id;
         }
-    }
-
-    string GetPropertyIcon(BoardPropertyType type) => type switch
-    {
-        BoardPropertyType.Select => Icons.Material.Filled.ArrowDropDownCircle,
-        BoardPropertyType.MultiSelect => Icons.Material.Filled.ChecklistRtl,
-        BoardPropertyType.Person => Icons.Material.Filled.Person,
-        BoardPropertyType.Date => Icons.Material.Filled.CalendarToday,
-        BoardPropertyType.Checkbox => Icons.Material.Filled.CheckBox,
-        BoardPropertyType.URL => Icons.Material.Filled.Link,
-        BoardPropertyType.Email => Icons.Material.Filled.Email,
-        BoardPropertyType.Number => Icons.Material.Filled.Numbers,
-        BoardPropertyType.Phone => Icons.Material.Filled.Phone,
-        BoardPropertyType.Project => Icons.Material.Filled.AccountTree,
-        _ => Icons.Material.Filled.ShortText
-    };
-
-    string GetColor(string colorName)
-    {
-        // Simple mapping to MudBlazor/HTML colors
-        return colorName switch
-        {
-            "gray" => "var(--mud-palette-grey)",
-            "brown" => "#795548",
-            "orange" => "var(--mud-palette-warning)",
-            "yellow" => "#FBC02D",
-            "green" => "var(--mud-palette-success)",
-            "blue" => "var(--mud-palette-info)",
-            "purple" => "#9C27B0",
-            "pink" => "#E91E63",
-            "red" => "var(--mud-palette-error)",
-            _ => "var(--mud-palette-text-primary)"
-        };
     }
 
     DateTime? GetDateValue(string propId)

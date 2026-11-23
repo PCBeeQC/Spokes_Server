@@ -1,6 +1,8 @@
 namespace Spokes_Server.Controllers;
 
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -34,14 +36,14 @@ public class SlideshowMediaController : ControllerBase
     }
 
     [HttpGet("{sessionId}/media/{mediaId}")]
-    public IActionResult GetMedia(string sessionId, string mediaId, [FromQuery] string? st = null)
-        => ServeBridgeMedia(sessionId, mediaId, thumb: false, st: st);
+    public Task<IActionResult> GetMedia(string sessionId, string mediaId, [FromQuery] string? st = null, CancellationToken cancellationToken = default)
+        => ServeBridgeMediaAsync(sessionId, mediaId, thumb: false, st: st, cancellationToken: cancellationToken);
 
     [HttpGet("{sessionId}/media/{mediaId}/thumb")]
-    public IActionResult GetMediaThumb(string sessionId, string mediaId, [FromQuery] string? st = null)
-        => ServeBridgeMedia(sessionId, mediaId, thumb: true, st: st);
+    public Task<IActionResult> GetMediaThumb(string sessionId, string mediaId, [FromQuery] string? st = null, CancellationToken cancellationToken = default)
+        => ServeBridgeMediaAsync(sessionId, mediaId, thumb: true, st: st, cancellationToken: cancellationToken);
 
-    private IActionResult ServeBridgeMedia(string sessionId, string mediaId, bool thumb, string? st)
+    private async Task<IActionResult> ServeBridgeMediaAsync(string sessionId, string mediaId, bool thumb, string? st, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(mediaId))
         {
@@ -71,10 +73,10 @@ public class SlideshowMediaController : ControllerBase
         // 3. Delegate directly to the user-scoped bridge (which invokes FileController)
         if (session.FileBridge is UserScopedSlideshowBridge userBridge)
         {
-            return userBridge.GetMedia(mediaId, thumb, ControllerContext);
+            return await userBridge.GetMediaAsync(mediaId, thumb, ControllerContext, cancellationToken);
         }
 
-        return session.FileBridge.GetMedia(mediaId, thumb);
+        return await session.FileBridge.GetMediaAsync(mediaId, thumb, cancellationToken);
     }
 
     private bool IsAuthenticatedSessionHost(string? hostUserId)

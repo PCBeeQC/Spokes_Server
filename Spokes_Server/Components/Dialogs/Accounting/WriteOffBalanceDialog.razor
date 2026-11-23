@@ -1,0 +1,178 @@
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@inject Database Db
+@inject IJurisdictionTemplateService JurisdictionService
+@inject UserService UserService
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Balance" Color="Color.Warning" />
+            <MudText Typo="Typo.h6">@BizLoc["Close / Write Off Balance"]</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-4">
+            @BizLoc["This records a non-cash balance adjustment to clear the open receivable or payable without creating a bank or credit card transaction."]
+        </MudAlert>
+
+        <MudPaper Elevation="0" Outlined="true" Class="pa-3 mb-4" Style="background-color: var(--mud-palette-background-grey);">
+            <MudGrid Spacing="1">
+                <MudItem xs="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@DocumentTypeLabel</MudText>
+                    <MudText Typo="Typo.body2"><b>@DocumentNumber</b></MudText>
+                </MudItem>
+                <MudItem xs="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@PartyLabel</MudText>
+                    <MudText Typo="Typo.body2"><b>@PartyName</b></MudText>
+                </MudItem>
+                <MudItem xs="4">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Total"]</MudText>
+                    <MudText Typo="Typo.body2">@TotalAmount.ToString("C2")</MudText>
+                </MudItem>
+                <MudItem xs="4">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Amount Paid"]</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Success">@AmountPaid.ToString("C2")</MudText>
+                </MudItem>
+                <MudItem xs="4">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Balance Due"]</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Error"><b>@RemainingBalance.ToString("C2")</b></MudText>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        <MudNumericField T="decimal"
+                         @bind-Value="_amount"
+                         Label="@BizLoc["Write-Off Amount"]"
+                         Format="N2"
+                         Min="0.01m"
+                         Max="@RemainingBalance"
+                         Adornment="Adornment.Start"
+                         AdornmentIcon="@Icons.Material.Filled.AttachMoney"
+                         Variant="Variant.Outlined"
+                         Required="true" />
+
+        @if (_amount > RemainingBalance)
+        {
+            <MudText Color="Color.Error" Typo="Typo.caption">
+                @string.Format(BizLoc["Amount cannot exceed the remaining balance ({0})."].Value, RemainingBalance.ToString("C2"))
+            </MudText>
+        }
+        else if (_amount > 0m)
+        {
+            <MudText Color="Color.Secondary" Typo="Typo.caption" Class="d-block mt-1">
+                @string.Format(BizLoc["Remaining balance after write-off: {0} — Resulting status: {1}"].Value, ProjectedRemainingBalance.ToString("C2"), ProjectedStatusLabel)
+            </MudText>
+        }
+
+        <MudDatePicker @bind-Date="_date"
+                       Label="@BizLoc["Adjustment Date"]"
+                       ShowToolbar="false"
+                       Variant="Variant.Outlined"
+                       Class="mt-3" />
+
+        @if (_canReadAccounting)
+        {
+            <div class="mt-3">
+                <GlAccountSelect @bind-Value="_glAccountCode"
+                                 ExcludeSubTypes="@(new[] { GlAccountSubType.Bank, GlAccountSubType.CreditCard, GlAccountSubType.LineOfCredit, GlAccountSubType.Loan })"
+                                 Label="@BizLoc["Adjustment Category"]"
+                                 Variant="Variant.Outlined"
+                                 Clearable="false" />
+            </div>
+        }
+
+        <MudTextField @bind-Value="_reason"
+                      Label="@BizLoc["Reason for Closing / Write-Off"]"
+                      Placeholder="@BizLoc["e.g., Rounding discrepancy ($0.01), waived small balance, courtesy discount, uncollectible balance"]"
+                      Variant="Variant.Outlined"
+                      Required="true"
+                      Lines="3"
+                      AutoFocus="true"
+                      Class="mt-3" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Color="Color.Warning"
+                   Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.Balance"
+                   OnClick="Submit"
+                   Disabled="@(!CanSubmit)">
+            @BizLoc["Close Balance"]
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string DocumentTypeLabel { get; set; } = "Document";
+    [Parameter] public string DocumentNumber { get; set; } = string.Empty;
+    [Parameter] public string PartyLabel { get; set; } = "Party";
+    [Parameter] public string PartyName { get; set; } = string.Empty;
+    [Parameter] public decimal TotalAmount { get; set; }
+    [Parameter] public decimal AmountPaid { get; set; }
+    [Parameter] public decimal RemainingBalance { get; set; }
+    [Parameter] public bool IsReceivable { get; set; } = true;
+
+    private decimal _amount;
+    private DateTime? _date = DateTime.Today;
+    private string? _glAccountCode;
+    private string _reason = string.Empty;
+    private bool _canReadAccounting;
+
+    private decimal ProjectedRemainingBalance =>
+        Math.Max(0m, Math.Round(RemainingBalance - _amount, 2, MidpointRounding.AwayFromZero));
+
+    private string ProjectedStatusLabel
+    {
+        get
+        {
+            if (ProjectedRemainingBalance <= 0m)
+            {
+                return AmountPaid > 0m ? BizLoc["Paid"].Value : BizLoc["Written Off"].Value;
+            }
+            return IsReceivable ? InvoiceStatus.Partial : BizLoc["Unpaid"].Value;
+        }
+    }
+
+    private bool CanSubmit =>
+        _amount > 0m &&
+        Math.Round(_amount, 2, MidpointRounding.AwayFromZero) <= Math.Round(RemainingBalance, 2, MidpointRounding.AwayFromZero) &&
+        !string.IsNullOrWhiteSpace(_reason);
+
+    protected override async Task OnInitializedAsync()
+    {
+        RemainingBalance = Math.Max(0m, Math.Round(RemainingBalance, 2, MidpointRounding.AwayFromZero));
+        _amount = RemainingBalance;
+        _date = DateTime.Today;
+
+        var emp = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canReadAccounting = emp?.IsEffectiveAdmin == true ||
+                             emp?.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: true) == true;
+
+        var defaultAccount = JurisdictionService.EnsureBadDebtsAndWriteOffsSeeded();
+        _glAccountCode = defaultAccount?.Code
+            ?? Db.GlAccounts?.GetBySystemRole(GlSystemRole.BadDebtsAndWriteOffs)?.Code
+            ?? "5860";
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (!CanSubmit) return;
+
+        var writeOff = new BalanceWriteOff
+        {
+            Date = (_date ?? DateTime.Today).Date,
+            Amount = Math.Round(_amount, 2, MidpointRounding.AwayFromZero),
+            Reason = _reason.Trim(),
+            GlAccountCode = string.IsNullOrWhiteSpace(_glAccountCode) ? null : _glAccountCode.Trim()
+        };
+
+        MudDialog.Close(DialogResult.Ok(writeOff));
+    }
+}

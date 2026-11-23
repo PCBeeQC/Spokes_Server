@@ -2,12 +2,15 @@
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.HR
 @using Spokes_Server.Core.Services.Reports.Helpers
-@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Core.Services.UI
-@using System.Globalization
 @inject Database Db
 @inject AppLabelService AppLabels
+@inject UserService UserService
+@inject HRService HRService
+@inject IUserPrivacyService PrivacyService
 
 @if (Model.SubTaskGroups.Any())
 {
@@ -27,15 +30,18 @@
                             <MudChip T="string" Color="Color.Primary" Variant="Variant.Filled" Size="Size.Small" Icon="@Icons.Material.Filled.Schedule">
                                 @TimesheetFormatHelper.FormatDurationHhMm(Model.TotalHours) @BizLoc["Total Time"]
                             </MudChip>
-                            <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small" Icon="@Icons.Material.Filled.Group">
-                                @Model.TotalContributorsCount @BizLoc["Contributors"]
-                            </MudChip>
+                            @if (_canViewAllReport)
+                            {
+                                <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small" Icon="@Icons.Material.Filled.Group">
+                                    @Model.TotalContributorsCount @BizLoc["Contributors"]
+                                </MudChip>
+                            }
                         </div>
                     </div>
                 </CardHeaderContent>
             </MudCardHeader>
             <MudCardContent Class="pt-0">
-                <MudTable Items="@Model.TaskSummaries" Hover="true" Dense="true" Striped="true" Elevation="0">
+                <MudTable Items="@Model.TaskSummaries" Hover="true" Dense="true" Striped="true" Elevation="0" Outlined="true">
                     <HeaderContent>
                         <MudTh><MudTableSortLabel SortBy="new Func<TaskLaborSummary, object>(x => x.TaskName)">@BizLoc["Task"]</MudTableSortLabel></MudTh>
                         <MudTh><MudTableSortLabel SortBy="new Func<TaskLaborSummary, object>(x => x.SubTaskName)">@BizLoc["Subtask"]</MudTableSortLabel></MudTh>
@@ -58,22 +64,14 @@
                             }
                         </MudTd>
                         <MudTd DataLabel="Contributors">
-                            <div class="d-flex align-center gap-1">
-                                @foreach (var emp in context.Employees.Take(4))
-                                {
-                                    <MudTooltip Text="@emp.FullName" Placement="Placement.Top" RootStyle="display: inline-flex; align-items: center;">
-                                        <EmployeeAvatar Employee="emp" Size="Size.Small" ShowPresence="false" Style="width: 22px; height: 22px; min-width: 22px; min-height: 22px; font-size: 0.6rem;" />
-                                    </MudTooltip>
-                                }
-                                @if (context.Employees.Count > 4)
-                                {
-                                    <MudTooltip Text="@string.Join(", ", context.Employees.Skip(4).Select(e => e.FullName))" Placement="Placement.Top">
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.75rem; font-weight: 600;" Class="ml-1">
-                                            +@(context.Employees.Count - 4)
-                                        </MudText>
-                                    </MudTooltip>
-                                }
-                            </div>
+                            @{ var visibleTaskEmployees = context.Employees.Where(e => CanDisplayContributor(e.Id)).ToList(); }
+                            <EmployeeAvatarGroup Employees="@visibleTaskEmployees"
+                                                 Max="4"
+                                                 Size="Size.Small"
+                                                 Layout="AvatarGroupLayout.Inline"
+                                                 OverflowStyle="AvatarOverflowStyle.Count"
+                                                 ShowOverflowNamesInTooltip="true"
+                                                 AvatarClass="labor-contributor-avatar" />
                         </MudTd>
                         <MudTd DataLabel="Hours Spent" Style="text-align: right;">
                             <MudText Typo="Typo.body2" Style="font-weight: 600;">@TimesheetFormatHelper.FormatDurationHhMm(context.TotalHours)</MudText>
@@ -90,22 +88,14 @@
                             <MudText Typo="Typo.subtitle2" Style="font-weight: 700;">@BizLoc["Total Project Labor"]</MudText>
                         </MudTd>
                         <MudTd>
-                            <div class="d-flex align-center gap-1">
-                                @foreach (var emp in Model.AllDistinctEmployees.Take(4))
-                                {
-                                    <MudTooltip Text="@emp.FullName" Placement="Placement.Top" RootStyle="display: inline-flex; align-items: center;">
-                                        <EmployeeAvatar Employee="emp" Size="Size.Small" ShowPresence="false" Style="width: 22px; height: 22px; min-width: 22px; min-height: 22px; font-size: 0.6rem;" />
-                                    </MudTooltip>
-                                }
-                                @if (Model.AllDistinctEmployees.Count > 4)
-                                {
-                                    <MudTooltip Text="@string.Join(", ", Model.AllDistinctEmployees.Skip(4).Select(e => e.FullName))" Placement="Placement.Top">
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.75rem; font-weight: 600;" Class="ml-1">
-                                            +@(Model.AllDistinctEmployees.Count - 4)
-                                        </MudText>
-                                    </MudTooltip>
-                                }
-                            </div>
+                            @{ var visibleFooterEmployees = Model.AllDistinctEmployees.Where(e => CanDisplayContributor(e.Id)).ToList(); }
+                            <EmployeeAvatarGroup Employees="@visibleFooterEmployees"
+                                                 Max="4"
+                                                 Size="Size.Small"
+                                                 Layout="AvatarGroupLayout.Inline"
+                                                 OverflowStyle="AvatarOverflowStyle.Count"
+                                                 ShowOverflowNamesInTooltip="true"
+                                                 AvatarClass="labor-contributor-avatar" />
                         </MudTd>
                         <MudTd Style="text-align: right;">
                             <MudText Typo="Typo.subtitle2" Color="Color.Primary" Style="font-weight: 700;">
@@ -158,7 +148,7 @@
                                            DateFormat="yyyy-MM-dd"
                                            Style="min-width: 140px; max-width: 160px;" />
 
-                            @if (Model.WeeklyLabor.Teams.Count > 1)
+                            @if (_canViewAllReport && Model.WeeklyLabor.Teams.Count > 1)
                             {
                                 <MudToggleGroup T="WeeklyViewMode" @bind-Value="_weeklyViewMode" Outlined="true" Size="Size.Small" Color="Color.Primary">
                                     <MudToggleItem Value="@WeeklyViewMode.ByContributor" Text="@(string.Format(BizLoc["By {0}"].Value, AppLabels.Employee))" />
@@ -184,9 +174,14 @@
                 @if (_weeklyViewMode == WeeklyViewMode.ByContributor)
                 {
                     var displayEmployees = GetFilteredWeeklyEmployees().ToList();
-                    var runningTotals = ComputeRunningTotals(Model.WeeklyLabor.Rows, r => displayEmployees.Sum(e => r.GetHours(e.Id)));
-                    var filteredTotal = displayEmployees.Sum(e => Model.WeeklyLabor.GetTotalForEmployee(e.Id));
-                    <MudSimpleTable Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;">
+                    var showFullProjectTotals = _selectedTeamFilter == "all";
+                    var runningTotals = showFullProjectTotals
+                        ? ComputeRunningTotals(Model.WeeklyLabor.Rows, r => r.TotalHours)
+                        : ComputeRunningTotals(Model.WeeklyLabor.Rows, r => displayEmployees.Sum(e => e.Id == null ? 0m : r.GetHours(e.Id)));
+                    var filteredTotal = showFullProjectTotals
+                        ? Model.WeeklyLabor.GrandTotal
+                        : displayEmployees.Sum(e => Model.WeeklyLabor.GetTotalForEmployee(e.Id));
+                    <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;">
                         <thead>
                             <tr>
                                 <th>@BizLoc["Week"]</th>
@@ -211,7 +206,9 @@
                             {
                                 @foreach (var row in Model.WeeklyLabor.Rows)
                                 {
-                                    var rowSum = displayEmployees.Sum(e => row.GetHours(e.Id));
+                                    var rowSum = showFullProjectTotals
+                                        ? row.TotalHours
+                                        : displayEmployees.Sum(e => row.GetHours(e.Id));
                                     var running = runningTotals.TryGetValue(row, out var rt) ? rt : 0m;
                                     <tr>
                                         <td>@row.WeekLabel</td>
@@ -242,7 +239,7 @@
                 else
                 {
                     var runningTotals = ComputeRunningTotals(Model.WeeklyLabor.Rows, r => r.TotalHours);
-                    <MudSimpleTable Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;">
+                    <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;">
                         <thead>
                             <tr>
                                 <th>@BizLoc["Week"]</th>
@@ -307,11 +304,11 @@
                     </CardHeaderContent>
                 </MudCardHeader>
                 <MudCardContent>
-                    <MudSimpleTable Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;">
+                    <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;">
                         <thead>
                             <tr>
                                 <th>@BizLoc["Week"]</th>
-                                @foreach (var emp in group.Employees)
+                                @foreach (var emp in group.Employees.Where(e => CanDisplayContributor(e.Id)))
                                 {
                                     <th>@(string.IsNullOrEmpty(emp.FirstName) ? emp.FullName : emp.FirstName)</th>
                                 }
@@ -323,7 +320,7 @@
                             {
                                 <tr>
                                     <td>@row.WeekLabel</td>
-                                    @foreach (var emp in group.Employees)
+                                    @foreach (var emp in group.Employees.Where(e => CanDisplayContributor(e.Id)))
                                     {
                                         var hours = row.GetHours(emp.Id);
                                         <td>@(hours > 0 ? hours.ToString("N1") : "-")</td>
@@ -335,7 +332,7 @@
                         <tfoot>
                             <tr>
                                 <td><strong>@BizLoc["Total"]</strong></td>
-                                @foreach (var emp in group.Employees)
+                                @foreach (var emp in group.Employees.Where(e => CanDisplayContributor(e.Id)))
                                 {
                                     <td><strong>@group.GetTotalForEmployee(emp.Id).ToString("N1")</strong></td>
                                 }
@@ -366,6 +363,8 @@ else
     private Dictionary<string, WorkType> _workTypes = [];
     private Dictionary<string, Employee> _employees = [];
     private Dictionary<string, Team> _teams = [];
+    private HashSet<string> _visibleContributorIds = new(StringComparer.OrdinalIgnoreCase);
+    private bool _canViewAllReport;
 
     private enum WeeklyViewMode
     {
@@ -373,19 +372,64 @@ else
         ByTeam
     }
 
-    protected override void OnInitialized() => LoadData();
-
-    protected override void OnParametersSet() => LoadData();
-
-    private void LoadData()
+    protected override async Task OnParametersSetAsync()
     {
-        _allTimesheets = Db.Timesheets.GetAll();
+        Model = new();
+        _allTimesheets = [];
+        _workTypes = [];
+        _employees = [];
+        _teams = [];
+        _visibleContributorIds = new(StringComparer.OrdinalIgnoreCase);
+        _canViewAllReport = false;
+
+        var emp = await UserService.GetEmployeeAsync(allowSuspended: true);
+        var project = Db.Projects.GetById(ProjectId);
+        if (emp == null || project == null || !UserService.CanViewProject(emp, project, allowAccountingFinancialRead: false))
+        {
+            _weeklyViewMode = WeeklyViewMode.ByContributor;
+            _selectedTeamFilter = "all";
+            return;
+        }
+
+        LoadData(emp);
+    }
+
+    private void LoadData(Employee viewer)
+    {
         _workTypes = Db.WorkTypes.GetAll().ToDictionary(x => x.Id, x => x);
-        _employees = Db.Employees.GetAll().ToDictionary(x => x.Id, x => x);
-        _teams = Db.Teams.GetAll().ToDictionary(x => x.Id, x => x);
+
+        var scoped = ProjectLaborCalculator.PrepareViewerScopedInputs(
+            viewer,
+            Db.Timesheets.GetAll(),
+            Db.Employees.GetAll(),
+            Db.Teams.GetAll(),
+            HRService,
+            PrivacyService);
+
+        _allTimesheets = scoped.ScopedTimesheets;
+        _employees = scoped.VisibleEmployees;
+        _teams = scoped.VisibleTeams;
+        _visibleContributorIds = scoped.VisibleContributorIds;
+        _canViewAllReport = scoped.CanViewAllReport;
+
+        if (!_canViewAllReport)
+        {
+            _weeklyViewMode = WeeklyViewMode.ByContributor;
+            _selectedTeamFilter = "all";
+        }
 
         UpdateLaborModel();
+
+        if (_selectedTeamFilter != "all"
+            && _selectedTeamFilter != "unassigned"
+            && !Model.WeeklyLabor.Teams.Any(t => t.Id == _selectedTeamFilter))
+        {
+            _selectedTeamFilter = "all";
+        }
     }
+
+    private bool CanDisplayContributor(string? employeeId) =>
+        !string.IsNullOrEmpty(employeeId) && _visibleContributorIds.Contains(employeeId);
 
     private void UpdateLaborModel()
     {
@@ -415,22 +459,30 @@ else
             _endDate,
             Model.AllDistinctEmployees);
 
+        if (_selectedTeamFilter != "all"
+            && _selectedTeamFilter != "unassigned"
+            && !Model.WeeklyLabor.Teams.Any(t => t.Id == _selectedTeamFilter))
+        {
+            _selectedTeamFilter = "all";
+        }
+
         StateHasChanged();
     }
 
     private IEnumerable<Employee> GetFilteredWeeklyEmployees()
     {
+        var visible = Model.WeeklyLabor.Employees.Where(e => CanDisplayContributor(e.Id));
         if (_selectedTeamFilter == "all")
         {
-            return Model.WeeklyLabor.Employees;
+            return visible;
         }
 
         if (_selectedTeamFilter == "unassigned")
         {
-            return Model.WeeklyLabor.Employees.Where(e => string.IsNullOrEmpty(e.TeamId));
+            return visible.Where(e => string.IsNullOrEmpty(e.TeamId));
         }
 
-        return Model.WeeklyLabor.Employees.Where(e => e.TeamId == _selectedTeamFilter);
+        return visible.Where(e => e.TeamId == _selectedTeamFilter);
     }
 
     private static Dictionary<ProjectWeeklyRowViewModel, decimal> ComputeRunningTotals(

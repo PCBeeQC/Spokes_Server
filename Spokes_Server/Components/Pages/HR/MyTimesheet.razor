@@ -8,7 +8,7 @@
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Core.Services.HR
-@inject AuthenticationStateProvider AuthStateProvider
+@using Spokes_Server.Core.Services.Projects
 @inject UserService UserService
 @inject OvertimeService OvertimeService
 @inject HRService HRService
@@ -16,25 +16,66 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject TimesheetTimerService TimerService
+@inject NavigationManager Nav
+@inject AppLabelService AppLabels
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4 pb-6">
 <MudHidden Breakpoint="Breakpoint.SmAndDown">
     <MudGrid Class="align-center mb-4">
-        <MudItem xs="12" sm="4">
-            <MudText Typo="Typo.h4">Timesheet</MudText>
-            @if (CurrentSheet != null && _timesheetSettings.RequireApproval)
-            {
-                <StatusChip Status="@CurrentSheet.Status" Class="ml-2" />
-            }
+        <MudItem xs="12" md="5">
+            <div class="d-flex align-center flex-wrap gap-2">
+                @if (IsViewingOtherEmployee)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                                   Size="Size.Small"
+                                   Variant="Variant.Outlined"
+                                   title="@($"Back to {AppLabels.Team} Timesheets")"
+                                   OnClick="@(() => Nav.NavigateTo($"/planning/timesheet-approvals?year={CurrentYear}&week={CurrentWeekNumber}"))" />
+                }
+                <MudText Typo="Typo.h4">
+                    @(IsViewingOtherEmployee && TimesheetOwner != null ? TimesheetOwner.FullName : "Timesheet")
+                </MudText>
+                @if (CurrentSheet != null && (_timesheetSettings.RequireApproval || CurrentSheet.Status == TimesheetStatus.Approved || CurrentSheet.Status == TimesheetStatus.Submitted))
+                {
+                    <StatusChip Status="@CurrentSheet.Status" Class="ml-1" />
+                }
+            </div>
         </MudItem>
 
-        <MudItem xs="12" sm="8" Class="d-flex justify-center justify-sm-end align-center gap-4">
-            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="@(() => ChangeWeek(-1))"
-                Variant="Variant.Outlined" />
+        <MudItem xs="12" md="7" Class="d-flex justify-center justify-md-end align-center gap-3 flex-wrap">
+            @if (!IsViewingCurrentWeek)
+            {
+                <MudButton Variant="Variant.Text"
+                           Color="Color.Primary"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Today"
+                           OnClick="GoToCurrentWeek">
+                    Current Week
+                </MudButton>
+            }
 
-            <div class="d-flex flex-column align-center" style="min-width: 200px;">
-                <MudText Typo="Typo.h6">Week @CurrentWeekNumber</MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="@(() => ChangeWeek(-1))"
+                Variant="Variant.Outlined" title="Previous Week" />
+
+            <div class="d-flex flex-column align-center" style="min-width: 210px;">
+                <div class="d-flex align-center gap-1">
+                    <MudText Typo="Typo.h6">Week @CurrentWeekNumber, @CurrentYear</MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.CalendarMonth"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   title="Jump to week"
+                                   OnClick="OpenWeekPickerAsync" />
+                    <div style="width: 0; height: 0; overflow: hidden; position: absolute;">
+                        <MudDatePicker @ref="_weekDatePicker"
+                                       Date="@WeekStart"
+                                       DateChanged="OnJumpDateSelected"
+                                       PickerVariant="PickerVariant.Dialog"
+                                       ShowWeekNumbers="true"
+                                       FirstDayOfWeek="DayOfWeek.Monday"
+                                       Color="Color.Primary" />
+                    </div>
+                </div>
                 <MudText Typo="Typo.caption">@WeekStart.ToString("MMM dd") - @WeekEnd.ToString("MMM dd, yyyy")</MudText>
                 <div>
                     @if (IsSaving)
@@ -63,15 +104,17 @@
             </div>
 
             <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="@(() => ChangeWeek(1))"
-                Variant="Variant.Outlined" />
+                Variant="Variant.Outlined" title="Next Week" />
         </MudItem>
     </MudGrid>
 </MudHidden>
 
 <MudHidden Breakpoint="Breakpoint.MdAndUp">
     <div class="d-flex align-center justify-space-between mb-2 px-3 pt-1">
-        <MudText Typo="Typo.h5" Style="font-weight: 700;">Timesheet</MudText>
-        @if (CurrentSheet != null && _timesheetSettings.RequireApproval)
+        <MudText Typo="Typo.h5" Style="font-weight: 700;">
+            @(IsViewingOtherEmployee && TimesheetOwner != null ? TimesheetOwner.FullName : "Timesheet")
+        </MudText>
+        @if (CurrentSheet != null && (_timesheetSettings.RequireApproval || CurrentSheet.Status == TimesheetStatus.Approved || CurrentSheet.Status == TimesheetStatus.Submitted))
         {
             <StatusChip Status="@CurrentSheet.Status" />
         }
@@ -84,7 +127,7 @@
 }
 else
 {
-    @if (!CanEdit)
+    @if (!_hasBaseEditPermission)
     {
         <MudAlert Severity="Severity.Info" Class="mb-4 mx-3 mx-md-0">You have read-only access to this timesheet.</MudAlert>
     }
@@ -94,22 +137,47 @@ else
             <b>Timesheet Rejected:</b> @CurrentSheet.RejectionNote
         </MudAlert>
     }
-    @if (CurrentSheet?.Status == TimesheetStatus.Submitted)
+    @if (IsSheetLocked)
     {
-        <MudAlert Severity="Severity.Info" Class="mb-4 mx-3 mx-md-0" Variant="Variant.Outlined">
-            This timesheet is pending approval and cannot be edited.
+        <MudAlert Severity="@(_isEditModeUnlocked ? Severity.Warning : (CurrentSheet?.Status == TimesheetStatus.Approved ? Severity.Success : Severity.Info))"
+                  Class="mb-4 mx-3 mx-md-0"
+                  Variant="Variant.Outlined">
+            <div class="d-flex align-center justify-space-between flex-wrap gap-2" style="width: 100%;">
+                <span>
+                    @if (_isEditModeUnlocked)
+                    {
+                        <b>Edit Mode Unlocked:</b> @("Changes are saved directly while keeping this timesheet's status unchanged.")
+                    }
+                    else if (CurrentSheet?.Status == TimesheetStatus.Approved)
+                    {
+                        @("This timesheet has been approved and is locked.")
+                    }
+                    else if (CurrentSheet?.Status == TimesheetStatus.Submitted)
+                    {
+                        @("This timesheet is pending approval and cannot be edited.")
+                    }
+                    else if (_isDateLocked)
+                    {
+                        @($"This timesheet is locked (past the {_timesheetSettings.LockTimesheetsOlderThanDays}-day cutoff).")
+                    }
+                </span>
+                @if (CanOverrideLock)
+                {
+                    <MudSwitch T="bool"
+                               Value="@_isEditModeUnlocked"
+                               ValueChanged="OnEditModeToggled"
+                               Color="Color.Warning"
+                               Label="Edit Mode"
+                               Size="Size.Small" />
+                }
+            </div>
         </MudAlert>
     }
-    @if (CurrentSheet?.Status == TimesheetStatus.Approved)
+
+    @if (_hiddenRestrictedEntries.Count > 0)
     {
-        <MudAlert Severity="Severity.Success" Class="mb-4 mx-3 mx-md-0" Variant="Variant.Outlined">
-            This timesheet has been approved and is locked.
-        </MudAlert>
-    }
-    @if (_isDateLocked)
-    {
-        <MudAlert Severity="Severity.Info" Class="mb-4 mx-3 mx-md-0" Variant="Variant.Outlined">
-            This timesheet is locked (past the @(_timesheetSettings.LockTimesheetsOlderThanDays)-day cutoff).
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+            @($"{_hiddenRestrictedEntries.Sum(e => e.Hours):0.##}h logged on restricted project(s) outside your access scope are hidden and preserved.")
         </MudAlert>
     }
 
@@ -146,29 +214,40 @@ else
             <RowTemplate>
                 <MudTd>
                     <MudAutocomplete T="string" Value="@context.ProjectId"
-                        ValueChanged="@(async (s) => { context.ProjectId = s; await AutoSave(); })"
+                        ValueChanged="@((string s) => OnProjectChanged(context, s))"
                         SearchFunc="SearchProjects"
                         ToStringFunc="GetProjectName"
                         Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" 
-                        Placeholder="Project"
-                        ResetValueOnEmptyText="true"
+                        Placeholder="Project or Time Off"
+                        ResetValueOnEmptyText="false"
                         CoerceText="false" 
                         Disabled="@(!CanEdit)" 
                         MaxItems="null"
                         Style="text-align: left;" />
                 </MudTd>
 
-                <WorkTypeSubTaskSelector WorkTypes="@ActiveWorkTypes"
-                                         Projects="@ActiveProjects"
-                                         ProjectId="@context.ProjectId"
-                                         RequireProject="true"
-                                         WorkTypeId="@context.WorkTypeId"
-                                         SubTaskId="@context.SubTaskId"
-                                         OnSelectionChanged="@(async (sel) => { context.WorkTypeId = sel.WorkTypeId; context.SubTaskId = sel.SubTaskId; await AutoSave(); })"
-                                         Layout="WorkTypeSelectorLayout.TableCells"
-                                         Variant="Variant.Outlined"
-                                         UsePlaceholder="true"
-                                         Disabled="@(!CanEdit)" />
+                @if (context.IsLeaveRow)
+                {
+                    <MudTd colspan="2">
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.EventAvailable">
+                            @TimeEntryTypes.GetDisplayLabel(context.ProjectId)
+                        </MudChip>
+                    </MudTd>
+                }
+                else
+                {
+                    <WorkTypeSubTaskSelector WorkTypes="@ActiveWorkTypes"
+                                             Projects="@ActiveProjects"
+                                             ProjectId="@context.ProjectId"
+                                             RequireProject="true"
+                                             WorkTypeId="@context.WorkTypeId"
+                                             SubTaskId="@context.SubTaskId"
+                                             OnSelectionChanged="@(async (sel) => { context.WorkTypeId = sel.WorkTypeId; context.SubTaskId = sel.SubTaskId; await AutoSave(); })"
+                                             Layout="WorkTypeSelectorLayout.TableCells"
+                                             Variant="Variant.Outlined"
+                                             UsePlaceholder="true"
+                                             Disabled="@(!CanEdit)" />
+                }
 
                 @for (int i = 0; i < 7; i++)
                 {
@@ -179,7 +258,7 @@ else
                                 ValueChanged="@((string v) => OnTimeChanged(context, dayIndex, v))"
                                 Variant="Variant.Outlined" Margin="Margin.Dense" Style="text-align: center; flex: 1;"
                                 Placeholder="-" Immediate="false"
-                                Disabled="@(string.IsNullOrEmpty(context.ProjectId) || string.IsNullOrEmpty(context.WorkTypeId) || !CanEdit)" />
+                                Disabled="@(string.IsNullOrEmpty(context.ProjectId) || (!context.IsLeaveRow && string.IsNullOrEmpty(context.WorkTypeId) && _timesheetSettings.RequireTask && context.DailyHours.All(h => h == 0)) || !CanEdit)" />
                             @if (context.DailyHours[dayIndex] > 0 || !string.IsNullOrEmpty(context.DailyNotes[dayIndex]))
                             {
                                 <MudTooltip Text="@(string.IsNullOrEmpty(context.DailyNotes[dayIndex]) ? "Add note" : context.DailyNotes[dayIndex])">
@@ -208,10 +287,32 @@ else
                 <MudTd colspan="3" Class="pa-2">
                     @if (CanEdit)
                     {
-                        <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddNewRow" Variant="Variant.Text"
-                            Color="Color.Primary">
-                            Add Row
-                        </MudButton>
+                        <div class="d-flex align-center gap-2 flex-wrap">
+                            <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddNewRow" Variant="Variant.Text"
+                                Color="Color.Primary">
+                                Add Row
+                            </MudButton>
+                            <MudMenu Label="Add Time Off / Holiday"
+                                     StartIcon="@Icons.Material.Filled.BeachAccess"
+                                     EndIcon="@Icons.Material.Filled.KeyboardArrowDown"
+                                     Variant="Variant.Outlined"
+                                     Color="Color.Info"
+                                     Size="Size.Small"
+                                     Dense="true">
+                                <MudMenuItem OnClick="@(() => AddLeaveRow(TimeEntryTypes.VacationRowKey))" Icon="@Icons.Material.Filled.BeachAccess">
+                                    Vacation / Paid Time Off
+                                </MudMenuItem>
+                                <MudMenuItem OnClick="@(() => AddLeaveRow(TimeEntryTypes.StatutoryHolidayRowKey))" Icon="@Icons.Material.Filled.Event">
+                                    Statutory / Public Holiday
+                                </MudMenuItem>
+                                <MudMenuItem OnClick="@(() => AddLeaveRow(TimeEntryTypes.BankedTimeOffRowKey))" Icon="@Icons.Material.Filled.Schedule">
+                                    Banked Time Off (Redeem Hour Bank)
+                                </MudMenuItem>
+                                <MudMenuItem OnClick="@(() => AddLeaveRow(TimeEntryTypes.SickOrPersonalLeaveRowKey))" Icon="@Icons.Material.Filled.Healing">
+                                    Sick / Personal Leave
+                                </MudMenuItem>
+                            </MudMenu>
+                        </div>
                     }
                 </MudTd>
 
@@ -268,7 +369,7 @@ else
                         @(HourBankResult.HourBank >= 0 ? "+" : "")@FormatHours(HourBankResult.HourBank)
                     </MudText>
                     <MudIconButton Icon="@Icons.Material.Filled.History" Size="Size.Small" Color="Color.Secondary" OnClick="OpenHourBankAuditDialog" title="View Audit Trail" />
-                    @if (CurrentUser != null && TimesheetOwner != null && (CurrentUser.IsAdmin || CurrentUser.HasPermission(AppPermissions.Admin.ManageUsers) || (CurrentUser.Id != TimesheetOwner.Id && CanManage(CurrentUser, TimesheetOwner.Id))))
+                    @if (CurrentUser != null && TimesheetOwner != null && (CurrentUser.IsAdmin || CurrentUser.HasPermission(AppPermissions.Hr.ManageEmployees) || CurrentUser.HasPermission(AppPermissions.Admin.ManageUsers) || (CurrentUser.Id != TimesheetOwner.Id && CanManage(CurrentUser, TimesheetOwner.Id))))
                     {
                         <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Primary" OnClick="OpenAdjustHourBankDialog" title="Adjust Hour Bank" />
                     }
@@ -320,6 +421,33 @@ else
         await AutoSave();
     }
 
+    private async Task OnProjectChanged(TimesheetUiRow row, string? newProjectId)
+    {
+        if (!CanEdit) return;
+        if (string.IsNullOrEmpty(newProjectId) && row.DailyHours.Any(h => h > 0))
+        {
+            // Never clear ProjectId on a row that already has logged hours; prevents accidental row wiping.
+            return;
+        }
+        var targetProjectId = newProjectId ?? string.Empty;
+        if (!CanCallerAccessTimesheetProject(CurrentUser, targetProjectId, allowSuspended: false))
+        {
+            Snackbar.Add("You do not have permission to assign that project.", Severity.Warning);
+            LoadTimesheet();
+            StateHasChanged();
+            return;
+        }
+        row.ProjectId = targetProjectId;
+        row.EntryType = TimeEntryTypes.ResolveEntryType(row.ProjectId);
+        if (row.IsLeaveRow)
+        {
+            row.WorkTypeId = string.Empty;
+            row.SubTaskId = string.Empty;
+            row.IsBillable = false;
+        }
+        await AutoSave();
+    }
+
     // --- UI STATE ---
     private DateTime WeekStart;
     private DateTime WeekEnd => WeekStart.AddDays(6);
@@ -333,20 +461,50 @@ else
     private Timesheet? CurrentSheet;
     private List<Project> ActiveProjects = new();
     private List<WorkType> ActiveWorkTypes = new();
+    private MudDatePicker? _weekDatePicker;
     private TimesheetSettings _timesheetSettings = new();
     private bool _isDateLocked = false;
 
-    // --- PERMISSIONS ---
+    // --- PERMISSIONS & LOCK OVERRIDE ---
+    private bool _hasBaseEditPermission = false;
+    private bool _isEditModeUnlocked = false;
     private bool CanEdit = false;
+
+    private bool IsViewingOtherEmployee =>
+        CurrentUser != null && TimesheetOwner != null && CurrentUser.Id != TimesheetOwner.Id;
+
+    private bool IsViewingCurrentWeek
+    {
+        get
+        {
+            var today = DateTime.Today;
+            return today >= WeekStart.Date && today <= WeekEnd.Date;
+        }
+    }
+
+    private bool CanOverrideLock =>
+        CurrentUser != null && TimesheetOwner != null && HRService.CanOverrideTimesheetLock(CurrentUser, TimesheetOwner.Id);
+
+    private bool IsSheetLocked =>
+        CurrentSheet != null &&
+        (_isDateLocked ||
+         CurrentSheet.Status == TimesheetStatus.Submitted ||
+         CurrentSheet.Status == TimesheetStatus.Approved);
 
     // --- THE MATRIX (ViewModel) ---
     private List<TimesheetUiRow> UiRows = new();
+    private List<TimeEntry> _hiddenRestrictedEntries = [];
 
     // --- OVERTIME TRACKING ---
     private HourBankResult HourBankResult = new();
     private WeeklyOvertimeResult WeeklyResult = new();
 
-
+    // --- QUERY & ROUTE PARAMETERS ---
+    [Parameter] public string? TargetEmployeeId { get; set; }
+    [SupplyParameterFromQuery(Name = "year")] public int? QueryYear { get; set; }
+    [SupplyParameterFromQuery(Name = "week")] public int? QueryWeek { get; set; }
+    [SupplyParameterFromQuery(Name = "date")] public string? QueryDate { get; set; }
+    private Employee? TimesheetOwner;
 
     protected override async Task OnInitializedAsync()
     {
@@ -366,7 +524,9 @@ else
     protected override async Task OnParametersSetAsync()
     {
         IsLoading = true;
-        CurrentUser = await UserService.GetEmployeeAsync();
+        ApplyQueryWeekIfPresent();
+
+        CurrentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
         if (CurrentUser != null)
         {
             // Determine which timesheet to load
@@ -377,33 +537,92 @@ else
                     var target = Db.Employees.GetById(TargetEmployeeId);
                     if (target != null)
                     {
-                        CanEdit = true;
+                        _hasBaseEditPermission = CurrentUser.IsActiveUnsuspended && CurrentUser.HasPermission(AppPermissions.Timesheets.AccessTimesheet);
+                        _isEditModeUnlocked = false;
                         TimesheetOwner = target;
                         FilterProjects(TimesheetOwner);
                         LoadTimesheet();
-                        Snackbar.Add($"Editing timesheet for {target.FullName}", Severity.Info);
                     }
                     else
                     {
                         Snackbar.Add("Employee not found", Severity.Error);
+                        _hasBaseEditPermission = false;
+                        CanEdit = false;
                     }
                 }
                 else
                 {
                     Snackbar.Add("You do not have permission to view/edit this timesheet.", Severity.Error);
+                    _hasBaseEditPermission = false;
                     CanEdit = false;
                 }
             }
             else
             {
                 // Own Timesheet
-                CanEdit = CurrentUser.HasPermission(AppPermissions.Timesheets.AccessTimesheet);
+                _hasBaseEditPermission = CurrentUser.IsActiveUnsuspended && CurrentUser.HasPermission(AppPermissions.Timesheets.AccessTimesheet);
+                _isEditModeUnlocked = false;
                 TimesheetOwner = CurrentUser;
                 FilterProjects(TimesheetOwner);
                 LoadTimesheet();
             }
         }
         IsLoading = false;
+    }
+
+    private void ApplyQueryWeekIfPresent()
+    {
+        if (QueryYear is > 1900 and < 9999 && QueryWeek is >= 1 and <= 53)
+        {
+            try
+            {
+                int maxWeek = ISOWeek.GetWeeksInYear(QueryYear.Value);
+                int clampedWeek = Math.Min(QueryWeek.Value, maxWeek);
+                WeekStart = ISOWeek.ToDateTime(QueryYear.Value, clampedWeek, DayOfWeek.Monday);
+                UpdateWeekInfo();
+                return;
+            }
+            catch
+            {
+                // Ignore invalid query parameters
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(QueryDate) && DateTime.TryParse(QueryDate, out var parsedDate))
+        {
+            var d = parsedDate.Date;
+            var diff = (7 + (d.DayOfWeek - DayOfWeek.Monday)) % 7;
+            WeekStart = d.AddDays(-diff);
+            UpdateWeekInfo();
+        }
+    }
+
+    private Task OpenWeekPickerAsync() => _weekDatePicker?.OpenAsync() ?? Task.CompletedTask;
+
+    private void OnJumpDateSelected(DateTime? selectedDate)
+    {
+        if (!selectedDate.HasValue) return;
+        var d = selectedDate.Value.Date;
+        var diff = (7 + (d.DayOfWeek - DayOfWeek.Monday)) % 7;
+        WeekStart = d.AddDays(-diff);
+        _isEditModeUnlocked = false;
+        UpdateWeekInfo();
+        LoadTimesheet();
+    }
+
+    private void OnEditModeToggled(bool unlocked)
+    {
+        _isEditModeUnlocked = unlocked;
+        UpdateEditPermissions();
+        if (CanEdit && !UiRows.Any())
+        {
+            UiRows.Add(new TimesheetUiRow());
+        }
+        else if (!CanEdit)
+        {
+            UiRows.RemoveAll(r => string.IsNullOrEmpty(r.ProjectId) && string.IsNullOrEmpty(r.WorkTypeId) && r.DailyHours.All(h => h == 0));
+        }
+        StateHasChanged();
     }
 
     private void OnTimerChanged()
@@ -428,10 +647,19 @@ else
 
     private void ChangeWeek(int offset)
     {
-        // Auto-save before moving? Optional. For now, we assume explicit save.
         WeekStart = WeekStart.AddDays(offset * 7);
+        _isEditModeUnlocked = false;
         UpdateWeekInfo();
         LoadTimesheet();
+    }
+
+    private bool CanCallerAccessTimesheetProject(Employee? caller, string? projectId, bool allowSuspended = true)
+    {
+        if (string.IsNullOrWhiteSpace(projectId) || TimeEntryTypes.IsLeaveProjectKey(projectId))
+            return true;
+
+        var proj = Db.Projects.GetById(projectId);
+        return proj != null && ProjectAccessHelper.CanAccessProjectForContribution(caller, proj, Db.Teams, allowSuspended);
     }
 
     private void LoadTimesheet()
@@ -440,50 +668,66 @@ else
         if (TimesheetOwner == null) return;
         CurrentSheet = Db.Timesheets.GetOrStubByWeek(TimesheetOwner.Id, CurrentYear, CurrentWeekNumber);
 
-        // 2. Convert "Flat List" to "Matrix Rows"
-        UiRows.Clear();
+        var sourceEntries = CurrentSheet.Entries ?? [];
+        var visibleEntries = sourceEntries
+            .Where(e => e.IsLeaveOrHoliday || CanCallerAccessTimesheetProject(CurrentUser, e.ProjectId, allowSuspended: true))
+            .ToList();
+        _hiddenRestrictedEntries = sourceEntries
+            .Where(e => !e.IsLeaveOrHoliday && !CanCallerAccessTimesheetProject(CurrentUser, e.ProjectId, allowSuspended: true))
+            .ToList();
 
-        // Group by Project + Task + SubTask
-        var grouped = CurrentSheet.Entries
-            .GroupBy(e => new { e.ProjectId, e.WorkTypeId, e.SubTaskId });
-
-        foreach (var group in grouped)
+        var visibleSheet = new Timesheet
         {
-            var row = new TimesheetUiRow
-            {
-                ProjectId = group.Key.ProjectId,
-                WorkTypeId = group.Key.WorkTypeId,
-                SubTaskId = group.Key.SubTaskId ?? ""
-            };
+            Id = CurrentSheet.Id,
+            EmployeeId = CurrentSheet.EmployeeId,
+            EmployeeName = CurrentSheet.EmployeeName,
+            Year = CurrentSheet.Year,
+            WeekNumber = CurrentSheet.WeekNumber,
+            Status = CurrentSheet.Status,
+            Entries = visibleEntries
+        };
 
-            // Map entries to array indices (0 = Mon, 6 = Sun)
-            foreach (var entry in group)
-            {
-                // Calculate difference from Monday
-                var dayIndex = (entry.Date - WeekStart).Days;
-                if (dayIndex >= 0 && dayIndex < 7)
-                {
-                    row.DailyHours[dayIndex] += entry.Hours;
-                    row.EntryIds[dayIndex] = entry.Id;
-                    if (!string.IsNullOrEmpty(entry.Description))
-                    {
-                        row.DailyNotes[dayIndex] = string.IsNullOrEmpty(row.DailyNotes[dayIndex])
-                            ? entry.Description
-                            : row.DailyNotes[dayIndex] + "; " + entry.Description;
-                    }
-                }
-            }
-            UiRows.Add(row);
-        }
+        // Ensure any historical/inactive projects referenced by visible entries are in ActiveProjects (caller-ACL filtered)
+        EnsureHistoricalProjectsIncluded(visibleSheet);
+
+        // 2. Apply approval/locking restrictions first so CanEdit is accurate for the blank-row check
+        UpdateEditPermissions();
+
+        // 3. Convert "Flat List" to "Matrix Rows"
+        UiRows = TimesheetUiRow.FromTimesheet(visibleSheet, WeekStart);
 
         // If empty, add one blank row to get them started without triggering concurrent autosave
         if (!UiRows.Any() && CanEdit) UiRows.Add(new TimesheetUiRow());
 
         // Load overtime data
         LoadOvertimeData();
+    }
 
-        // Apply approval/locking restrictions
-        UpdateEditPermissions();
+    private void EnsureHistoricalProjectsIncluded(Timesheet sheet)
+    {
+        if (sheet?.Entries == null || sheet.Entries.Count == 0 || CurrentUser == null) return;
+
+        var activeIds = ActiveProjects.Select(p => p.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool addedAny = false;
+
+        foreach (var entry in sheet.Entries)
+        {
+            if (entry.IsLeaveOrHoliday || string.IsNullOrWhiteSpace(entry.ProjectId) || activeIds.Contains(entry.ProjectId))
+                continue;
+
+            var proj = Db.Projects.GetById(entry.ProjectId);
+            if (proj != null && ProjectAccessHelper.CanAccessProjectForContribution(CurrentUser, proj, Db.Teams, allowSuspended: true))
+            {
+                ActiveProjects.Add(proj);
+                activeIds.Add(proj.Id);
+                addedAny = true;
+            }
+        }
+
+        if (addedAny)
+        {
+            ActiveProjects = ActiveProjects.OrderBy(p => p.DisplayName).ToList();
+        }
     }
 
     private void LoadOvertimeData()
@@ -495,7 +739,11 @@ else
 
     private void UpdateEditPermissions()
     {
-        if (CurrentSheet == null) return;
+        if (CurrentSheet == null)
+        {
+            CanEdit = false;
+            return;
+        }
 
         // Load settings
         var profile = Db.CompanyProfile.Get();
@@ -504,23 +752,34 @@ else
         // Check date lock
         _isDateLocked = HRService.IsTimesheetLocked(CurrentSheet, _timesheetSettings);
 
-        // Disable editing if submitted, approved, or date-locked
-        if (_timesheetSettings.RequireApproval && 
-            (CurrentSheet.Status == TimesheetStatus.Submitted || CurrentSheet.Status == TimesheetStatus.Approved))
-        {
-            CanEdit = false;
-        }
+        // Check status lock (Submitted or Approved timesheets are locked unless Edit Mode is unlocked by an authorized manager/admin)
+        bool isStatusLocked = CurrentSheet.Status == TimesheetStatus.Submitted || CurrentSheet.Status == TimesheetStatus.Approved;
+        bool isLocked = isStatusLocked || _isDateLocked;
 
-        if (_isDateLocked)
-        {
-            CanEdit = false;
-        }
+        CanEdit = _hasBaseEditPermission && (!isLocked || (CanOverrideLock && _isEditModeUnlocked));
     }
 
     private async Task AddNewRow()
     {
         if (!CanEdit) return;
         UiRows.Add(new TimesheetUiRow());
+        await AutoSave();
+    }
+
+    private async Task AddLeaveRow(string leaveRowKey)
+    {
+        if (!CanEdit || string.IsNullOrWhiteSpace(leaveRowKey)) return;
+        if (UiRows.Any(r => string.Equals(r.ProjectId, leaveRowKey, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+        UiRows.RemoveAll(r => string.IsNullOrEmpty(r.ProjectId) && string.IsNullOrEmpty(r.WorkTypeId) && r.DailyHours.All(h => h == 0));
+        UiRows.Add(new TimesheetUiRow
+        {
+            ProjectId = leaveRowKey,
+            EntryType = TimeEntryTypes.ResolveEntryType(leaveRowKey),
+            IsBillable = false
+        });
         await AutoSave();
     }
 
@@ -533,52 +792,94 @@ else
     // --- Search & Display Logic (delegated to TimesheetSearchHelper) ---
 
     private async Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
-        => TimesheetSearchHelper.SearchProjects(value, ActiveProjects);
+        => TimesheetSearchHelper.SearchProjects(value, ActiveProjects, includeLeaveOptions: true);
 
     private string GetProjectName(string id)
         => TimesheetSearchHelper.GetProjectName(id, ActiveProjects);
 
-    private async Task AutoSave()
+    private async Task<bool> AuthorizeTimesheetMutationAsync(string? targetProjectId = null)
     {
-        if (!CanEdit || CurrentSheet == null) return;
-        IsSaving = true;
-        StateHasChanged();
+        var liveUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        CurrentUser = liveUser ?? await UserService.GetEmployeeAsync(allowSuspended: true);
 
-        // 1. Flatten the Matrix back into a List<TimeEntry>
-        var newEntries = new List<TimeEntry>();
+        if (liveUser == null || TimesheetOwner == null)
+        {
+            _hasBaseEditPermission = false;
+            CanEdit = false;
+            Snackbar.Add("You do not have permission to edit this timesheet.", Severity.Warning);
+            LoadTimesheet();
+            StateHasChanged();
+            return false;
+        }
+
+        bool isSelf = string.Equals(liveUser.Id, TimesheetOwner.Id, StringComparison.Ordinal);
+        bool hasTimesheetAccess = liveUser.HasPermission(AppPermissions.Timesheets.AccessTimesheet);
+        _hasBaseEditPermission = isSelf
+            ? hasTimesheetAccess
+            : hasTimesheetAccess && CanManage(liveUser, TimesheetOwner.Id);
+
+        UpdateEditPermissions();
+        if (!CanEdit || CurrentSheet == null)
+        {
+            Snackbar.Add("You do not have permission to modify this timesheet.", Severity.Warning);
+            if (TimesheetOwner != null) FilterProjects(TimesheetOwner);
+            LoadTimesheet();
+            StateHasChanged();
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetProjectId) &&
+            !CanCallerAccessTimesheetProject(liveUser, targetProjectId, allowSuspended: false))
+        {
+            Snackbar.Add("You do not have permission to assign that project.", Severity.Warning);
+            FilterProjects(TimesheetOwner);
+            LoadTimesheet();
+            StateHasChanged();
+            return false;
+        }
 
         foreach (var row in UiRows)
         {
-            // Skip rows without project/task
-            if (string.IsNullOrEmpty(row.ProjectId) || string.IsNullOrEmpty(row.WorkTypeId)) continue;
-            
-            for (int i = 0; i < 7; i++)
+            if (row.IsLeaveRow || string.IsNullOrWhiteSpace(row.ProjectId))
+                continue;
+
+            if (!CanCallerAccessTimesheetProject(liveUser, row.ProjectId, allowSuspended: false))
             {
-                var hours = row.DailyHours[i];
-                if (hours > 0)
-                {
-                    var entryId = !string.IsNullOrEmpty(row.EntryIds[i]) ? row.EntryIds[i]! : Guid.NewGuid().ToString();
-                    row.EntryIds[i] = entryId;
-                    newEntries.Add(new TimeEntry
-                        {
-                            Id = entryId,
-                            ProjectId = row.ProjectId,
-                            WorkTypeId = row.WorkTypeId,
-                            SubTaskId = row.SubTaskId,
-                            Date = WeekStart.AddDays(i),
-                            Hours = hours,
-                            Description = row.DailyNotes[i] ?? ""
-                        });
-                }
+                Snackbar.Add("Timesheet contains a restricted project outside your access scope.", Severity.Warning);
+                FilterProjects(TimesheetOwner);
+                LoadTimesheet();
+                StateHasChanged();
+                return false;
             }
         }
 
-        // 2. Update the Sheet
+        return true;
+    }
+
+    private async Task AutoSave()
+    {
+        if (!await AuthorizeTimesheetMutationAsync()) return;
+        IsSaving = true;
+        StateHasChanged();
+
+        var hiddenIds = _hiddenRestrictedEntries
+            .Select(h => h.Id)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+        var currentVisibleEntries = (CurrentSheet!.Entries ?? [])
+            .Where(e => !hiddenIds.Contains(e.Id) && !_hiddenRestrictedEntries.Contains(e))
+            .ToList();
+
+        // 1. Flatten the visible Matrix back into a List<TimeEntry> and preserve hidden restricted entries untouched
+        var newVisibleEntries = TimesheetUiRow.ToTimeEntries(UiRows, WeekStart, currentVisibleEntries);
+
+        // 2. Update the Sheet (preserving existing Status such as Approved)
         CurrentSheet.EmployeeName = TimesheetOwner?.FullName ?? "";
-        CurrentSheet.Entries = newEntries;
+        CurrentSheet.Entries = newVisibleEntries.Concat(_hiddenRestrictedEntries).ToList();
 
         // 3. Persist
         Db.Timesheets.Save(CurrentSheet);
+        LoadOvertimeData();
 
         await Task.Delay(300); // Give user visual feedback
 
@@ -591,6 +892,7 @@ else
         var today = DateTime.Today;
         var diff = (7 + (today.DayOfWeek - DayOfWeek.Monday)) % 7;
         WeekStart = today.AddDays(-1 * diff);
+        _isEditModeUnlocked = false;
         UpdateWeekInfo();
         LoadTimesheet();
     }
@@ -618,6 +920,8 @@ else
 
         if (result is { Canceled: false, Data: TimesheetDayEntryResult entry })
         {
+            if (!await AuthorizeTimesheetMutationAsync(entry.ProjectId)) return;
+
             var existingRow = UiRows.FirstOrDefault(r =>
                 r.ProjectId == entry.ProjectId &&
                 r.WorkTypeId == entry.WorkTypeId &&
@@ -679,6 +983,8 @@ else
 
         if (result is { Canceled: false, Data: TimesheetDayEntryResult entry })
         {
+            if (!await AuthorizeTimesheetMutationAsync(entry.IsDelete ? null : entry.ProjectId)) return;
+
             if (entry.IsDelete)
             {
                 row.DailyHours[dayIndex] = 0;
@@ -750,8 +1056,7 @@ else
 
         var parameters = new DialogParameters<NoteEditDialog>
         {
-            { x => x.Note, currentNote },
-            { x => x.Title, $"Note — {day:ddd, MMM dd}" }
+            { x => x.Note, currentNote }
         };
 
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
@@ -790,40 +1095,25 @@ else
     }
 
     // --- MANAGER LOGIC ---
-    [Parameter] public string? TargetEmployeeId { get; set; }
-    private Employee? TimesheetOwner;
-
     private bool CanManage(Employee manager, string targetId) => HRService.CanManageEmployee(manager, targetId);
 
 
-    private void FilterProjects(Employee user)
+    private void FilterProjects(Employee owner)
     {
-        // Admins see everything
-        if (user.IsAdmin)
+        if (CurrentUser == null)
         {
-             ActiveProjects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.DisplayName).ToList();
-             return;
+            ActiveProjects = [];
+            return;
         }
 
-        var all = Db.Projects.GetAll().Where(p => p.IsActive);
-        var filtered = new List<Project>();
-
-        foreach(var p in all)
-        {
-            if (p.AccessPolicy == ProjectAccessPolicy.Public)
-            {
-                filtered.Add(p);
-            }
-            else // Restricted
-            {
-                if (p.AllowedUserIds.Contains(user.Id) || 
-                   (!string.IsNullOrEmpty(user.TeamId) && p.AllowedTeamIds.Contains(user.TeamId)))
-                {
-                    filtered.Add(p);
-                }
-            }
-        }
-        ActiveProjects = filtered.OrderBy(p => p.DisplayName).ToList();
+        ActiveProjects = Db.Projects.GetAll()
+            .Where(p => p.IsActive
+                        && p.Status != ProjectStatus.Archived
+                        && p.Status != ProjectStatus.Draft
+                        && ProjectAccessHelper.CanAccessProjectForContribution(owner, p, Db.Teams, allowSuspended: true)
+                        && ProjectAccessHelper.CanAccessProjectForContribution(CurrentUser, p, Db.Teams, allowSuspended: true))
+            .OrderBy(p => p.DisplayName)
+            .ToList();
     }
 
     private async Task OpenAdjustHourBankDialog()

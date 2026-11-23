@@ -1,6 +1,5 @@
 namespace Spokes_Server.Core.Models.Reports;
 
-using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.HR;
 
 public class TimesheetReportFilterCriteria
@@ -159,7 +158,6 @@ public class TimesheetWeeklyRow
     public decimal TargetHours { get; set; } = 40m;
     public List<TimesheetWeeklyCell> Cells { get; set; } = [];
     public decimal TotalHours => Cells.Sum(c => c.Hours);
-    public decimal TotalBillableHours => Cells.Sum(c => c.BillableHours);
     public decimal TotalBillableAmount => Cells.Sum(c => c.BillableAmount);
     public bool IsExpanded { get; set; } = false;
     public List<TimesheetWeeklyRow> SubRows { get; set; } = [];
@@ -173,6 +171,5 @@ public class TimesheetWeeklyMatrix
     public List<TimesheetWeeklyRow> Rows { get; set; } = [];
     public decimal[] DayTotals { get; set; } = new decimal[7];
     public decimal GrandTotalHours => Rows.Sum(r => r.TotalHours);
-    public decimal GrandTotalBillableHours => Rows.Sum(r => r.TotalBillableHours);
     public decimal GrandTotalBillableAmount => Rows.Sum(r => r.TotalBillableAmount);
 }

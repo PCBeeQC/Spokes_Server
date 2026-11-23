@@ -33,7 +33,7 @@ public class DecomposedWebPushServicesTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_DecomposedWebPush_" + Guid.NewGuid().ToString());
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir } };
+        var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
         _sessions = new DeviceSessionRepository(_persistence, _config);
@@ -121,14 +121,20 @@ public class DecomposedWebPushServicesTests : IDisposable
         var context = new PushRelayContext(profile, serverConfig, "/icon.png", "https://spokes.example.com");
         var payload = builder.BuildRelayPayload(request, sub, context);
 
+        // NV-8: When a legacy NativeRelay session lacks a valid RSA public key, BuildRelayPayload must
+        // emit a content-free generic wakeup envelope without leaking plaintext metadata.
         Assert.Equal("endpoint-123", payload.Token);
         Assert.False(payload.IsEncrypted);
-        Assert.Equal("Alert Title", payload.Title);
-        Assert.Equal("Alert Body", payload.Body);
-        Assert.Equal("/chat/room1", payload.Url);
-        Assert.Equal("Acme Corp", payload.ServerName);
-        Assert.Equal("General", payload.ChannelName);
-        Assert.True(payload.IsGroupChat);
+        Assert.Equal("New notification", payload.Title);
+        Assert.Equal("Open Spokes to view.", payload.Body);
+        Assert.Null(payload.Url);
+        Assert.Null(payload.ServerName);
+        Assert.Null(payload.ChannelName);
+        Assert.Null(payload.OriginUrl);
+        Assert.Null(payload.ServerIconUrl);
+        Assert.Null(payload.ThreadId);
+        Assert.Null(payload.ImageUrl);
+        Assert.False(payload.IsGroupChat);
         Assert.Equal("srv-1", payload.ServerId);
         Assert.Equal("LIC-DATA", payload.LicensePayload);
         Assert.Equal("v1", payload.DatabaseCreationVersion);
@@ -257,7 +263,7 @@ public class DecomposedWebPushServicesTests : IDisposable
 
         var systemLogMock = new Mock<ISystemLogService>();
 
-        var dispatcher = new NativeRelayDispatcher(factoryMock.Object, _sessions, systemLogMock.Object);
+        var dispatcher = new NativeRelayDispatcher(new SpokesRelayClient(factoryMock.Object), _sessions, systemLogMock.Object);
 
         var payload = new RelayPushPayload { Token = "test_token", Title = "Hello" };
         var sub = new DeviceSession { Id = "sub1", PushEndpoint = "endpoint", DeviceType = "Mobile" };
@@ -282,7 +288,7 @@ public class DecomposedWebPushServicesTests : IDisposable
 
         var systemLogMock = new Mock<ISystemLogService>();
 
-        var dispatcher = new NativeRelayDispatcher(factoryMock.Object, _sessions, systemLogMock.Object);
+        var dispatcher = new NativeRelayDispatcher(new SpokesRelayClient(factoryMock.Object), _sessions, systemLogMock.Object);
 
         var payload = new RelayPushPayload { Token = "test_token" };
         var sub = new DeviceSession { Id = "sub1", PushEndpoint = "endpoint", DeviceType = "Mobile" };
@@ -300,8 +306,7 @@ public class DecomposedWebPushServicesTests : IDisposable
         var companyProfileRepo = new CompanyProfileRepository(_persistence, _config);
         var serverConfigRepo = new ServerConfigRepository(_persistence, _config);
         var licenseValidation = new LicenseValidationService(
-            new Mock<ILogger<LicenseValidationService>>().Object,
-            new VersionMetadata("2026.8.102"));
+            new Mock<ILogger<LicenseValidationService>>().Object);
 
         var eligibility = new PushLicenseEligibilityService(
             companyProfileRepo,
@@ -322,8 +327,7 @@ public class DecomposedWebPushServicesTests : IDisposable
         var companyProfileRepo = new CompanyProfileRepository(_persistence, _config);
         var serverConfigRepo = new ServerConfigRepository(_persistence, _config);
         var licenseValidation = new LicenseValidationService(
-            new Mock<ILogger<LicenseValidationService>>().Object,
-            new VersionMetadata("2026.8.102"));
+            new Mock<ILogger<LicenseValidationService>>().Object);
 
         Assert.Throws<ArgumentNullException>(() => new PushLicenseEligibilityService(null!, serverConfigRepo, licenseValidation));
         Assert.Throws<ArgumentNullException>(() => new PushLicenseEligibilityService(companyProfileRepo, null!, licenseValidation));
@@ -354,8 +358,10 @@ public class DecomposedWebPushServicesTests : IDisposable
         config.ServerMasterRsaPublicKey = escrowKeyXml;
         configs.Save(config);
 
-        var dispatcher = new NativeRelayDispatcher(factoryMock.Object, _sessions, new Mock<ISystemLogService>().Object,
-            trialTickets: new RelayTrialTicketService(configs));
+        var dispatcher = new NativeRelayDispatcher(
+            new SpokesRelayClient(factoryMock.Object, trialTicketService: new RelayTrialTicketService(configs)),
+            _sessions,
+            new Mock<ISystemLogService>().Object);
         return (dispatcher, configs);
     }
 

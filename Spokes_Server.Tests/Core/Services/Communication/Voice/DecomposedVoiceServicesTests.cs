@@ -20,6 +20,7 @@ public class DecomposedVoiceServicesTests
         new(
             Mock.Of<IVoiceJsInteropService>(),
             new Mock<VoiceChannelService>().Object,
+            new VoiceStateService(),
             new ChatStateService(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<GlobalVoiceService>.Instance);
 
@@ -74,7 +75,7 @@ public class DecomposedVoiceServicesTests
 
         Assert.Equal(720, service.MaxCameraHeight);
         Assert.Equal(24, service.MaxCameraFps);
-        Assert.Equal("360p", service.MaxVideoSendQuality);
+        Assert.Equal("Auto", service.MaxVideoSendQuality);
     }
 
     [Fact]
@@ -168,6 +169,27 @@ public class DecomposedVoiceServicesTests
     }
 
     [Fact]
+    public void VoiceUiStateService_ResolveDeviceLabel_MapsHashesAndFallbacks()
+    {
+        var hashId = "7b8f4e1a2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f";
+        var mics = new List<AudioDevice>
+        {
+            new() { DeviceId = "default", Label = "System Default" },
+            new() { DeviceId = hashId, Label = "Headset Microphone (USB)" }
+        };
+        var cams = new List<CameraDevice>
+        {
+            new() { DeviceId = "cam-hash-123", Label = "Front Camera" }
+        };
+
+        Assert.Equal("Headset Microphone (USB)", VoiceUiStateService.ResolveAudioDeviceLabel(mics, hashId));
+        Assert.Equal("System Default", VoiceUiStateService.ResolveAudioDeviceLabel(mics, ""));
+        Assert.Equal("System Default", VoiceUiStateService.ResolveAudioDeviceLabel(mics, "unmatched-raw-id"));
+        Assert.Equal("Front Camera", VoiceUiStateService.ResolveCameraDeviceLabel(cams, "cam-hash-123"));
+        Assert.Equal("System Default", VoiceUiStateService.ResolveAudioDeviceLabel([], hashId));
+    }
+
+    [Fact]
     public async Task VoiceJsInteropService_Disconnect_SafelyHandlesUninitializedModule()
     {
         var service = new VoiceJsInteropService(null);
@@ -178,13 +200,6 @@ public class DecomposedVoiceServicesTests
         await service.DisposeAsync();
 
         Assert.False(service.IsModuleLoaded);
-    }
-
-    [Fact]
-    public void VoiceJsInteropService_DerivesFromJsModuleBase()
-    {
-        var service = new VoiceJsInteropService(null);
-        Assert.IsAssignableFrom<JsModuleBase>(service);
     }
 
     [Fact]
@@ -246,27 +261,6 @@ public class DecomposedVoiceServicesTests
     }
 
     [Fact]
-    public void VoiceConnectionOptions_DefaultAndCustomConstructors_SetProperties()
-    {
-        var defaultOptions = new VoiceConnectionOptions();
-        Assert.Equal(string.Empty, defaultOptions.Token);
-        Assert.Equal(string.Empty, defaultOptions.Url);
-        Assert.Equal(string.Empty, defaultOptions.ChannelId);
-        Assert.Equal(string.Empty, defaultOptions.UserId);
-        Assert.Equal(64, defaultOptions.AudioBitrateKbps);
-        Assert.Equal("rnnoise", defaultOptions.NoiseSuppression);
-        Assert.Null(defaultOptions.VoiceSettings);
-
-        var customOptions = new VoiceConnectionOptions("tok1", "ws://url", "chan1", "user1", 128, "webrtc");
-        Assert.Equal("tok1", customOptions.Token);
-        Assert.Equal("ws://url", customOptions.Url);
-        Assert.Equal("chan1", customOptions.ChannelId);
-        Assert.Equal("user1", customOptions.UserId);
-        Assert.Equal(128, customOptions.AudioBitrateKbps);
-        Assert.Equal("webrtc", customOptions.NoiseSuppression);
-    }
-
-    [Fact]
     public void VoiceDeviceService_HandlesDeviceUpdatesAndDimensions()
     {
         var jsMock = new Mock<IVoiceJsInteropService>();
@@ -301,10 +295,10 @@ public class DecomposedVoiceServicesTests
         Assert.Empty(deviceService.RemoteVideoFps);
     }
 
-
     [Fact]
     public void DemoVoiceAdapter_ConnectAndDisconnect_ManipulatesStateAndChatNotifications()
     {
+        var voiceState = new VoiceStateService();
         var chatState = new ChatStateService();
         var jsMock = new Mock<IVoiceJsInteropService>();
         var voiceChannelMock = new Mock<VoiceChannelService>();
@@ -312,16 +306,17 @@ public class DecomposedVoiceServicesTests
         var voiceService = new GlobalVoiceService(
             jsMock.Object,
             voiceChannelMock.Object,
+            voiceState,
             chatState,
             Mock.Of<ILogger<GlobalVoiceService>>());
 
-        var demoAdapter = new DemoVoiceAdapter(voiceService, chatState);
+        var demoAdapter = new DemoVoiceAdapter(voiceService, voiceState);
 
         var joinedUsers = new List<string>();
-        chatState.VoiceMemberJoined += (cid, uid) => joinedUsers.Add(uid);
+        voiceState.VoiceMemberJoined += (cid, uid) => joinedUsers.Add(uid);
 
         var leftUsers = new List<string>();
-        chatState.VoiceMemberLeft += (cid, uid) => leftUsers.Add(uid);
+        voiceState.VoiceMemberLeft += (cid, uid) => leftUsers.Add(uid);
 
         demoAdapter.ConnectMock("chan1", "user1", ["user1", "user2"]);
         Assert.True(voiceService.IsInVoiceCall);

@@ -22,19 +22,22 @@ window.openBase64InNewTab = (base64, filename) => {
     }
 };
 
+function applyTextAreaUpdate(el, value, selStart, selEnd) {
+    el.value = value;
+    el.selectionStart = selStart;
+    el.selectionEnd = selEnd;
+    el.focus();
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 window.insertTextAtCursor = (elementId, textToInsert) => {
     var el = document.getElementById(elementId);
     if (!el) return;
     var start = el.selectionStart;
     var end = el.selectionEnd;
     var text = el.value;
-    var before = text.substring(0, start);
-    var after = text.substring(end, text.length);
-    el.value = before + textToInsert + after;
-    el.selectionStart = el.selectionEnd = start + textToInsert.length;
-    el.focus();
-    // Trigger input event for Blazor binding update
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+    var nextPos = start + textToInsert.length;
+    applyTextAreaUpdate(el, text.substring(0, start) + textToInsert + text.substring(end), nextPos, nextPos);
     return el.value;
 };
 
@@ -44,24 +47,11 @@ window.wrapSelection = (elementId, startTag, endTag) => {
     var start = el.selectionStart;
     var end = el.selectionEnd;
     var text = el.value;
-    var before = text.substring(0, start);
     var selected = text.substring(start, end);
-    var after = text.substring(end, text.length);
-
-    // If no text selected, just insert the tags with cursor in between
     var newText = startTag + selected + endTag;
-
-    el.value = before + newText + after;
-
-    if (selected.length === 0) {
-        el.selectionStart = el.selectionEnd = start + startTag.length;
-    } else {
-        el.selectionStart = start;
-        el.selectionEnd = start + newText.length;
-    }
-
-    el.focus();
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+    var selStart = selected.length === 0 ? start + startTag.length : start;
+    var selEnd = selected.length === 0 ? selStart : start + newText.length;
+    applyTextAreaUpdate(el, text.substring(0, start) + newText + text.substring(end), selStart, selEnd);
     return el.value;
 };
 
@@ -78,59 +68,7 @@ window.getTextAreaValue = (elementId) => {
 window.setTextAreaValue = (elementId, value, cursorPosition) => {
     var el = document.getElementById(elementId);
     if (!el) return;
-    el.value = value;
-    el.selectionStart = el.selectionEnd = cursorPosition;
-    el.focus();
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-};
-
-window.getCursorXY = (elementId) => {
-    const el = document.getElementById(elementId);
-    if (!el) return { top: 0, left: 0 };
-
-    const start = el.selectionStart;
-    const text = el.value.substring(0, start);
-
-    const shadow = document.createElement('div');
-    const styles = window.getComputedStyle(el);
-    
-    // Mirror essential layout and font styles
-    const properties = [
-        'direction', 'boxSizing', 'width', 'height', 'overflowX', 'overflowY',
-        'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
-        'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
-        'fontStyle', 'fontVariant', 'fontWeight', 'fontStretch', 'fontSize', 'lineHeight', 'fontFamily',
-        'textAlign', 'textTransform', 'textIndent', 'textDecoration', 'letterSpacing', 'wordSpacing', 'tabSize'
-    ];
-
-    properties.forEach(prop => {
-        shadow.style[prop] = styles[prop];
-    });
-
-    shadow.style.position = 'absolute';
-    shadow.style.visibility = 'hidden'; // Hidden but in DOM
-    shadow.style.whiteSpace = 'pre-wrap';
-    shadow.style.wordWrap = 'break-word';
-    shadow.style.top = '0';
-    shadow.style.left = '-9999px';
-
-    shadow.textContent = text;
-    const span = document.createElement('span');
-    span.textContent = '|'; // Use a standard character
-    shadow.appendChild(span);
-
-    document.body.appendChild(shadow);
-    const rect = span.getBoundingClientRect();
-    const elRect = el.getBoundingClientRect();
-    
-    // Coordinates relative to the textarea's TOP LEFT corner (including its own padding)
-    // span.offsetTop is relative to the shadow div top, which starts at the same Y as textarea top
-    const top = span.offsetTop - el.scrollTop;
-    const left = span.offsetLeft - el.scrollLeft;
-
-    document.body.removeChild(shadow);
-
-    return { top, left };
+    applyTextAreaUpdate(el, value, cursorPosition, cursorPosition);
 };
 
 window.scrollElementIntoView = (parentId, childId) => {
@@ -171,86 +109,162 @@ window.unregisterCtrlK = () => {
     _ctrlKDotNetRef = null;
 };
 
-// Window Focus Tracking
-let _focusDotNetRef = null;
-let _visHandler = null;
-let _focusHandler = null;
-let _blurHandler = null;
-let _electronFocusUnsub = null;
-let _isNativeActive = true;
-let _refocusTimer = null;
+// Window Focus Tracking & Presence Ordering
+let _presenceSeq = 0;
+const nextPresenceSeq = () => ++_presenceSeq;
+let _pendingOutOfBandAbort = null;
+let _onFocusStateChangedForActivity = null;
+let _getConfirmedFocusState = null;
 
-if (window.SpokesBridge) {
-    if (typeof window.SpokesBridge.initLayout === 'function' && !window.SpokesBridge.initLayout._spokesPresenceWrapped) {
-        const origInitLayout = window.SpokesBridge.initLayout.bind(window.SpokesBridge);
-        const wrappedInitLayout = async function (dotNetRef, options) {
-            window._currentPresenceToken = (options && typeof options.presenceToken === 'string' && options.presenceToken.length > 0)
-                ? options.presenceToken
-                : null;
-            return await origInitLayout(dotNetRef, options);
-        };
-        wrappedInitLayout._spokesPresenceWrapped = true;
-        window.SpokesBridge.initLayout = wrappedInitLayout;
-    }
-    if (typeof window.SpokesBridge.disposeLayout === 'function' && !window.SpokesBridge.disposeLayout._spokesPresenceWrapped) {
-        const origDisposeLayout = window.SpokesBridge.disposeLayout.bind(window.SpokesBridge);
-        const wrappedDisposeLayout = function () {
-            window._currentPresenceToken = null;
-            return origDisposeLayout();
-        };
-        wrappedDisposeLayout._spokesPresenceWrapped = true;
-        window.SpokesBridge.disposeLayout = wrappedDisposeLayout;
+function abortPendingOutOfBandPresence() {
+    if (_pendingOutOfBandAbort) {
+        try { _pendingOutOfBandAbort.abort(); } catch (_) {}
+        _pendingOutOfBandAbort = null;
     }
 }
 
-function sendOutOfBandPresencePost(endpointPath) {
+function isMobileOrNativePlatform() {
+    const ua = typeof navigator !== 'undefined' ? (navigator.userAgent || '') : '';
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua) ||
+        (typeof window.isCapacitorNative === 'function' && window.isCapacitorNative());
+}
+
+function sendOutOfBandPresencePost(endpointPath, options) {
     if (!window._currentSubscriptionId) return;
-    const payload = JSON.stringify({
+    const opts = options || {};
+    const preferBeacon = Boolean(opts.preferBeacon === true);
+    const abortable = Boolean(opts.abortable === true);
+    const bodyObj = {
         subscriptionId: window._currentSubscriptionId,
         presenceToken: window._currentPresenceToken || null
-    });
+    };
+    if (typeof opts.sequence === 'number' && opts.sequence > 0) {
+        bodyObj.sequence = opts.sequence;
+    }
+    if (typeof opts.state === 'string' && opts.state.length > 0) {
+        bodyObj.state = opts.state;
+    }
+    const payload = JSON.stringify(bodyObj);
+
+    if (preferBeacon && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function' && typeof Blob === 'function') {
+        try {
+            if (navigator.sendBeacon(endpointPath, new Blob([payload], { type: 'application/json' }))) {
+                return;
+            }
+        } catch (_) {}
+    }
+
+    let controller = null;
+    if (abortable && typeof AbortController === 'function') {
+        abortPendingOutOfBandPresence();
+        controller = new AbortController();
+        _pendingOutOfBandAbort = controller;
+    }
+
     try {
-        fetch(endpointPath, {
+        const fetchOpts = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: payload,
             keepalive: true,
             cache: 'no-store'
-        }).catch(() => {});
+        };
+        if (controller) {
+            fetchOpts.signal = controller.signal;
+        }
+        const req = fetch(endpointPath, fetchOpts);
+        if (req && typeof req.catch === 'function') {
+            req.catch(() => {}).finally(() => {
+                if (controller && _pendingOutOfBandAbort === controller) {
+                    _pendingOutOfBandAbort = null;
+                }
+            });
+        }
     } catch (e) {
-        if (navigator.sendBeacon) {
+        if (controller && _pendingOutOfBandAbort === controller) {
+            _pendingOutOfBandAbort = null;
+        }
+        if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function' && typeof Blob === 'function') {
             try { navigator.sendBeacon(endpointPath, new Blob([payload], { type: 'application/json' })); } catch (_) {}
         }
     }
 }
 
+let _focusDotNetRef = null;
+let _visHandler = null;
+let _focusHandler = null;
+let _blurHandler = null;
+let _hostViewActiveFocusHandler = null;
+let _blazorConnectedFocusHandler = null;
+let _blazorDisconnectedFocusHandler = null;
+let _electronFocusUnsub = null;
+let _isNativeActive = true;
+let _refocusTimer = null;
+let _focusRetryTimer = null;
+
 window.isSpokesWindowFocused = () => {
     if (window._spokesHostViewActive === false) {
         return false;
     }
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const ua = typeof navigator !== 'undefined' ? (navigator.userAgent || '') : '';
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
     const isNative = typeof window.isCapacitorNative === 'function' && window.isCapacitorNative();
     const isDesktop = !!(window.SpokesBridge && window.SpokesBridge.isDesktop);
 
-    if (isNative && !_isNativeActive) {
-        return false;
+    if (isDesktop) {
+        if (typeof window._spokesElectronWindowFocused === 'boolean') {
+            return document.visibilityState === 'visible' && window._spokesElectronWindowFocused;
+        }
+        return document.visibilityState === 'visible' && document.hasFocus();
     }
-    if (isDesktop && window._spokesElectronWindowFocused === false) {
-        return false;
+    if (isNative) {
+        if (window._spokesNativeShellLifecycle === true) {
+            return window._spokesHostViewActive === true &&
+                (document.visibilityState === 'visible' || window._spokesHostViewExplicitlyActivated === true);
+        }
+        if (!_isNativeActive && !window._spokesHostViewExplicitlyActivated) {
+            return false;
+        }
+        if (window._spokesHostViewExplicitlyActivated === true && window._spokesHostViewActive === true) {
+            return true;
+        }
+        return document.visibilityState === 'visible';
     }
-    return document.visibilityState === 'visible' && (isMobile || isNative || document.hasFocus());
+    return document.visibilityState === 'visible' && (isMobile || document.hasFocus());
 };
 
 window.registerWindowFocus = (dotNetRef) => {
+    window.unregisterWindowFocus();
     _focusDotNetRef = dotNetRef;
     _isNativeActive = true;
-    let _lastFocusState = null;
+    const FOCUS_RETRY_DELAYS_MS = [250, 500, 1000];
+    let _confirmedFocusState = null;
+    let _inFlightFocusState = null;
+    let _inFlightFocusSeq = 0;
+    let _focusRetryCount = 0;
+    _getConfirmedFocusState = () => _confirmedFocusState;
+
     if (typeof window._spokesElectronWindowFocused === 'undefined') {
-        window._spokesElectronWindowFocused = true;
+        window._spokesElectronWindowFocused = null;
     }
     if (typeof window._spokesHostViewActive === 'undefined') {
         window._spokesHostViewActive = true;
     }
+
+    const clearFocusRetryTimer = () => {
+        if (_focusRetryTimer) {
+            clearTimeout(_focusRetryTimer);
+            _focusRetryTimer = null;
+        }
+    };
+
+    const resetServerFocusSync = () => {
+        clearFocusRetryTimer();
+        _confirmedFocusState = null;
+        _inFlightFocusState = null;
+        _inFlightFocusSeq = 0;
+        _focusRetryCount = 0;
+    };
 
     const handleFocusInteropError = (err) => {
         const msg = String(err || '');
@@ -262,28 +276,69 @@ window.registerWindowFocus = (dotNetRef) => {
         }
     };
 
-    const invokeFocusInterop = (isFocused) => {
-        if (!_focusDotNetRef || window._blazorDisconnected) return;
-        const hiddenDuration = window._hiddenAt ? Math.max(0, Date.now() - window._hiddenAt) : (window._lastHiddenDurationMs || 0);
-        if (isFocused && hiddenDuration >= 180000 && !window._spokesInVoiceCall) {
-            window._blazorDisconnected = true;
-            if (window.spokesResume && typeof window.spokesResume.onConnectionDown === 'function') {
-                window.spokesResume.onConnectionDown('background-retention-expired');
-            }
-            return;
-        }
+    const isBlazorSocketReady = () => {
+        if (window._blazorDisconnected || window._isServerRestarting || window._reloadInProgress) return false;
+        const ws = window.__spokesBlazorSocket;
+        if (ws && typeof ws.readyState === 'number' && ws.readyState !== 1) return false;
+        return true;
+    };
+
+    const sendFocusToServer = (isFocused, seq, verifyAlive) => {
+        if (!_focusDotNetRef || !isBlazorSocketReady() || window._spokesPageUnloading) return false;
+        _inFlightFocusState = isFocused;
+        _inFlightFocusSeq = seq;
         try {
-            const p = _focusDotNetRef.invokeMethodAsync('OnWindowFocusChanged', isFocused);
-            if (isFocused && window.spokesResume && typeof window.spokesResume.verifyCircuitAlive === 'function') {
-                window.spokesResume.verifyCircuitAlive(p);
+            const p = _focusDotNetRef.invokeMethodAsync('OnWindowFocusChanged', isFocused, seq);
+            if (isFocused && verifyAlive && window.spokesResume && typeof window.spokesResume.verifyCircuitAlive === 'function') {
+                window.spokesResume.verifyCircuitAlive(p, true, 'focus-resume');
             }
-            p.catch(handleFocusInteropError);
+            if (p && typeof p.then === 'function') {
+                p.then(() => {
+                    if (_inFlightFocusSeq === seq) {
+                        _inFlightFocusSeq = 0;
+                        _inFlightFocusState = null;
+                        _confirmedFocusState = isFocused;
+                        _focusRetryCount = 0;
+                        if (isFocused) {
+                            window._lastHiddenDurationMs = 0;
+                        }
+                    }
+                    // If focus changed again while this RPC was in flight, converge immediately.
+                    if (!window._spokesPageUnloading && window.isSpokesWindowFocused() !== isFocused) {
+                        updateState(false);
+                    }
+                }, (err) => {
+                    if (_inFlightFocusSeq === seq) {
+                        _inFlightFocusSeq = 0;
+                        _inFlightFocusState = null;
+                    }
+                    handleFocusInteropError(err);
+                    if (!window._spokesPageUnloading &&
+                        window.isSpokesWindowFocused() === isFocused &&
+                        isBlazorSocketReady() &&
+                        _focusRetryCount < FOCUS_RETRY_DELAYS_MS.length) {
+                        const delay = FOCUS_RETRY_DELAYS_MS[_focusRetryCount++];
+                        clearFocusRetryTimer();
+                        _focusRetryTimer = setTimeout(() => {
+                            _focusRetryTimer = null;
+                            updateState(true);
+                        }, delay);
+                    }
+                });
+            }
+            return true;
         } catch (e) {
+            if (_inFlightFocusSeq === seq) {
+                _inFlightFocusSeq = 0;
+                _inFlightFocusState = null;
+            }
             handleFocusInteropError(e);
+            return false;
         }
     };
 
     const updateState = (force = false) => {
+        if (window._spokesPageUnloading) return;
         const isFocused = window.isSpokesWindowFocused();
 
         if (!isFocused) {
@@ -291,32 +346,63 @@ window.registerWindowFocus = (dotNetRef) => {
                 clearTimeout(_refocusTimer);
                 _refocusTimer = null;
             }
-            if (!force && _lastFocusState === false) return;
-            _lastFocusState = false;
+            clearFocusRetryTimer();
+            _focusRetryCount = 0;
+            if (typeof _onFocusStateChangedForActivity === 'function') {
+                try { _onFocusStateChangedForActivity(false); } catch (_) {}
+            }
 
-            sendOutOfBandPresencePost('/spokesapi/presence/unfocus');
-            invokeFocusInterop(false);
+            if (_inFlightFocusSeq !== 0 && _inFlightFocusState === false) return;
+            if (!force && _confirmedFocusState === false && _inFlightFocusSeq === 0) return;
+
+            const seq = nextPresenceSeq();
+            sendOutOfBandPresencePost('/spokesapi/presence/unfocus', { sequence: seq, abortable: true });
+            const sent = sendFocusToServer(false, seq, false);
+            if (!sent) {
+                // Out-of-band /unfocus already notified the server while socket is down;
+                // spokes:blazor-connected will reset _confirmedFocusState and re-sync on reconnect.
+                _confirmedFocusState = false;
+            }
             return;
         }
 
-        if (!force && _lastFocusState === true) return;
+        abortPendingOutOfBandPresence();
+        if (typeof _onFocusStateChangedForActivity === 'function') {
+            try { _onFocusStateChangedForActivity(true); } catch (_) {}
+        }
+
+        if (_inFlightFocusSeq !== 0 && _inFlightFocusState === true) return;
+        if (!force && _confirmedFocusState === true && _inFlightFocusSeq === 0) return;
 
         const applyFocused = () => {
             _refocusTimer = null;
-            if (!window.isSpokesWindowFocused()) return;
-            if (!force && _lastFocusState === true) return;
-            _lastFocusState = true;
+            if (window._spokesPageUnloading || !window.isSpokesWindowFocused()) return;
+            if (_inFlightFocusSeq !== 0 && _inFlightFocusState === true) return;
+            if (!force && _confirmedFocusState === true && _inFlightFocusSeq === 0) return;
 
-            invokeFocusInterop(true);
-            if (typeof window._spokesReobserveReadReceipts === 'function') {
-                try { window._spokesReobserveReadReceipts(); } catch(e) {}
+            if (!isBlazorSocketReady()) {
+                // Socket not ready yet: keep _confirmedFocusState unconfirmed so spokes:blazor-connected
+                // or the next foreground event synchronizes focus as soon as the socket is open.
+                const ws = window.__spokesBlazorSocket;
+                if (!window._blazorDisconnected && ws && typeof ws.readyState === 'number' && ws.readyState >= 2) {
+                    if (window.spokesResume && typeof window.spokesResume.handleDetectedDeadSocket === 'function') {
+                        window.spokesResume.handleDetectedDeadSocket('focus-socket-closed');
+                    } else if (window.spokesResume && typeof window.spokesResume.onConnectionDown === 'function') {
+                        window.spokesResume.onConnectionDown('focus-socket-closed');
+                    }
+                }
+                return;
+            }
+
+            const seq = nextPresenceSeq();
+            const shouldVerifyAlive = _confirmedFocusState !== true || (window._lastHiddenDurationMs || 0) > 0;
+            const sent = sendFocusToServer(true, seq, shouldVerifyAlive);
+            if (sent && typeof window._spokesReobserveReadReceipts === 'function') {
+                try { window._spokesReobserveReadReceipts(); } catch (e) {}
             }
         };
 
-        const isMobileOrNative = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
-            (typeof window.isCapacitorNative === 'function' && window.isCapacitorNative());
-
-        if (_lastFocusState === false && isMobileOrNative && !force) {
+        if (_confirmedFocusState === false && isMobileOrNativePlatform() && !force) {
             if (_refocusTimer) clearTimeout(_refocusTimer);
             _refocusTimer = setTimeout(applyFocused, 150);
         } else {
@@ -328,15 +414,48 @@ window.registerWindowFocus = (dotNetRef) => {
         }
     };
 
-    window._forceUpdateFocusState = () => updateState(true);
+    window._forceUpdateFocusState = () => {
+        if (window._spokesHostViewActive === true) {
+            _isNativeActive = true;
+            window._spokesPageUnloading = false;
+        }
+        updateState(true);
+    };
 
-    _visHandler = () => updateState();
+    _visHandler = () => {
+        if (document.visibilityState === 'visible') {
+            window._spokesPageUnloading = false;
+        } else {
+            window._spokesHostViewExplicitlyActivated = false;
+        }
+        updateState();
+    };
     _focusHandler = () => updateState();
     _blurHandler = () => updateState();
+    _hostViewActiveFocusHandler = () => {
+        if (window._spokesHostViewActive === true) {
+            _isNativeActive = true;
+            window._spokesPageUnloading = false;
+        }
+        updateState();
+    };
+    _blazorDisconnectedFocusHandler = () => {
+        resetServerFocusSync();
+    };
+    _blazorConnectedFocusHandler = () => {
+        resetServerFocusSync();
+        if (window._spokesHostViewActive === true && document.visibilityState === 'visible') {
+            window._spokesPageUnloading = false;
+        }
+        updateState(true);
+    };
 
     document.addEventListener('visibilitychange', _visHandler);
     window.addEventListener('focus', _focusHandler);
     window.addEventListener('blur', _blurHandler);
+    window.addEventListener('spokes:host-view-active-changed', _hostViewActiveFocusHandler);
+    window.addEventListener('spokes:blazor-disconnected', _blazorDisconnectedFocusHandler);
+    window.addEventListener('spokes:blazor-connected', _blazorConnectedFocusHandler);
 
     if (window.SpokesBridge && typeof window.SpokesBridge.onWindowFocusChanged === 'function') {
         if (_electronFocusUnsub) {
@@ -353,10 +472,21 @@ window.registerWindowFocus = (dotNetRef) => {
             try {
                 const result = window.Capacitor.Plugins.App.addListener('appStateChange', ({ isActive }) => {
                     console.log(`[Capacitor AppState] State changed. isActive: ${isActive}, subscriptionId: ${window._currentSubscriptionId}`);
+                    // When the native Android/iOS shell drives monotonic epoch-tagged lifecycle updates via
+                    // spokesSetServerViewActive(..., { nativeShellLifecycle: true, epoch }), ignore un-sequenced
+                    // Capacitor WebMessagePort appStateChange callbacks so delayed background events cannot race resume.
+                    if (window._spokesNativeShellLifecycle === true) {
+                        return;
+                    }
                     _isNativeActive = isActive;
+                    if (!isActive) {
+                        window._spokesHostViewExplicitlyActivated = false;
+                    } else {
+                        window._spokesPageUnloading = false;
+                    }
                     updateState();
                 });
-                
+
                 if (result && typeof result.then === 'function') {
                     result.then(listener => {
                         window._capacitorAppStateListener = listener;
@@ -379,32 +509,78 @@ window.unregisterWindowFocus = () => {
         clearTimeout(_refocusTimer);
         _refocusTimer = null;
     }
+    if (_focusRetryTimer) {
+        clearTimeout(_focusRetryTimer);
+        _focusRetryTimer = null;
+    }
+    abortPendingOutOfBandPresence();
     if (_visHandler) document.removeEventListener('visibilitychange', _visHandler);
     if (_focusHandler) window.removeEventListener('focus', _focusHandler);
     if (_blurHandler) window.removeEventListener('blur', _blurHandler);
+    if (_hostViewActiveFocusHandler) window.removeEventListener('spokes:host-view-active-changed', _hostViewActiveFocusHandler);
+    if (_blazorDisconnectedFocusHandler) window.removeEventListener('spokes:blazor-disconnected', _blazorDisconnectedFocusHandler);
+    if (_blazorConnectedFocusHandler) window.removeEventListener('spokes:blazor-connected', _blazorConnectedFocusHandler);
     if (_electronFocusUnsub) {
         try { _electronFocusUnsub(); } catch(e) {}
         _electronFocusUnsub = null;
     }
     _focusDotNetRef = null;
+    _getConfirmedFocusState = null;
     _visHandler = null;
     _focusHandler = null;
     _blurHandler = null;
-    
+    _hostViewActiveFocusHandler = null;
+    _blazorDisconnectedFocusHandler = null;
+    _blazorConnectedFocusHandler = null;
+
     if (window._capacitorAppStateListener && typeof window._capacitorAppStateListener.remove === 'function') {
         window._capacitorAppStateListener.remove();
         window._capacitorAppStateListener = null;
     }
 };
 
-// Explicit helper for Mobile/Desktop Server Switcher before unloading or hiding a server view
-window.spokesNotifyServerSwitchAway = () => {
-    sendOutOfBandPresencePost('/spokesapi/presence/offline');
+// Explicit helper for Mobile/Desktop Server Switcher before unloading or hiding a server view.
+// In warm-pooled native shells (Android Fragment pool / iOS WKWebView pool), switching servers
+// hides the current WebView without destroying its Blazor circuit, so we transition to unfocused
+// unless the session is explicitly being evicted (`options.evict === true`).
+window.spokesNotifyServerSwitchAway = (options) => {
+    const isEvicting = Boolean(options && options.evict === true);
+    const hasWarmNativePool = Boolean(window.SpokesNative && (typeof window.SpokesNative.openServerSwitcher === 'function' || typeof window.SpokesNative.openServer === 'function')) ||
+        Boolean(window.webkit && window.webkit.messageHandlers && (window.webkit.messageHandlers.SpokesNative_shell || window.webkit.messageHandlers.SpokesNative));
+
+    if (hasWarmNativePool && !isEvicting) {
+        if (typeof window.spokesSetServerViewActive === 'function') {
+            try { window.spokesSetServerViewActive(false); } catch (e) {}
+        }
+        sendOutOfBandPresencePost('/spokesapi/presence/unfocus', { sequence: nextPresenceSeq(), abortable: true });
+        return;
+    }
+
+    window._spokesPageUnloading = true;
+    sendOutOfBandPresencePost('/spokesapi/presence/offline', { preferBeacon: true, sequence: nextPresenceSeq() });
 };
 
-// App Termination Teardown
-window.addEventListener('pagehide', function(event) {
-    sendOutOfBandPresencePost('/spokesapi/presence/offline');
+// App Termination Teardown & BFCache Restore
+window.addEventListener('pagehide', function() {
+    window._spokesPageUnloading = true;
+    sendOutOfBandPresencePost('/spokesapi/presence/offline', { preferBeacon: true, sequence: nextPresenceSeq() });
+});
+
+window.addEventListener('pageshow', function(event) {
+    const wasUnloading = window._spokesPageUnloading === true;
+    window._spokesPageUnloading = false;
+    if (event && event.persisted) {
+        if (_focusDotNetRef && !window._blazorDisconnected) {
+            try {
+                _focusDotNetRef.invokeMethodAsync('OnPageRestoredFromCache', Boolean(window.isSpokesWindowFocused()), nextPresenceSeq()).catch(() => {});
+            } catch (_) {}
+        }
+        if (typeof window._forceUpdateFocusState === 'function') {
+            try { window._forceUpdateFocusState(); } catch (_) {}
+        }
+    } else if (wasUnloading && typeof window._forceUpdateFocusState === 'function') {
+        try { window._forceUpdateFocusState(); } catch (_) {}
+    }
 });
 
 // Unified Activity & Idle Tracker (5-minute timeout in Browser; OS-level in Electron Desktop)
@@ -415,6 +591,7 @@ let _activityTrackerHandler = null;
 let _browserIdleTimer = null;
 let _desktopPresenceUnsub = null;
 let _desktopActivePingInterval = null;
+let _desktopHostViewActiveHandler = null;
 
 window.registerImageRecoveryCoordinator = (dotNetRef) => {
     window._imageRecoveryCoordinator = dotNetRef;
@@ -428,36 +605,49 @@ window.registerActivityTracker = (dotNetRef) => {
     window._spokesClientIdle = false;
 
     const sendActivePing = () => {
-        if (_activityTrackerDotNetRef && !window._blazorDisconnected) {
-            try { _activityTrackerDotNetRef.invokeMethodAsync('OnDeviceActivePing').catch(()=>{}); } catch(e) {}
+        if (window._spokesPageUnloading || window._spokesHostViewActive === false) return;
+        const isFocused = typeof window.isSpokesWindowFocused === 'function' ? Boolean(window.isSpokesWindowFocused()) : false;
+        const ws = window.__spokesBlazorSocket;
+        if (_activityTrackerDotNetRef && !window._blazorDisconnected && (!ws || ws.readyState === 1)) {
+            try { _activityTrackerDotNetRef.invokeMethodAsync('OnDeviceActivePing', isFocused).catch(()=>{}); } catch(e) {}
+        }
+        if (isFocused && typeof _getConfirmedFocusState === 'function' && _getConfirmedFocusState() !== true && typeof window._forceUpdateFocusState === 'function') {
+            try { window._forceUpdateFocusState(); } catch(e) {}
         }
     };
 
     const reportClientPresenceState = (state) => {
-        if (_activityTrackerDotNetRef && !window._blazorDisconnected) {
-            try { _activityTrackerDotNetRef.invokeMethodAsync('OnClientPresenceStateChanged', state).catch(()=>{}); } catch(e) {}
+        if (window._spokesPageUnloading) return;
+        const seq = nextPresenceSeq();
+        const ws = window.__spokesBlazorSocket;
+        if (_activityTrackerDotNetRef && !window._blazorDisconnected && (!ws || ws.readyState === 1)) {
+            try { _activityTrackerDotNetRef.invokeMethodAsync('OnClientPresenceStateChanged', state, seq).catch(()=>{}); } catch(e) {}
         }
-        if (window._currentSubscriptionId) {
-            try {
-                fetch('/spokesapi/presence/state', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        subscriptionId: window._currentSubscriptionId,
-                        state: state,
-                        presenceToken: window._currentPresenceToken || null
-                    }),
-                    keepalive: true
-                }).catch(() => {});
-            } catch(e) {}
-        }
+        sendOutOfBandPresencePost('/spokesapi/presence/state', {
+            sequence: seq,
+            state: state,
+            abortable: state === 'away' || state === 'idle'
+        });
     };
 
     const isDesktopApp = !!(window.SpokesBridge && window.SpokesBridge.isDesktop);
 
     if (isDesktopApp) {
+        let _lastDesktopPresenceStatus = 'online';
         const applyDesktopPresence = (status) => {
             if (!status) return;
+            _lastDesktopPresenceStatus = status;
+            if (window._spokesHostViewActive === false) {
+                if (_desktopActivePingInterval) {
+                    clearInterval(_desktopActivePingInterval);
+                    _desktopActivePingInterval = null;
+                }
+                if (status !== 'online') {
+                    window._spokesClientIdle = (status === 'away' || status === 'offline');
+                    reportClientPresenceState(status);
+                }
+                return;
+            }
             if (status === 'online') {
                 const wasIdle = window._spokesClientIdle === true;
                 window._spokesClientIdle = false;
@@ -477,6 +667,18 @@ window.registerActivityTracker = (dotNetRef) => {
                 reportClientPresenceState(status);
             }
         };
+
+        _desktopHostViewActiveHandler = () => {
+            if (window._spokesHostViewActive === false) {
+                if (_desktopActivePingInterval) {
+                    clearInterval(_desktopActivePingInterval);
+                    _desktopActivePingInterval = null;
+                }
+            } else {
+                applyDesktopPresence(_lastDesktopPresenceStatus);
+            }
+        };
+        window.addEventListener('spokes:host-view-active-changed', _desktopHostViewActiveHandler);
 
         if (typeof window.SpokesBridge.onPresenceChanged === 'function') {
             _desktopPresenceUnsub = window.SpokesBridge.onPresenceChanged((status) => {
@@ -498,9 +700,25 @@ window.registerActivityTracker = (dotNetRef) => {
             applyDesktopPresence('online');
         }
     } else {
+        const clearBrowserIdleTimer = () => {
+            if (_browserIdleTimer) {
+                clearTimeout(_browserIdleTimer);
+                _browserIdleTimer = null;
+            }
+        };
+
         const resetBrowserIdleTimer = () => {
-            if (_browserIdleTimer) clearTimeout(_browserIdleTimer);
+            clearBrowserIdleTimer();
+            // Do not arm the idle timer while a mobile/native view is backgrounded;
+            // backgrounded mobile presence is already represented by IsFocused = false.
+            if (isMobileOrNativePlatform() && !window.isSpokesWindowFocused()) {
+                return;
+            }
             _browserIdleTimer = setTimeout(() => {
+                _browserIdleTimer = null;
+                if (isMobileOrNativePlatform() && !window.isSpokesWindowFocused()) {
+                    return;
+                }
                 if (window._spokesInVoiceCall) {
                     sendActivePing();
                     resetBrowserIdleTimer();
@@ -509,6 +727,15 @@ window.registerActivityTracker = (dotNetRef) => {
                 window._spokesClientIdle = true;
                 reportClientPresenceState('away');
             }, SPOKES_IDLE_TIMEOUT_MS);
+        };
+
+        _onFocusStateChangedForActivity = (isFocused) => {
+            if (isFocused) {
+                window._spokesClientIdle = false;
+                resetBrowserIdleTimer();
+            } else if (isMobileOrNativePlatform()) {
+                clearBrowserIdleTimer();
+            }
         };
 
         resetBrowserIdleTimer();
@@ -540,6 +767,7 @@ window.registerActivityTracker = (dotNetRef) => {
 };
 
 window.unregisterActivityTracker = () => {
+    _onFocusStateChangedForActivity = null;
     if (_activityTrackerHandler) {
         window.removeEventListener('mousemove', _activityTrackerHandler);
         window.removeEventListener('mousedown', _activityTrackerHandler);
@@ -560,6 +788,10 @@ window.unregisterActivityTracker = () => {
         clearInterval(_desktopActivePingInterval);
         _desktopActivePingInterval = null;
     }
+    if (_desktopHostViewActiveHandler) {
+        window.removeEventListener('spokes:host-view-active-changed', _desktopHostViewActiveHandler);
+        _desktopHostViewActiveHandler = null;
+    }
     _activityTrackerHandler = null;
     _activityTrackerDotNetRef = null;
 };
@@ -572,6 +804,11 @@ window.unregisterActivityTracker = () => {
 window.paginateSections = async (paperId, availableHeight) => {
     const paper = document.getElementById(paperId);
     if (!paper) return;
+
+    const scrollParent = paper.closest('.print-scroll');
+    if (scrollParent) {
+        scrollParent.classList.add('viewer-scroll-active');
+    }
 
     // Wait for web fonts and any embedded images inside the paper to finish loading before measuring
     try {
@@ -695,6 +932,11 @@ window.paginateSections = async (paperId, availableHeight) => {
             currentPage = [];
             currentHeight = 0;
             currentRepeatingBlocks.clear();
+        }
+
+        // Empty force-break markers only break the page and must never occupy a page on their own
+        if (m.forceBreak && m.isEmpty) {
+            continue;
         }
 
         let repeatingHeightToAdd = 0;
@@ -898,6 +1140,18 @@ window.cleanupPagination = (paperId) => {
         paper.removeAttribute('data-pagination-complete');
         paper.style.display = '';
     }
+    const scrollParent = document.querySelector('.print-scroll.viewer-scroll-active');
+    if (scrollParent && !scrollParent.querySelector('#printable-area')) {
+        scrollParent.classList.remove('viewer-scroll-active');
+    }
+};
+
+window.scrollMainToTop = () => {
+    window.scrollTo(0, 0);
+    const scrollContainer = document.querySelector('.print-scroll');
+    if (scrollContainer) {
+        scrollContainer.scrollTop = 0;
+    }
 };
 
 // --- TV Slideshow Remote Zoom & Pan Dragging ---
@@ -1012,85 +1266,28 @@ window.cleanupSlideshowRemoteDrag = (wrapperId) => {
 
 // --- TV Slideshow Synchronized Video Playback & Scrubbing ---
 window.spokesSlideshowVideo = {
-    initRemoteVideo: function (elementId, dotNetRef, isLooping) {
-        const v = document.getElementById(elementId);
-        if (!v) return;
-        v.muted = true;
-        v.loop = Boolean(isLooping);
-
-        const onLoaded = () => {
-            if (dotNetRef && Number.isFinite(v.duration)) {
-                dotNetRef.invokeMethodAsync('OnRemoteDurationKnown', v.duration);
-            }
-        };
-        const onTime = () => {
-            if (dotNetRef && Number.isFinite(v.currentTime)) {
-                dotNetRef.invokeMethodAsync('OnRemoteTimeUpdate', v.currentTime);
-            }
-        };
-        const onEnd = () => {
-            if (!v.loop && dotNetRef) {
-                dotNetRef.invokeMethodAsync('OnRemoteVideoEnded');
-            }
-        };
-
-        v.addEventListener('loadedmetadata', onLoaded);
-        v.addEventListener('timeupdate', onTime);
-        v.addEventListener('ended', onEnd);
-
-        if (Number.isFinite(v.duration) && v.duration > 0) {
-            onLoaded();
-        }
-
-        v._cleanupVideo = () => {
-            v.removeEventListener('loadedmetadata', onLoaded);
-            v.removeEventListener('timeupdate', onTime);
-            v.removeEventListener('ended', onEnd);
-        };
-    },
-    cleanupRemoteVideo: function (elementId) {
-        const v = document.getElementById(elementId);
-        if (v && typeof v._cleanupVideo === 'function') {
-            v._cleanupVideo();
-        }
-    },
-    syncPlayPause: function (elementId, isPlaying) {
-        const v = document.getElementById(elementId);
-        if (!v) return;
-        if (isPlaying) {
-            v.play().catch(() => {});
-        } else {
-            v.pause();
-        }
-    },
-    seekTo: function (elementId, timeSeconds) {
-        const v = document.getElementById(elementId);
-        if (!v || !Number.isFinite(timeSeconds)) return;
-        if (Math.abs(v.currentTime - timeSeconds) > 0.25) {
-            v.currentTime = timeSeconds;
-        }
-    },
-    setLoop: function (elementId, isLooping) {
-        const v = document.getElementById(elementId);
-        if (v) v.loop = Boolean(isLooping);
-    },
     syncTvVideo: function (isPlaying, currentTime, isMuted, isLooping) {
         const v = document.getElementById('stage-video');
         if (!v) return;
+        v._desiredPlaying = Boolean(isPlaying);
         v.muted = Boolean(isMuted);
         v.loop = Boolean(isLooping);
-        if (Number.isFinite(currentTime) && currentTime >= 0 && Math.abs(v.currentTime - currentTime) > 0.35) {
+        if (typeof currentTime === 'number' && Number.isFinite(currentTime) && currentTime >= 0 && Math.abs(v.currentTime - currentTime) > 0.35) {
             v.currentTime = currentTime;
         }
         if (isPlaying) {
             const p = v.play();
             if (p !== undefined) {
-                p.catch(e => {
+                p.then(() => {
+                    if (typeof v._notifyPlayStateChanged === 'function') v._notifyPlayStateChanged();
+                }).catch(e => {
                     console.warn('[spokesSlideshowVideo] Play rejected in syncTvVideo', e);
+                    if (typeof v._notifyPlayStateChanged === 'function') v._notifyPlayStateChanged();
                 });
             }
         } else {
             v.pause();
+            if (typeof v._notifyPlayStateChanged === 'function') v._notifyPlayStateChanged();
         }
     },
     initTvVideo: function (elementId, dotNetRef, isMuted, isLooping) {
@@ -1100,6 +1297,7 @@ window.spokesSlideshowVideo = {
             v._cleanupTvVideo();
         }
 
+        v._desiredPlaying = true;
         v.muted = isMuted !== undefined ? Boolean(isMuted) : true;
         v.defaultMuted = true;
         v.playsInline = true;
@@ -1125,9 +1323,10 @@ window.spokesSlideshowVideo = {
 
         const onPlayPause = () => {
             if (dotNetRef) {
-                dotNetRef.invokeMethodAsync('OnTvPlayStateChanged', !v.paused, v.currentTime).catch(() => {});
+                dotNetRef.invokeMethodAsync('OnTvPlayStateChanged', !v.paused, v.currentTime || 0).catch(() => {});
             }
         };
+        v._notifyPlayStateChanged = onPlayPause;
 
         const onEnded = () => {
             if (!v.loop && dotNetRef) {
@@ -1147,10 +1346,11 @@ window.spokesSlideshowVideo = {
 
         // Robust autoplay handling with muted fallback
         const attemptPlay = () => {
-            if (!v.paused) return;
+            if (!v._desiredPlaying || !v.paused) return;
             const p = v.play();
             if (p !== undefined) {
                 p.catch(e => {
+                    if (!v._desiredPlaying) return;
                     console.warn('[spokesSlideshowVideo] Autoplay blocked, attempting muted fallback', e);
                     v.muted = true;
                     const p2 = v.play();
@@ -1179,6 +1379,8 @@ window.spokesSlideshowVideo = {
             v.removeEventListener('ended', onEnded);
             v.removeEventListener('canplay', attemptPlay);
             v.removeEventListener('loadeddata', attemptPlay);
+            delete v._notifyPlayStateChanged;
+            delete v._desiredPlaying;
         };
     },
     cleanupTvVideo: function (elementId) {
@@ -1188,4 +1390,582 @@ window.spokesSlideshowVideo = {
         }
     }
 };
+
+// --- Canonical Touch-Tap Reconciliation & Ripple Cleanup (Android WebView / Mobile) ---
+// Single source of truth for reconciling dropped clicks when Chromium's 8dp touch-slop or
+// post-scroll fling deceleration tail suppresses `click` after `pointerdown`/`touchend`,
+// while leaving normal native clicks (~1-5ms) completely untouched.
+(function initSpokesTouch() {
+    const TAP_MAX_DURATION_MS = 350;
+    const TAP_MAX_DRIFT_PX = 22;
+    const TAP_BOUNDS_SLOP_PX = 8;
+    const SCROLL_CANCEL_DELTA_PX = 4;
+    const FAST_FLING_WINDOW_MS = 60;
+    const FAST_FLING_STEP_PX = 6;
+    const NATIVE_CLICK_GRACE_MS = 55;
+    const DUPLICATE_CLICK_SHIELD_MS = 350;
+    const DUPLICATE_CLICK_RADIUS_PX = 24;
+    const MAX_RECENT_GESTURES = 20;
+
+    const EXCLUDED_SELECTOR = [
+        'input',
+        'textarea',
+        'select',
+        'option',
+        'video',
+        'audio',
+        '[contenteditable="true"]',
+        '[contenteditable=""]',
+        '[data-spokes-no-tap-rescue]',
+        '#lightbox-image-area',
+        '.voice-bar-pull-tab',
+        '.voice-slider',
+        '.media-zoom-container',
+        '.action-sheet-handle',
+        '.mud-slider',
+        '.mud-range-slider',
+        '[draggable="true"]'
+    ].join(',');
+
+    const INTERACTIVE_SELECTOR = [
+        'a[href]',
+        'button',
+        '[role="button"]',
+        '[role="menuitem"]',
+        '[role="option"]',
+        '[role="tab"]',
+        '[role="checkbox"]',
+        '[role="switch"]',
+        '[role="radio"]',
+        '.mud-button-root',
+        '.mud-icon-button',
+        '.mud-list-item-clickable',
+        '.mud-nav-link',
+        '.mud-chip',
+        '.mud-menu-item',
+        'summary',
+        'label'
+    ].join(',');
+
+    const now = () => (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now();
+
+    let installed = false;
+    let gestureSeq = 0;
+    let active = null;
+    let pendingRescue = null;
+    let lastRescued = null;
+    let lastScroll = null;
+    let isRescuingClick = false;
+
+    const stats = {
+        nativeClicks: 0,
+        rescuedTaps: 0,
+        suppressedDuplicates: 0,
+        cancelledScrolls: 0,
+        abortedRipples: 0,
+        recent: []
+    };
+
+    function recordGesture(entry) {
+        stats.recent.push(entry);
+        if (stats.recent.length > MAX_RECENT_GESTURES) {
+            stats.recent.shift();
+        }
+    }
+
+    function describeElement(el) {
+        if (!el || !el.tagName) return 'unknown';
+        const tag = el.tagName.toLowerCase();
+        const id = el.id ? '#' + el.id : '';
+        const cls = typeof el.className === 'string' && el.className.trim()
+            ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.')
+            : '';
+        return tag + id + cls;
+    }
+
+    function isDisabledElement(el) {
+        if (!el) return true;
+        if (el.disabled === true) return true;
+        if (typeof el.getAttribute === 'function') {
+            if (el.getAttribute('aria-disabled') === 'true') return true;
+            if (el.hasAttribute && el.hasAttribute('disabled')) return true;
+        }
+        if (el.classList && (el.classList.contains('mud-disabled') || el.classList.contains('disabled'))) {
+            return true;
+        }
+        return false;
+    }
+
+    function hasBlazorClickHandler(el) {
+        if (!el || typeof el !== 'object') return false;
+        if (typeof el.onclick === 'function') return true;
+        if (typeof el.hasAttribute === 'function' && el.hasAttribute('onclick')) return true;
+        try {
+            const keys = Object.keys(el);
+            for (let i = 0; i < keys.length; i++) {
+                const k = keys[i];
+                if (k.startsWith('_blazorEvents_')) {
+                    const info = el[k];
+                    if (info) {
+                        if (typeof info.getHandler === 'function' && info.getHandler('click')) return true;
+                        if (info.handlers && info.handlers.click) return true;
+                    }
+                }
+            }
+        } catch (_) {}
+        return false;
+    }
+
+    function findInteractiveTarget(startNode) {
+        let cur = startNode;
+        if (cur && cur.nodeType !== 1) {
+            cur = cur.parentElement;
+        }
+        if (!cur) return null;
+        if (typeof cur.closest === 'function' && cur.closest(EXCLUDED_SELECTOR)) {
+            return null;
+        }
+        while (cur && cur !== document.body && cur !== document.documentElement) {
+            if (typeof cur.matches === 'function' && cur.matches(EXCLUDED_SELECTOR)) {
+                return null;
+            }
+            if (isDisabledElement(cur)) {
+                return null;
+            }
+            if ((typeof cur.matches === 'function' && cur.matches(INTERACTIVE_SELECTOR)) || hasBlazorClickHandler(cur)) {
+                return cur;
+            }
+            cur = cur.parentElement;
+        }
+        return null;
+    }
+
+    function captureScrollSnapshots(el) {
+        const snapshots = [];
+        let cur = el;
+        while (cur && cur !== document) {
+            if (typeof cur.scrollTop === 'number' || typeof cur.scrollLeft === 'number') {
+                snapshots.push({
+                    el: cur,
+                    top: cur.scrollTop || 0,
+                    left: cur.scrollLeft || 0
+                });
+            }
+            cur = cur.parentElement;
+        }
+        snapshots.push({
+            el: window,
+            top: window.scrollY || window.pageYOffset || 0,
+            left: window.scrollX || window.pageXOffset || 0
+        });
+        return snapshots;
+    }
+
+    function computeMaxScrollDelta(snapshots) {
+        if (!snapshots || snapshots.length === 0) return 0;
+        let maxDelta = 0;
+        for (let i = 0; i < snapshots.length; i++) {
+            const s = snapshots[i];
+            let curTop = 0;
+            let curLeft = 0;
+            if (s.el === window) {
+                curTop = window.scrollY || window.pageYOffset || 0;
+                curLeft = window.scrollX || window.pageXOffset || 0;
+            } else if (s.el) {
+                curTop = s.el.scrollTop || 0;
+                curLeft = s.el.scrollLeft || 0;
+            }
+            const d = Math.max(Math.abs(curTop - s.top), Math.abs(curLeft - s.left));
+            if (d > maxDelta) maxDelta = d;
+        }
+        return maxDelta;
+    }
+
+    function clearPendingRescue() {
+        if (pendingRescue && pendingRescue.timer) {
+            clearTimeout(pendingRescue.timer);
+        }
+        pendingRescue = null;
+    }
+
+    function abortMisleadingRipples(node) {
+        if (!node) return;
+        const rippleHost = (typeof node.closest === 'function')
+            ? node.closest('.mud-ripple')
+            : (node.parentElement && typeof node.parentElement.closest === 'function' ? node.parentElement.closest('.mud-ripple') : null);
+        if (!rippleHost || typeof rippleHost.querySelectorAll !== 'function') return;
+        const ripples = rippleHost.querySelectorAll('.mud-ripple-effect');
+        if (!ripples || ripples.length === 0) return;
+        for (let i = 0; i < ripples.length; i++) {
+            try { ripples[i].remove(); } catch (_) {}
+        }
+        if (rippleHost._mudRipples && typeof rippleHost._mudRipples.clear === 'function') {
+            rippleHost._mudRipples.clear();
+        }
+        stats.abortedRipples++;
+    }
+
+    function isPointInsideRectWithSlop(x, y, rect, slop) {
+        if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+        return x >= rect.left - slop &&
+            x <= rect.right + slop &&
+            y >= rect.top - slop &&
+            y <= rect.bottom + slop;
+    }
+
+    function isTargetUnobstructedAt(targetEl, rect, x, y) {
+        if (typeof document.elementFromPoint !== 'function' || !rect || rect.width <= 0 || rect.height <= 0) {
+            return true;
+        }
+        const inset = Math.min(1, rect.width / 4, rect.height / 4);
+        const clampedX = Math.max(rect.left + inset, Math.min(rect.right - inset, x));
+        const clampedY = Math.max(rect.top + inset, Math.min(rect.bottom - inset, y));
+        const hit = document.elementFromPoint(clampedX, clampedY);
+        if (!hit) return false;
+        return hit === targetEl || (typeof targetEl.contains === 'function' && targetEl.contains(hit));
+    }
+
+    function hasActiveTextSelection() {
+        try {
+            const sel = window.getSelection ? window.getSelection() : null;
+            return Boolean(sel && typeof sel.toString === 'function' && sel.toString().length > 0);
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function dispatchRescuedClick(targetEl, x, y, meta) {
+        lastRescued = {
+            target: targetEl,
+            x: x,
+            y: y,
+            at: now()
+        };
+        stats.rescuedTaps++;
+        recordGesture(Object.assign({ outcome: 'rescued' }, meta));
+
+        try {
+            console.debug(
+                `[Touch] Rescued dropped tap on ${meta.target} (dur=${meta.durationMs}ms, drift=${meta.maxDist}px, scroll=${meta.scrollDelta}px, pointerCancel=${meta.pointerCancelled})`
+            );
+        } catch (_) {}
+
+        isRescuingClick = true;
+        try {
+            if (typeof targetEl.click === 'function') {
+                targetEl.click();
+            } else if (typeof MouseEvent === 'function') {
+                targetEl.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true,
+                    cancelable: true,
+                    composed: true,
+                    view: window,
+                    clientX: x,
+                    clientY: y,
+                    detail: 1
+                }));
+            }
+        } catch (err) {
+            try { console.warn('[Touch] Rescued click dispatch failed:', err); } catch (_) {}
+        } finally {
+            isRescuingClick = false;
+        }
+    }
+
+    function onScrollCapture(e) {
+        const t = now();
+        const scroller = (e && e.target && e.target !== document) ? e.target : window;
+        const top = scroller === window
+            ? (window.scrollY || window.pageYOffset || 0)
+            : (scroller.scrollTop || 0);
+        const left = scroller === window
+            ? (window.scrollX || window.pageXOffset || 0)
+            : (scroller.scrollLeft || 0);
+
+        let stepPx = 0;
+        if (lastScroll && lastScroll.el === scroller && (t - lastScroll.time) < 120) {
+            stepPx = Math.max(Math.abs(top - lastScroll.top), Math.abs(left - lastScroll.left));
+        }
+        lastScroll = { el: scroller, top: top, left: left, time: t, stepPx: stepPx };
+    }
+
+    function isInsideFastFling(targetEl) {
+        if (!lastScroll || lastScroll.stepPx < FAST_FLING_STEP_PX) return false;
+        if ((now() - lastScroll.time) >= FAST_FLING_WINDOW_MS) return false;
+        if (lastScroll.el === window) return true;
+        return Boolean(lastScroll.el && typeof lastScroll.el.contains === 'function' && lastScroll.el.contains(targetEl));
+    }
+
+    function onTouchStartCapture() {
+        clearPendingRescue();
+        active = null;
+    }
+
+    function onTouchStart(e) {
+        if (!e || !e.touches || e.touches.length !== 1 || e.defaultPrevented) {
+            active = null;
+            return;
+        }
+        const touch = e.touches[0];
+        const targetEl = findInteractiveTarget(e.target);
+        if (!targetEl || isInsideFastFling(targetEl)) {
+            active = null;
+            return;
+        }
+
+        active = {
+            id: ++gestureSeq,
+            targetEl: targetEl,
+            downNode: e.target,
+            startX: touch.clientX,
+            startY: touch.clientY,
+            startTime: now(),
+            maxDist: 0,
+            scrollSnapshots: captureScrollSnapshots(targetEl),
+            hadScroll: false,
+            pointerCancelled: false,
+            nativeClickReceived: false
+        };
+    }
+
+    function onTouchMove(e) {
+        if (!active) return;
+        if (!e || !e.touches || e.touches.length !== 1) {
+            active = null;
+            return;
+        }
+        const touch = e.touches[0];
+        const dist = Math.hypot(touch.clientX - active.startX, touch.clientY - active.startY);
+        if (dist > active.maxDist) active.maxDist = dist;
+        if (!active.hadScroll && computeMaxScrollDelta(active.scrollSnapshots) >= SCROLL_CANCEL_DELTA_PX) {
+            active.hadScroll = true;
+        }
+    }
+
+    function onPointerCancel() {
+        if (!active) return;
+        active.pointerCancelled = true;
+        const scrollDelta = computeMaxScrollDelta(active.scrollSnapshots);
+        if (scrollDelta >= SCROLL_CANCEL_DELTA_PX) {
+            active.hadScroll = true;
+        }
+        if (active.hadScroll || active.maxDist > TAP_MAX_DRIFT_PX) {
+            abortMisleadingRipples(active.targetEl || active.downNode);
+        }
+    }
+
+    function onTouchCancel() {
+        if (!active) return;
+        const scrollDelta = computeMaxScrollDelta(active.scrollSnapshots);
+        if (scrollDelta >= SCROLL_CANCEL_DELTA_PX || active.maxDist > TAP_MAX_DRIFT_PX) {
+            abortMisleadingRipples(active.targetEl || active.downNode);
+            stats.cancelledScrolls++;
+        }
+        active = null;
+        clearPendingRescue();
+    }
+
+    function onTouchEnd(e) {
+        const g = active;
+        active = null;
+        if (!g) return;
+        if (!e || e.defaultPrevented || g.nativeClickReceived) return;
+        if (e.touches && e.touches.length > 0) return;
+
+        const changed = e.changedTouches && e.changedTouches[0];
+        const endX = changed ? changed.clientX : g.startX;
+        const endY = changed ? changed.clientY : g.startY;
+        const endDist = Math.hypot(endX - g.startX, endY - g.startY);
+        const maxDist = Math.round(Math.max(g.maxDist, endDist));
+        const durationMs = Math.round(now() - g.startTime);
+        const scrollDelta = Math.round(computeMaxScrollDelta(g.scrollSnapshots));
+        const meta = {
+            target: describeElement(g.targetEl),
+            durationMs: durationMs,
+            maxDist: maxDist,
+            scrollDelta: scrollDelta,
+            pointerCancelled: g.pointerCancelled
+        };
+
+        if (g.hadScroll || scrollDelta >= SCROLL_CANCEL_DELTA_PX) {
+            stats.cancelledScrolls++;
+            abortMisleadingRipples(g.targetEl || g.downNode);
+            recordGesture(Object.assign({ outcome: 'scroll' }, meta));
+            return;
+        }
+        if (durationMs > TAP_MAX_DURATION_MS || maxDist > TAP_MAX_DRIFT_PX) {
+            if (maxDist > TAP_MAX_DRIFT_PX) {
+                stats.cancelledScrolls++;
+                abortMisleadingRipples(g.targetEl || g.downNode);
+            }
+            recordGesture(Object.assign({ outcome: durationMs > TAP_MAX_DURATION_MS ? 'long-press' : 'drag' }, meta));
+            return;
+        }
+        if (!g.targetEl.isConnected || isDisabledElement(g.targetEl) || hasActiveTextSelection()) {
+            return;
+        }
+        const rect = typeof g.targetEl.getBoundingClientRect === 'function' ? g.targetEl.getBoundingClientRect() : null;
+        if (rect && !isPointInsideRectWithSlop(endX, endY, rect, TAP_BOUNDS_SLOP_PX)) {
+            recordGesture(Object.assign({ outcome: 'out-of-bounds' }, meta));
+            return;
+        }
+
+        const pending = {
+            id: g.id,
+            targetEl: g.targetEl,
+            endX: endX,
+            endY: endY,
+            scrollSnapshots: g.scrollSnapshots,
+            meta: meta,
+            timer: null
+        };
+        pendingRescue = pending;
+        pending.timer = setTimeout(() => {
+            if (pendingRescue !== pending) return;
+            pendingRescue = null;
+            if (gestureSeq !== pending.id) return;
+            if (!pending.targetEl.isConnected || isDisabledElement(pending.targetEl) || hasActiveTextSelection()) return;
+
+            const postScrollDelta = Math.round(computeMaxScrollDelta(pending.scrollSnapshots));
+            if (postScrollDelta >= SCROLL_CANCEL_DELTA_PX) {
+                stats.cancelledScrolls++;
+                abortMisleadingRipples(pending.targetEl);
+                recordGesture(Object.assign({ outcome: 'fling-scroll' }, pending.meta, { scrollDelta: postScrollDelta }));
+                return;
+            }
+            const liveRect = typeof pending.targetEl.getBoundingClientRect === 'function'
+                ? pending.targetEl.getBoundingClientRect()
+                : null;
+            if (liveRect && !isPointInsideRectWithSlop(pending.endX, pending.endY, liveRect, TAP_BOUNDS_SLOP_PX)) {
+                recordGesture(Object.assign({ outcome: 'shifted-bounds' }, pending.meta));
+                return;
+            }
+            if (liveRect && !isTargetUnobstructedAt(pending.targetEl, liveRect, pending.endX, pending.endY)) {
+                recordGesture(Object.assign({ outcome: 'obstructed' }, pending.meta));
+                return;
+            }
+
+            dispatchRescuedClick(pending.targetEl, pending.endX, pending.endY, pending.meta);
+        }, NATIVE_CLICK_GRACE_MS);
+    }
+
+    function onClickCapture(e) {
+        if (isRescuingClick) return;
+
+        if (active) {
+            active.nativeClickReceived = true;
+        }
+        if (pendingRescue) {
+            const p = pendingRescue;
+            clearPendingRescue();
+            stats.nativeClicks++;
+            recordGesture(Object.assign({ outcome: 'native-click' }, p.meta));
+            return;
+        }
+
+        if (lastRescued) {
+            const elapsed = now() - lastRescued.at;
+            if (elapsed <= DUPLICATE_CLICK_SHIELD_MS) {
+                const sameTarget = e.target === lastRescued.target ||
+                    (lastRescued.target && typeof lastRescued.target.contains === 'function' && lastRescued.target.contains(e.target));
+                const nearPoint = typeof e.clientX === 'number' && typeof e.clientY === 'number' &&
+                    Math.hypot(e.clientX - lastRescued.x, e.clientY - lastRescued.y) <= DUPLICATE_CLICK_RADIUS_PX;
+                if (sameTarget || nearPoint) {
+                    stats.suppressedDuplicates++;
+                    if (typeof e.preventDefault === 'function') e.preventDefault();
+                    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+                    return;
+                }
+            } else {
+                lastRescued = null;
+            }
+        }
+    }
+
+    function onVisibilityOrBlur() {
+        active = null;
+        clearPendingRescue();
+    }
+
+    function shouldAutoInstall() {
+        if (typeof window === 'undefined' || typeof document === 'undefined') return false;
+        const hasTouch = ('ontouchstart' in window) ||
+            (typeof navigator !== 'undefined' && (navigator.maxTouchPoints || 0) > 0);
+        const coarsePointer = typeof window.matchMedia === 'function' &&
+            Boolean(window.matchMedia('(pointer: coarse)').matches);
+        return hasTouch || coarsePointer;
+    }
+
+    function install() {
+        if (installed || typeof document === 'undefined') return;
+        installed = true;
+        // Capture-phase touchstart clears any prior pending rescue even if a custom widget stops propagation.
+        // Bubble-phase touchstart/touchend run AFTER target handlers so e.defaultPrevented and stopPropagation()
+        // from custom touch controls (mobile send button, autocomplete popovers, zoom gestures) are respected.
+        document.addEventListener('touchstart', onTouchStartCapture, { passive: true, capture: true });
+        document.addEventListener('touchstart', onTouchStart, { passive: true, capture: false });
+        document.addEventListener('touchmove', onTouchMove, { passive: true, capture: true });
+        document.addEventListener('touchend', onTouchEnd, { passive: true, capture: false });
+        document.addEventListener('touchcancel', onTouchCancel, { passive: true, capture: true });
+        document.addEventListener('pointercancel', onPointerCancel, { passive: true, capture: true });
+        document.addEventListener('scroll', onScrollCapture, { passive: true, capture: true });
+        document.addEventListener('click', onClickCapture, true);
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+            window.addEventListener('blur', onVisibilityOrBlur);
+        }
+        document.addEventListener('visibilitychange', onVisibilityOrBlur);
+    }
+
+    function destroy() {
+        if (!installed || typeof document === 'undefined') return;
+        installed = false;
+        active = null;
+        clearPendingRescue();
+        lastRescued = null;
+        lastScroll = null;
+        document.removeEventListener('touchstart', onTouchStartCapture, true);
+        document.removeEventListener('touchstart', onTouchStart, false);
+        document.removeEventListener('touchmove', onTouchMove, true);
+        document.removeEventListener('touchend', onTouchEnd, false);
+        document.removeEventListener('touchcancel', onTouchCancel, true);
+        document.removeEventListener('pointercancel', onPointerCancel, true);
+        document.removeEventListener('scroll', onScrollCapture, true);
+        document.removeEventListener('click', onClickCapture, true);
+        if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+            window.removeEventListener('blur', onVisibilityOrBlur);
+        }
+        document.removeEventListener('visibilitychange', onVisibilityOrBlur);
+    }
+
+    window.spokesTouch = {
+        install: install,
+        destroy: destroy,
+        isInstalled: () => installed,
+        getDiagnostics: () => ({
+            installed: installed,
+            nativeClicks: stats.nativeClicks,
+            rescuedTaps: stats.rescuedTaps,
+            suppressedDuplicates: stats.suppressedDuplicates,
+            cancelledScrolls: stats.cancelledScrolls,
+            abortedRipples: stats.abortedRipples,
+            recent: stats.recent.slice()
+        }),
+        resetDiagnostics: () => {
+            stats.nativeClicks = 0;
+            stats.rescuedTaps = 0;
+            stats.suppressedDuplicates = 0;
+            stats.cancelledScrolls = 0;
+            stats.abortedRipples = 0;
+            stats.recent.length = 0;
+            lastRescued = null;
+        }
+    };
+
+    if (shouldAutoInstall()) {
+        install();
+    }
+})();
+
 

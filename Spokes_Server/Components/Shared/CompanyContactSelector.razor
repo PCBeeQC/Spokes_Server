@@ -1,18 +1,20 @@
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Core.Constants
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject UserService UserService
 
 <MudGrid Spacing="2">
-    <MudItem xs="12" sm="@(ShowEditButtons ? 8 : 12)">
+    <MudItem xs="12" sm="@(EffectiveShowEditButtons ? 8 : 12)">
         <MudAutocomplete T="Supplier" Label="@Label" Value="selectedCompany" ValueChanged="OnCompanySelected"
             SearchFunc="SearchCompanies" ToStringFunc="@(s => s?.ContactInfo.BusinessName)" CoerceText="false"
             ResetValueOnEmptyText="true" Dense="true" Variant="Variant.Outlined" AdornmentIcon="@Icon"
-            Clearable="@Clearable" Required="@Required" HelperText="@GetCompanyHelperText()"
+            ReadOnly="@(!_canViewAddressBook)" Clearable="@Clearable" Required="@Required" HelperText="@GetCompanyHelperText()"
             Placeholder="@Placeholder" MaxItems="null" />
     </MudItem>
 
-    @if (ShowEditButtons)
+    @if (EffectiveShowEditButtons)
     {
         <MudItem xs="12" sm="4" Class="d-flex gap-2 align-center mt-sm-0 mt-4">
             <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateNewCompany"
@@ -61,9 +63,26 @@
     private List<Supplier> AllCompanies = new();
     private Supplier? selectedCompany;
     private ContactPerson? selectedContact;
+    private bool _canViewAddressBook;
+    private bool _canManageAddressBook;
+    private bool EffectiveShowEditButtons => ShowEditButtons && _canManageAddressBook;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        var emp = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canManageAddressBook = emp?.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false) == true;
+        _canViewAddressBook = _canManageAddressBook ||
+                              (emp != null && emp.IsActive && !emp.IsBanned && !emp.IsSystem &&
+                               (emp.IsAdmin || emp.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: true)));
+
+        if (!_canViewAddressBook)
+        {
+            AllCompanies = new();
+            selectedCompany = null;
+            selectedContact = null;
+            return;
+        }
+
         AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.ContactInfo.BusinessName).ToList();
 
         if (!string.IsNullOrEmpty(InitialCompanyName))
@@ -86,6 +105,7 @@
 
     private Task<IEnumerable<Supplier>> SearchCompanies(string value, CancellationToken token)
     {
+        if (!_canViewAddressBook) return Task.FromResult(Enumerable.Empty<Supplier>());
         if (string.IsNullOrEmpty(value)) return Task.FromResult<IEnumerable<Supplier>>(AllCompanies);
         return Task.FromResult(AllCompanies.Where(x => x.ContactInfo.BusinessName.Contains(value, StringComparison.InvariantCultureIgnoreCase)));
     }
@@ -121,8 +141,22 @@
     }
 
     // --- DIALOG LOGIC ---
+    private async Task<bool> AuthorizeAddressBookMutationAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        _canManageAddressBook = emp?.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false) == true;
+        _canViewAddressBook = _canManageAddressBook ||
+                              (emp != null && emp.IsActive && !emp.IsBanned && !emp.IsSystem &&
+                               (emp.IsAdmin || emp.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: true)));
+        if (_canManageAddressBook) return true;
+        Snackbar.Add("You do not have permission to manage address book contacts.", Severity.Warning);
+        StateHasChanged();
+        return false;
+    }
+
     private async Task CreateNewCompany()
     {
+        if (!await AuthorizeAddressBookMutationAsync()) return;
         var newCompany = new Supplier();
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
         var dialog = await DialogService.ShowAsync<SupplierDialog>("Create New Company", new DialogParameters
@@ -134,6 +168,7 @@
 
         if (result is { Canceled: false, Data: Supplier created })
         {
+            if (!await AuthorizeAddressBookMutationAsync()) return;
             Db.Suppliers.Save(created);
             AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.ContactInfo.BusinessName).ToList();
             await OnCompanySelected(created);
@@ -143,18 +178,20 @@
 
     private async Task EditSelectedCompany()
     {
-        if (selectedCompany == null) return;
+        if (selectedCompany == null || !await AuthorizeAddressBookMutationAsync()) return;
 
+        var clone = selectedCompany.DeepClone();
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
         var dialog = await DialogService.ShowAsync<SupplierDialog>("Edit Company", new DialogParameters
             {
                 ["Supplier"] =
-            selectedCompany
+            clone
             }, options);
         var result = await dialog.Result;
 
         if (result is { Canceled: false, Data: Supplier updated })
         {
+            if (!await AuthorizeAddressBookMutationAsync()) return;
             Db.Suppliers.Save(updated);
             AllCompanies = Db.Suppliers.GetAll().OrderBy(s => s.ContactInfo.BusinessName).ToList();
             await OnCompanySelected(updated);

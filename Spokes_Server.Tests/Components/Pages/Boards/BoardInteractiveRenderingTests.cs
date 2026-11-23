@@ -42,6 +42,7 @@ public class BoardInteractiveRenderingTests : BunitContext
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         Services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         Services.AddLogging();

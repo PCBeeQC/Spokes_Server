@@ -1,31 +1,43 @@
 @page "/business/capacity"
-@attribute [Authorize(Policy = AppPermissions.Finance.TeamCapacity)]
+@attribute [Authorize]
 @implements IDisposable
 @using System.Globalization
 @using Spokes_Server.Core.Constants
 @inject Database Db
 @inject NavigationManager Nav
+@inject UserService UserService
 
-<PageTitle>Team Capacity</PageTitle>
+<PageTitle>@BizLoc["Forward Planning & Capacity"]</PageTitle>
 
 <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
-    <div class="d-flex justify-space-between align-center mb-4">
-        <MudText Typo="Typo.h5"><b>Team Capacity Dashboard</b></MudText>
+    @if (!_isAuthorized)
+    {
+        <MudAlert Severity="Severity.Warning">@Loc["Access Denied"]</MudAlert>
+    }
+    else
+    {
+    <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-4">
+        <MudText Typo="Typo.h5"><b>@BizLoc["Forward Planning & Capacity"]</b></MudText>
         
-        <div class="d-flex align-center gap-4">
-            <!-- Timeframe Controls -->
-            <MudSelect T="string" Value="@SelectedTimeframe" ValueChanged="OnTimeframeChanged" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true" Style="min-width: 150px;">
-                <MudSelectItem Value="@("Week")">This Week</MudSelectItem>
-                <MudSelectItem Value="@("Month")">This Month</MudSelectItem>
-                <MudSelectItem Value="@("Quarter")">This Quarter</MudSelectItem>
-                <MudSelectItem Value="@("Year")">This Year</MudSelectItem>
-            </MudSelect>
+        <div class="d-flex align-center flex-wrap gap-3">
+            @if (activeTabIndex <= 1)
+            {
+                <div class="d-flex align-center gap-4">
+                    <!-- Timeframe Controls -->
+                    <MudSelect T="string" Value="@SelectedTimeframe" ValueChanged="OnTimeframeChanged" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true" Style="min-width: 150px;">
+                        <MudSelectItem Value="@("Week")">This Week</MudSelectItem>
+                        <MudSelectItem Value="@("Month")">This Month</MudSelectItem>
+                        <MudSelectItem Value="@("Quarter")">This Quarter</MudSelectItem>
+                        <MudSelectItem Value="@("Year")">This Year</MudSelectItem>
+                    </MudSelect>
 
-            <div class="d-flex align-center gap-2">
-                <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevPeriod" />
-                <MudText><b>@PeriodLabel</b></MudText>
-                <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextPeriod" />
-            </div>
+                    <div class="d-flex align-center gap-2">
+                        <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevPeriod" />
+                        <MudText><b>@PeriodLabel</b></MudText>
+                        <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextPeriod" />
+                    </div>
+                </div>
+            }
         </div>
     </div>
 
@@ -134,30 +146,59 @@
             </MudTable>
         </MudTabPanel>
 
-
         <!-- TAB 3: SCHEDULE & FINANCE -->
-        <MudTabPanel Text="Schedule & Finance" Icon="@Icons.Material.Filled.CalendarMonth">
-             <Spokes_Server.Components.Pages.Business.CapacityCalendar />
-        </MudTabPanel>
+        @if (_canViewAccounting)
+        {
+            <MudTabPanel Text="Schedule & Finance" Icon="@Icons.Material.Filled.CalendarMonth">
+                 <Spokes_Server.Components.Pages.Business.CapacityCalendar />
+            </MudTabPanel>
+        }
     </MudTabs>
+    }
 
 </MudContainer>
 
 @code {
     [SupplyParameterFromQuery] public string? Tab { get; set; }
     private int activeTabIndex = 0;
+    private bool _isAuthorized = true;
+    private bool _canViewAccounting = false;
+
+    private List<string> GetVisibleTabKeys()
+    {
+        var keys = new List<string> { "team", "employees" };
+        if (_canViewAccounting) keys.Add("schedule");
+        return keys;
+    }
 
     protected override void OnParametersSet()
     {
+        ResolveActiveTabFromQuery();
+    }
+
+    private void ResolveActiveTabFromQuery()
+    {
         if (!string.IsNullOrEmpty(Tab))
         {
-            activeTabIndex = Tab.ToLower() switch
+            var lower = Tab.ToLowerInvariant();
+            if (lower == "estimator" || lower == "one-time")
             {
-                "team" => 0,
-                "employees" => 1,
-                "schedule" => 2,
-                _ => 0
-            };
+                var target = lower == "one-time"
+                    ? "/business/operating-costs?tab=one-time"
+                    : "/business/operating-costs?tab=overview";
+                try
+                {
+                    Nav.NavigateTo(target, replace: true);
+                }
+                catch (Microsoft.AspNetCore.Components.NavigationException)
+                {
+                }
+                return;
+            }
+
+            var keys = GetVisibleTabKeys();
+            var idx = keys.IndexOf(lower);
+            activeTabIndex = idx >= 0 ? idx : 0;
         }
     }
 
@@ -177,13 +218,8 @@
         if (!Nav.Uri.Contains("/business/capacity", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var tabName = index switch
-        {
-            0 => "team",
-            1 => "employees",
-            2 => "schedule",
-            _ => "team"
-        };
+        var keys = GetVisibleTabKeys();
+        var tabName = (index >= 0 && index < keys.Count) ? keys[index] : "team";
         
         try
         {
@@ -209,6 +245,16 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var currentUser = await UserService.GetEmployeeAsync();
+        _isAuthorized = currentUser != null && (currentUser.IsAdmin || currentUser.HasPermission(AppPermissions.Finance.TeamCapacity) || currentUser.HasPermission(AppPermissions.Finance.AccessAccounting));
+        _canViewAccounting = currentUser != null && (currentUser.IsAdmin || currentUser.HasPermission(AppPermissions.Finance.AccessAccounting));
+        ResolveActiveTabFromQuery();
+        if (!_isAuthorized)
+        {
+            Loading = false;
+            return;
+        }
+
         // Init to current week
         var today = DateOnly.FromDateTime(DateTime.Today);
         SetWeek(today);
@@ -283,7 +329,7 @@
     {
         Loading = true;
         StateHasChanged();
-        await Task.Delay(50); // UI Refresh (Task.Yield is too fast for SignalR to split payloads on slow clients)
+        await Task.Delay(50);
 
         TeamMetrics.Clear();
         FlatPlanList.Clear();
@@ -293,40 +339,32 @@
         var allQuotes = Db.Quotes.GetAll().Where(q => q.Status == QuoteStatus.Accepted).ToList();
         var allWorkTypes = Db.WorkTypes.GetAll();
         
-        // Optimize: Load ALL plan entries once for fast querying
         var allWeeklyPlans = Db.WeeklyPlans.GetAll();
         var allPlanEntries = allWeeklyPlans.SelectMany(p => p.Entries).ToList();
 
-        // Helpers to get weeks in range
         var weeks = GetWeeksInRange(StartDate, EndDate);
 
         foreach (var team in teams)
         {
             var members = allEmployees.Where(e => e.TeamId == team.Id).ToList();
             
-            // 1. Calculate Capacity (Based on Timeframe)
             decimal capacity = 0;
             foreach(var m in members)
             {
                 capacity += m.WeeklyHours * weeks.Count;
             }
 
-            // 2. Calculate Planned (Within Timeframe)
             decimal planned = 0;
             foreach(var member in members)
             {
                 decimal empPlanned = 0;
                 foreach(var (year, week) in weeks)
                 {
-                    // Use memory cache of plans instead of querying DB repeatedely if possible, 
-                    // but GetByEmployeeAndWeek is fast cache lookup. 
-                    // Using Db.WeeklyPlans.GetByEmployeeAndWeek logic:
                     var plan = allWeeklyPlans.FirstOrDefault(p => p.EmployeeId == member.Id && p.Year == year && p.WeekNumber == week);
                     if (plan != null) empPlanned += plan.TotalHours;
                 }
                 planned += empPlanned;
 
-                // Add to flat list
                 decimal empCapacity = member.WeeklyHours * weeks.Count;
                 decimal util = empCapacity > 0 ? (empPlanned / empCapacity) * 100 : 0;
                 
@@ -341,9 +379,7 @@
                 });
             }
 
-            // 3. Calculate Backlog (Unassigned Demand) - True Backlog (Quoted - AllTimeAssigned)
             decimal backlog = 0;
-            
             var activeProjects = Db.Projects.GetAll().Where(p => p.Status != ProjectStatus.Archived).Select(p => p.Id).ToHashSet();
             
             foreach(var quote in allQuotes.Where(q => activeProjects.Contains(q.ProjectId)))
@@ -362,7 +398,6 @@
                 }
             }
             
-            // 4. Utilization
             decimal teamUtil = capacity > 0 ? (planned / capacity) * 100 : 0;
 
             TeamMetrics.Add(new TeamMetricViewModel
@@ -378,7 +413,6 @@
             });
         }
         
-        // Calculate Company Aggregates
         decimal totalCap = TeamMetrics.Sum(t => t.TotalCapacity);
         decimal totalPlan = TeamMetrics.Sum(t => t.PlannedHours);
         decimal totalUtil = totalCap > 0 ? (totalPlan / totalCap) * 100 : 0;
@@ -432,4 +466,3 @@
         public Color UtilizationColor { get; set; }
     }
 }
-

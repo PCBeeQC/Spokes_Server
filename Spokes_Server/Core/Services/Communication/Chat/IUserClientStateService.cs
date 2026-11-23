@@ -12,6 +12,5 @@ public interface IUserClientStateService
     string? GetActiveDraftChannel(string userId);
     void SetTyping(string userId, string channelId, bool isTyping);
     void StopActiveTyping(string userId);
-    void FlushToDiskIfUnsent(string userId);
     void ClearDraft(string userId, string channelId);
 }

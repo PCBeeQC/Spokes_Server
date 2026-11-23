@@ -71,7 +71,8 @@ public static class DeviceDetectionHelper
         ArgumentNullException.ThrowIfNull(context);
         var userAgent = context.Request.Headers["User-Agent"].ToString();
         var clientQuery = context.Request.Query["client"].ToString();
-        var hasCapacitorHeader = context.Request.Headers.ContainsKey("X-Capacitor");
+        var hasCapacitorHeader = context.Request.Headers.ContainsKey("X-Capacitor")
+            || string.Equals(context.Request.Headers["X-Spokes-Client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase);
 
         return IsMobileClient(userAgent, clientQuery, hasCapacitorHeader);
     }

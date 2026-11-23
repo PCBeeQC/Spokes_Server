@@ -22,7 +22,7 @@ public class RelayTrialTicketServiceTests : IDisposable
     {
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_RelayTrialTicket_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testDataDir }).Build();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"}).Build();
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
         _serverConfigs = new ServerConfigRepository(_persistence, config);
         _sut = new RelayTrialTicketService(_serverConfigs);
@@ -141,7 +141,7 @@ public class RelayTrialTicketServiceTests : IDisposable
         _persistence.FlushAll();
 
         var reloaded = new ServerConfigRepository(_persistence, new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testDataDir }).Build()).GetOrCreateGlobalConfig();
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"}).Build()).GetOrCreateGlobalConfig();
         Assert.NotNull(reloaded.RelayTrialTicket);
         Assert.Equal(ticket.Fingerprint, reloaded.RelayTrialTicket!.Fingerprint);
         Assert.Equal(ticket.ExpiresAt, reloaded.RelayTrialTicket.ExpiresAt);

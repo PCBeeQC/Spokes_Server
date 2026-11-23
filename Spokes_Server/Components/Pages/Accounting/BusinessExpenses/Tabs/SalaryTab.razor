@@ -1,8 +1,14 @@
 @using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.HR
+@using Spokes_Server.Components.Pages.HR.Dialogs
 @inject Database Db
+@inject IPayrollCalculationEngine PayrollEngine
+@inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject UserService UserService
 
 <MudGrid>
     <!-- 1. Employee Salary Grid (Full Width) -->
@@ -15,21 +21,35 @@
                     <MudTh>Position</MudTh>
                     <MudTh>Weekly Hours</MudTh>
                     <MudTh>Hourly Cost</MudTh>
-                    <MudTh>Biweekly</MudTh>
-                    <MudTh>Yearly</MudTh>
+                    <MudTh>Total Cost / h</MudTh>
+                    <MudTh>Biweekly Gross</MudTh>
+                    <MudTh>Yearly Gross</MudTh>
+                    <MudTh>Yearly Total Cost</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Payroll Profile"]</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd DataLabel="Employee">@context.FullName</MudTd>
                     <MudTd DataLabel="Position">@context.Position</MudTd>
                     <MudTd DataLabel="Weekly Hours">
-                        <MudNumericField @bind-Value="context.WeeklyHours" @bind-Value:after="() => OnFieldChanged(context)"
-                            Variant="Variant.Outlined" Adornment="Adornment.End" AdornmentText="h" 
+                        <MudNumericField T="decimal" Value="context.WeeklyHours"
+                            ValueChanged="@((decimal val) => OnWeeklyHoursChanged(context, val))"
+                            Disabled="@(!CanEditWeeklyHours(context))"
+                            Min="0m" Max="168m"
+                            Variant="Variant.Outlined" Adornment="Adornment.End" AdornmentText="h"
                             Margin="Margin.Dense" Style="max-width: 120px;" />
                     </MudTd>
                     <MudTd DataLabel="Hourly Cost">
-                        <MudNumericField @bind-Value="context.HourlyRate" @bind-Value:after="() => OnFieldChanged(context)"
-                            Variant="Variant.Outlined" Adornment="Adornment.End" AdornmentText="$/h" 
+                        <MudNumericField T="decimal" Value="context.HourlyRate"
+                            ValueChanged="@((decimal val) => OnHourlyRateChanged(context, val))"
+                            Disabled="@(!_canEditSalaries)"
+                            Min="0m"
+                            Variant="Variant.Outlined" Adornment="Adornment.End" AdornmentText="$/h"
                             Margin="Margin.Dense" Style="max-width: 120px;" />
+                    </MudTd>
+                    <MudTd DataLabel="Total Cost / h">
+                        <MudText Typo="Typo.body2" Color="Color.Primary" Style="font-weight: 700;">
+                            @(EmployerContribution.CalculateTotalHourlyCost(context, Contributions).ToString("C2"))/h
+                        </MudText>
                     </MudTd>
                     <MudTd DataLabel="Bi-Weekly Gross">
                         <MudText Typo="Typo.body2">@((context.HourlyRate * context.WeeklyHours * 2).ToString("C2"))
@@ -37,8 +57,20 @@
                     </MudTd>
                     <MudTd DataLabel="Yearly Gross">
                         <MudText>@((context.HourlyRate * context.WeeklyHours * 52).ToString("C0"))</MudText>
-                        </MudTd>
-                    </RowTemplate>
+                    </MudTd>
+                    <MudTd DataLabel="Yearly Total Cost">
+                        <MudText Color="Color.Primary" Style="font-weight: 700;">@(CalculateYearlyTotal(context).ToString("C0"))</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="@BizLoc["Payroll Profile"]" Style="text-align: right;">
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Badge"
+                                   OnClick="@(() => OpenEmployeePayrollProfileDialog(context))">
+                            @BizLoc["Tax & Payroll Profile"]
+                        </MudButton>
+                    </MudTd>
+                </RowTemplate>
                 </MudTable>
             </MudPaper>
         </MudItem>
@@ -46,14 +78,19 @@
         <!-- 2. Employer Contributions Management (Full Width) -->
         <MudItem xs="12">
         <MudPaper Class="pa-4" Elevation="0" Outlined="true">
-                <div class="d-flex justify-space-between align-center mb-4">
+                <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-4">
                     <div>
                         <MudText Typo="Typo.h6">Employer Contributions Configuration</MudText>
                         <MudText Typo="Typo.caption">Manage taxes, insurance, and other fees added on top of salary.
                         </MudText>
                     </div>
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenAddContributionDialog">Add
-                        Contribution</MudButton>
+                    <div class="d-flex align-center gap-2">
+                        <MudButton Variant="Variant.Outlined" Color="Color.Info" Disabled="@(!_canEditSalaries)" StartIcon="@Icons.Material.Filled.Sync" OnClick="SyncJurisdictionContributions">
+                            @BizLoc["Sync Jurisdiction Statutory Contributions"]
+                        </MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!_canEditSalaries)" OnClick="OpenAddContributionDialog">Add
+                            Contribution</MudButton>
+                    </div>
                 </div>
 
             <MudTable Items="@Contributions" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true">
@@ -81,8 +118,10 @@
                     </MudTd>
                     <MudTd>
                         <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                            Disabled="@(!_canEditSalaries)"
                             OnClick="@(() => EditContribution(context))" />
                         <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                            Disabled="@(!_canEditSalaries)"
                             OnClick="@(() => DeleteContribution(context))" />
                     </MudTd>
                 </RowTemplate>
@@ -335,6 +374,7 @@
     private EmployerContribution? _analysisAutoCompleteContribValue { get; set; }
 
     // Config
+    private bool _canEditSalaries;
     private bool _showAddForm;
     private bool _isEditing;
     private EmployerContribution NewContribution = new();
@@ -421,22 +461,92 @@
         _analysisContribIds = list;
     }
 
-    protected override void OnInitialized()
+    private Employee? _currentUser;
+
+    protected override async Task OnInitializedAsync()
     {
-        Employees = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canEditSalaries = _currentUser is { IsActiveUnsuspended: true } && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Hr.ManageSalaries));
+        LoadActiveEmployees();
         Contributions = Db.EmployerContributions.GetAll();
         Teams = Db.Teams.GetAll();
     }
 
-    private void OnFieldChanged(Employee item)
+    private void LoadActiveEmployees()
     {
-        Db.Employees.Save(item);
+        Employees = Db.Employees.GetAll()
+            .Where(e => e.IsActive && !e.IsBanned && !e.IsSystem)
+            .ToList();
+    }
+
+    private bool CanEditWeeklyHours(Employee target) =>
+        _canEditSalaries && UserService.CanManageEmployeeTarget(_currentUser, target);
+
+    private async Task<bool> AuthorizeSalaryWriteAsync()
+    {
+        var actor = await UserService.GetEmployeeAsync(allowSuspended: false);
+        _currentUser = actor ?? await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canEditSalaries = actor != null && (actor.IsAdmin || actor.HasPermission(AppPermissions.Hr.ManageSalaries));
+        if (_canEditSalaries) return true;
+        Snackbar.Add(BizLoc["Read-only mode: cannot modify salaries or contributions."].Value, Severity.Warning);
+        StateHasChanged();
+        return false;
+    }
+
+    private async Task OnWeeklyHoursChanged(Employee item, decimal newHours)
+    {
+        if (!await AuthorizeSalaryWriteAsync() || _currentUser == null)
+        {
+            LoadActiveEmployees();
+            StateHasChanged();
+            return;
+        }
+
+        var target = Db.Employees.GetById(item.Id);
+        if (target == null || !UserService.CanManageEmployeeTarget(_currentUser, target))
+        {
+            Snackbar.Add("You do not have permission to modify this employee's weekly hours schedule.", Severity.Warning);
+            LoadActiveEmployees();
+            StateHasChanged();
+            return;
+        }
+
+        var clamped = Math.Clamp(newHours, 0m, 168m);
+        target.WeeklyHours = clamped;
+        item.WeeklyHours = clamped;
+        Db.Employees.Save(target);
         Snackbar.Add("Salary updated", Severity.Success);
         StateHasChanged();
     }
 
-    private void OpenAddContributionDialog()
+    private async Task OnHourlyRateChanged(Employee item, decimal newRate)
     {
+        if (!await AuthorizeSalaryWriteAsync())
+        {
+            LoadActiveEmployees();
+            StateHasChanged();
+            return;
+        }
+
+        var target = Db.Employees.GetById(item.Id);
+        if (target == null)
+        {
+            LoadActiveEmployees();
+            StateHasChanged();
+            return;
+        }
+
+        var sanitized = Math.Max(0m, newRate);
+        target.HourlyRate = sanitized;
+        item.HourlyRate = sanitized;
+        Db.Employees.Save(target);
+        Snackbar.Add("Salary updated", Severity.Success);
+        StateHasChanged();
+    }
+
+    private async Task OpenAddContributionDialog()
+    {
+        if (!await AuthorizeSalaryWriteAsync()) return;
         NewContribution = new EmployerContribution();
         SelectedTeamIds = new HashSet<string>();
         SelectedEmployeeIds = new HashSet<string>();
@@ -444,8 +554,9 @@
         _showAddForm = true;
     }
 
-    private void EditContribution(EmployerContribution contribution)
+    private async Task EditContribution(EmployerContribution contribution)
     {
+        if (!await AuthorizeSalaryWriteAsync()) return;
         NewContribution = new EmployerContribution
         {
             Id = contribution.Id,
@@ -477,8 +588,9 @@
         _showAddForm = true;
     }
 
-    private void SaveContribution()
+    private async Task SaveContribution()
     {
+        if (!await AuthorizeSalaryWriteAsync()) return;
         if (string.IsNullOrWhiteSpace(NewContribution.Name)) return;
 
         // Set TargetIds based on scope
@@ -549,8 +661,9 @@
         SelectedEmployeeIds = list;
     }
 
-    private void DeleteContribution(EmployerContribution contribution)
+    private async Task DeleteContribution(EmployerContribution contribution)
     {
+        if (!await AuthorizeSalaryWriteAsync()) return;
         Db.EmployerContributions.Delete(contribution.Id);
         Contributions.Remove(contribution);
         Snackbar.Add("Contribution removed", Severity.Success);
@@ -566,36 +679,8 @@
 
     // --- Calculations ---
 
-    private decimal CalculateEmployeeContributions(Employee emp, List<EmployerContribution>? scopedContribs = null)
-    {
-        decimal weeklyGross = emp.WeeklyHours * emp.HourlyRate;
-        decimal yearlyGross = weeklyGross * 52;
-        decimal totalContrib = 0;
-
-        var sourceList = scopedContribs ?? Contributions;
-
-        foreach (var c in sourceList)
-        {
-            bool applies = false;
-            if (c.Scope == EmployerContributionScope.Global) applies = true;
-            else if (c.Scope == EmployerContributionScope.Employee && c.TargetIds.Contains(emp.Id)) applies = true;
-            else if (c.Scope == EmployerContributionScope.Team && !string.IsNullOrEmpty(emp.TeamId) &&
-            c.TargetIds.Contains(emp.TeamId)) applies = true;
-
-            if (applies)
-            {
-                if (c.Type == EmployerContributionType.Percentage)
-                {
-                    totalContrib += yearlyGross * (c.Value / 100m);
-                }
-                else // Fixed (Yearly amount)
-                {
-                    totalContrib += c.Value;
-                }
-            }
-        }
-        return totalContrib;
-    }
+    private decimal CalculateEmployeeContributions(Employee emp, List<EmployerContribution>? scopedContribs = null) =>
+        EmployerContribution.CalculateAnnualContributions(emp, scopedContribs ?? Contributions);
 
     private decimal CalculateYearlyTotal(Employee emp)
     {
@@ -658,6 +743,51 @@
         public decimal GrossSalary { get; set; }
         public decimal TotalContributions { get; set; }
         public Dictionary<string, decimal> CostByTeam { get; set; } = [];
+    }
+
+    private async Task SyncJurisdictionContributions()
+    {
+        if (!await AuthorizeSalaryWriteAsync()) return;
+        PayrollEngine.SyncJurisdictionEmployerContributionsToRepository();
+        Contributions = Db.EmployerContributions.GetAll().ToList();
+        Snackbar.Add(BizLoc["Synchronized statutory employer contributions from active jurisdiction template."].Value, Severity.Success);
+        StateHasChanged();
+    }
+
+    private async Task OpenEmployeePayrollProfileDialog(Employee emp)
+    {
+        var freshTarget = Db.Employees.GetById(emp.Id);
+        if (freshTarget == null) return;
+
+        var clone = freshTarget.DeepClone();
+        var parameters = new DialogParameters<EmployeePayrollProfileDialog>
+        {
+            { x => x.Employee, clone }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<EmployeePayrollProfileDialog>(BizLoc["Payroll & Tax Profile"].Value, parameters, options);
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: Employee updatedEmp })
+        {
+            if (!await AuthorizeSalaryWriteAsync() || _currentUser == null) return;
+            var currentTarget = Db.Employees.GetById(emp.Id);
+            if (currentTarget == null) return;
+
+            if (!UserService.CanManageEmployeeTarget(_currentUser, currentTarget))
+            {
+                updatedEmp.WeeklyHours = currentTarget.WeeklyHours;
+            }
+            else
+            {
+                updatedEmp.WeeklyHours = Math.Clamp(updatedEmp.WeeklyHours, 0m, 168m);
+            }
+
+            updatedEmp.HourlyRate = Math.Max(0m, updatedEmp.HourlyRate);
+            Db.Employees.Save(updatedEmp);
+            LoadActiveEmployees();
+            Snackbar.Add(BizLoc["Employee payroll and tax profile saved."].Value, Severity.Success);
+            StateHasChanged();
+        }
     }
 }
 

@@ -1,11 +1,15 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Projects;
 
 namespace Spokes_Server.Core.Services.HR;
 
@@ -13,6 +17,9 @@ public class TimesheetTimerService
 {
     private readonly TimesheetRepository _timesheets;
     private readonly EmployeeRepository _employees;
+    private readonly ProjectRepository? _projects;
+    private readonly TeamRepository? _teams;
+    private readonly bool _enforcePermissions;
     private readonly ConcurrentDictionary<string, TimerState> _timers = new();
     private readonly ConcurrentDictionary<string, object> _employeeLocks = new();
     private readonly string _dataPath;
@@ -27,18 +34,29 @@ public class TimesheetTimerService
         EmployeeRepository employees,
         IConfiguration config,
         ILogger<TimesheetTimerService>? logger = null)
-        : this(timesheets, employees, config, (ILogger?)logger)
-    {
-    }
-
-    public TimesheetTimerService(
-        TimesheetRepository timesheets,
-        EmployeeRepository employees,
-        IConfiguration config,
-        ILogger? logger)
     {
         _timesheets = timesheets;
         _employees = employees;
+        _enforcePermissions = false;
+        _dataPath = config["DataPath"] ?? "Data";
+        _logger = logger;
+        RestoreTimerStates();
+    }
+
+    [ActivatorUtilitiesConstructor]
+    public TimesheetTimerService(
+        TimesheetRepository timesheets,
+        EmployeeRepository employees,
+        ProjectRepository projects,
+        TeamRepository teams,
+        IConfiguration config,
+        ILogger<TimesheetTimerService>? logger = null)
+    {
+        _timesheets = timesheets;
+        _employees = employees;
+        _projects = projects;
+        _teams = teams;
+        _enforcePermissions = true;
         _dataPath = config["DataPath"] ?? "Data";
         _logger = logger;
         RestoreTimerStates();
@@ -56,13 +74,28 @@ public class TimesheetTimerService
     {
         lock (GetLock(employeeId))
         {
-            var today = DateTime.Today;
-            var weekNum = ISOWeek.GetWeekOfYear(today);
-            var year = ISOWeek.GetYear(today);
+            _ = GetTimerStatePath(employeeId);
 
-            var timesheet = _timesheets.GetAll()
-                .FirstOrDefault(t => t.EmployeeId == employeeId && t.Year == year && t.WeekNumber == weekNum);
+            if (!TryValidateTimerActor(employeeId, "start", out var emp, out var isAccountDisabled))
+            {
+                return SpokesResult.Failure(
+                    isAccountDisabled
+                        ? "Suspended or inactive accounts cannot start timers."
+                        : "You do not have permission to log time to this project.",
+                    "FORBIDDEN");
+            }
 
+            if (_enforcePermissions)
+            {
+                var project = _projects?.GetById(projectId);
+                if (!ProjectAccessHelper.CanLogTimeToProject(emp, project, _teams))
+                {
+                    _logger?.LogWarning("[TimesheetTimerService] Cannot start timer for {EmployeeId} on project {ProjectId}: unauthorized project access", employeeId, projectId);
+                    return SpokesResult.Failure("You do not have permission to log time to this project.", "FORBIDDEN");
+                }
+            }
+
+            var timesheet = GetCurrentWeekTimesheet(employeeId, out _, out _, out var weekNum);
             if (timesheet != null && (timesheet.Status == TimesheetStatus.Submitted || timesheet.Status == TimesheetStatus.Approved))
             {
                 _logger?.LogWarning("[TimesheetTimerService] Cannot start timer for {EmployeeId}: timesheet for week {Week} is {Status}", employeeId, weekNum, timesheet.Status);
@@ -82,13 +115,60 @@ public class TimesheetTimerService
         }
     }
 
+    private Timesheet? GetCurrentWeekTimesheet(string employeeId, out DateTime today, out int year, out int weekNum)
+    {
+        today = DateTime.Today;
+        var currentWeek = ISOWeek.GetWeekOfYear(today);
+        var currentYear = ISOWeek.GetYear(today);
+        weekNum = currentWeek;
+        year = currentYear;
+        return _timesheets.GetAll()
+            .FirstOrDefault(t => t.EmployeeId == employeeId && t.Year == currentYear && t.WeekNumber == currentWeek);
+    }
+
+    private bool TryValidateTimerActor(string employeeId, string action, out Employee? emp, out bool isAccountDisabled)
+    {
+        emp = _employees.GetById(employeeId);
+        isAccountDisabled = emp != null && !emp.IsActiveUnsuspended;
+        if (isAccountDisabled ||
+            (_enforcePermissions && (emp == null || !emp.HasPermission(AppPermissions.Timesheets.AccessTimesheet))))
+        {
+            _logger?.LogWarning("[TimesheetTimerService] Cannot {Action} timer for {EmployeeId}: account is suspended, inactive, or lacks timesheet permission", action, employeeId);
+            return false;
+        }
+        return true;
+    }
+
+    private void ClearAndDeleteTimerState(TimerState state, string employeeId)
+    {
+        state.IsRunning = false;
+        state.StartedAt = null;
+        state.ProjectId = null;
+        state.WorkTypeId = null;
+        state.SubTaskId = null;
+        state.Note = string.Empty;
+        DeleteTimerState(employeeId);
+    }
+
     public SpokesResult<TimeSpan> Stop(string employeeId)
     {
         lock (GetLock(employeeId))
         {
+            if (!TryValidateTimerActor(employeeId, "stop", out var emp, out _))
+            {
+                return SpokesResult<TimeSpan>.Failure("Suspended or unauthorized accounts cannot stop and log timer entries.", "FORBIDDEN");
+            }
+
             var state = _timers.GetOrAdd(employeeId, id => new TimerState { EmployeeId = id });
             if (!state.IsRunning || state.StartedAt == null)
                 return SpokesResult<TimeSpan>.Success(TimeSpan.Zero);
+
+            if (_enforcePermissions && !string.IsNullOrEmpty(state.ProjectId) && _projects != null &&
+                !ProjectAccessHelper.CanLogTimeToProject(emp, _projects.GetById(state.ProjectId), _teams))
+            {
+                _logger?.LogWarning("[TimesheetTimerService] Cannot stop timer for {EmployeeId} on project {ProjectId}: unauthorized project access", employeeId, state.ProjectId);
+                return SpokesResult<TimeSpan>.Failure("You no longer have permission to log time to this project.", "FORBIDDEN");
+            }
 
             var elapsed = DateTime.UtcNow - state.StartedAt.Value;
             var hours = Math.Round((decimal)elapsed.TotalHours, 2);
@@ -98,12 +178,7 @@ public class TimesheetTimerService
             var subTaskId = state.SubTaskId;
             var note = state.Note;
 
-            var today = DateTime.Today;
-            var weekNum = ISOWeek.GetWeekOfYear(today);
-            var year = ISOWeek.GetYear(today);
-
-            var timesheet = _timesheets.GetAll()
-                .FirstOrDefault(t => t.EmployeeId == employeeId && t.Year == year && t.WeekNumber == weekNum);
+            var timesheet = GetCurrentWeekTimesheet(employeeId, out var today, out var year, out var weekNum);
 
             // If time would be logged (>= 0.02h with valid project & worktype), check if timesheet is submitted or approved
             if (hours >= 0.02m && !string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(workTypeId))
@@ -117,18 +192,12 @@ public class TimesheetTimerService
                 }
             }
 
-            state.IsRunning = false;
-            state.StartedAt = null;
-            state.ProjectId = null;
-            state.WorkTypeId = null;
-            state.SubTaskId = null;
-            state.Note = string.Empty;
-            DeleteTimerState(employeeId);
+            ClearAndDeleteTimerState(state, employeeId);
 
             // Only log if at least 1 minute
             if (hours >= 0.02m && !string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(workTypeId))
             {
-                LogTimeEntry(employeeId, projectId, workTypeId, subTaskId, hours, note);
+                LogTimeEntry(employeeId, emp, timesheet, today, year, weekNum, projectId, workTypeId, subTaskId, hours, note);
             }
 
             OnTimerChanged?.Invoke();
@@ -140,39 +209,37 @@ public class TimesheetTimerService
     {
         lock (GetLock(employeeId))
         {
+            if (!TryValidateTimerActor(employeeId, "cancel", out _, out _))
+            {
+                return;
+            }
+
             var state = _timers.GetOrAdd(employeeId, id => new TimerState { EmployeeId = id });
-            state.IsRunning = false;
-            state.StartedAt = null;
-            state.ProjectId = null;
-            state.WorkTypeId = null;
-            state.SubTaskId = null;
-            state.Note = string.Empty;
-            DeleteTimerState(employeeId);
+            ClearAndDeleteTimerState(state, employeeId);
             OnTimerChanged?.Invoke();
         }
     }
 
-    private void LogTimeEntry(string employeeId, string projectId, string workTypeId, string? subTaskId, decimal hours, string note)
+    private void LogTimeEntry(
+        string employeeId,
+        Employee? employee,
+        Timesheet? timesheet,
+        DateTime today,
+        int year,
+        int weekNum,
+        string projectId,
+        string workTypeId,
+        string? subTaskId,
+        decimal hours,
+        string note)
     {
-        var today = DateTime.Today;
-        var weekNum = ISOWeek.GetWeekOfYear(today);
-        var year = ISOWeek.GetYear(today);
-
-        // Find or create the timesheet for this week
-        var timesheet = _timesheets.GetAll()
-            .FirstOrDefault(t => t.EmployeeId == employeeId && t.Year == year && t.WeekNumber == weekNum);
-
-        if (timesheet == null)
+        timesheet ??= new Timesheet
         {
-            var employee = _employees.GetById(employeeId);
-            timesheet = new Timesheet
-            {
-                EmployeeId = employeeId,
-                EmployeeName = employee?.FullName ?? "",
-                Year = year,
-                WeekNumber = weekNum
-            };
-        }
+            EmployeeId = employeeId,
+            EmployeeName = employee?.FullName ?? "",
+            Year = year,
+            WeekNumber = weekNum
+        };
 
         // Don't log to submitted/approved timesheets
         if (timesheet.Status == TimesheetStatus.Submitted || timesheet.Status == TimesheetStatus.Approved)

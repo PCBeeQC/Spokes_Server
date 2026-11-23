@@ -19,6 +19,8 @@ public sealed class AcousticRoomProcessor
     public const int FrameSamples20Ms = 960; // 20ms @ 48kHz
     public const int MaxLagMs = 340;
     public const int MaxLagSamples = (SampleRate * MaxLagMs) / 1000; // +/-16320 samples (+/-340ms)
+    public const int MinCalibratedLookaheadMs = 10;
+    public const int MinCalibratedLookaheadSamples = (SampleRate * MinCalibratedLookaheadMs) / 1000; // 480 samples (10ms calibrated floor)
     public const int LookaheadMs = 50;
     public const int LookaheadSamples = (SampleRate * LookaheadMs) / 1000; // 2400 samples (50ms baseline)
     public const int MaxLookaheadMs = 355;
@@ -27,6 +29,8 @@ public sealed class AcousticRoomProcessor
     internal const int InitialLagHeadroomSamples = (SampleRate * 150) / 1000;
     internal const int DefaultPositiveHeadroomSamples = (SampleRate * 220) / 1000;
     internal const float MaxAllowedAgcBleedGain = 8.5f;
+    internal const float NegligibleBleedGainThreshold = 0.015f;     // ~ -36.5 dB current bleed ratio threshold
+    internal const float NegligiblePeakBleedGainThreshold = 0.025f; // ~ -32.0 dB peak onset bleed ratio threshold
     internal const int DefaultAirDelaySamples = 192; // ~4ms = ~1.37 meters 1-way air assumption
     internal const int RingBufferCapacity = 96000;   // 2.0 seconds @ 48kHz
     internal const int EnvelopeStepSamples = 96;     // 2ms @ 48kHz
@@ -39,7 +43,6 @@ public sealed class AcousticRoomProcessor
     internal const int BarkFftSize = 256;
     internal const int BarkStepSamples = EnvelopeStepSamples * 2; // 4ms (192 samples)
     internal const int GccPhatFftSize = 512;
-    internal const float PostLevelerTargetSpeechRms = 0.10f; // -20.0 dBFS standard VoIP target
 
     private readonly object _syncLock = new();
     private readonly Dictionary<string, AcousticParticipantStream> _participants = new(StringComparer.Ordinal);
@@ -48,8 +51,6 @@ public sealed class AcousticRoomProcessor
 
     private long _globalSampleClock;
     private long? _roomEpochWallClockMs;
-
-    public int CurrentLookaheadMs => LookaheadMs;
 
     /// <summary>
     /// Ensures a participant is registered in the processor's $N \times N$ matrix.
@@ -111,7 +112,6 @@ public sealed class AcousticRoomProcessor
     /// </summary>
     public void SetParticipantClientPipelineInfo(
         string userId,
-        string filterType,
         double estimatedCaptureLatencyMs,
         double serverToClientDelayMs = 0.0)
     {
@@ -119,7 +119,6 @@ public sealed class AcousticRoomProcessor
         lock (_syncLock)
         {
             var state = GetOrCreateParticipantLocked(userId, _globalSampleClock);
-            state.FilterType = string.IsNullOrWhiteSpace(filterType) ? "webrtc" : filterType.Trim();
             if (estimatedCaptureLatencyMs > 0 && estimatedCaptureLatencyMs <= 500.0)
             {
                 state.EstimatedCaptureLatencyMs = estimatedCaptureLatencyMs;
@@ -153,25 +152,13 @@ public sealed class AcousticRoomProcessor
             GetOrCreateParticipantLocked(sourceUserId, _globalSampleClock);
             GetOrCreateParticipantLocked(targetUserId, _globalSampleClock);
 
-            if (_matrix.SeedSavedCalibration(sourceUserId, targetUserId, delaySamples, bleedGain, confidence, _participants.Keys))
+            if (_matrix.SeedSavedCalibration(sourceUserId, targetUserId, delaySamples, bleedGain, confidence, _participants))
             {
                 foreach (var p in _participants.Values)
                 {
-                    p.AppliedLookaheadSamples = _matrix.GetTargetLookaheadSamples(p.UserId);
+                    p.AppliedLookaheadSamples = _matrix.GetTargetLookaheadSamples(p.UserId, _participants.Keys);
                 }
             }
-        }
-    }
-
-    /// <summary>
-    /// Removes a participant and their pairwise matrix entries from the processor.
-    /// </summary>
-    public void UnregisterParticipant(string userId)
-    {
-        if (string.IsNullOrWhiteSpace(userId)) return;
-        lock (_syncLock)
-        {
-            RemoveParticipantLocked(userId);
         }
     }
 
@@ -326,7 +313,7 @@ public sealed class AcousticRoomProcessor
 
     private int ResolveEffectiveLookaheadSamplesLocked(AcousticParticipantStream state)
     {
-        int targetSamples = _matrix.GetTargetLookaheadSamples(state.UserId);
+        int targetSamples = _matrix.GetTargetLookaheadSamples(state.UserId, _participants.Keys);
         if (state.AppliedLookaheadSamples != targetSamples)
         {
             bool isActivelySpeakingNearField = state.FramesWritten > 1 &&
@@ -573,7 +560,7 @@ public sealed class AcousticRoomProcessor
                 self.RecentSpeechRms *= 0.93f;
             }
             AcousticSpectralCanceller.ApplySmoothedGain(self, subStartSample, subLen, selfVocalRms, isPercussiveClick, outPcm);
-            _diagnostics.AdvanceBucketIfMaster(self, _participants, subStartSample, selfVocalRms);
+            _diagnostics.AdvanceBucketIfMaster(self, _participants, subStartSample);
             return;
         }
 
@@ -622,7 +609,7 @@ public sealed class AcousticRoomProcessor
             self.BleedInputEnergySum += rawInEnergy;
             self.BleedOutputEnergySum += AcousticDspMath.ComputePcmMeanSquare(outPcm);
 
-            _diagnostics.AdvanceBucketIfMaster(self, _participants, subStartSample, selfVocalRms);
+            _diagnostics.AdvanceBucketIfMaster(self, _participants, subStartSample);
             return;
         }
 
@@ -666,7 +653,7 @@ public sealed class AcousticRoomProcessor
             AcousticSpectralCanceller.ApplySmoothedGain(self, subStartSample, subLen, selfVocalRms, isPercussiveClick, outPcm);
         }
 
-        _diagnostics.AdvanceBucketIfMaster(self, _participants, subStartSample, selfVocalRms);
+        _diagnostics.AdvanceBucketIfMaster(self, _participants, subStartSample);
     }
 
     private static float ComputePreOnsetRms(

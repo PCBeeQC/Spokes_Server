@@ -1,0 +1,25 @@
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Configuration
+
+<MudDivider />
+<div>
+    <MudSwitch @bind-Value="Server.IsSharedWithAllUsers"
+               Color="Color.Primary"
+               Label="@SwitchLabel" />
+
+    @if (!Server.IsSharedWithAllUsers)
+    {
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+            @RestrictionCaption
+        </MudText>
+        <UserGroupPicker Target="UserGroupPickerTarget.Both"
+                         SelectedUserIdsList="Server.AllowedUserIds"
+                         SelectedGroupIdsList="Server.AllowedTeamIds" />
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public EmailServerConfigBase Server { get; set; } = default!;
+    [Parameter, EditorRequired] public string SwitchLabel { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string RestrictionCaption { get; set; } = string.Empty;
+}

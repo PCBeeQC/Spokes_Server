@@ -16,10 +16,8 @@
 @inject UserService UserService
 @inject AlbumService AlbumService
 @inject ScopedKeystoreService KeystoreService
-@inject FileTokenService FileTokenService
 @inject ISlideshowSessionService SessionService
 @inject IHubContext<SlideshowHub> HubContext
-@inject ISnackbar Snackbar
 @inject IServiceProvider ServiceProvider
 @inject IJSRuntime JS
 
@@ -187,10 +185,19 @@
             {
                 @* VIDEO PREVIEW CONTAINER (LIGHTWEIGHT POSTER + PLAYING ON TV INDICATOR) *@
                 <div class="active-photo-wrapper" style="cursor: default; position: relative;">
-                    <img src="@GetMediaUrl(CurrentMedia, thumb: true)" 
-                         alt="@CurrentMedia.FileName" 
-                         class="active-photo" 
-                         style="max-width: 100%; max-height: 100%; object-fit: contain; opacity: 0.85;" />
+                    @if (CurrentMedia.HasServerThumbnail)
+                    {
+                        <img src="@GetMediaUrl(CurrentMedia, thumb: true)" 
+                             alt="@CurrentMedia.FileName" 
+                             class="active-photo" 
+                             style="max-width: 100%; max-height: 100%; object-fit: contain; opacity: 0.85;" />
+                    }
+                    else
+                    {
+                        <div class="d-flex align-center justify-center rounded-lg" style="width: 100%; height: 220px; background: #141418;">
+                            <MudIcon Icon="@Icons.Material.Filled.PlayCircle" Style="font-size: 4rem; color: rgba(255,255,255,0.45);" />
+                        </div>
+                    }
 
                     <div class="d-flex flex-column align-center justify-center" 
                          style="position: absolute; inset: 0; pointer-events: none; background: rgba(0,0,0,0.35);">
@@ -299,7 +306,16 @@
         {
             <div class="up-next-card mb-2">
                 <div class="d-flex align-center gap-3">
-                    <img src="@GetMediaUrl(UpcomingMedia, thumb: true)" alt="@UpcomingMedia.FileName" class="up-next-thumb" />
+                    @if (UpcomingMedia.ContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase) && !UpcomingMedia.HasServerThumbnail)
+                    {
+                        <div class="up-next-thumb d-flex align-center justify-center" style="background: #141418;">
+                            <MudIcon Icon="@Icons.Material.Filled.PlayCircle" Size="Size.Small" Style="color: rgba(255,255,255,0.55);" />
+                        </div>
+                    }
+                    else
+                    {
+                        <img src="@GetMediaUrl(UpcomingMedia, thumb: true)" alt="@UpcomingMedia.FileName" class="up-next-thumb" />
+                    }
                     <div>
                         <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.6); font-weight: 600;">@Loc["UP NEXT"]</MudText>
                         <MudText Typo="Typo.body2" Style="font-weight: 500; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
@@ -334,9 +350,20 @@
                     var index = i;
                     var item = _mediaItems[index];
                     bool isActive = (index == _currentIndex) || (IsDualPortrait && index == _currentIndex + 1);
-                    <img src="@GetMediaUrl(item, thumb: true)" alt="@item.FileName" 
-                         class="filmstrip-thumb @(isActive ? "active" : "")" 
-                         @onclick="() => JumpToSlide(index)" />
+                    @if (item.ContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase) && !item.HasServerThumbnail)
+                    {
+                        <div class="filmstrip-thumb d-flex align-center justify-center @(isActive ? "active" : "")"
+                             style="background: #141418;"
+                             @onclick="() => JumpToSlide(index)">
+                            <MudIcon Icon="@Icons.Material.Filled.PlayCircle" Size="Size.Medium" Style="color: rgba(255,255,255,0.55);" />
+                        </div>
+                    }
+                    else
+                    {
+                        <img src="@GetMediaUrl(item, thumb: true)" alt="@item.FileName" 
+                             class="filmstrip-thumb @(isActive ? "active" : "")" 
+                             @onclick="() => JumpToSlide(index)" />
+                    }
                 }
             </div>
         </div>
@@ -369,6 +396,7 @@
     private double _videoDuration = 0;
     private bool _isScrubbing = false;
     private DateTime _lastScrubBroadcast = DateTime.MinValue;
+    private DateTime _lastPlayToggleUtc = DateTime.MinValue;
     private string? _lastRenderedMediaId;
     private AlbumMedia? CurrentMedia => 
         (_currentIndex >= 0 && _currentIndex < _mediaItems.Count) ? _mediaItems[_currentIndex] : null;
@@ -421,7 +449,10 @@
         InvokeAsync(() =>
         {
             _videoCurrentTime = currentTime;
-            _isVideoPlaying = isPlaying;
+            if ((DateTime.UtcNow - _lastPlayToggleUtc).TotalMilliseconds >= 800)
+            {
+                _isVideoPlaying = isPlaying;
+            }
             if (duration > 0 && Math.Abs(_videoDuration - duration) > 1.0)
             {
                 _videoDuration = duration;
@@ -538,6 +569,7 @@
         _videoDuration = (itemDur.HasValue && itemDur.Value > 0) ? itemDur.Value : 0;
         _isScrubbing = false;
         _isVideoPlaying = true;
+        _lastPlayToggleUtc = DateTime.MinValue;
         await UpdateJsZoomState();
 
         SessionService.UpdateCurrentIndex(SessionId, index);
@@ -631,11 +663,14 @@
     private async Task ToggleVideoPlay()
     {
         _isVideoPlaying = !_isVideoPlaying;
+        _lastPlayToggleUtc = DateTime.UtcNow;
+        double? seekTime = null;
         if (_isVideoPlaying && _videoDuration > 0 && Math.Abs(_videoCurrentTime - _videoDuration) < 0.5)
         {
             _videoCurrentTime = 0;
+            seekTime = 0;
         }
-        await BroadcastVideo();
+        await BroadcastVideo(seekTime);
     }
 
     private async Task ToggleVideoLoop()
@@ -660,7 +695,7 @@
             if ((DateTime.UtcNow - _lastScrubBroadcast).TotalMilliseconds >= 100)
             {
                 _lastScrubBroadcast = DateTime.UtcNow;
-                await BroadcastVideo();
+                await BroadcastVideo(_videoCurrentTime);
             }
         }
     }
@@ -673,51 +708,17 @@
         }
         _isScrubbing = false;
         _lastScrubBroadcast = DateTime.UtcNow;
-        await BroadcastVideo();
+        await BroadcastVideo(_videoCurrentTime);
     }
 
-    private async Task BroadcastVideo()
+    private async Task BroadcastVideo(double? explicitSeekTime = null)
     {
         if (!IsAuthorizedSessionOwner(out var session)) return;
-        SessionService.NotifyVideoControlUpdated(SessionId, _isVideoPlaying, _videoCurrentTime, _isVideoMuted, _isVideoLooping);
+        var seekTime = explicitSeekTime ?? -1.0;
+        SessionService.NotifyVideoControlUpdated(SessionId, _isVideoPlaying, seekTime, _isVideoMuted, _isVideoLooping);
         if (session != null && !string.IsNullOrEmpty(session.TvConnectionId))
         {
-            await HubContext.Clients.Client(session.TvConnectionId).SendAsync("VideoControlUpdated", _isVideoPlaying, _videoCurrentTime, _isVideoMuted, _isVideoLooping);
-        }
-    }
-
-    [JSInvokable]
-    public void OnRemoteTimeUpdate(double currentTime)
-    {
-        if (!_isScrubbing)
-        {
-            if (Math.Abs(_videoCurrentTime - currentTime) >= 0.5)
-            {
-                _videoCurrentTime = currentTime;
-                StateHasChanged();
-            }
-        }
-    }
-
-    [JSInvokable]
-    public void OnRemoteDurationKnown(double duration)
-    {
-        if (duration > 0 && Math.Abs(_videoDuration - duration) > 0.1)
-        {
-            _videoDuration = duration;
-            StateHasChanged();
-        }
-    }
-
-    [JSInvokable]
-    public async Task OnRemoteVideoEnded()
-    {
-        if (!_isVideoLooping)
-        {
-            _isVideoPlaying = false;
-            _videoCurrentTime = _videoDuration;
-            await BroadcastVideo();
-            StateHasChanged();
+            await HubContext.Clients.Client(session.TvConnectionId).SendAsync("VideoControlUpdated", _isVideoPlaying, seekTime, _isVideoMuted, _isVideoLooping);
         }
     }
 

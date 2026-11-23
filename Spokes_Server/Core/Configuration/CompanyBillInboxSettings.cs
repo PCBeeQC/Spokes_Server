@@ -11,7 +11,23 @@ public class CompanyBillInboxSettings
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// Email address of the company billing mailbox (e.g. factures@poly-robotics.com).
+    /// Bound Real Inbox (EmailAccount.Id) in the Email system.
+    /// </summary>
+    public string AccountId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Optional Virtual Inbox (EmailInbox.Id) filtering messages inside the bound Real Inbox.
+    /// When empty, all messages in the Real Inbox's monitored folder are processed.
+    /// </summary>
+    public string InboxId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Optional Sending Identity (EmailSendingIdentity.Id) used when sending inquiries or replies from the Bill Inbox.
+    /// </summary>
+    public string SendingIdentityId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Email address of the company billing mailbox (e.g. factures@example.com).
     /// </summary>
     public string EmailAddress { get; set; } = string.Empty;
 
@@ -20,27 +36,8 @@ public class CompanyBillInboxSettings
     /// </summary>
     public string DisplayName { get; set; } = "Facturation";
 
-    // --- IMAP (Receiving) ---
-    public string? ImapHost { get; set; }
-    public int ImapPort { get; set; } = 993;
-    public bool ImapSsl { get; set; } = true;
-    public string? ImapUsername { get; set; }
-    public string EncryptedImapPassword { get; set; } = string.Empty;
     public string FolderToMonitor { get; set; } = "INBOX";
     public int CheckIntervalMinutes { get; set; } = 15;
-
-    // --- SMTP (Sending / Replying) ---
-    public string? SmtpHost { get; set; }
-    public int SmtpPort { get; set; } = 587;
-    public bool SmtpSsl { get; set; } // StartTLS usually
-    public string? SmtpUsername { get; set; }
-    public string EncryptedSmtpPassword { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Explicitly permits unencrypted plaintext IMAP/SMTP transport for trusted internal/local mail relays.
-    /// Defaults to false (enforcing mandatory STARTTLS when implicit SSL is not enabled).
-    /// </summary>
-    public bool AllowPlaintextTransport { get; set; } = false;
 
     // --- Ingestion & Matching Rules ---
     public string DefaultCurrency { get; set; } = "CAD";

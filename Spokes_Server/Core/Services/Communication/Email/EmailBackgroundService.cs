@@ -111,8 +111,17 @@ public class EmailBackgroundService : BackgroundService
 
     protected virtual List<EmailAccount> GetSyncAccounts(EmailAccountRepository repo)
     {
+        return GetSyncAccounts(repo, _serviceProvider.GetService<EmailInboxRepository>());
+    }
+
+    protected virtual List<EmailAccount> GetSyncAccounts(EmailAccountRepository repo, EmailInboxRepository? inboxesRepo)
+    {
         return repo.GetAll()
-            .Where(a => a.Enabled && !a.IsArchived && (!string.IsNullOrEmpty(a.Username) || !string.IsNullOrEmpty(a.EmailAddress)) && !string.IsNullOrEmpty(a.EncryptedPassword))
+            .Where(a => a.Enabled &&
+                        !a.IsArchived &&
+                        (!string.IsNullOrEmpty(a.Username) || !string.IsNullOrEmpty(a.EmailAddress)) &&
+                        !string.IsNullOrEmpty(a.EncryptedPassword) &&
+                        EmailInboxService.HasWebmailConsumers(a, inboxesRepo))
             .ToList();
     }
 
@@ -186,12 +195,13 @@ public class EmailBackgroundService : BackgroundService
         }
 
         var accountsRepo = scope.ServiceProvider.GetRequiredService<EmailAccountRepository>();
+        var inboxesRepo = scope.ServiceProvider.GetService<EmailInboxRepository>();
         var foldersRepo = scope.ServiceProvider.GetRequiredService<EmailFolderRepository>();
         var messagesRepo = scope.ServiceProvider.GetRequiredService<EmailMessageRepository>();
         var syncService = scope.ServiceProvider.GetRequiredService<IEmailSyncService>();
         var syncStateService = scope.ServiceProvider.GetService<EmailSyncStateService>();
 
-        var accounts = GetSyncAccounts(accountsRepo);
+        var accounts = GetSyncAccounts(accountsRepo, inboxesRepo);
         var activeIds = accounts.Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         foreach (var watchedId in _idleStarted.ToList())

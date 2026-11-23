@@ -40,7 +40,7 @@ public class CalendarNotificationServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_CalNotif_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -228,12 +228,13 @@ public class CalendarNotificationServiceTests : IDisposable
         var evt = new CalendarEvent { Id = "evt-1", Title = "Alice Event" };
         var reminder = new CalendarReminder { Id = "rem-1", Value = 10, Unit = CalendarReminderUnit.Minutes };
 
-        bool unreadChangedFired = false;
-        _service.OnUnreadCountChanged += () => unreadChangedFired = true;
-
         _reminderState.TriggerReminder("user-bob", evt, reminder);
 
-        Assert.False(unreadChangedFired);
+        _mockSnackbar.Verify(s => s.Add<CalendarNotificationContent>(
+            It.IsAny<Dictionary<string, object>>(),
+            It.IsAny<Severity>(),
+            It.IsAny<Action<SnackbarOptions>>(),
+            It.IsAny<string>()), Times.Never);
         _mockSoundService.Verify(s => s.PlayNotificationSoundAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
     }
 
@@ -265,9 +266,6 @@ public class CalendarNotificationServiceTests : IDisposable
             })
             .Returns((Snackbar)null!);
 
-        bool unreadChangedFired = false;
-        _service.OnUnreadCountChanged += () => unreadChangedFired = true;
-
         var evt = new CalendarEvent
         {
             Id = "evt-99",
@@ -279,8 +277,6 @@ public class CalendarNotificationServiceTests : IDisposable
         var reminder = new CalendarReminder { Id = "rem-99", Value = 15, Unit = CalendarReminderUnit.Minutes };
 
         _reminderState.TriggerReminder("user-alice", evt, reminder);
-
-        Assert.True(unreadChangedFired);
 
         // Sound played
         _mockSoundService.Verify(s => s.PlayNotificationSoundAsync(NotificationCategories.Calendar, null, false), Times.Once);
@@ -296,13 +292,6 @@ public class CalendarNotificationServiceTests : IDisposable
 
         // Config callback was registered
         Assert.NotNull(capturedConfig);
-    }
-
-    [Fact]
-    public async Task TotalUnreadCount_AlwaysReturnsZero()
-    {
-        await _service.InitializeAsync("user-alice");
-        Assert.Equal(0, _service.TotalUnreadCount);
     }
 
     [Fact]
@@ -330,7 +319,7 @@ public class CalendarNotificationServiceTests : IDisposable
             IsConnected = true,
             IsFocused = false
         };
-        var presenceState = new PresenceStateService(new Mock<ChatStateService>().Object);
+        var presenceState = new PresenceStateService(new VoiceStateService());
         presenceState.RegisterConnection(new ConnectionRegistrationOptions
         {
             UserId = userId,
@@ -375,7 +364,7 @@ public class CalendarNotificationServiceTests : IDisposable
             IsConnected = true,
             IsFocused = true
         };
-        var presenceState = new PresenceStateService(new Mock<ChatStateService>().Object);
+        var presenceState = new PresenceStateService(new VoiceStateService());
         presenceState.RegisterConnection(new ConnectionRegistrationOptions
         {
             UserId = userId,

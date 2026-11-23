@@ -33,5 +33,10 @@ public interface IChatService
     SpokesResult DeleteChannel(string channelId, string requestingUserId, bool isSessionUnlocked = true);
     SpokesResult ArchiveChannel(string channelId, bool archive, string requestingUserId, bool isSessionUnlocked = true);
     SpokesResult UpdateChannelOrders(Dictionary<string, int> channelOrders, string requestingUserId);
+    List<ChatCategory> GetCategories();
+    int GetCategoryChannelCount(string categoryId, string requestingUserId);
+    SpokesResult<ChatCategory> CreateCategory(string name, string requestingUserId);
+    SpokesResult UpdateCategoryOrders(Dictionary<string, int> categoryOrders, string requestingUserId);
+    SpokesResult DeleteCategory(string categoryId, string requestingUserId, bool isSessionUnlocked = true);
     SpokesResult LeaveGroupChannel(string channelId, string requestingUserId);
 }

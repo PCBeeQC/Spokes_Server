@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
@@ -34,7 +35,7 @@ public class EmailDraftServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_EmailDrafts_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -68,23 +69,10 @@ public class EmailDraftServiceTests : IDisposable
     }
 
     [Fact]
-    public void SaveDraftRequest_SettingEmployeeId_DoesNotOverwriteAccountId()
-    {
-        var req = new SaveDraftRequest
-        {
-            AccountId = "acc-shared-1",
-            EmployeeId = "emp-alice-1"
-        };
-
-        Assert.Equal("acc-shared-1", req.AccountId);
-        Assert.Equal("emp-alice-1", req.EmployeeId);
-    }
-
-    [Fact]
     public async Task SaveDraftAsync_SetsCreatedByEmployeeId_AndBlocksSharedAccountCoworkerFromOverwritingDraft()
     {
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", IsActive = true };
-        var bob = new Employee { Id = "emp-bob", FirstName = "Bob", IsActive = true };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", IsActive = true, Permissions = [AppPermissions.Email.Use] };
+        var bob = new Employee { Id = "emp-bob", FirstName = "Bob", IsActive = true, Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
         _employees.Save(bob);
 
@@ -146,8 +134,8 @@ public class EmailDraftServiceTests : IDisposable
     [Fact]
     public async Task RemoveDraftAttachmentAsync_And_DeleteDraftAsync_EnforceCreatorIsolation()
     {
-        var alice = new Employee { Id = "emp-att-alice", FirstName = "Alice", IsActive = true };
-        var bob = new Employee { Id = "emp-att-bob", FirstName = "Bob", IsActive = true };
+        var alice = new Employee { Id = "emp-att-alice", FirstName = "Alice", IsActive = true, Permissions = [AppPermissions.Email.Use] };
+        var bob = new Employee { Id = "emp-att-bob", FirstName = "Bob", IsActive = true, Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
         _employees.Save(bob);
 
@@ -197,7 +185,7 @@ public class EmailDraftServiceTests : IDisposable
     [Fact]
     public async Task DraftOperations_RejectSuspendedBannedAndUnknownEmployees()
     {
-        var activeCreator = new Employee { Id = "emp-active", FirstName = "Active", IsActive = true };
+        var activeCreator = new Employee { Id = "emp-active", FirstName = "Active", IsActive = true, Permissions = [AppPermissions.Email.Use] };
         var suspendedUser = new Employee { Id = "emp-suspended", FirstName = "Suspended", IsActive = true, IsSuspended = true };
         var bannedUser = new Employee { Id = "emp-banned", FirstName = "Banned", IsActive = true, IsBanned = true };
         _employees.Save(activeCreator);

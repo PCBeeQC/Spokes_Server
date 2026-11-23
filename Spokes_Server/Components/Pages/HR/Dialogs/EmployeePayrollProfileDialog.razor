@@ -1,0 +1,546 @@
+@using System.Globalization
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Accounting
+@inject IJurisdictionTemplateService TemplateService
+@inject UserService UserService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+            <div class="d-flex align-center gap-2">
+                <MudIcon Icon="@Icons.Material.Filled.Badge" Color="Color.Primary" />
+                <div>
+                    <MudText Typo="Typo.h6">@BizLoc["Payroll & Tax Profile"] — @Employee.FullName</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["Active Jurisdiction:"] <b>@_template.Name (@_template.JurisdictionId · @_template.TaxYear)</b>
+                    </MudText>
+                </div>
+            </div>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="4" Style="max-height: 75vh; overflow-y: auto;" Class="pr-1">
+            @* 1. Compensation & Vacation *@
+            <MudPaper Class="pa-4" Outlined="true" Elevation="0">
+                <MudText Typo="Typo.subtitle1" Class="mb-3"><b>@BizLoc["Compensation & Vacation Policy"]</b></MudText>
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="4">
+                        <MudSelect T="string"
+                                   @bind-Value="_compensationType"
+                                   Disabled="@(!_canEditSalaries)"
+                                   Label="@BizLoc["Compensation Type"]"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   Dense="true">
+                            <MudSelectItem Value="@PayrollCompensationType.Hourly">@BizLoc["Hourly"]</MudSelectItem>
+                            <MudSelectItem Value="@PayrollCompensationType.Salaried">@BizLoc["Salaried (Annual)"]</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudSelect T="string"
+                                   @bind-Value="_payFrequency"
+                                   Disabled="@(!_canEditSalaries)"
+                                   Label="@BizLoc["Pay Frequency"]"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   Dense="true">
+                            <MudSelectItem Value="@PayFrequencyType.Weekly">@BizLoc["Weekly (52/yr)"]</MudSelectItem>
+                            <MudSelectItem Value="@PayFrequencyType.BiWeekly">@BizLoc["Bi-Weekly (26/yr)"]</MudSelectItem>
+                            <MudSelectItem Value="@PayFrequencyType.SemiMonthly">@BizLoc["Semi-Monthly (24/yr)"]</MudSelectItem>
+                            <MudSelectItem Value="@PayFrequencyType.Monthly">@BizLoc["Monthly (12/yr)"]</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="decimal"
+                                         Value="_weeklyHours"
+                                         ValueChanged="OnWeeklyHoursChanged"
+                                         Disabled="@(!_canEditWeeklyHours)"
+                                         Label="@BizLoc["Standard Weekly Hours"]"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Min="1m"
+                                         Max="80m"
+                                         Format="N1"
+                                         Adornment="Adornment.End"
+                                         AdornmentText="h/wk" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="decimal"
+                                         Value="_hourlyRate"
+                                         ValueChanged="OnHourlyRateChanged"
+                                         Disabled="@(!_canEditSalaries)"
+                                         Label="@BizLoc["Hourly Rate"]"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Min="0m"
+                                         Format="N2"
+                                         Adornment="Adornment.End"
+                                         AdornmentText="$/h" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="decimal"
+                                         Value="_annualSalary"
+                                         ValueChanged="OnAnnualSalaryChanged"
+                                         Disabled="@(!_canEditSalaries)"
+                                         Label="@BizLoc["Annual Gross Salary"]"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Min="0m"
+                                         Format="N2"
+                                         Adornment="Adornment.Start"
+                                         AdornmentText="$" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="decimal"
+                                         @bind-Value="_vacationRatePercent"
+                                         Disabled="@(!_canEditSalaries)"
+                                         Label="@BizLoc["Vacation Rate (%)"]"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Min="0m"
+                                         Max="30m"
+                                         Format="N2"
+                                         Adornment="Adornment.End"
+                                         AdornmentText="%" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudSelect T="string"
+                                   @bind-Value="_vacationHandling"
+                                   Disabled="@(!_canEditSalaries)"
+                                   Label="@BizLoc["Vacation Handling"]"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   Dense="true">
+                            <MudSelectItem Value="@VacationPayHandling.AccrueInBank">@BizLoc["Accrue in Vacation Bank"]</MudSelectItem>
+                            <MudSelectItem Value="@VacationPayHandling.PayOutEachPeriod">@BizLoc["Pay Out Every Period"]</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="decimal"
+                                         @bind-Value="_vacationBankDollars"
+                                         Disabled="@(!_canEditSalaries)"
+                                         Label="@BizLoc["Vacation Bank Balance ($)"]"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Format="N2"
+                                         Adornment="Adornment.Start"
+                                         AdornmentText="$" />
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+
+            @* 2. Template-Declared Employee Tax & Withholding Parameters *@
+            @if (_paramRows.Count > 0)
+            {
+                <MudPaper Class="pa-4" Outlined="true" Elevation="0">
+                    <div class="d-flex justify-space-between align-center mb-1">
+                        <MudText Typo="Typo.subtitle1"><b>@BizLoc["Jurisdiction Tax & Withholding Parameters"]</b></MudText>
+                        <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary" Disabled="@(!_canEditSalaries)" OnClick="ResetAllParametersToDefaults">
+                            @BizLoc["Reset All Defaults"]
+                        </MudButton>
+                    </div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-3">
+                        @BizLoc["Rendered dynamically from the active jurisdiction template."]
+                    </MudText>
+
+                    <MudGrid Spacing="2">
+                        @foreach (var p in _paramRows)
+                        {
+                            <MudItem xs="12" sm="6">
+                                @if (p.Definition.DataType == EmployeeRuleParameterType.Choice)
+                                {
+                                    <MudSelect T="string"
+                                               @bind-Value="p.StringValue"
+                                               Disabled="@(!_canEditSalaries)"
+                                               Label="@p.Definition.GetLocalizedLabel()"
+                                               HelperText="@p.Definition.GetLocalizedHelpText()"
+                                               Variant="Variant.Outlined"
+                                               Margin="Margin.Dense"
+                                               Dense="true">
+                                        @foreach (var opt in p.Definition.Options)
+                                        {
+                                            <MudSelectItem Value="@opt.Key">@opt.GetLocalizedLabel()</MudSelectItem>
+                                        }
+                                    </MudSelect>
+                                }
+                                else if (p.Definition.DataType == EmployeeRuleParameterType.Boolean)
+                                {
+                                    <MudCheckBox T="bool"
+                                                 @bind-Value="p.BoolValue"
+                                                 Disabled="@(!_canEditSalaries)"
+                                                 Label="@p.Definition.GetLocalizedLabel()"
+                                                 Color="Color.Primary"
+                                                 Dense="true" />
+                                    @if (!string.IsNullOrWhiteSpace(p.Definition.GetLocalizedHelpText()))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block ml-7">
+                                            @p.Definition.GetLocalizedHelpText()
+                                        </MudText>
+                                    }
+                                }
+                                else if (p.Definition.DataType == EmployeeRuleParameterType.Percent)
+                                {
+                                    <MudNumericField T="decimal"
+                                                     @bind-Value="p.NumericValue"
+                                                     Disabled="@(!_canEditSalaries)"
+                                                     Label="@p.Definition.GetLocalizedLabel()"
+                                                     HelperText="@p.Definition.GetLocalizedHelpText()"
+                                                     Variant="Variant.Outlined"
+                                                     Margin="Margin.Dense"
+                                                     Min="0m"
+                                                     Max="100m"
+                                                     Format="N2"
+                                                     Adornment="Adornment.End"
+                                                     AdornmentText="%" />
+                                }
+                                else if (p.Definition.DataType == EmployeeRuleParameterType.Decimal)
+                                {
+                                    <MudNumericField T="decimal"
+                                                     @bind-Value="p.NumericValue"
+                                                     Disabled="@(!_canEditSalaries)"
+                                                     Label="@p.Definition.GetLocalizedLabel()"
+                                                     HelperText="@p.Definition.GetLocalizedHelpText()"
+                                                     Variant="Variant.Outlined"
+                                                     Margin="Margin.Dense"
+                                                     Min="0m"
+                                                     Format="N2" />
+                                }
+                                else
+                                {
+                                    <MudNumericField T="decimal"
+                                                     @bind-Value="p.NumericValue"
+                                                     Disabled="@(!_canEditSalaries)"
+                                                     Label="@p.Definition.GetLocalizedLabel()"
+                                                     HelperText="@p.Definition.GetLocalizedHelpText()"
+                                                     Variant="Variant.Outlined"
+                                                     Margin="Margin.Dense"
+                                                     Min="0m"
+                                                     Format="N2"
+                                                     Adornment="Adornment.Start"
+                                                     AdornmentText="$" />
+                                }
+                            </MudItem>
+                        }
+                    </MudGrid>
+                </MudPaper>
+            }
+
+            @* 3. Template-Driven Statutory Contribution Exemptions *@
+            @if (_template.PayrollRules.Contributions.Count > 0)
+            {
+                <MudPaper Class="pa-4" Outlined="true" Elevation="0">
+                    <MudText Typo="Typo.subtitle1" Class="mb-1"><b>@BizLoc["Statutory Social Contributions & Exemptions"]</b></MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-3">
+                        @BizLoc["Toggle exemptions for specific contributions defined in the active jurisdiction template (e.g. owner/shareholder exemptions)."]
+                    </MudText>
+
+                    <MudSimpleTable Elevation="0" Dense="true" Hover="true" Outlined="true">
+                        <thead>
+                            <tr>
+                                <th>@BizLoc["Code"]</th>
+                                <th>@BizLoc["Contribution"]</th>
+                                <th>@BizLoc["Authority"]</th>
+                                <th style="text-align: right;">@BizLoc["Employee %"]</th>
+                                <th style="text-align: right;">@BizLoc["Employer %"]</th>
+                                <th style="text-align: center;">@BizLoc["Exempt for Employee"]</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var rule in _template.PayrollRules.Contributions)
+                            {
+                                var isExempt = _exemptCodes.Contains(rule.Code);
+                                <tr>
+                                    <td><MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@rule.Code</MudChip></td>
+                                    <td>@rule.Name</td>
+                                    <td>@rule.Authority</td>
+                                    <td style="text-align: right;">@((rule.EmployeeRate * 100m).ToString("N3"))%</td>
+                                    <td style="text-align: right;">@((rule.EmployerRate * 100m).ToString("N3"))%</td>
+                                    <td style="text-align: center;">
+                                        <MudCheckBox T="bool"
+                                                     Value="@isExempt"
+                                                     ValueChanged="@((bool v) => ToggleContributionExemption(rule.Code, v))"
+                                                     Disabled="@(!_canEditSalaries)"
+                                                     Dense="true"
+                                                     Color="Color.Warning" />
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                </MudPaper>
+            }
+
+            @* 4. Custom Recurring Employee Deductions & Benefits *@
+            <MudPaper Class="pa-4" Outlined="true" Elevation="0">
+                <div class="d-flex justify-space-between align-center mb-2">
+                    <div>
+                        <MudText Typo="Typo.subtitle1"><b>@BizLoc["Custom Recurring Deductions & Benefits"]</b></MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @BizLoc["Group insurance, pension/retirement matching, union dues, or recurring allowances."]
+                        </MudText>
+                    </div>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               Disabled="@(!_canEditSalaries)"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="AddCustomItem">
+                        @BizLoc["Add Item"]
+                    </MudButton>
+                </div>
+
+                @if (_customItems.Count == 0)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["No custom deductions or benefits configured."]</MudText>
+                }
+                else
+                {
+                    <MudStack Spacing="2" Class="mt-2">
+                        @foreach (var item in _customItems)
+                        {
+                            <MudGrid Spacing="2" Class="align-center">
+                                <MudItem xs="12" sm="4">
+                                    <MudTextField T="string"
+                                                  @bind-Value="item.Name"
+                                                  Disabled="@(!_canEditSalaries)"
+                                                  Label="@Loc["Name"]"
+                                                  Variant="Variant.Outlined"
+                                                  Margin="Margin.Dense" />
+                                </MudItem>
+                                <MudItem xs="6" sm="2">
+                                    <MudNumericField T="decimal"
+                                                     @bind-Value="item.AmountPerPay"
+                                                     Disabled="@(!_canEditSalaries)"
+                                                     Label="@BizLoc["Amount / Pay"]"
+                                                     Variant="Variant.Outlined"
+                                                     Margin="Margin.Dense"
+                                                     Format="N2" />
+                                </MudItem>
+                                <MudItem xs="6" sm="3">
+                                    @if (_canAccessAccounting)
+                                    {
+                                        <GlAccountSelect @bind-Value="item.GlAccountCode"
+                                                         Disabled="@(!_canEditSalaries)"
+                                                         Label="@BizLoc["Category"]"
+                                                         Dense="true" />
+                                    }
+                                    else
+                                    {
+                                        <MudTextField T="string"
+                                                      Value="@item.GlAccountCode"
+                                                      Disabled="true"
+                                                      Label="@BizLoc["Category"]"
+                                                      Variant="Variant.Outlined"
+                                                      Margin="Margin.Dense" />
+                                    }
+                                </MudItem>
+                                <MudItem xs="8" sm="2">
+                                    <MudCheckBox T="bool"
+                                                 @bind-Value="item.IsEmployerContribution"
+                                                 Disabled="@(!_canEditSalaries)"
+                                                 Label="@BizLoc["Employer Paid"]"
+                                                 Dense="true" />
+                                </MudItem>
+                                <MudItem xs="4" sm="1" Class="d-flex justify-end">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                   Color="Color.Error"
+                                                   Size="Size.Small"
+                                                   Disabled="@(!_canEditSalaries)"
+                                                   OnClick="@(() => _customItems.Remove(item))" />
+                                </MudItem>
+                            </MudGrid>
+                        }
+                    </MudStack>
+                }
+            </MudPaper>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => MudDialog.Cancel())">@Loc["Cancel"]</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!_canEditSalaries)" StartIcon="@Icons.Material.Filled.Save" OnClick="Save">
+            @Loc["Save"]
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public Employee Employee { get; set; } = new();
+
+    private JurisdictionTemplate _template = new();
+    private string _compensationType = PayrollCompensationType.Hourly;
+    private string _payFrequency = PayFrequencyType.BiWeekly;
+    private decimal _weeklyHours = 40m;
+    private decimal _hourlyRate;
+    private decimal _annualSalary;
+    private decimal _vacationRatePercent = 4.0m;
+    private string _vacationHandling = VacationPayHandling.AccrueInBank;
+    private decimal _vacationBankDollars;
+
+    private List<ParamEditRow> _paramRows = [];
+    private HashSet<string> _exemptCodes = new(StringComparer.OrdinalIgnoreCase);
+    private List<EmployeePayRecurringItem> _customItems = [];
+    private bool _canEditSalaries;
+    private bool _canEditWeeklyHours;
+    private bool _canAccessAccounting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var actor = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canEditSalaries = actor is { IsActiveUnsuspended: true } && (actor.IsAdmin || actor.HasPermission(AppPermissions.Hr.ManageSalaries));
+        _canEditWeeklyHours = _canEditSalaries && UserService.CanManageEmployeeTarget(actor, Employee);
+        _canAccessAccounting = actor != null && (actor.IsAdmin || actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: true));
+        _template = TemplateService.GetActiveTemplate();
+        var payroll = Employee.Payroll ?? new EmployeePayrollProfile();
+
+        _compensationType = payroll.CompensationType;
+        _payFrequency = payroll.PayFrequency;
+        _weeklyHours = Employee.WeeklyHours > 0m ? Employee.WeeklyHours : 40m;
+        _hourlyRate = Employee.HourlyRate;
+        _annualSalary = payroll.AnnualSalary > 0m
+            ? payroll.AnnualSalary
+            : Math.Round(_hourlyRate * _weeklyHours * 52m, 2);
+        _vacationRatePercent = Math.Round((payroll.VacationRate > 0m ? payroll.VacationRate : _template.PayrollRules.DefaultVacationRate) * 100m, 2);
+        _vacationHandling = payroll.VacationHandling;
+        _vacationBankDollars = payroll.VacationBankBalanceDollars;
+
+        _exemptCodes = new HashSet<string>(payroll.ExemptContributionCodes ?? [], StringComparer.OrdinalIgnoreCase);
+
+        _paramRows = (_template.PayrollRules?.EmployeeParameters ?? [])
+            .Select(def => new ParamEditRow
+            {
+                Definition = def,
+                StringValue = payroll.GetParameterString(def),
+                NumericValue = payroll.GetParameterDecimal(def.Key, [def], 0m),
+                BoolValue = payroll.GetParameterBool(def.Key, [def], false)
+            })
+            .ToList();
+
+        _customItems = (payroll.CustomDeductionsAndBenefits ?? [])
+            .Select(c => new EmployeePayRecurringItem
+            {
+                Id = c.Id,
+                Name = c.Name,
+                AmountPerPay = c.AmountPerPay,
+                IsPercentageOfGross = c.IsPercentageOfGross,
+                Percentage = c.Percentage,
+                IsEmployerContribution = c.IsEmployerContribution,
+                GlAccountCode = c.GlAccountCode
+            })
+            .ToList();
+    }
+
+    private void ResetAllParametersToDefaults()
+    {
+        foreach (var row in _paramRows)
+        {
+            row.StringValue = row.Definition.DefaultValue;
+            row.NumericValue = decimal.TryParse(row.Definition.DefaultValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : 0m;
+            row.BoolValue = bool.TryParse(row.Definition.DefaultValue, out var b) && b;
+        }
+    }
+
+    private void OnWeeklyHoursChanged(decimal hours)
+    {
+        if (!_canEditWeeklyHours) return;
+        _weeklyHours = hours > 0m ? Math.Clamp(hours, 1m, 80m) : 40m;
+        if (_compensationType == PayrollCompensationType.Salaried && _annualSalary > 0m)
+        {
+            _hourlyRate = Math.Round(_annualSalary / (_weeklyHours * 52m), 2);
+        }
+        else
+        {
+            _annualSalary = Math.Round(_hourlyRate * _weeklyHours * 52m, 2);
+        }
+    }
+
+    private void OnHourlyRateChanged(decimal rate)
+    {
+        _hourlyRate = Math.Max(0m, rate);
+        _annualSalary = Math.Round(_hourlyRate * _weeklyHours * 52m, 2);
+    }
+
+    private void OnAnnualSalaryChanged(decimal annual)
+    {
+        _annualSalary = Math.Max(0m, annual);
+        if (_weeklyHours > 0m)
+        {
+            _hourlyRate = Math.Round(_annualSalary / (_weeklyHours * 52m), 2);
+        }
+    }
+
+    private void ToggleContributionExemption(string code, bool isExempt)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return;
+        if (isExempt) _exemptCodes.Add(code);
+        else _exemptCodes.Remove(code);
+    }
+
+    private void AddCustomItem()
+    {
+        _customItems.Add(new EmployeePayRecurringItem
+        {
+            Name = "Group Benefit / Deduction",
+            GlAccountCode = "2210"
+        });
+    }
+
+    private async Task Save()
+    {
+        var actor = await UserService.GetEmployeeAsync(allowSuspended: false);
+        _canEditSalaries = actor != null && (actor.IsAdmin || actor.HasPermission(AppPermissions.Hr.ManageSalaries));
+        _canEditWeeklyHours = _canEditSalaries && UserService.CanManageEmployeeTarget(actor, Employee);
+        if (!_canEditSalaries)
+        {
+            Snackbar.Add(BizLoc["Read-only mode: cannot modify salaries or contributions."].Value, Severity.Warning);
+            StateHasChanged();
+            return;
+        }
+
+        if (_canEditWeeklyHours)
+        {
+            Employee.WeeklyHours = Math.Clamp(_weeklyHours, 1m, 80m);
+        }
+        Employee.HourlyRate = Math.Max(0m, _hourlyRate);
+        Employee.Payroll ??= new EmployeePayrollProfile();
+
+        Employee.Payroll.CompensationType = _compensationType;
+        Employee.Payroll.PayFrequency = _payFrequency;
+        Employee.Payroll.AnnualSalary = _annualSalary;
+        Employee.Payroll.VacationRate = Math.Round(_vacationRatePercent / 100m, 4);
+        Employee.Payroll.VacationHandling = _vacationHandling;
+        Employee.Payroll.VacationBankBalanceDollars = _vacationBankDollars;
+
+        Employee.Payroll.ParameterValues ??= new(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in _paramRows)
+        {
+            if (string.IsNullOrWhiteSpace(row.Definition.Key)) continue;
+            if (row.Definition.DataType == EmployeeRuleParameterType.Choice)
+                Employee.Payroll.SetParameterValue(row.Definition.Key, row.StringValue);
+            else if (row.Definition.DataType == EmployeeRuleParameterType.Boolean)
+                Employee.Payroll.SetParameterBool(row.Definition.Key, row.BoolValue);
+            else
+                Employee.Payroll.SetParameterDecimal(row.Definition.Key, row.NumericValue);
+        }
+
+        Employee.Payroll.ExemptContributionCodes = new HashSet<string>(_exemptCodes, StringComparer.OrdinalIgnoreCase);
+        Employee.Payroll.CustomDeductionsAndBenefits = _customItems
+            .Where(c => !string.IsNullOrWhiteSpace(c.Name))
+            .ToList();
+
+        MudDialog.Close(DialogResult.Ok(Employee));
+    }
+
+    private sealed class ParamEditRow
+    {
+        public EmployeeRuleParameter Definition { get; set; } = new();
+        public string StringValue { get; set; } = string.Empty;
+        public decimal NumericValue { get; set; }
+        public bool BoolValue { get; set; }
+    }
+}

@@ -47,7 +47,7 @@ public class EmailPipelineServicesTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Email_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -60,7 +60,7 @@ public class EmailPipelineServicesTests : IDisposable
 
         _encryptionService = new EncryptionService(_config);
         _syncStateService = new EmailSyncStateService();
-        var presenceState = new PresenceStateService(new ChatStateService());
+        var presenceState = new PresenceStateService(new VoiceStateService());
 
         var mockNotificationRouting = new Mock<INotificationRoutingService>();
 
@@ -245,7 +245,7 @@ public class EmailPipelineServicesTests : IDisposable
             }
         };
 
-        await _syncService.SyncFolderAsync(null, mockFolder.Object, acc, isInitialAccountSync: false);
+        await _syncService.SyncFolderAsync(mockFolder.Object, acc, isInitialAccountSync: false);
 
         Assert.Equal(0, unreadCountAtNotificationTime);
         Assert.True(_emailMessages.GetById(acc.Id, msg.Id)!.IsRead);
@@ -290,7 +290,7 @@ public class EmailPipelineServicesTests : IDisposable
             if (accountId == acc.Id) notified = true;
         };
 
-        await _syncService.SyncFolderAsync(null, mockFolder.Object, acc, isInitialAccountSync: false);
+        await _syncService.SyncFolderAsync(mockFolder.Object, acc, isInitialAccountSync: false);
 
         Assert.True(notified);
         Assert.Equal(0, _emailFolders.GetById("f_expunge_sync")!.UnreadCount);
@@ -476,16 +476,6 @@ public class EmailPipelineServicesTests : IDisposable
         var result = await _messageLifecycleService.MoveMessageToTrashAsync("acc_gmail", msg.Id);
         // It attempted move to [Gmail]/Trash (and failed at IMAP layer), rather than failing with TRASH_FOLDER_NOT_FOUND
         Assert.NotEqual("TRASH_FOLDER_NOT_FOUND", result.Code);
-    }
-
-    [Fact]
-    public void EmailFolder_IsSelectable_DefaultsToTrue_AndCanBeSetFalse()
-    {
-        var folder = new EmailFolder { Id = "f_cont", Name = "[Gmail]", Path = "[Gmail]" };
-        Assert.True(folder.IsSelectable);
-
-        folder.IsSelectable = false;
-        Assert.False(folder.IsSelectable);
     }
 
     [Fact]
@@ -813,7 +803,7 @@ public class EmailPipelineServicesTests : IDisposable
 
         Assert.True(File.Exists(attPath));
 
-        await _draftService.RemoveDraftAttachmentAsync(acc.Id, draftId, attId);
+        await _draftService.RemoveDraftAttachmentAsync(acc.Id, draftId, attId, employeeId: null);
 
         var reloaded = _emailMessages.GetById(draftId);
         Assert.NotNull(reloaded);

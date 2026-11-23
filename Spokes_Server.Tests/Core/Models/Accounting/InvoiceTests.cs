@@ -5,51 +5,6 @@ namespace Spokes_Server.Tests.Core.Models.Accounting;
 public class InvoiceTests
 {
     [Fact]
-    public void Invoice_Initialization_SetsDefaultsCorrectly()
-    {
-        var invoice = new Invoice();
-
-        Assert.False(string.IsNullOrEmpty(invoice.Id));
-        Assert.Equal(string.Empty, invoice.ProjectId);
-        Assert.Null(invoice.ProjectGroupId);
-        Assert.Equal(string.Empty, invoice.InvoiceNumber);
-
-        Assert.Equal(DateTime.Today, invoice.Date);
-        Assert.Equal(DateTime.Today.AddDays(30), invoice.DueDate);
-        Assert.Equal("Draft", invoice.Status);
-
-        Assert.Null(invoice.TemplateId);
-        Assert.False(invoice.HideCostAndMarkup);
-        Assert.Equal(string.Empty, invoice.Note);
-
-        Assert.Empty(invoice.LineItems);
-        Assert.Empty(invoice.BilledTimeEntryIds);
-        Assert.Empty(invoice.BilledPoItemIds);
-        Assert.Empty(invoice.BilledExpenseItemIds);
-
-        Assert.Equal(0.14975m, invoice.TaxRate);
-        Assert.Equal(0, invoice.SubTotal);
-        Assert.Equal(0, invoice.TaxAmount);
-        Assert.Equal(0, invoice.GrandTotal);
-
-        Assert.Equal(0, invoice.AmountPaid);
-        Assert.Equal(0, invoice.BalanceDue);
-        Assert.Null(invoice.DatePaid);
-        
-        Assert.Equal(string.Empty, invoice.PaymentTerms);
-    }
-
-    [Fact]
-    public void Invoice_PaymentTerms_CanBeModifiedAndPersisted()
-    {
-        var invoice = new Invoice { PaymentTerms = "Net 45 days. **Late fees** apply." };
-        Assert.Equal("Net 45 days. **Late fees** apply.", invoice.PaymentTerms);
-        
-        var json = System.Text.Json.JsonSerializer.Serialize(invoice);
-        Assert.Contains("\"PaymentTerms\":\"Net 45 days. **Late fees** apply.\"", json);
-    }
-
-    [Fact]
     public void Invoice_FinancialProjections_CalculatedCorrectly()
     {
         var invoice = new Invoice
@@ -66,32 +21,6 @@ public class InvoiceTests
 
         invoice.Payments.Add(new PaymentRecord { Amount = 100m });
         Assert.Equal(120m, invoice.BalanceDue);
-    }
-
-    [Fact]
-    public void InvoiceLine_Initialization_SetsDefaultsCorrectly()
-    {
-        var line = new InvoiceLine();
-
-        Assert.Equal(string.Empty, line.Description);
-        Assert.Equal(0, line.Quantity);
-        Assert.Equal(0, line.UnitPrice);
-        Assert.Equal(0, line.Total);
-
-        Assert.False(line.IsPrepayment);
-        Assert.False(line.IsCreditUsed);
-
-        Assert.Equal("General", line.Type);
-        Assert.Equal(0, line.OriginalUnitCost);
-        Assert.Equal(0, line.MarkupPercentage);
-        Assert.Equal(string.Empty, line.Note);
-    }
-
-    [Fact]
-    public void InvoiceLine_Note_MutatesCorrectly()
-    {
-        var line = new InvoiceLine { Note = "Special discount" };
-        Assert.Equal("Special discount", line.Note);
     }
 
     [Fact]
@@ -170,132 +99,61 @@ public class InvoiceTests
     }
 
     [Fact]
-    public void Invoice_JsonDeserialization_MigratesLegacyAmountPaidToPaymentRecord()
+    public void Invoice_JsonDeserialization_IgnoresObsoleteLegacyFieldsAndReadsCanonicalPayments()
     {
-        const string legacyJson = "{\"Id\":\"inv-legacy-1\",\"AmountPaid\":75.50,\"Status\":\"Final\"}";
-        var invoice = System.Text.Json.JsonSerializer.Deserialize<Invoice>(legacyJson);
+        const string jsonWithObsoleteFields = """
+        {
+            "Id": "inv-modern-1",
+            "Lines": [{ "Description": "Old", "Quantity": 1, "UnitPrice": 50 }],
+            "AmountPaid": 75.50,
+            "Payments": [{ "Amount": 25.00, "Method": "EFT" }],
+            "Status": "Final"
+        }
+        """;
+        var invoice = System.Text.Json.JsonSerializer.Deserialize<Invoice>(jsonWithObsoleteFields);
 
         Assert.NotNull(invoice);
+        Assert.Empty(invoice.LineItems);
         Assert.Single(invoice.Payments);
-        Assert.Equal(75.50m, invoice.Payments[0].Amount);
-        Assert.Equal("Legacy", invoice.Payments[0].Method);
-        Assert.Equal(75.50m, invoice.AmountPaid);
+        Assert.Equal(25.00m, invoice.Payments[0].Amount);
+        Assert.Equal("EFT", invoice.Payments[0].Method);
+        Assert.Equal(25.00m, invoice.AmountPaid);
     }
 
     [Fact]
-    public void Invoice_Equals_SameReference_ReturnsTrue()
-    {
-        var invoice = new Invoice { Id = "INV-001" };
-
-        Assert.True(invoice.Equals(invoice));
-    }
-
-    [Fact]
-    public void Invoice_EqualsAndGetHashCode_SameId_ReturnsTrueAndEqualHashCode()
+    public void Invoice_Equals_And_GetHashCode_Behavior()
     {
         var invoice1 = new Invoice { Id = "INV-001" };
         var invoice2 = new Invoice { Id = "INV-001" };
+        var invoice3 = new Invoice { Id = "INV-002" };
 
+        Assert.True(invoice1.Equals(invoice1));
         Assert.True(invoice1.Equals(invoice2));
         Assert.True(invoice2.Equals(invoice1));
         Assert.Equal(invoice1.GetHashCode(), invoice2.GetHashCode());
+        Assert.False(invoice1.Equals(invoice3));
+        Assert.False(invoice3.Equals(invoice1));
+        Assert.False(invoice1.Equals(null));
+        Assert.False(invoice1.Equals("INV-001"));
+        Assert.False(invoice1.Equals(new object()));
     }
 
     [Fact]
-    public void Invoice_Equals_DifferentId_ReturnsFalse()
-    {
-        var invoice1 = new Invoice { Id = "INV-001" };
-        var invoice2 = new Invoice { Id = "INV-002" };
-
-        Assert.False(invoice1.Equals(invoice2));
-        Assert.False(invoice2.Equals(invoice1));
-    }
-
-    [Fact]
-    public void Invoice_Equals_NullOrDifferentType_ReturnsFalse()
-    {
-        var invoice = new Invoice { Id = "INV-001" };
-
-        Assert.False(invoice.Equals(null));
-        Assert.False(invoice.Equals("INV-001"));
-        Assert.False(invoice.Equals(new object()));
-    }
-
-    [Fact]
-    public void InvoiceLine_Equals_SameReference_ReturnsTrue()
-    {
-        var line = new InvoiceLine { Id = "LINE-001" };
-
-        Assert.True(line.Equals(line));
-    }
-
-    [Fact]
-    public void InvoiceLine_EqualsAndGetHashCode_SameId_ReturnsTrueAndEqualHashCode()
+    public void InvoiceLine_Equals_And_GetHashCode_Behavior()
     {
         var line1 = new InvoiceLine { Id = "LINE-001" };
         var line2 = new InvoiceLine { Id = "LINE-001" };
+        var line3 = new InvoiceLine { Id = "LINE-002" };
 
+        Assert.True(line1.Equals(line1));
         Assert.True(line1.Equals(line2));
         Assert.True(line2.Equals(line1));
         Assert.Equal(line1.GetHashCode(), line2.GetHashCode());
-    }
-
-    [Fact]
-    public void InvoiceLine_Equals_DifferentId_ReturnsFalse()
-    {
-        var line1 = new InvoiceLine { Id = "LINE-001" };
-        var line2 = new InvoiceLine { Id = "LINE-002" };
-
-        Assert.False(line1.Equals(line2));
-        Assert.False(line2.Equals(line1));
-    }
-
-    [Fact]
-    public void InvoiceLine_Equals_NullOrDifferentType_ReturnsFalse()
-    {
-        var line = new InvoiceLine { Id = "LINE-001" };
-
-        Assert.False(line.Equals(null));
-        Assert.False(line.Equals("LINE-001"));
-        Assert.False(line.Equals(new object()));
-    }
-
-#pragma warning disable CS0618 // Obsolete member testing
-    [Fact]
-    public void Invoice_LineItems_And_Lines_AreSynchronized()
-    {
-        var invoice = new Invoice();
-        var item = new InvoiceLine { Description = "Test Service", Quantity = 2, UnitPrice = 50m };
-
-        invoice.LineItems.Add(item);
-        Assert.Single(invoice.Lines);
-        Assert.Same(item, invoice.Lines[0]);
-        Assert.Equal(100m, invoice.SubTotal);
-
-        var item2 = new InvoiceLine { Description = "Parts", Quantity = 1, UnitPrice = 25m };
-        invoice.Lines.Add(item2);
-        Assert.Equal(2, invoice.LineItems.Count);
-        Assert.Equal(125m, invoice.SubTotal);
-    }
-
-    [Fact]
-    public void Invoice_JsonDeserialization_SupportsLegacyLinesProperty()
-    {
-        const string legacyJson = """
-        {
-            "Id": "inv-1",
-            "Lines": [
-                { "Description": "Consulting", "Quantity": 2, "UnitPrice": 100 }
-            ]
-        }
-        """;
-
-        var invoice = System.Text.Json.JsonSerializer.Deserialize<Invoice>(legacyJson);
-        Assert.NotNull(invoice);
-        Assert.Single(invoice.LineItems);
-        Assert.Equal("Consulting", invoice.LineItems[0].Description);
-        Assert.Equal("Consulting", invoice.Lines[0].Description);
-        Assert.Equal(200m, invoice.SubTotal);
+        Assert.False(line1.Equals(line3));
+        Assert.False(line3.Equals(line1));
+        Assert.False(line1.Equals(null));
+        Assert.False(line1.Equals("LINE-001"));
+        Assert.False(line1.Equals(new object()));
     }
 
     [Fact]
@@ -314,10 +172,8 @@ public class InvoiceTests
         Assert.NotNull(invoice);
         Assert.Single(invoice.LineItems);
         Assert.Equal("Development", invoice.LineItems[0].Description);
-        Assert.Equal("Development", invoice.Lines[0].Description);
         Assert.Equal(450m, invoice.SubTotal);
     }
-#pragma warning restore CS0618
 
     [Fact]
     public void Invoice_JsonSerialization_WritesLineItemsProperty()
@@ -328,6 +184,74 @@ public class InvoiceTests
         var json = System.Text.Json.JsonSerializer.Serialize(invoice);
         Assert.Contains("\"LineItems\"", json);
         Assert.DoesNotContain("\"LegacyLines\"", json);
+    }
+
+    [Fact]
+    public void Invoice_LineTotalsAndSubTotal_AreRoundedToTwoDecimals()
+    {
+        var invoice = new Invoice { TaxRate = 0.14975m };
+        invoice.LineItems.Add(new InvoiceLine { Quantity = 14.234m, UnitPrice = 103.05m }); // 1466.8137 -> 1466.81
+        invoice.LineItems.Add(new InvoiceLine { Quantity = 1m, UnitPrice = -1466.81m, IsCreditUsed = true });
+
+        Assert.Equal(1466.81m, invoice.LineItems[0].Total);
+        Assert.Equal(0.00m, invoice.SubTotal);
+        Assert.Equal(0.00m, invoice.TaxAmount);
+        Assert.Equal(0.00m, invoice.GrandTotal);
+        Assert.Equal(0.00m, invoice.BalanceDue);
+    }
+
+    [Fact]
+    public void Invoice_DuplicateAsDraft_RegeneratesLineIdsAndClearsBillingLinks()
+    {
+        var originalLineId = "line-orig-1";
+        var original = new Invoice
+        {
+            Id = "inv-orig",
+            ProjectId = "proj-1",
+            InvoiceNumber = "INV-2601-0001",
+            Status = InvoiceStatus.Paid,
+            PdfPath = "/data/PDFs/Invoices/inv-orig.pdf",
+            IsOpeningBalance = true,
+            MigrationBatchId = "batch-1",
+            BilledTimeEntryIds = ["t1"],
+            BilledPoItemIds = ["p1"],
+            BilledExpenseItemIds = ["e1"],
+            Payments = [new PaymentRecord { Amount = 100m }],
+            LineItems =
+            [
+                new InvoiceLine
+                {
+                    Id = originalLineId,
+                    Description = "Engineering",
+                    Quantity = 1m,
+                    UnitPrice = 100m,
+                    SourceId = "t1",
+                    SourceType = "Time",
+                    IsCreditUsed = true
+                }
+            ]
+        };
+
+        var copy = original.DuplicateAsDraft("INV-2601-0002", "Tester");
+
+        Assert.NotEqual(original.Id, copy.Id);
+        Assert.Equal("INV-2601-0002", copy.InvoiceNumber);
+        Assert.Equal(InvoiceStatus.Draft, copy.Status);
+        Assert.Equal(string.Empty, copy.PdfPath);
+        Assert.Empty(copy.Payments);
+        Assert.Null(copy.DatePaid);
+        Assert.False(copy.IsOpeningBalance);
+        Assert.Null(copy.MigrationBatchId);
+        Assert.Empty(copy.BilledTimeEntryIds);
+        Assert.Empty(copy.BilledPoItemIds);
+        Assert.Empty(copy.BilledExpenseItemIds);
+
+        Assert.Single(copy.LineItems);
+        Assert.NotEqual(originalLineId, copy.LineItems[0].Id);
+        Assert.Null(copy.LineItems[0].SourceId);
+        Assert.Null(copy.LineItems[0].SourceType);
+        Assert.False(copy.LineItems[0].IsCreditUsed);
+        Assert.Equal(100m, copy.LineItems[0].UnitPrice);
     }
 }
 

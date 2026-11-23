@@ -15,6 +15,7 @@ public static class AppPermissions
         public const string View = "Projects.View";
         public const string Create = "Projects.Create";
         public const string Edit = "Projects.Edit";
+        public const string ApproveQuotes = "Projects.ApproveQuotes";
         public const string Delete = "Projects.Delete";
     }
 
@@ -41,6 +42,7 @@ public static class AppPermissions
     public static class Finance
     {
         public const string AccessAccounting = "Finance.AccessAccounting";
+        public const string ApproveInvoices = "Finance.ApproveInvoices";
         public const string AccessExpenses = "Finance.AccessExpenses";
         public const string TeamCapacity = "Finance.TeamCapacity";
     }
@@ -70,17 +72,30 @@ public static class AppPermissions
         public const string View = "Albums.View";
     }
 
+    public static class Hr
+    {
+        public const string ManageEmployees = "Hr.ManageEmployees";
+        public const string ManageSalaries = "Hr.ManageSalaries";
+    }
+
+    public static class Business
+    {
+        public const string ManageSettings = "Business.ManageSettings";
+    }
+
     /// <summary>
     /// Helper to get all permissions for the UI
     /// </summary>
     public static Dictionary<string, List<string>> GetAll() => new()
     {
         ["Admin"] = [Admin.ManageUsers, Admin.ManageSettings],
-        ["Projects"] = [Projects.View, Projects.Create, Projects.Edit, Projects.Delete],
+        ["HR"] = [Hr.ManageEmployees, Hr.ManageSalaries],
+        ["Business"] = [Business.ManageSettings],
+        ["Projects"] = [Projects.View, Projects.Create, Projects.Edit, Projects.ApproveQuotes, Projects.Delete],
         ["Chat"] = [Chat.Use, Chat.CreateChannels, Chat.ViewArchive, Chat.EditAllPublicChannels, Chat.Moderator],
         ["Email"] = [Email.Use],
         ["Address Book"] = [AddressBook.View, AddressBook.Manage],
-        ["Finance"] = [Finance.AccessAccounting, Finance.AccessExpenses, Finance.TeamCapacity],
+        ["Finance"] = [Finance.AccessAccounting, Finance.ApproveInvoices, Finance.AccessExpenses, Finance.TeamCapacity],
         ["Purchases"] = [Purchases.ViewPOs, Purchases.ManagePOs, Purchases.ViewBills, Purchases.ManageBills, Purchases.ApproveBills],
         ["Timesheets"] = [Timesheets.AccessTimesheet, Timesheets.ViewReport],
         ["Business Documents"] = [BusinessDocuments.View],
@@ -94,11 +109,15 @@ public static class AppPermissions
     /// </summary>
     public static string GetDescription(string permission) => permission switch
     {
-        Admin.ManageUsers => "Full admin access to create, edit, and modify users.",
+        Admin.ManageUsers => "Full admin access to manage user access permissions, roles, and account activation.",
         Admin.ManageSettings => "Access to system-wide settings and configurations.",
+        Hr.ManageEmployees => "Allows managing employee profiles, HR details (vacation, overtime, hire date, emergency contacts), teams, and the organization chart.",
+        Hr.ManageSalaries => "Allows viewing and editing employee salaries, hourly costs, employer contributions, payroll estimates, and labor cost/profit margins.",
+        Business.ManageSettings => "Allows configuring business settings: task definitions, rate cards, document templates, terms & conditions, standard documents, project statuses, and timesheet rules.",
         Projects.View => "Allows viewing projects.",
         Projects.Create => "Allows creating new projects.",
         Projects.Edit => "Allows editing existing project details.",
+        Projects.ApproveQuotes => "Allows finalizing quotes, changing quote resolution status, reverting quote status, editing finalized quotes, and sending quotes by email.",
         Projects.Delete => "Allows deleting projects.",
         Chat.Use => "Allows using the team chat.",
         Chat.CreateChannels => "Allows creating new chat channels.",
@@ -109,6 +128,7 @@ public static class AppPermissions
         AddressBook.View => "Allows viewing the address book.",
         AddressBook.Manage => "Allows adding, editing, and deleting contacts in the address book.",
         Finance.AccessAccounting => "Provides access to the accounting dashboard.",
+        Finance.ApproveInvoices => "Allows finalizing invoices, reverting invoice status, editing finalized invoices, and sending invoices by email.",
         Finance.AccessExpenses => "Allows accessing expense reports.",
         Finance.TeamCapacity => "Allows viewing team capacity reports.",
         Purchases.ViewPOs => "Allows viewing purchase orders.",
@@ -144,6 +164,18 @@ public static class AppPermissions
         Email.Use => true,
         _ => false
     };
+
+    private static readonly HashSet<string> BusinessCategories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "HR", "Business", "Email", "Projects", "Address Book", "Finance",
+        "Purchases", "Timesheets", "Business Documents", "My Week"
+    };
+
+    /// <summary>
+    /// Returns true if the permission category key belongs to Business Edition features
+    /// (hidden in Family Edition).
+    /// </summary>
+    public static bool IsBusinessCategory(string categoryKey) => BusinessCategories.Contains(categoryKey);
 
     public static class MyWeek
     {

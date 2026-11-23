@@ -4,9 +4,17 @@
 @using System.Globalization
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Pages.Chat
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Communication.Email
+@using Spokes_Server.Core.Services.Security
 @inject NavigationManager Nav
 @inject Database Db
 @inject UserService UserService
+@inject Spokes_Server.Core.Services.HR.CalendarService CalendarService
+@inject IChatAuthorizationService ChatAuth
+@inject IEmailInboxService EmailInboxService
+@inject IUserPrivacyService PrivacyService
+@inject AppLabelService AppLabels
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject ILogger<Home> Logger
@@ -102,8 +110,8 @@
                     </MudItem>
                 }
 
-                <!-- 2. Latest Chat Notifications -->
-                @if (HasPerm(AppPermissions.Chat.Use))
+                <!-- 2. Latest Chat & Email Notifications -->
+                @if (HasPerm(AppPermissions.Chat.Use) || (!IsFriendEdition && HasPerm(AppPermissions.Email.Use)))
 
                 {
                     <MudItem xs="12" md="6">
@@ -170,7 +178,7 @@
                                         <MudText Typo="Typo.subtitle2">Planned This Week</MudText>
                                     </MudItem>
                                     <MudItem xs="12" sm="9">
-                                        <MudTable Items="@CurrentPlan.Entries" Dense="true" Hover="true" Elevation="0">
+                                        <MudTable Items="@CurrentPlan.Entries" Dense="true" Hover="true" Elevation="0" Outlined="true">
                                             <HeaderContent>
                                                 <MudTh>Project</MudTh>
                                                 <MudTh>Planned Hours</MudTh>
@@ -301,26 +309,7 @@
         }
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
     // Data Models
-
-
-
-
-
-
 
     private List<CalendarEvent> WeekEvents = new();
     private List<CalendarCategory> Categories = new();
@@ -329,40 +318,14 @@
     private Dictionary<string, Employee> _employeesById = [];
     private Dictionary<string, string> _teamNames = [];
 
-
-
-
-
-
-
     private List<NotificationViewModel> UnreadMessages = new();
 
-
-
-
-
-
-
     private WeeklyPlan? CurrentPlan;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     protected override async Task OnInitializedAsync()
     {
         _currentUser = await UserService.GetEmployeeAsync();
-        
+
         if (!IsFriendEdition && !IsExplicitHomeRoute && !string.IsNullOrWhiteSpace(_currentUser?.LandingPage) && _currentUser.LandingPage != "" && _currentUser.LandingPage != "/")
         {
             var target = _currentUser.LandingPage.StartsWith('/') ? _currentUser.LandingPage : "/" + _currentUser.LandingPage;
@@ -377,10 +340,20 @@
                 ? _currentUser.EnsureCalendarCategories(serverProfile)
                 : CalendarCategoryDefaults.CloneList(serverProfile?.CalendarCategories);
 
-            var allEmployees = Db.Employees.GetAll();
-            _employeeNames = allEmployees.ToDictionary(e => e.Id, e => e.FullName);
-            _employeesById = allEmployees.ToDictionary(e => e.Id, e => e);
-            _teamNames = Db.Teams.GetAll().ToDictionary(t => t.Id, t => t.Name);
+            var discoverableEmployees = _currentUser != null
+                ? PrivacyService.FilterDiscoverableEmployees(_currentUser, Db.Employees.GetActiveEmployees())
+                : [];
+            _employeeNames = discoverableEmployees.ToDictionary(e => e.Id, e => e.FullName);
+            _employeesById = discoverableEmployees.ToDictionary(e => e.Id, e => e);
+            if (_currentUser != null)
+            {
+                _employeeNames.TryAdd(_currentUser.Id, _currentUser.FullName);
+                _employeesById.TryAdd(_currentUser.Id, _currentUser);
+            }
+            var discoverableTeams = _currentUser != null
+                ? PrivacyService.FilterDiscoverableTeams(_currentUser, Db.Teams.GetAll())
+                : [];
+            _teamNames = discoverableTeams.ToDictionary(t => t.Id, t => t.Name);
             _currentUserTeamIds.Clear();
             if (!string.IsNullOrEmpty(_currentUser?.TeamId))
                 _currentUserTeamIds.Add(_currentUser.TeamId);
@@ -425,109 +398,27 @@
         }
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     private void LoadWeekAgenda()
 
-
-
-
-
-
-
     {
-
-
-
-
-
-
 
         var currentUser = _currentUser;
         if (currentUser == null) return;
 
-
-
-
-
-
-
         var today = DateTime.Today;
-
-
-
-
-
-
 
         var daysUntilSunday = ((int)DayOfWeek.Sunday - (int)today.DayOfWeek + 7) % 7;
         var endOfWeek = today.AddDays(daysUntilSunday + 1);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         // Fetch events where user is EmployeeId or (Participant logic if implemented)
-
-
-
-
-
-
 
         // Ignoring complicated recurrence or attendees for MVP, assuming 'EmployeeId' owns the event
 
-
-
-
-
-
-
-        var allEvents = Db.CalendarEvents.GetAll();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        var canViewCalendar = Spokes_Server.Core.Services.HR.CalendarService.HasCalendarViewAccess(currentUser)
+            || Spokes_Server.Core.Services.HR.CalendarService.HasCalendarAdminOverride(currentUser);
+        var allEvents = canViewCalendar ? Db.CalendarEvents.GetAll() : new List<CalendarEvent>();
 
         WeekEvents = allEvents
-
-
-
-
-
-
 
         .Where(e => (e.IsCompanyWide || 
                      e.EmployeeId == currentUser.Id || 
@@ -535,133 +426,117 @@
                      (e.InvitedTeamIds != null && e.InvitedTeamIds.Any(tId => _currentUserTeamIds.Contains(tId)))) &&
         e.Start < endOfWeek && e.End > today) // Overlaps this week
 
-
-
-
-
-
-
         .OrderBy(e => e.Start)
-
-
-
-
-
-
 
         .ToList();
 
-
-
-
-
-
-
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     private void LoadNotifications()
     {
         var currentUser = _currentUser;
         if (currentUser == null) return;
 
-        // 1. Get user channels
-        var channels = Db.ChatChannels.GetAll()
-            .Where(c => c.ParticipantIds.Contains(currentUser.Id) || c.ChannelType == ChatChannelType.General);
-
-        foreach (var channel in channels)
+        if (HasPerm(AppPermissions.Chat.Use))
         {
-            var lastRead = Db.ChatReadStates.GetLastReadAt(currentUser.Id, channel.Id);
-
-            // Fast path: check unread count using in-memory index without loading messages from disk
-            if (Db.ChatMessages.GetUnreadCountSince(channel.Id, lastRead, currentUser.Id) == 0)
-                continue;
-
-            // Existing method used by ChatSidebar for channel preview
-            var preview = Db.ChatMessages.GetChannelPreviewSummary(channel.Id);
-            if (preview != null && preview.SentAt > lastRead && preview.SenderId != currentUser.Id)
+            string ResolveVisibleSenderName(string? senderId)
             {
-                var senderName = _employeeNames.GetValueOrDefault(preview.SenderId, "Unknown");
-                var channelName = ChatChannelFormatter.GetDisplayName(channel, currentUser.Id, id => _employeesById.GetValueOrDefault(id));
-                var content = preview.PreviewText ?? (preview.IsEncrypted ? "Encrypted message" : "");
-
-                if (string.IsNullOrEmpty(content))
-                {
-                    var msg = Db.ChatMessages.GetByIdOrLoad(channel.Id, preview.MessageId);
-                    content = msg?.Content ?? "";
-                }
-
-                UnreadMessages.Add(new NotificationViewModel
-                {
-                    ChannelId = channel.Id,
-                    ChannelName = channelName,
-                    SenderName = senderName,
-                    Content = content,
-                    SentAt = preview.SentAt,
-                    Type = "Chat",
-                    EmailId = "",
-                    FolderPath = ""
-                });
+                if (string.IsNullOrWhiteSpace(senderId)) return "Unknown";
+                if (_employeeNames.TryGetValue(senderId, out var visibleName)) return visibleName;
+                return Db.Employees.GetById(senderId) != null ? AppLabels.Employee : "Unknown";
             }
-            else
-            {
-                // Fallback to existing repository method: loads only unread messages for this specific channel
-                var latestUnread = Db.ChatMessages.GetUnreadMessagesSince(channel.Id, lastRead, currentUser.Id)
-                    .OrderByDescending(m => m.SentAt)
-                    .FirstOrDefault();
 
-                if (latestUnread != null)
+            // 1. Get user channels using centralized authorization
+            var channels = ChatAuth.GetChannelsForUser(currentUser.Id)
+                .Where(c => ChatAuth.CanUserAccessChannel(c, currentUser));
+
+            foreach (var channel in channels)
+            {
+                var lastRead = Db.ChatReadStates.GetLastReadAt(currentUser.Id, channel.Id);
+
+                // Fast path: check unread count using in-memory index without loading messages from disk
+                if (Db.ChatMessages.GetUnreadCountSince(channel.Id, lastRead, currentUser.Id) == 0)
+                    continue;
+
+                // Existing method used by ChatSidebar for channel preview
+                var preview = Db.ChatMessages.GetChannelPreviewSummary(channel.Id);
+                if (preview != null && preview.SentAt > lastRead && preview.SenderId != currentUser.Id)
                 {
-                    var senderName = _employeeNames.GetValueOrDefault(latestUnread.SenderId, "Unknown");
+                    var senderName = ResolveVisibleSenderName(preview.SenderId);
                     var channelName = ChatChannelFormatter.GetDisplayName(channel, currentUser.Id, id => _employeesById.GetValueOrDefault(id));
+                    bool isEncrypted = preview.IsEncrypted || channel.IsEncrypted;
+                    var content = preview.PreviewText ?? (isEncrypted ? "Encrypted message" : "");
+
+                    if (string.IsNullOrEmpty(content) && !isEncrypted)
+                    {
+                        var msg = Db.ChatMessages.GetByIdOrLoad(channel.Id, preview.MessageId);
+                        if (msg != null)
+                        {
+                            content = msg.IsEncrypted ? "Encrypted message" : msg.Content;
+                        }
+                    }
 
                     UnreadMessages.Add(new NotificationViewModel
                     {
                         ChannelId = channel.Id,
                         ChannelName = channelName,
                         SenderName = senderName,
-                        Content = latestUnread.Content,
-                        SentAt = latestUnread.SentAt,
+                        Content = content,
+                        SentAt = preview.SentAt,
                         Type = "Chat",
                         EmailId = "",
                         FolderPath = ""
                     });
                 }
+                else
+                {
+                    // Fallback to existing repository method: loads only unread messages for this specific channel
+                    var latestUnread = Db.ChatMessages.GetUnreadMessagesSince(channel.Id, lastRead, currentUser.Id)
+                        .OrderByDescending(m => m.SentAt)
+                        .FirstOrDefault();
+
+                    if (latestUnread != null)
+                    {
+                        var senderName = ResolveVisibleSenderName(latestUnread.SenderId);
+                        var channelName = ChatChannelFormatter.GetDisplayName(channel, currentUser.Id, id => _employeesById.GetValueOrDefault(id));
+                        bool isEncrypted = latestUnread.IsEncrypted || channel.IsEncrypted;
+
+                        UnreadMessages.Add(new NotificationViewModel
+                        {
+                            ChannelId = channel.Id,
+                            ChannelName = channelName,
+                            SenderName = senderName,
+                            Content = isEncrypted ? "Encrypted message" : latestUnread.Content,
+                            SentAt = latestUnread.SentAt,
+                            Type = "Chat",
+                            EmailId = "",
+                            FolderPath = ""
+                        });
+                    }
+                }
             }
         }
 
-        // 2. Fetch unread emails from accessible accounts/inboxes using in-memory index
-        var userTeamIds = Db.Teams.GetAll()
-            .Where(t => t.Id == currentUser.TeamId || t.LeaderId == currentUser.Id)
-            .Select(t => t.Id)
-            .ToList();
-        var accessibleAccounts = Db.EmailAccounts.GetAccessibleForUser(currentUser.Id, userTeamIds)
-            .Select(a => a.Id)
-            .Concat(Db.EmailInboxes.GetAccessibleForUser(currentUser.Id, userTeamIds).Select(i => i.AccountId))
-            .Append(currentUser.Id)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        foreach (var accountId in accessibleAccounts)
+        if (!IsFriendEdition && HasPerm(AppPermissions.Email.Use))
         {
-            if (Db.EmailMessages.GetUnreadCount(accountId, "INBOX") > 0)
+            // 2. Fetch unread emails strictly scoped to non-archived Real Inboxes and filter-scoped Virtual Inboxes
+            var seenEmails = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var realAccounts = EmailInboxService.GetAccessibleRealInboxes(currentUser.Id)
+                .Where(a => !a.IsArchived)
+                .ToList();
+            var realAccountIds = new HashSet<string>(realAccounts.Select(a => a.Id), StringComparer.OrdinalIgnoreCase);
+
+            foreach (var account in realAccounts)
             {
-                var topEmails = Db.EmailMessages.GetUnreadByFolderRecent(accountId, "INBOX", 5);
+                if (Db.EmailMessages.GetUnreadCount(account.Id, "INBOX") <= 0)
+                    continue;
+
+                var topEmails = Db.EmailMessages.GetUnreadByFolderRecent(account.Id, "INBOX", 5);
                 foreach (var email in topEmails)
                 {
+                    if (!seenEmails.Add($"{account.Id}:{email.Id}"))
+                        continue;
+
                     UnreadMessages.Add(new NotificationViewModel
                     {
                         ChannelId = "",
@@ -671,7 +546,36 @@
                         SentAt = email.Date.DateTime,
                         Type = "Email",
                         EmailId = email.Id,
-                        FolderPath = email.FolderPath
+                        FolderPath = $"real-{account.Id}"
+                    });
+                }
+            }
+
+            foreach (var inbox in EmailInboxService.GetAccessibleInboxes(currentUser.Id))
+            {
+                if (string.IsNullOrWhiteSpace(inbox.AccountId) || realAccountIds.Contains(inbox.AccountId))
+                    continue;
+
+                var filter = EmailInboxService.GetMetadataFilterForInbox(inbox);
+                if (Db.EmailMessages.GetUnreadCount(inbox.AccountId, "INBOX", filter) <= 0)
+                    continue;
+
+                var topEmails = Db.EmailMessages.GetUnreadByFolderRecent(inbox.AccountId, "INBOX", 5, filter);
+                foreach (var email in topEmails)
+                {
+                    if (!seenEmails.Add($"{inbox.AccountId}:{email.Id}"))
+                        continue;
+
+                    UnreadMessages.Add(new NotificationViewModel
+                    {
+                        ChannelId = "",
+                        ChannelName = email.Subject,
+                        SenderName = string.IsNullOrWhiteSpace(email.FromName) ? email.FromAddress : email.FromName,
+                        Content = string.IsNullOrWhiteSpace(email.Snippet) ? "No snippet available" : email.Snippet,
+                        SentAt = email.Date.DateTime,
+                        Type = "Email",
+                        EmailId = email.Id,
+                        FolderPath = $"inbox-{inbox.Id}"
                     });
                 }
             }
@@ -680,276 +584,37 @@
         UnreadMessages = UnreadMessages.OrderByDescending(m => m.SentAt).Take(5).ToList();
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     private void LoadWeeklyPlan()
-
-
-
-
-
-
-
     {
-
-
-
-
-
-
-
         var currentUser = _currentUser;
         if (currentUser == null) return;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        var week = ISOWeek.GetWeekOfYear(DateTime.Today);
-
-
-
-
-
-
-
-        var year = DateTime.Today.Year;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        var (year, week) = Spokes_Server.Core.Services.HR.WeeklyPlanService.GetCurrentIsoYearWeek();
         CurrentPlan = Db.WeeklyPlans.GetOrStubByEmployeeAndWeek(currentUser.Id, year, week);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        // Enrich project names if missing (UI logic from MyWeekView)
-
-
-
-
-
-
-
         if (CurrentPlan != null)
-
-
-
-
-
-
-
         {
-
-
-
-
-
-
-
-            var allProjects = Db.Projects.GetAll(); // Cache potentially
-
-
-
-
-
-
-
-            foreach (var entry in CurrentPlan.Entries)
-
-
-
-
-
-
-
-            {
-
-
-
-
-
-
-
-                if (string.IsNullOrEmpty(entry.ProjectName))
-
-
-
-
-
-
-
-                {
-
-
-
-
-
-
-
-                    var p = allProjects.FirstOrDefault(x => x.Id == entry.ProjectId);
-
-
-
-
-
-
-
-                    if (p != null) entry.ProjectName = p.DisplayName;
-
-
-
-
-
-
-
-                }
-
-
-
-
-
-
-
-            }
-
-
-
-
-
-
-
+            var allProjects = Db.Projects.GetAll()
+                .Where(p => UserService.CanViewProject(_currentUser, p))
+                .ToList();
+
+            Spokes_Server.Core.Services.HR.WeeklyPlanService.EnrichProjectNames(CurrentPlan, allProjects);
         }
-
-
-
-
-
-
-
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     private bool HasPerm(string perm) => _currentUser?.HasPermission(perm) ?? false;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     public class NotificationViewModel
-
-
-
-
-
-
 
     {
 
-
-
-
-
-
-
         public string ChannelId { get; set; } = string.Empty;
-
-
-
-
-
-
 
         public string ChannelName { get; set; } = string.Empty;
 
-
-
-
-
-
-
         public string SenderName { get; set; } = string.Empty;
 
-
-
-
-
-
-
         public string Content { get; set; } = string.Empty;
-
-
-
-
-
-
 
         public DateTime SentAt { get; set; }
         public string Type { get; set; } = "Chat";
@@ -959,6 +624,15 @@
 
     private async Task OpenEventDialog(CalendarEvent evt)
     {
+        var liveUser = _currentUser != null
+            ? Db.Employees.GetById(_currentUser.Id)
+            : await UserService.GetEmployeeAsync();
+        if (liveUser == null || !CalendarService.CanUserViewEvent(evt, liveUser))
+        {
+            Snackbar.Add("You do not have permission to view this calendar event.", Severity.Warning);
+            return;
+        }
+
         var parameters = new DialogParameters { ["Event"] = evt, ["IsNew"] = false };
         var options = new DialogOptions
         {
@@ -972,15 +646,31 @@
 
         if (result != null && !result.Canceled)
         {
-            if (result.Data is CalendarEvent resultEvent) // Saved
+            var actionUser = Db.Employees.GetById(liveUser.Id);
+            var persistedEvent = CalendarService.GetEventById(evt.Id) ?? evt;
+            if (actionUser == null || !CalendarService.CanUserEditEvent(persistedEvent, actionUser))
             {
-                Db.CalendarEvents.Save(resultEvent);
-                Snackbar.Add("Event saved", Severity.Success);
+                Snackbar.Add("You do not have permission to modify this calendar event.", Severity.Warning);
+                return;
             }
-            else // Deleted
+
+            try
             {
-                Db.CalendarEvents.Delete(evt.Id);
-                Snackbar.Add("Event deleted", Severity.Success);
+                if (result.Data is CalendarEvent resultEvent) // Saved
+                {
+                    CalendarService.SaveEvent(resultEvent, actionUser.Id);
+                    Snackbar.Add("Event saved", Severity.Success);
+                }
+                else // Deleted
+                {
+                    CalendarService.DeleteEvent(evt.Id, actionUser.Id);
+                    Snackbar.Add("Event deleted", Severity.Success);
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Snackbar.Add("You do not have permission to modify this calendar event.", Severity.Warning);
+                return;
             }
             LoadWeekAgenda();
             StateHasChanged();

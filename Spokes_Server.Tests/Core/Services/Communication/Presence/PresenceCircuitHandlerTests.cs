@@ -6,7 +6,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Presence;
 
 public class PresenceCircuitHandlerTests : IDisposable
 {
-    private readonly ChatStateService _chatState;
+    private readonly VoiceStateService _voiceState;
     private readonly PresenceStateService _presenceState;
     private readonly UserCircuitContext _circuitContext;
     private readonly Mock<IUserClientStateService> _mockClientStateService;
@@ -14,8 +14,8 @@ public class PresenceCircuitHandlerTests : IDisposable
 
     public PresenceCircuitHandlerTests()
     {
-        _chatState = new ChatStateService();
-        _presenceState = new PresenceStateService(_chatState);
+        _voiceState = new VoiceStateService();
+        _presenceState = new PresenceStateService(_voiceState);
         _circuitContext = new UserCircuitContext();
         _mockClientStateService = new Mock<IUserClientStateService>();
         _handler = new PresenceCircuitHandler(_presenceState, _circuitContext, _mockClientStateService.Object);
@@ -29,23 +29,24 @@ public class PresenceCircuitHandlerTests : IDisposable
         _circuitContext.SubscriptionId = "sub-123";
         
         // Act
-        await _handler.OnConnectionUpAsync(null!, CancellationToken.None);
+
 
         // Assert
-        Assert.True(_presenceState.HasActiveConnection("user-123"));
+        await _handler.OnConnectionUpAsync(null!, CancellationToken.None); Assert.True(_presenceState.HasActiveConnection("user-123"));
     }
 
     [Fact]
-    public async Task OnConnectionUpAsync_WithUserIdAndNoSubscription_ThrowsNullReferenceBecauseCircuitCannotBeMocked()
+    public async Task OnConnectionUpAsync_WithUserIdAndNoSubscription_DoesNotRegisterPrematureConnectionBeforeMainLayoutInit()
     {
         // Arrange
         _circuitContext.UserId = "user-456";
         _circuitContext.SubscriptionId = null;
         
         // Act & Assert
-        // We cannot mock Circuit, so passing null causes NRE when it falls back to circuit.Id
-        await Assert.ThrowsAsync<NullReferenceException>(() => 
-            _handler.OnConnectionUpAsync(null!, CancellationToken.None));
+        // Without SubscriptionId (before MainLayout OnAfterRenderAsync), do not register fallback circuit.Id
+
+        await _handler.OnConnectionUpAsync(null!, CancellationToken.None); Assert.True(_circuitContext.IsConnected);
+        Assert.False(_presenceState.HasActiveConnection("user-456"));
     }
 
     [Fact]
@@ -56,10 +57,10 @@ public class PresenceCircuitHandlerTests : IDisposable
         _circuitContext.SubscriptionId = "sub-123";
         
         // Act
-        await _handler.OnConnectionUpAsync(null!, CancellationToken.None);
+
 
         // Assert
-        Assert.False(_presenceState.HasActiveConnection("user-123"));
+        await _handler.OnConnectionUpAsync(null!, CancellationToken.None); Assert.False(_presenceState.HasActiveConnection("user-123"));
     }
 
     [Fact]
@@ -83,19 +84,23 @@ public class PresenceCircuitHandlerTests : IDisposable
 
         // Assert
         Assert.False(_presenceState.HasActiveConnection("user-789"));
-        _mockClientStateService.Verify(s => s.FlushToDiskIfUnsent("user-789"), Times.Once);
+        _mockClientStateService.Verify(s => s.StopActiveTyping("user-789"), Times.Once);
     }
 
     [Fact]
-    public async Task OnConnectionDownAsync_WithoutSubscriptionId_ThrowsNullReferenceBecauseCircuitCannotBeMocked()
+    public async Task OnConnectionDownAsync_WithoutSubscriptionId_CompletesSafelyAndStopsTyping()
     {
         // Arrange
         _circuitContext.UserId = "user-101";
         _circuitContext.SubscriptionId = null;
-        
-        // Act & Assert
-        await Assert.ThrowsAsync<NullReferenceException>(() => 
-            _handler.OnConnectionDownAsync(null!, CancellationToken.None));
+        _circuitContext.IsConnected = true;
+
+        // Act
+        await _handler.OnConnectionDownAsync(null!, CancellationToken.None);
+
+        // Assert
+        Assert.False(_circuitContext.IsConnected);
+        _mockClientStateService.Verify(s => s.StopActiveTyping("user-101"), Times.Once);
     }
 
     [Fact]
@@ -127,10 +132,10 @@ public class PresenceCircuitHandlerTests : IDisposable
         _circuitContext.IsFocused = true;
 
         // Act
-        await _handler.OnConnectionUpAsync(null!, CancellationToken.None);
+
 
         // Assert
-        Assert.True(_circuitContext.IsConnected);
+        await _handler.OnConnectionUpAsync(null!, CancellationToken.None); Assert.True(_circuitContext.IsConnected);
         Assert.False(_circuitContext.IsFocused);
         Assert.False(_circuitContext.IsActivelyViewed);
         Assert.False(_presenceState.IsConnectionActivelyViewed("sub-up"));
@@ -215,6 +220,47 @@ public class PresenceCircuitHandlerTests : IDisposable
         _circuitContext.IsMobileViewport = isMobileViewport;
 
         Assert.Equal(expectedMobileLayout, _circuitContext.IsMobileLayout);
+    }
+
+    [Fact]
+    public async Task OnCircuitClosedAsync_MarksTerminated_RemovesConnection_AndBlocksLateResurrection()
+    {
+        _circuitContext.UserId = "user-closed";
+        _circuitContext.SubscriptionId = "sub-closed";
+        _circuitContext.IsConnected = true;
+        _circuitContext.IsFocused = true;
+
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-closed",
+            SubscriptionId = "sub-closed",
+            DeviceType = "Desktop",
+            IsFocused = true,
+            IsTransportAlive = () => _circuitContext.CanRegisterPresence
+        });
+        Assert.Equal(UserPresenceBadge.OnlineDesktop, _presenceState.GetUserPresenceBadge("user-closed"));
+
+        await _handler.OnCircuitClosedAsync(null!, CancellationToken.None);
+
+        Assert.False(_circuitContext.IsConnected);
+        Assert.True(_circuitContext.IsTerminated);
+        Assert.False(_circuitContext.CanRegisterPresence);
+        Assert.Equal(UserPresenceBadge.Offline, _presenceState.GetUserPresenceBadge("user-closed"));
+        _mockClientStateService.Verify(s => s.StopActiveTyping("user-closed"), Times.Once);
+
+        // Late registration or spurious OnConnectionUpAsync on a closed circuit must not resurrect presence
+        _presenceState.RegisterConnection(new ConnectionRegistrationOptions
+        {
+            UserId = "user-closed",
+            SubscriptionId = "sub-closed",
+            DeviceType = "Desktop",
+            IsFocused = true,
+            IsTransportAlive = () => _circuitContext.CanRegisterPresence
+        });
+        await _handler.OnConnectionUpAsync(null!, CancellationToken.None);
+
+        Assert.False(_presenceState.HasConnection("sub-closed"));
+        Assert.Equal(UserPresenceBadge.Offline, _presenceState.GetUserPresenceBadge("user-closed"));
     }
 
     public void Dispose()

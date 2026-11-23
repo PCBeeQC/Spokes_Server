@@ -2,7 +2,10 @@
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Accounting
 @inject Database Db
+@inject CompanyBillInboxService BillInboxService
+@inject UserService UserService
 @inject IStringLocalizer<BusinessResources> BizLoc
 @inject IStringLocalizer<AppResources> Loc
 
@@ -49,13 +52,13 @@
                          Color="@(_statusFilter == "unpaid" ? Color.Warning : Color.Default)"
                          Variant="@(_statusFilter == "unpaid" ? Variant.Filled : Variant.Outlined)"
                          OnClick='() => _statusFilter = "unpaid"'>
-                    @BizLoc["Unpaid / Open"] (@_allItems.Count(b => b.Status != BillStatus.Paid && b.BalanceDue > 0))
+                    @BizLoc["Unpaid / Open"] (@_allItems.Count(b => !BillStatus.IsSettled(b.Status) && b.BalanceDue > 0))
                 </MudChip>
                 <MudChip T="string" Size="Size.Small"
                          Color="@(_statusFilter == "paid" ? Color.Success : Color.Default)"
                          Variant="@(_statusFilter == "paid" ? Variant.Filled : Variant.Outlined)"
                          OnClick='() => _statusFilter = "paid"'>
-                    @BizLoc["Paid"] (@_allItems.Count(b => b.Status == BillStatus.Paid || b.BalanceDue <= 0))
+                    @BizLoc["Paid"] (@_allItems.Count(b => BillStatus.IsSettled(b.Status) || b.BalanceDue <= 0))
                 </MudChip>
             </div>
             @if (Email != null && !string.IsNullOrWhiteSpace(Email.FromName) && _searchQuery != Email.FromName.Trim())
@@ -74,7 +77,7 @@
                           AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" />
         </div>
 
-        <MudTable T="ExistingBillItem" Items="FilteredBills" Dense="true" Hover="true" FixedHeader="true" Height="340px"
+        <MudTable Elevation="0" Outlined="true" T="ExistingBillItem" Items="FilteredBills" Dense="true" Hover="true" FixedHeader="true" Height="340px"
                   SelectedItem="_selectedItem" SelectedItemChanged="@((ExistingBillItem? b) => OnBillSelected(b))"
                   RowClassFunc="@((b, i) => _selectedItem?.Id == b?.Id ? "mud-selected-item" : "")">
             <HeaderContent>
@@ -171,7 +174,8 @@
         public DateTime? DueDate { get; set; }
         public decimal Amount { get; set; }
         public decimal AmountPaid { get; set; }
-        public decimal BalanceDue => Amount - AmountPaid;
+        public decimal AmountWrittenOff { get; set; }
+        public decimal BalanceDue => Math.Round(Amount - AmountPaid - AmountWrittenOff, 2, MidpointRounding.AwayFromZero);
         public string Status { get; set; } = "";
         public string? AttachmentPath { get; set; }
         public string? AttachmentName { get; set; }
@@ -186,15 +190,25 @@
     private string _searchQuery = "";
     private string _statusFilter = "all"; // "all", "unpaid", "paid"
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         _allItems.Clear();
 
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || emp.IsSuspended ||
+            (!emp.HasEffectivePermission(AppPermissions.Purchases.ViewBills) &&
+             !emp.HasEffectivePermission(AppPermissions.Purchases.ManageBills)))
+        {
+            return;
+        }
+
         // 1. Standard Bills (All non-void bills: Paid, Unpaid, Approved, AwaitingApproval)
-        var bills = Db.Bills.GetAll().Where(b => b.Status != BillStatus.Void);
+        var bills = Db.Bills.GetAll()
+            .Where(b => b.Status != BillStatus.Void)
+            .Where(b => BillInboxService.IsBillAccessible(b, emp));
         foreach (var b in bills)
         {
-            var isPaid = b.BalanceDue <= 0 || b.Status == BillStatus.Paid;
+            var isSettled = b.BalanceDue <= 0 || BillStatus.IsSettled(b.Status);
             _allItems.Add(new ExistingBillItem
             {
                 Id = b.Id,
@@ -205,7 +219,10 @@
                 DueDate = b.DueDate,
                 Amount = b.Amount,
                 AmountPaid = b.AmountPaid,
-                Status = isPaid ? BillStatus.Paid : (b.AmountPaid > 0 ? "Partially Paid" : b.Status),
+                AmountWrittenOff = b.AmountWrittenOff,
+                Status = isSettled
+                    ? (b.AmountPaid <= 0 && b.HasWriteOffs ? BillStatus.WrittenOff : BillStatus.Paid)
+                    : (b.AmountPaid > 0 ? "Partially Paid" : b.Status),
                 AttachmentPath = b.AttachmentPath,
                 AttachmentName = b.AttachmentName,
                 IsRecurring = false,
@@ -219,7 +236,7 @@
         {
             foreach (var rec in re.History)
             {
-                var isPaid = rec.IsPaid || rec.BalanceDue <= 0;
+                var isSettled = rec.IsPaid || rec.BalanceDue <= 0;
                 var supplier = !string.IsNullOrWhiteSpace(re.Supplier) ? re.Supplier : re.Name;
                 _allItems.Add(new ExistingBillItem
                 {
@@ -231,7 +248,10 @@
                     DueDate = rec.DueDate,
                     Amount = rec.Amount,
                     AmountPaid = rec.AmountPaid,
-                    Status = isPaid ? BillStatus.Paid : (rec.AmountPaid > 0 ? "Partially Paid" : BillStatus.Unpaid),
+                    AmountWrittenOff = rec.AmountWrittenOff,
+                    Status = isSettled
+                        ? (rec.AmountPaid <= 0 && rec.HasWriteOffs ? BillStatus.WrittenOff : BillStatus.Paid)
+                        : (rec.AmountPaid > 0 ? "Partially Paid" : BillStatus.Unpaid),
                     AttachmentPath = rec.AttachmentPath,
                     AttachmentName = rec.AttachmentName,
                     IsRecurring = true,
@@ -264,11 +284,11 @@
             // Status filter
             if (_statusFilter == "unpaid")
             {
-                items = items.Where(b => b.Status != BillStatus.Paid && b.BalanceDue > 0);
+                items = items.Where(b => !BillStatus.IsSettled(b.Status) && b.BalanceDue > 0);
             }
             else if (_statusFilter == "paid")
             {
-                items = items.Where(b => b.Status == BillStatus.Paid || b.BalanceDue <= 0);
+                items = items.Where(b => BillStatus.IsSettled(b.Status) || b.BalanceDue <= 0);
             }
 
             // Search query with multi-term search

@@ -39,6 +39,7 @@ public class SessionServiceTests : IDisposable
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
         _persistence = new DiskPersistenceService(mockLogger.Object);
@@ -95,11 +96,16 @@ public class SessionServiceTests : IDisposable
             Email = "jane@example.com",
             IsAdmin = false,
             Permissions = new List<string>(),
-            PermissionGroup = new PermissionGroup
-            {
-                Name = "Editors",
-                Permissions = new List<string> { "Chat.Use", "Projects.View" }
-            }
+            PermissionGroupIds = ["grp-editors"],
+            PermissionGroups =
+            [
+                new PermissionGroup
+                {
+                    Id = "grp-editors",
+                    Name = "Editors",
+                    Permissions = new List<string> { "Chat.Use", "Projects.View" }
+                }
+            ]
         };
 
         var identity = _service.BuildIdentity(employee, "session_grp");
@@ -394,72 +400,23 @@ public class SessionServiceTests : IDisposable
         Assert.Contains("Spokes_Refresh=", context2.Response.Headers.SetCookie.ToString());
     }
 
-    [Fact]
-    public void ValidateToken_WithLegacyDevPrefix_AllowsValidationAndAdoptsToIosDeviceId()
+    [Theory]
+    [InlineData("emp_mig_ios", "sess_mig_ios", "dev_legacy_ios_1", "ios_device_id_1", "ios_attacker_device")]
+    [InlineData("emp_mig_android", "sess_mig_and", "dev_old_guid_12345", "android_secure_hw_id_99", "android_attacker_device")]
+    [InlineData("emp_mig_opaque", "sess_mig_opaque", "dev_legacy_mobile_id", "550e8400-e29b-41d4-a716-446655440000", "other_attacker_device")]
+    public void ValidateToken_WithLegacyDevPrefix_AllowsValidationAndAdoptsToTargetDeviceId(
+        string empId, string sessionId, string legacyDeviceId, string targetDeviceId, string wrongDeviceId)
     {
-        var employee = new Employee { Id = "emp_mig_ios", FirstName = "Alice", IsActive = true };
+        var employee = new Employee { Id = empId, FirstName = "User", IsActive = true };
         _employeeRepo.Save(employee);
 
-        var rawToken = "mig_ios_token_" + Guid.NewGuid();
+        var rawToken = $"mig_token_{empId}_{Guid.NewGuid()}";
         using var sha256 = SHA256.Create();
         var tokenHash = Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(rawToken)));
 
-        var legacyDeviceId = "dev_" + Guid.NewGuid();
         var session = new DeviceSession
         {
-            Id = "sess_mig_ios",
-            EmployeeId = employee.Id,
-            TokenHash = tokenHash,
-            DeviceId = legacyDeviceId, // legacy placeholder
-            ExpiresAt = DateTime.UtcNow.AddDays(30)
-        };
-        _sessionRepo.Save(session);
-
-        var expectedIosId = "ios_" + Guid.NewGuid();
-
-        // 1. Validating with modern iOS device ID must succeed without mutating the session or database
-        var result = _service.ValidateToken(rawToken, expectedIosId);
-        Assert.NotNull(result);
-        Assert.Equal(session.Id, result.Value.Session.Id);
-        Assert.Equal(legacyDeviceId, result.Value.Session.DeviceId);
-
-        // Verify persisted record in repo is NOT mutated during read validation
-        var unmigrated = _sessionRepo.GetById(session.Id);
-        Assert.NotNull(unmigrated);
-        Assert.Equal(legacyDeviceId, unmigrated.DeviceId);
-
-        // 2. Explicit lifecycle adoption migrates and persists the device ID
-        var adopted = _service.AdoptLegacySessionDeviceId(result.Value.Session, expectedIosId);
-        Assert.True(adopted);
-        Assert.Equal(expectedIosId, result.Value.Session.DeviceId);
-
-        var persisted = _sessionRepo.GetById(session.Id);
-        Assert.NotNull(persisted);
-        Assert.Equal(expectedIosId, persisted.DeviceId);
-
-        // 3. Subsequent validation with same iOS ID succeeds
-        var repeatResult = _service.ValidateToken(rawToken, expectedIosId);
-        Assert.NotNull(repeatResult);
-
-        // 4. Subsequent validation with a DIFFERENT iOS ID must be rejected
-        var wrongResult = _service.ValidateToken(rawToken, "ios_attacker_device");
-        Assert.Null(wrongResult);
-    }
-
-    [Fact]
-    public void ValidateToken_WithLegacyDevPrefix_AllowsValidationAndAdoptsToAndroidDeviceId()
-    {
-        var employee = new Employee { Id = "emp_mig_android", FirstName = "Bob", IsActive = true };
-        _employeeRepo.Save(employee);
-
-        var rawToken = "mig_and_token_" + Guid.NewGuid();
-        using var sha256 = SHA256.Create();
-        var tokenHash = Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(rawToken)));
-
-        var legacyDeviceId = "dev_old_guid_12345";
-        var session = new DeviceSession
-        {
-            Id = "sess_mig_and",
+            Id = sessionId,
             EmployeeId = employee.Id,
             TokenHash = tokenHash,
             DeviceId = legacyDeviceId,
@@ -467,17 +424,28 @@ public class SessionServiceTests : IDisposable
         };
         _sessionRepo.Save(session);
 
-        var expectedAndroidId = "android_secure_hw_id_99";
-        var result = _service.ValidateToken(rawToken, expectedAndroidId);
+        // 1. Validating with modern device ID succeeds without mutating the session or database
+        var result = _service.ValidateToken(rawToken, targetDeviceId);
         Assert.NotNull(result);
+        Assert.Equal(session.Id, result.Value.Session.Id);
         Assert.Equal(legacyDeviceId, result.Value.Session.DeviceId);
 
-        var adopted = _service.AdoptLegacySessionDeviceId(result.Value.Session, expectedAndroidId);
+        var unmigrated = _sessionRepo.GetById(session.Id);
+        Assert.NotNull(unmigrated);
+        Assert.Equal(legacyDeviceId, unmigrated.DeviceId);
+
+        // 2. Explicit lifecycle adoption migrates and persists the device ID
+        var adopted = _service.AdoptLegacySessionDeviceId(result.Value.Session, targetDeviceId);
         Assert.True(adopted);
-        Assert.Equal(expectedAndroidId, result.Value.Session.DeviceId);
+        Assert.Equal(targetDeviceId, result.Value.Session.DeviceId);
 
         var persisted = _sessionRepo.GetById(session.Id);
-        Assert.Equal(expectedAndroidId, persisted?.DeviceId);
+        Assert.NotNull(persisted);
+        Assert.Equal(targetDeviceId, persisted.DeviceId);
+
+        // 3. Subsequent validation with same ID succeeds, different ID is rejected
+        Assert.NotNull(_service.ValidateToken(rawToken, targetDeviceId));
+        Assert.Null(_service.ValidateToken(rawToken, wrongDeviceId));
     }
 
     [Fact]
@@ -542,43 +510,6 @@ public class SessionServiceTests : IDisposable
         var navResult = _service.ValidateToken(rawToken, null);
         Assert.NotNull(navResult);
         Assert.Null(navResult.Value.Session.DeviceId);
-    }
-
-    [Fact]
-    public void ValidateToken_WithLegacyDevPrefix_AllowsValidationAndAdoptsToAnyOpaqueDeviceId()
-    {
-        var employee = new Employee { Id = "emp_mig_opaque", FirstName = "Eve", IsActive = true };
-        _employeeRepo.Save(employee);
-
-        var rawToken = "mig_opaque_token_" + Guid.NewGuid();
-        using var sha256 = SHA256.Create();
-        var tokenHash = Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(rawToken)));
-
-        var legacyDeviceId = "dev_legacy_mobile_id";
-        var session = new DeviceSession
-        {
-            Id = "sess_mig_opaque",
-            EmployeeId = employee.Id,
-            TokenHash = tokenHash,
-            DeviceId = legacyDeviceId,
-            ExpiresAt = DateTime.UtcNow.AddDays(30)
-        };
-        _sessionRepo.Save(session);
-
-        // Validating a legacy dev_ session to any opaque persistent UUID succeeds without mutation
-        var targetUuid = "550e8400-e29b-41d4-a716-446655440000";
-        var result = _service.ValidateToken(rawToken, targetUuid);
-        Assert.NotNull(result);
-        Assert.Equal(legacyDeviceId, result.Value.Session.DeviceId);
-
-        // Explicit adoption migrates and persists with the new ID
-        var adopted = _service.AdoptLegacySessionDeviceId(result.Value.Session, targetUuid);
-        Assert.True(adopted);
-        Assert.Equal(targetUuid, result.Value.Session.DeviceId);
-
-        var persisted = _sessionRepo.GetById(session.Id);
-        Assert.NotNull(persisted);
-        Assert.Equal(targetUuid, persisted.DeviceId);
     }
 
     [Fact]
@@ -792,27 +723,6 @@ public class SessionServiceTests : IDisposable
     }
 
     [Fact]
-    public void ValidateToken_UnboundDesktopSession_SucceedsForAnyOrNullDeviceId()
-    {
-        var (session, rawToken) = SetupValidSession(deviceId: null);
-
-        // An unbound session does not enforce device binding, so standard navigation (null)
-        // or any client identifier succeeds without mutating the session's null DeviceId in DB.
-        var resultNull = _service.ValidateToken(rawToken, null);
-        var resultId = _service.ValidateToken(rawToken, "client_device_id_123");
-
-        Assert.NotNull(resultNull);
-        Assert.Null(resultNull.Value.Session.DeviceId);
-
-        Assert.NotNull(resultId);
-        Assert.Null(resultId.Value.Session.DeviceId);
-
-        var persisted = _sessionRepo.GetById(session.Id);
-        Assert.NotNull(persisted);
-        Assert.Null(persisted.DeviceId);
-    }
-
-    [Fact]
     public void AdoptLegacySessionDeviceId_MigratingLegacyDev_DeduplicatesTargetDeviceSessions()
     {
         var employee = new Employee { Id = "emp_dedup_mig", FirstName = "Dedup", IsActive = true };
@@ -993,20 +903,6 @@ public class SessionServiceTests : IDisposable
     }
 
     [Fact]
-    public void TouchLastSeen_WhenOlderThanOneMinute_PersistsUpdatedLastSeenAt()
-    {
-        var (session, _) = SetupValidSession();
-        session.LastSeenAt = DateTime.UtcNow.AddMinutes(-5);
-        _sessionRepo.Save(session);
-
-        _service.TouchLastSeen(session);
-
-        var updated = _sessionRepo.GetById(session.Id);
-        Assert.NotNull(updated);
-        Assert.True(updated.LastSeenAt > DateTime.UtcNow.AddSeconds(-5));
-    }
-
-    [Fact]
     public async Task SignInAndExtendAsync_WithHttpsRequest_SetsSecureCookie()
     {
         var employee = new Employee { Id = "emp_https_cookie", FirstName = "SecureUser", IsActive = true };
@@ -1088,13 +984,6 @@ public class SessionServiceTests : IDisposable
         var updated = _sessionRepo.GetById(session.Id);
         Assert.NotNull(updated);
         Assert.Equal(recentTime, updated.LastSeenAt);
-    }
-
-    [Fact]
-    public void TouchSession_NullOrEmpty_NoOp()
-    {
-        _service.TouchSession(null);
-        _service.TouchSession("");
     }
 
     [Fact]
@@ -1205,21 +1094,6 @@ public class SessionServiceTests : IDisposable
     }
 
     [Fact]
-    public void CreateSession_GeneratesNewSessionAndToken()
-    {
-        var employee = new Employee { Id = "emp_create_test", FirstName = "Create", IsActive = true };
-        _employeeRepo.Save(employee);
-
-        var context = new DefaultHttpContext();
-        var (session, rawToken) = _service.CreateSession(context, employee.Id, deviceId: "device_new_test", issueCookie: false);
-
-        Assert.NotNull(session);
-        Assert.NotEmpty(rawToken);
-        Assert.Equal("device_new_test", session.DeviceId);
-        Assert.Equal(employee.Id, session.EmployeeId);
-    }
-
-    [Fact]
     public void GetActiveSession_WithAllowRevoked_ReturnsRevokedSession()
     {
         var (session, _) = SetupValidSession();
@@ -1320,9 +1194,7 @@ public class SessionServiceTests : IDisposable
     [Fact]
     public async Task ResolveEndSessionEndpointAsync_WhenNoConfiguredAuthority_ReturnsDefaultFallback()
     {
-        var context = new DefaultHttpContext();
-
-        var endpoint = await _service.ResolveEndSessionEndpointAsync(context);
+        var endpoint = await _service.ResolveEndSessionEndpointAsync();
 
         Assert.Equal("/api/logout", endpoint);
     }

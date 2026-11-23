@@ -1,13 +1,17 @@
-﻿@page "/projects/{ProjectId}/invoices/{InvoiceId}"
+@page "/projects/{ProjectId}/invoices/{InvoiceId}"
 @page "/project-groups/{GroupId}/invoices/{InvoiceId}"
 @attribute [Authorize(Policy = AppPermissions.Projects.View)]
 @using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Dialogs.Common
 @using Spokes_Server.Components.Pages.Email
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Common
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Communication.Email
 @using Spokes_Server.Core.Services.Documents
 @using Spokes_Server.Core.Services.Content
+@using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Components.Shared
 @inject Database Db
 @inject ISnackbar Snackbar
@@ -17,7 +21,9 @@
 @inject UserService UserService
 @inject DocumentPdfService PdfService
 @inject IAccountingService AccountingService
+@inject IJurisdictionTemplateService JurisdictionService
 @inject MarkdownSanitizerService MarkdownSanitizer
+@inject FileUrlSigner FileUrls
 @inject ILogger<InvoiceViewer> Logger
 @implements IAsyncDisposable
 
@@ -48,17 +54,25 @@ else
             }
             </div>
             <div class="d-flex align-center gap-2 flex-wrap">
-                <MudSelect T="string" Value="@Invoice.Status" ValueChanged="UpdateStatusAsync" Disabled="@(!CanEditInvoice)" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="width: 170px; min-width: 170px; flex-shrink: 0;">
-                    <MudSelectItem Value="@(InvoiceStatus.Draft)">Draft</MudSelectItem>
-                    <MudSelectItem Value="@(InvoiceStatus.Final)">Final</MudSelectItem>
-                    <MudSelectItem Value="@(InvoiceStatus.Paid)">Paid</MudSelectItem>
+                <MudSelect T="string"
+                           Value="@Invoice.Status"
+                           ValueChanged="UpdateStatusAsync"
+                           Disabled="@(!CanApproveInvoice || Invoice.Payments.Any() || Invoice.WriteOffs.Any())"
+                           Dense="true"
+                           Margin="Margin.Dense"
+                           Variant="Variant.Outlined"
+                           Style="width: 170px; min-width: 170px; flex-shrink: 0;">
+                    @foreach (var status in InvoiceStatus.GetDropdownStatuses(Invoice.Status, Invoice.Payments.Any() || Invoice.WriteOffs.Any()))
+                    {
+                        <MudSelectItem Value="@status">@status</MudSelectItem>
+                    }
                 </MudSelect>
                 <MudDivider Vertical="true" FlexItem="true" Class="mx-1" />
                 <MudButton Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.PictureAsPdf" OnClick="PrintPdf">Print / PDF</MudButton>
                 @if (Invoice.Status != InvoiceStatus.Draft)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
-                    @if (CanEditInvoice)
+                    @if (CanSendEmail)
                     {
                         <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email" OnClick="SendByEmail">Send by Email</MudButton>
                     }
@@ -68,23 +82,34 @@ else
                     <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="DuplicateInvoice">Duplicate</MudButton>
                 }
 
-                @if (CanManageAccounting)
+                @if (CanManageAccounting && (Invoice.Status != InvoiceStatus.Draft || Invoice.Payments.Any() || Invoice.WriteOffs.Any()))
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Payments" OnClick="OpenPaymentsDialog">
-                        @BizLoc["Payments"]@(Invoice.Payments.Any() ? $" ({Invoice.Payments.Count})" : "")
+                        @BizLoc["Payments"]@((Invoice.Payments.Count + Invoice.WriteOffs.Count) > 0 ? $" ({Invoice.Payments.Count + Invoice.WriteOffs.Count})" : "")
                     </MudButton>
-                    @if (Invoice.BalanceDue > 0)
+                    @if (Invoice.Status != InvoiceStatus.Draft && Invoice.Status != InvoiceStatus.Void && Invoice.BalanceDue > 0)
                     {
                         <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AttachMoney" OnClick="RegisterPayment">@BizLoc["Add Payment"]</MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Balance" OnClick="CloseInvoiceBalance">@BizLoc["Close Balance"]</MudButton>
                     }
-                    @if (Invoice.Status == InvoiceStatus.Draft)
-                    {
-                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Edit" OnClick="EditInvoice">@Loc["Edit"]</MudButton>
+                }
 
-                        <MudTooltip Text="Delete Draft">
-                            <MudIconButton Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="DeleteInvoice" />
-                        </MudTooltip>
-                    }
+                <MudButton Variant="Variant.Outlined"
+                           Color="@(Invoice.Status == InvoiceStatus.Draft && CanManageAccounting ? Color.Warning : Color.Default)"
+                           StartIcon="@(Invoice.Status == InvoiceStatus.Draft && CanManageAccounting ? Icons.Material.Filled.Edit : (InvoiceStatus.CanUnlockEdit(Invoice.Status) && !Invoice.Payments.Any() && !Invoice.WriteOffs.Any() && CanApproveInvoice ? Icons.Material.Filled.EditNote : Icons.Material.Filled.Visibility))"
+                           OnClick="EditInvoice">
+                    @(Invoice.Status == InvoiceStatus.Draft && CanManageAccounting
+                        ? Loc["Edit"].Value
+                        : (InvoiceStatus.CanUnlockEdit(Invoice.Status) && !Invoice.Payments.Any() && !Invoice.WriteOffs.Any() && CanApproveInvoice
+                            ? BizLoc["View / Edit"].Value
+                            : BizLoc["View Details"].Value))
+                </MudButton>
+
+                @if (CanManageAccounting && Invoice.Status == InvoiceStatus.Draft)
+                {
+                    <MudTooltip Text="Delete Draft">
+                        <MudIconButton Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="DeleteInvoice" />
+                    </MudTooltip>
                 }
             </div>
         </div>
@@ -141,10 +166,12 @@ else
                         <MudText Typo="Typo.body2">@Template.Label_ProjectNumber @Project?.ProjectNumber</MudText>
                     }
 
-                    @if (string.Equals(Invoice.Status, InvoiceStatus.Paid, StringComparison.OrdinalIgnoreCase))
+                    @if (InvoiceStatus.IsSettled(Invoice.Status))
                     {
                         <div class="mt-2 px-3 py-1 rounded" style="@($"background-color: {GetStatusColor()}; color: white; font-size: 0.8rem; font-weight: bold; -webkit-print-color-adjust: exact;")">
-                            @(!string.IsNullOrWhiteSpace(Template.Label_Paid) ? Template.Label_Paid : Invoice.Status.ToUpper())
+                            @(string.Equals(Invoice.Status, InvoiceStatus.Paid, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(Template.Label_Paid)
+                                ? Template.Label_Paid
+                                : Invoice.Status.ToUpper())
                         </div>
                     }
 
@@ -238,30 +265,38 @@ else
                             </div>
                         </MudPaper>
                     }
-                    @if (!string.IsNullOrEmpty(Template.PaymentInstructions) || !string.IsNullOrEmpty(Template.BankAccountNumber))
+                    @{
+                        var taxRegs = JurisdictionService.GetCompanyTaxRegistrations();
+                    }
+                    @if (!string.IsNullOrEmpty(Template.PaymentInstructions) || !string.IsNullOrEmpty(Template.BankAccountNumber) || taxRegs.Count > 0)
                     {
-                                <MudPaper Class="pa-3" Style="background-color: #f8f9fa; -webkit-print-color-adjust: exact; print-color-adjust: exact;" Elevation="0">
-                                    <MudText Typo="Typo.subtitle2" Class="mb-1" Style="@($"color: {Profile.PrimaryColor};")"><b>@Template.Label_PaymentInstructions</b></MudText>
-                                    <MudText Typo="Typo.caption" Style="white-space: pre-line;">@Template.PaymentInstructions</MudText>
+                        <MudPaper Class="pa-3" Style="background-color: #f8f9fa; -webkit-print-color-adjust: exact; print-color-adjust: exact;" Elevation="0">
+                            @if (!string.IsNullOrEmpty(Template.PaymentInstructions))
+                            {
+                                <MudText Typo="Typo.subtitle2" Class="mb-1" Style="@($"color: {Profile.PrimaryColor};")"><b>@Template.Label_PaymentInstructions</b></MudText>
+                                <MudText Typo="Typo.caption" Style="white-space: pre-line;">@Template.PaymentInstructions</MudText>
+                            }
 
                             @if (!string.IsNullOrEmpty(Template.BankName))
                             {
-                                            <MudDivider Class="my-2" />
-                                            <MudText Typo="Typo.caption"><b>@Template.Label_BankName:</b> @Template.BankName</MudText>
-                                            <MudText Typo="Typo.caption" Class="d-block"><b>@Template.Label_SwiftCode:</b> @Template.BankSwiftCode</MudText>
-                                            <MudText Typo="Typo.caption" Class="d-block"><b>@Template.Label_BankAccount:</b> @Template.BankAccountNumber</MudText>
+                                <MudDivider Class="my-2" />
+                                <MudText Typo="Typo.caption"><b>@Template.Label_BankName:</b> @Template.BankName</MudText>
+                                <MudText Typo="Typo.caption" Class="d-block"><b>@Template.Label_SwiftCode:</b> @Template.BankSwiftCode</MudText>
+                                <MudText Typo="Typo.caption" Class="d-block"><b>@Template.Label_BankAccount:</b> @Template.BankAccountNumber</MudText>
                             }
 
+                            @if (taxRegs.Count > 0)
+                            {
+                                @if (!string.IsNullOrEmpty(Template.PaymentInstructions) || !string.IsNullOrEmpty(Template.BankName))
+                                {
                                     <MudDivider Class="my-2" />
-                            @if (!string.IsNullOrEmpty(Template.TaxId1))
-                            {
-                                            <MudText Typo="Typo.caption"><b>@Template.Label_TaxId1</b> @Template.TaxId1</MudText>
+                                }
+                                @foreach (var reg in taxRegs)
+                                {
+                                    <MudText Typo="Typo.caption" Class="d-block"><b>@reg.Label</b> @reg.Number</MudText>
+                                }
                             }
-                            @if (!string.IsNullOrEmpty(Template.TaxId2))
-                            {
-                                            <MudText Typo="Typo.caption" Class="d-block"><b>@Template.Label_TaxId2</b> @Template.TaxId2</MudText>
-                            }
-                                </MudPaper>
+                        </MudPaper>
                     }
                     </div>
 
@@ -271,7 +306,7 @@ else
                             <MudText>@FormatMoney(Invoice.SubTotal)</MudText>
                         </div>
                         <div class="d-flex justify-space-between mb-1">
-                            <MudText>@Template.Label_Tax (@(Invoice.TaxRate * 100)%):</MudText>
+                            <MudText>@Template.Label_Tax (@FinancialCalculationEngine.FormatTaxRatePercent(Invoice.TaxRate)%):</MudText>
                             <MudText>@FormatMoney(Invoice.TaxAmount)</MudText>
                         </div>
 
@@ -282,12 +317,22 @@ else
                             <MudText Typo="Typo.h6" Style="@($"color: {Profile.PrimaryColor}; font-weight: bold;")">@FormatMoney(Invoice.GrandTotal)</MudText>
                         </div>
 
-                    @if (Invoice.AmountPaid > 0)
+                    @if (Invoice.AmountPaid > 0 || Invoice.AmountWrittenOff > 0)
                     {
+                        @if (Invoice.AmountPaid > 0)
+                        {
                                 <div class="d-flex justify-space-between mb-1 mt-2" style="color: green;">
                                     <MudText>@(!string.IsNullOrWhiteSpace(Template.Label_AmountPaid) ? Template.Label_AmountPaid : "Amount Paid"):</MudText>
                                     <MudText>(- @FormatMoney(Invoice.AmountPaid))</MudText>
                                 </div>
+                        }
+                        @if (Invoice.AmountWrittenOff > 0)
+                        {
+                                <div class="d-flex justify-space-between mb-1 @(Invoice.AmountPaid <= 0 ? "mt-2" : "")" style="color: #607d8b;">
+                                    <MudText>@BizLoc["Balance Adjustment"]:</MudText>
+                                    <MudText>(- @FormatMoney(Invoice.AmountWrittenOff))</MudText>
+                                </div>
+                        }
                         @if (Invoice.DatePaid.HasValue)
                         {
                                         <div class="d-flex justify-space-between mb-1" style="@($"color: {GetStatusColor()};")">
@@ -323,6 +368,13 @@ else
     private bool HasTransparency => Invoice?.HideCostAndMarkup == true && Invoice.LineItems.Any(l => l.MarkupPercentage > 0);
     private bool CanManageAccounting;
     private bool CanEditInvoice;
+    private bool CanApproveInvoice;
+    private bool _canUseEmail;
+    private bool CanSendEmail => CanApproveInvoice && _canUseEmail && !string.Equals(Profile?.Edition, "Family", StringComparison.OrdinalIgnoreCase);
+    private string? _authorizedProjectId;
+    private string? _authorizedGroupId;
+    private string? _authorizedInvoiceId;
+    private string _currentUserName = "System";
 
     private const int PageHeight = 940;
     private bool _needsPagination;
@@ -355,17 +407,49 @@ else
         catch { /* component already disposed or JS unavailable */ }
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
-        // Use UserService for consistent permission checking
-        var emp = await UserService.GetEmployeeAsync();
-        if (emp != null)
+        if (!string.Equals(_authorizedProjectId, ProjectId, StringComparison.Ordinal) ||
+            !string.Equals(_authorizedGroupId, GroupId, StringComparison.Ordinal) ||
+            !string.Equals(_authorizedInvoiceId, InvoiceId, StringComparison.Ordinal))
         {
-            CanManageAccounting = emp.IsAdmin || emp.HasPermission(AppPermissions.Finance.AccessAccounting);
-            CanEditInvoice = CanManageAccounting || emp.HasPermission(AppPermissions.Projects.Edit);
+            if (_authorizedInvoiceId != null && _authorizedInvoiceId != InvoiceId)
+            {
+                try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); } catch { }
+                _needsPagination = true;
+            }
+
+            Project = null;
+            Invoice = null;
+            Profile = null;
+            Template = null;
+            ProjectManagerName = "";
+            ProjectManagerEmail = "";
+            CanManageAccounting = false;
+            CanEditInvoice = false;
+            CanApproveInvoice = false;
+            _canUseEmail = false;
+            _authorizedProjectId = null;
+            _authorizedGroupId = null;
+            _authorizedInvoiceId = null;
         }
 
-        var loadedInvoice = Db.Invoices.GetById(InvoiceId);
+        // Use UserService for consistent permission checking
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null)
+        {
+            Nav.NavigateTo("/projects");
+            return;
+        }
+
+        var canAccountingRead = emp.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: true);
+        CanApproveInvoice = emp.HasPermission(AppPermissions.Finance.ApproveInvoices);
+        CanManageAccounting = emp.HasPermission(AppPermissions.Finance.AccessAccounting) || CanApproveInvoice;
+        CanEditInvoice = CanManageAccounting;
+        _canUseEmail = emp.HasPermission(AppPermissions.Email.Use);
+        _currentUserName = emp.FullName ?? emp.Email ?? "System";
+
+        var loadedInvoice = string.IsNullOrEmpty(InvoiceId) ? null : Db.Invoices.GetById(InvoiceId);
         if (loadedInvoice == null)
         {
             Nav.NavigateTo("/projects");
@@ -387,18 +471,9 @@ else
                 .Cast<Project>()
                 .ToList();
 
-            bool canViewGroup = CanManageAccounting;
-            if (!canViewGroup)
-            {
-                foreach (var gp in groupProjects)
-                {
-                    if (await UserService.CanViewProjectAsync(gp))
-                    {
-                        canViewGroup = true;
-                        break;
-                    }
-                }
-            }
+            bool canViewGroup = canAccountingRead ||
+                                CanApproveInvoice ||
+                                (groupProjects.Any() && groupProjects.All(gp => UserService.CanViewProject(emp, gp, allowAccountingFinancialRead: true)));
 
             if (!canViewGroup)
             {
@@ -415,27 +490,42 @@ else
         }
         else
         {
-            Project = Db.Projects.GetById(ProjectId);
-            if (Project == null || !await UserService.CanViewProjectAsync(Project))
+            var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+            if (liveProject == null || !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: true))
             {
                 Nav.NavigateTo("/projects");
                 return;
             }
 
-            bool belongsToProject = string.Equals(loadedInvoice.ProjectId, ProjectId, StringComparison.OrdinalIgnoreCase);
+            bool belongsToProject = string.Equals(loadedInvoice.ProjectId, liveProject.Id, StringComparison.OrdinalIgnoreCase);
+            bool groupAccessOk = true;
             if (!belongsToProject && !string.IsNullOrEmpty(loadedInvoice.ProjectGroupId))
             {
                 var group = Db.ProjectGroups.GetById(loadedInvoice.ProjectGroupId);
-                belongsToProject = group != null && group.ProjectIds.Contains(ProjectId);
+                belongsToProject = group != null && group.ProjectIds.Contains(liveProject.Id);
+                if (belongsToProject && group != null && !canAccountingRead && !CanApproveInvoice)
+                {
+                    var groupProjects = group.ProjectIds
+                        .Select(pid => Db.Projects.GetById(pid))
+                        .Where(p => p != null)
+                        .Cast<Project>()
+                        .ToList();
+                    groupAccessOk = groupProjects.Any() && groupProjects.All(gp => UserService.CanViewProject(emp, gp, allowAccountingFinancialRead: true));
+                }
             }
 
-            if (!belongsToProject)
+            if (!belongsToProject || !groupAccessOk)
             {
                 Nav.NavigateTo("/projects");
                 return;
             }
+
+            Project = liveProject;
         }
 
+        _authorizedProjectId = ProjectId;
+        _authorizedGroupId = GroupId;
+        _authorizedInvoiceId = loadedInvoice.Id;
         Invoice = loadedInvoice;
         Profile = Db.CompanyProfile.Get();
 
@@ -450,13 +540,15 @@ else
         }
         if (Template == null) Template = Db.DocumentTemplates.GetDefault();
 
+        ProjectManagerName = "";
+        ProjectManagerEmail = "";
         if (Project != null && !string.IsNullOrEmpty(Project.ProjectManagerId))
         {
             var pm = Db.Employees.GetById(Project.ProjectManagerId);
             if (pm != null)
             {
                 ProjectManagerName = pm.FullName;
-                ProjectManagerEmail = pm.Email;
+                ProjectManagerEmail = pm.IsEmailPublic ? pm.Email : string.Empty;
             }
         }
     }
@@ -491,14 +583,14 @@ else
                 "\n\n" + string.Join("", System.Linq.Enumerable.Repeat("<div style=\"height: 1rem;\"></div>\n\n", match.Length - 2)));
 
             var html = MarkdownSanitizer.RenderSanitizedHtml(text);
-            return new MarkupString(html);
+            return new MarkupString(FileUrls.SignHtmlFileUrls(html));
         }
         catch (Exception)
         {
             return new MarkupString(System.Net.WebUtility.HtmlEncode(text)); // Fallback to encoded text
         }
     }
-    private string GetStatusColor() => Invoice?.Status switch { InvoiceStatus.Paid => "#4caf50", InvoiceStatus.Partial => "#ff9800", InvoiceStatus.Draft => "#9e9e9e", _ => "#2196f3" };
+    private string GetStatusColor() => Invoice?.Status switch { InvoiceStatus.Paid => "#4caf50", InvoiceStatus.WrittenOff => "#607d8b", InvoiceStatus.Partial => "#ff9800", InvoiceStatus.Draft => "#9e9e9e", _ => "#2196f3" };
 
     private string GetTranslatedDescription(InvoiceLine line)
     {
@@ -531,49 +623,207 @@ else
     private bool HasConsumedPrepaymentCredits(Invoice invoice)
         => AccountingService.HasConsumedPrepaymentCredits(invoice);
 
+    private async Task<(Spokes_Server.Core.Models.HR.Employee Actor, Invoice Invoice)?> AuthorizeInvoiceMutationAsync(bool requireApprove = false, bool requireDraft = false)
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        var liveInvoice = string.IsNullOrEmpty(InvoiceId) ? null : Db.Invoices.GetById(InvoiceId);
+        if (emp == null || liveInvoice == null || !CanEmployeeViewInvoiceScope(emp, liveInvoice))
+        {
+            CanManageAccounting = false;
+            CanEditInvoice = false;
+            CanApproveInvoice = false;
+            _canUseEmail = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+
+        var canApprove = emp.HasPermission(AppPermissions.Finance.ApproveInvoices);
+        var canManage = emp.HasPermission(AppPermissions.Finance.AccessAccounting) || canApprove;
+        if (requireApprove ? !canApprove : !canManage)
+        {
+            CanApproveInvoice = canApprove;
+            CanManageAccounting = canManage;
+            CanEditInvoice = canManage;
+            _canUseEmail = emp.HasPermission(AppPermissions.Email.Use);
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+
+        if (requireDraft && !string.Equals(liveInvoice.Status, InvoiceStatus.Draft, StringComparison.OrdinalIgnoreCase))
+        {
+            Snackbar.Add("Only draft invoices can be deleted.", Severity.Warning);
+            return null;
+        }
+
+        _currentUserName = emp.FullName ?? emp.Email ?? _currentUserName;
+        return (emp, liveInvoice);
+    }
+
+    private bool CanEmployeeViewInvoiceScope(Spokes_Server.Core.Models.HR.Employee emp, Invoice inv)
+    {
+        if (!string.IsNullOrEmpty(inv.ProjectGroupId))
+        {
+            var group = Db.ProjectGroups.GetById(inv.ProjectGroupId);
+            if (group == null) return false;
+            var groupProjects = group.ProjectIds
+                .Select(pid => Db.Projects.GetById(pid))
+                .Where(p => p != null)
+                .Cast<Project>()
+                .ToList();
+            return groupProjects.Any() && groupProjects.All(gp => UserService.CanViewProject(emp, gp, allowAccountingFinancialRead: true));
+        }
+
+        var targetProjectId = !string.IsNullOrEmpty(inv.ProjectId) ? inv.ProjectId : ProjectId;
+        var project = string.IsNullOrEmpty(targetProjectId) ? null : Db.Projects.GetById(targetProjectId);
+        return project != null && UserService.CanViewProject(emp, project, allowAccountingFinancialRead: true);
+    }
+
     private async Task OpenPaymentsDialog()
     {
-        if (Invoice == null || !CanManageAccounting) return;
+        var auth = await AuthorizeInvoiceMutationAsync();
+        if (auth == null) return;
+        var liveInvoice = auth.Value.Invoice;
 
         var parameters = new DialogParameters<InvoicePaymentsDialog>
         {
-            { x => x.Invoice, Invoice }
+            { x => x.Invoice, liveInvoice }
         };
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
-        var dialog = await DialogService.ShowAsync<InvoicePaymentsDialog>(string.Format(BizLoc["Payments - Invoice #{0}"].Value, Invoice.InvoiceNumber), parameters, options);
+        var dialog = await DialogService.ShowAsync<InvoicePaymentsDialog>(string.Format(BizLoc["Payments - Invoice #{0}"].Value, liveInvoice.InvoiceNumber), parameters, options);
         var result = await dialog.Result;
 
         if (result is { Canceled: false })
         {
-            Invoice = Db.Invoices.GetById(InvoiceId);
+            Invoice = Db.Invoices.GetById(liveInvoice.Id);
             await RefreshViewer();
+        }
+    }
+
+    private async Task CloseInvoiceBalance()
+    {
+        var auth = await AuthorizeInvoiceMutationAsync();
+        if (auth == null) return;
+        var liveInvoice = auth.Value.Invoice;
+        if (liveInvoice.Status == InvoiceStatus.Draft || liveInvoice.Status == InvoiceStatus.Void || liveInvoice.BalanceDue <= 0)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters<WriteOffBalanceDialog>
+        {
+            { x => x.DocumentTypeLabel, BizLoc["Invoice"].Value },
+            { x => x.DocumentNumber, liveInvoice.InvoiceNumber },
+            { x => x.PartyLabel, BizLoc["Client"].Value },
+            { x => x.PartyName, Project?.Client?.BusinessName ?? Project?.DisplayName ?? "-" },
+            { x => x.TotalAmount, liveInvoice.GrandTotal },
+            { x => x.AmountPaid, liveInvoice.AmountPaid },
+            { x => x.RemainingBalance, liveInvoice.BalanceDue },
+            { x => x.IsReceivable, true }
+        };
+
+        var dialog = await DialogService.ShowAsync<WriteOffBalanceDialog>(
+            BizLoc["Close / Write Off Balance"].Value,
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: BalanceWriteOff writeOff })
+        {
+            try
+            {
+                var saveAuth = await AuthorizeInvoiceMutationAsync();
+                if (saveAuth == null) return;
+                AccountingService.RecordInvoiceWriteOff(saveAuth.Value.Invoice, writeOff, _currentUserName, saveAuth.Value.Actor);
+                Invoice = Db.Invoices.GetById(saveAuth.Value.Invoice.Id);
+                Snackbar.Add(string.Format(BizLoc["Closed balance of {0} without creating a bank transaction."].Value, writeOff.Amount.ToString("C2")), Severity.Success);
+                await RefreshViewer();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Warning);
+            }
         }
     }
 
     private async Task UpdateStatusAsync(string newStatus)
     {
-        if (Invoice == null || !CanEditInvoice) return;
+        if (Invoice == null || newStatus == Invoice.Status) return;
 
-        // Admin-only revert from Final to Draft
-        if (Invoice.Status != InvoiceStatus.Draft && newStatus == InvoiceStatus.Draft && !CanManageAccounting)
+        var preAuth = await AuthorizeInvoiceMutationAsync(requireApprove: true);
+        if (preAuth == null)
         {
-            Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
+            StateHasChanged();
+            return;
+        }
+        var liveInvoice = preAuth.Value.Invoice;
+
+        if ((liveInvoice.Payments.Any() || liveInvoice.WriteOffs.Any()) && newStatus == InvoiceStatus.Draft)
+        {
+            Snackbar.Add(BizLoc["Cannot revert an invoice with recorded payments or write-offs to Draft. Remove them first."].Value, Severity.Warning);
+            StateHasChanged();
             return;
         }
 
-        if (Invoice.Status == InvoiceStatus.Paid && newStatus != InvoiceStatus.Paid && HasConsumedPrepaymentCredits(Invoice))
+        if (InvoiceStatus.IsSettled(liveInvoice.Status) && !InvoiceStatus.IsSettled(newStatus) && HasConsumedPrepaymentCredits(liveInvoice))
         {
-            Snackbar.Add("Cannot revert a paid prepayment invoice while its credits are applied to other invoices.", Severity.Warning);
+            Snackbar.Add(BizLoc["Cannot revert a paid prepayment invoice while its credits are applied to other invoices."].Value, Severity.Warning);
+            StateHasChanged();
             return;
         }
 
-        var oldStatus = Invoice.Status;
-        Invoice.Status = newStatus;
-        if (newStatus == InvoiceStatus.Paid && Invoice.DatePaid == null)
+        var oldStatus = liveInvoice.Status;
+        var requiresReason = InvoiceStatus.RequiresReason(oldStatus, newStatus);
+        string? reason = null;
+
+        if (requiresReason)
         {
-            Invoice.DatePaid = DateTime.Today;
+            var parameters = new DialogParameters<ConfirmDialog>
+            {
+                { x => x.ContentText, string.Format(BizLoc["Please provide a reason for changing the invoice status from {0} to {1}."].Value, oldStatus, newStatus) },
+                { x => x.ButtonText, BizLoc["Confirm Status Change"].Value },
+                { x => x.Color, Color.Warning },
+                { x => x.ShowReasonInput, true },
+                { x => x.ReasonRequired, true },
+                { x => x.ReasonLabel, BizLoc["Reason for status change"].Value },
+                { x => x.ReasonPlaceholder, BizLoc["Explain why this invoice status is being reverted..."].Value }
+            };
+
+            var dialog = await DialogService.ShowAsync<ConfirmDialog>(BizLoc["Confirm Status Change"].Value, parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            var result = await dialog.Result;
+            if (result == null || result.Canceled || string.IsNullOrWhiteSpace(result.Data as string))
+            {
+                StateHasChanged();
+                return;
+            }
+
+            reason = (result.Data as string)?.Trim();
         }
 
+        var saveAuth = await AuthorizeInvoiceMutationAsync(requireApprove: true);
+        if (saveAuth == null)
+        {
+            StateHasChanged();
+            return;
+        }
+        liveInvoice = saveAuth.Value.Invoice;
+        var emp = saveAuth.Value.Actor;
+        if (liveInvoice.Status == newStatus) return;
+
+        liveInvoice.Status = newStatus;
+        liveInvoice.History.Add(new DocumentHistoryEntry
+        {
+            Timestamp = DateTime.UtcNow,
+            Action = requiresReason ? DocumentHistoryActions.StatusReverted : DocumentHistoryActions.StatusChanged,
+            OldStatus = oldStatus,
+            NewStatus = newStatus,
+            ChangedBy = _currentUserName,
+            Summary = requiresReason
+                ? $"Reverted status from {oldStatus} to {newStatus}"
+                : $"Changed status from {oldStatus} to {newStatus}",
+            Reason = reason
+        });
+
+        Invoice = liveInvoice;
         if (oldStatus != InvoiceStatus.Draft && newStatus == InvoiceStatus.Draft)
         {
             if (!string.IsNullOrEmpty(Invoice.PdfPath) && System.IO.File.Exists(Invoice.PdfPath))
@@ -583,7 +833,7 @@ else
             Invoice.PdfPath = "";
             Db.Invoices.Save(Invoice);
         }
-        else if (oldStatus == InvoiceStatus.Draft && (newStatus == InvoiceStatus.Final || newStatus == InvoiceStatus.Paid))
+        else if (oldStatus == InvoiceStatus.Draft && newStatus == InvoiceStatus.Final)
         {
             Db.Invoices.Save(Invoice);
             await EnsurePdfExistsAsync();
@@ -592,7 +842,7 @@ else
         {
             Db.Invoices.Save(Invoice);
         }
-        AccountingService.ProcessInvoiceStatusChange(Invoice, oldStatus, newStatus, null);
+        AccountingService.ProcessInvoiceStatusChange(Invoice, oldStatus, newStatus, _currentUserName, emp);
         Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
         
         await RefreshViewer();
@@ -600,14 +850,29 @@ else
 
     private async Task DeleteInvoice()
     {
-        if (Invoice == null || !CanManageAccounting) return;
-        if (HasConsumedPrepaymentCredits(Invoice))
+        var preAuth = await AuthorizeInvoiceMutationAsync(requireDraft: true);
+        if (preAuth == null) return;
+        var targetInvoice = preAuth.Value.Invoice;
+
+        if (HasConsumedPrepaymentCredits(targetInvoice))
         {
             Snackbar.Add("Cannot delete a prepayment invoice while its credits are applied to other invoices.", Severity.Warning);
             return;
         }
         var result = await DialogService.ShowMessageBoxAsync("Delete Invoice?", "Deleting this draft will release all linked time entries.", yesText: "Delete", cancelText: "Cancel");
-        if (result == true) { Db.Invoices.Delete(Invoice.Id); Snackbar.Add("Invoice deleted", Severity.Success); GoBack(); }
+        if (result == true)
+        {
+            var deleteAuth = await AuthorizeInvoiceMutationAsync(requireDraft: true);
+            if (deleteAuth == null) return;
+            if (HasConsumedPrepaymentCredits(deleteAuth.Value.Invoice))
+            {
+                Snackbar.Add("Cannot delete a prepayment invoice while its credits are applied to other invoices.", Severity.Warning);
+                return;
+            }
+            Db.Invoices.Delete(deleteAuth.Value.Invoice.Id);
+            Snackbar.Add("Invoice deleted", Severity.Success);
+            GoBack();
+        }
     }
 
     // UPDATED: Now triggers the browser print dialog
@@ -615,20 +880,27 @@ else
 
     private async Task RegisterPayment()
     {
-        if (Invoice == null || !CanManageAccounting) return;
-        var emp = await UserService.GetEmployeeAsync();
+        var preAuth = await AuthorizeInvoiceMutationAsync();
+        if (preAuth == null || preAuth.Value.Invoice.Status == InvoiceStatus.Draft)
+        {
+            return;
+        }
+        var liveInvoice = preAuth.Value.Invoice;
+
         var parameters = new DialogParameters<RecordPaymentDialog> 
         { 
-            { x => x.MaxAmount, Math.Max(0, Invoice.BalanceDue) },
-            { x => x.Message, string.Format(BizLoc["Record payment for invoice #{0}."].Value, Invoice.InvoiceNumber) },
-            { x => x.ExistingPayments, Invoice.Payments }
+            { x => x.MaxAmount, Math.Max(0, liveInvoice.BalanceDue) },
+            { x => x.Message, string.Format(BizLoc["Record payment for invoice #{0}."].Value, liveInvoice.InvoiceNumber) },
+            { x => x.ExistingPayments, liveInvoice.Payments }
         };
         var dialog = await DialogService.ShowAsync<RecordPaymentDialog>(BizLoc["Record Payment"].Value, parameters);
         var result = await dialog.Result;
         if (result is { Canceled: false, Data: PaymentRecord payment })
         {
-            AccountingService.RecordInvoicePayment(Invoice, payment, emp?.FullName);
-            Invoice = Db.Invoices.GetById(InvoiceId);
+            var saveAuth = await AuthorizeInvoiceMutationAsync();
+            if (saveAuth == null || saveAuth.Value.Invoice.Status == InvoiceStatus.Draft) return;
+            AccountingService.RecordInvoicePayment(saveAuth.Value.Invoice, payment, saveAuth.Value.Actor.FullName ?? _currentUserName, saveAuth.Value.Actor);
+            Invoice = Db.Invoices.GetById(saveAuth.Value.Invoice.Id);
             Snackbar.Add(string.Format(BizLoc["Payment of {0} Registered"].Value, payment.Amount.ToString("C2")), Severity.Success);
             await RefreshViewer();
         }
@@ -636,18 +908,40 @@ else
 
     private async Task EditInvoice()
     {
-        if (Invoice == null || !CanManageAccounting) return;
-        var parameters = new DialogParameters { ["Invoice"] = Invoice };
-        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
+        var emp = await UserService.GetEmployeeAsync();
+        var liveInvoice = string.IsNullOrEmpty(InvoiceId) ? null : Db.Invoices.GetById(InvoiceId);
+        if (emp == null || liveInvoice == null || !CanEmployeeViewInvoiceScope(emp, liveInvoice))
+        {
+            Snackbar.Add("Access denied.", Severity.Error);
+            return;
+        }
 
-        // This calls the dialog defined below
-        var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>("Edit Invoice", parameters, options);
+        var liveCanApprove = emp.HasPermission(AppPermissions.Finance.ApproveInvoices);
+        var liveCanManage = emp.HasPermission(AppPermissions.Finance.AccessAccounting) || liveCanApprove;
+        CanApproveInvoice = liveCanApprove;
+        CanManageAccounting = liveCanManage;
+        CanEditInvoice = liveCanManage;
+        _canUseEmail = emp.HasPermission(AppPermissions.Email.Use);
+        _currentUserName = emp.FullName ?? emp.Email ?? "System";
+
+        var parameters = new DialogParameters<InvoiceMasterDialog>
+        {
+            { x => x.Invoice, liveInvoice },
+            { x => x.CanEditDraft, liveCanManage },
+            { x => x.CanApproveInvoice, liveCanApprove }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
+        var dialogTitle = liveInvoice.Status == InvoiceStatus.Draft && liveCanManage
+            ? BizLoc["Edit Invoice"].Value
+            : BizLoc["Invoice Builder & Details"].Value;
+
+        var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>(dialogTitle, parameters, options);
         var result = await dialog.Result;
 
         if (result is { Canceled: false })
         {
             // Reload to ensure UI reflects changes (Totals, Descriptions, etc.)
-            Invoice = Db.Invoices.GetById(InvoiceId);
+            Invoice = Db.Invoices.GetById(liveInvoice.Id);
 
             // Re-evaluate template in case it changed
             if (!string.IsNullOrEmpty(Invoice?.TemplateId))
@@ -670,35 +964,33 @@ else
 
     private async Task DuplicateInvoice()
     {
-        if (Invoice == null || !CanEditInvoice) return;
+        var preAuth = await AuthorizeInvoiceMutationAsync();
+        if (preAuth == null) return;
         var result = await DialogService.ShowMessageBoxAsync("Duplicate Invoice", "Are you sure you want to create a copy of this invoice?", yesText: "Duplicate", cancelText: "Cancel");
         if (result != true) return;
 
         try
         {
-            // 1. Clone
-            var json = System.Text.Json.JsonSerializer.Serialize(Invoice);
-            var newInv = System.Text.Json.JsonSerializer.Deserialize<Invoice>(json);
-            if (newInv == null) return;
+            var saveAuth = await AuthorizeInvoiceMutationAsync();
+            if (saveAuth == null) return;
+            var sourceInvoice = saveAuth.Value.Invoice;
 
-            // 2. Update Metadata
-            newInv.Id = Guid.NewGuid().ToString();
-            newInv.InvoiceNumber = Db.Invoices.GenerateInvoiceNumber(Profile?.InvoicePrefix ?? "INV-");
-            newInv.Date = DateTime.Today;
-            newInv.Status = InvoiceStatus.Draft;
-            newInv.Note = $"{Invoice.Note} (Copy)"; // Optional, user might want this?
+            var newNumber = Db.Invoices.GenerateInvoiceNumber(Profile?.InvoicePrefix ?? "INV-");
+            var newInv = sourceInvoice.DuplicateAsDraft(newNumber, _currentUserName);
+            newInv.ProjectId = sourceInvoice.ProjectId;
+            newInv.ProjectGroupId = sourceInvoice.ProjectGroupId;
 
-            // 3. Reset Payments
-            newInv.Payments.Clear();
-            newInv.DatePaid = null;
-            // BalanceDue is calced property, so it will update automatically based on AmountPaid and GrandTotal.
-
-            // 4. Save
             Db.Invoices.Save(newInv);
 
-            // 5. Navigate
             Snackbar.Add("Invoice Duplicated Successfully", Severity.Success);
-            Nav.NavigateTo($"/projects/{ProjectId}/invoices/{newInv.Id}");
+            if (!string.IsNullOrEmpty(newInv.ProjectGroupId))
+            {
+                Nav.NavigateTo($"/project-groups/{newInv.ProjectGroupId}/invoices/{newInv.Id}");
+            }
+            else
+            {
+                Nav.NavigateTo($"/projects/{ProjectId}/invoices/{newInv.Id}");
+            }
         }
         catch (Exception)
         {
@@ -708,8 +1000,16 @@ else
 
     private async Task<bool> EnsurePdfExistsAsync()
     {
-        if (Invoice == null) return false;
-        if (PdfService.IsValidCachedPdf(Invoice.PdfPath))
+        var emp = await UserService.GetEmployeeAsync();
+        var liveInvoice = string.IsNullOrEmpty(InvoiceId) ? null : Db.Invoices.GetById(InvoiceId);
+        if (emp == null || liveInvoice == null || !CanEmployeeViewInvoiceScope(emp, liveInvoice))
+        {
+            Snackbar.Add("Access denied.", Severity.Error);
+            return false;
+        }
+
+        Invoice = liveInvoice;
+        if (PdfService.IsValidCachedPdf(liveInvoice.PdfPath))
         {
             return true;
         }
@@ -717,8 +1017,13 @@ else
         try
         {
             Snackbar.Add("Generating PDF document...", Severity.Info);
-            Invoice.PdfPath = await PdfService.GenerateInvoicePdfAsync(Invoice, ProjectId, Nav.BaseUri);
-            Db.Invoices.Save(Invoice);
+            var targetProjectId = !string.IsNullOrEmpty(ProjectId) ? ProjectId : liveInvoice.ProjectId;
+            liveInvoice.PdfPath = await PdfService.GenerateInvoicePdfAsync(liveInvoice, targetProjectId, Nav.BaseUri, emp.Id);
+            if (emp.HasPermission(AppPermissions.Finance.AccessAccounting) || emp.HasPermission(AppPermissions.Finance.ApproveInvoices))
+            {
+                Db.Invoices.Save(liveInvoice);
+            }
+            Invoice = liveInvoice;
             return true;
         }
         catch (Exception ex)
@@ -731,9 +1036,16 @@ else
 
     private async Task SendByEmail()
     {
-        if (Invoice == null) return;
+        var auth = await AuthorizeInvoiceMutationAsync(requireApprove: true);
+        if (auth == null) return;
+        if (string.Equals(Db.CompanyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase) ||
+            !auth.Value.Actor.HasPermission(AppPermissions.Email.Use))
+        {
+            Snackbar.Add("Active Email.Use permission is required to send emails.", Severity.Error);
+            return;
+        }
 
-        if (!await EnsurePdfExistsAsync())
+        if (!await EnsurePdfExistsAsync() || Invoice == null)
         {
             return;
         }
@@ -744,9 +1056,9 @@ else
             ["Subject"] = $"Invoice #{Invoice.InvoiceNumber} from {Profile?.CompanyName}",
             ["Body"] = $"<p>Dear {Project?.Client?.ContactPersonName ?? "Client"},</p><p>Please find attached invoice #{Invoice.InvoiceNumber}.</p>",
             ["IsTemplate"] = true,
-            ["PreloadedFiles"] = new List<(string Path, string FileName)> 
-            { 
-                (Invoice.PdfPath, $"Invoice_{Invoice.InvoiceNumber}.pdf") 
+            ["PreloadedDocumentAttachments"] = new List<OutboundDocumentAttachmentRef>
+            {
+                new(OutboundDocumentKind.Invoice, Invoice.Id, $"Invoice_{Invoice.InvoiceNumber}.pdf")
             }
         };
 
@@ -765,10 +1077,7 @@ else
 
         try
         {
-            var bytes = await System.IO.File.ReadAllBytesAsync(Invoice.PdfPath);
-            var base64 = Convert.ToBase64String(bytes);
-            var dataUrl = $"data:application/pdf;base64,{base64}";
-            await JS.InvokeVoidAsync("window.openBase64InNewTab", dataUrl, $"Invoice_{Invoice.InvoiceNumber}.pdf");
+            await JS.OpenPdfFileInNewTabAsync(Invoice.PdfPath, $"Invoice_{Invoice.InvoiceNumber}.pdf");
         }
         catch (Exception ex)
         {

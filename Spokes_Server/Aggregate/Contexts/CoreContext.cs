@@ -31,19 +31,6 @@ public class CoreContext
     }
 
 
-    public CoreContext(
-        CompanyProfileRepository companyProfile,
-        DocumentTemplateRepository documentTemplates,
-        OpenIdAccountRepository openIdAccounts,
-        ServerConfigRepository serverConfigs,
-        SystemConfigRepository systemConfigs,
-        DeviceSessionRepository deviceSessions,
-        DemoConfigRepository demoConfigs,
-        StandardDocumentRepository standardDocuments)
-        : this(companyProfile, documentTemplates, openIdAccounts, serverConfigs, systemConfigs, deviceSessions, demoConfigs, standardDocuments, null!)
-    {
-    }
-
     [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public CoreContext(
         CompanyProfileRepository companyProfile,

@@ -22,9 +22,7 @@ public class PartyContactInfo
     public string BusinessAddressZip { get; set; } = string.Empty;
     public string TaxId { get; set; } = string.Empty;
 
-    // Sage 50 Canadian Edition Integration & Baseline Mapping
-    public string SageReferenceName { get; set; } = string.Empty;
-    public string DefaultSageItemCode { get; set; } = string.Empty;
+    // Chart of Accounts Baseline Mapping
     public string DefaultGlAccountCode { get; set; } = string.Empty;
 
     /// <summary>

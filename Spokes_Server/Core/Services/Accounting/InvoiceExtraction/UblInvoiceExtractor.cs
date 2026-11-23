@@ -1,17 +1,15 @@
 namespace Spokes_Server.Core.Services.Accounting.InvoiceExtraction;
 
 using System;
-using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
 
 /// <summary>
 /// Extracts invoice details from OASIS UBL 2.0 / 2.1 e-invoices.
 /// </summary>
-public class UblInvoiceExtractor : IElectronicInvoiceExtractor
+public class UblInvoiceExtractor : ElectronicInvoiceExtractorBase
 {
-    public bool CanExtract(string xmlContent)
+    public override bool CanExtract(string xmlContent)
     {
         if (string.IsNullOrWhiteSpace(xmlContent)) return false;
         return xmlContent.Contains("urn:oasis:names:specification:ubl:schema:xsd:Invoice-2", StringComparison.OrdinalIgnoreCase) ||
@@ -20,7 +18,7 @@ public class UblInvoiceExtractor : IElectronicInvoiceExtractor
                 xmlContent.Contains("LegalMonetaryTotal", StringComparison.OrdinalIgnoreCase));
     }
 
-    public ExtractedInvoiceData? Extract(string xmlContent)
+    public override ExtractedInvoiceData? Extract(string xmlContent)
     {
         if (string.IsNullOrWhiteSpace(xmlContent)) return null;
 
@@ -82,13 +80,7 @@ public class UblInvoiceExtractor : IElectronicInvoiceExtractor
                 var party = FindElement(supplierParty, "Party");
                 if (party != null)
                 {
-                    var partyName = FindElement(party, "PartyName");
-                    result.SupplierName = FindElement(partyName ?? party, "Name")?.Value?.Trim();
-                    if (string.IsNullOrEmpty(result.SupplierName))
-                    {
-                        var legalEntity = FindElement(party, "PartyLegalEntity");
-                        result.SupplierName = FindElement(legalEntity ?? party, "RegistrationName")?.Value?.Trim();
-                    }
+                    result.SupplierName = ExtractPartyName(party);
 
                     var taxScheme = FindElement(party, "PartyTaxScheme");
                     if (taxScheme != null)
@@ -111,13 +103,7 @@ public class UblInvoiceExtractor : IElectronicInvoiceExtractor
                 var party = FindElement(customerParty, "Party");
                 if (party != null)
                 {
-                    var partyName = FindElement(party, "PartyName");
-                    result.BuyerName = FindElement(partyName ?? party, "Name")?.Value?.Trim();
-                    if (string.IsNullOrEmpty(result.BuyerName))
-                    {
-                        var legalEntity = FindElement(party, "PartyLegalEntity");
-                        result.BuyerName = FindElement(legalEntity ?? party, "RegistrationName")?.Value?.Trim();
-                    }
+                    result.BuyerName = ExtractPartyName(party);
                 }
             }
 
@@ -157,16 +143,7 @@ public class UblInvoiceExtractor : IElectronicInvoiceExtractor
                 result.PaidAmount = ParseDecimal(FindElement(monetaryTotal, "PrepaidAmount")?.Value);
                 result.BalanceDue = ParseDecimal(payableElem?.Value);
 
-                if (result.TotalAmount == 0)
-                {
-                    result.TotalAmount = result.BalanceDue != 0 && result.PaidAmount != 0
-                        ? result.BalanceDue + result.PaidAmount
-                        : result.BalanceDue;
-                }
-                if (result.BalanceDue == 0 && result.TotalAmount > 0 && result.PaidAmount > 0 && result.TotalAmount > result.PaidAmount)
-                {
-                    result.BalanceDue = result.TotalAmount - result.PaidAmount;
-                }
+                NormalizeBalanceAmounts(result);
             }
 
             // Tax Total
@@ -198,14 +175,7 @@ public class UblInvoiceExtractor : IElectronicInvoiceExtractor
             }
 
             // Fallback to standard Canadian/Quebec breakdown if taxes not itemized
-            if (result.TpsAmount == 0 && result.TvqAmount == 0 && result.TaxAmount > 0 && result.SubTotal > 0)
-            {
-                if (Math.Abs(result.TaxAmount - (result.SubTotal * 0.14975m)) <= 0.05m)
-                {
-                    result.TpsAmount = Math.Round(result.SubTotal * 0.05m, 2, MidpointRounding.AwayFromZero);
-                    result.TvqAmount = Math.Round(result.SubTotal * 0.09975m, 2, MidpointRounding.AwayFromZero);
-                }
-            }
+            ApplyCanadianTaxBreakdownFallback(result);
 
             // Line Items (InvoiceLine or CreditNoteLine)
             var lines = FindElements(root, "InvoiceLine").Concat(FindElements(root, "CreditNoteLine"));
@@ -253,22 +223,7 @@ public class UblInvoiceExtractor : IElectronicInvoiceExtractor
             }
 
             // Default calculations
-            if (result.TotalAmount == 0 && result.SubTotal != 0)
-            {
-                result.TotalAmount = result.SubTotal + result.TaxAmount;
-            }
-            if (result.TaxAmount == 0 && (result.TpsAmount != 0 || result.TvqAmount != 0))
-            {
-                result.TaxAmount = result.TpsAmount + result.TvqAmount;
-            }
-            if (result.DueDate == null && result.InvoiceDate.HasValue)
-            {
-                result.DueDate = result.InvoiceDate.Value.AddDays(30);
-            }
-            if (result.IsCreditNote || result.TotalAmount < 0)
-            {
-                UniversalDocumentClassifier.ApplyCreditNoteNormalization(result, result.ClassificationReason ?? "UBL Credit Note");
-            }
+            ApplyFallbackTotalsAndCreditNote(result, "UBL Credit Note");
 
             return result;
         }
@@ -278,45 +233,17 @@ public class UblInvoiceExtractor : IElectronicInvoiceExtractor
         }
     }
 
-    private static XElement? FindElement(XContainer container, string localName)
+    private static readonly string[] UblDateFormats =
+        ["yyyy-MM-dd", "yyyyMMdd", "MM/dd/yyyy", "dd/MM/yyyy"];
+
+    private static string? ExtractPartyName(XElement party)
     {
-        return container.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(localName, StringComparison.OrdinalIgnoreCase));
+        var partyName = FindElement(party, "PartyName");
+        var name = FindElement(partyName ?? party, "Name")?.Value?.Trim();
+        if (!string.IsNullOrEmpty(name)) return name;
+        var legalEntity = FindElement(party, "PartyLegalEntity");
+        return FindElement(legalEntity ?? party, "RegistrationName")?.Value?.Trim();
     }
 
-    private static IEnumerable<XElement> FindElements(XContainer container, string localName)
-    {
-        return container.Elements().Where(e => e.Name.LocalName.Equals(localName, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static decimal ParseDecimal(string? value, decimal defaultValue = 0m)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return defaultValue;
-        if (decimal.TryParse(value.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out var result))
-        {
-            return result;
-        }
-        if (decimal.TryParse(value.Trim(), NumberStyles.Any, CultureInfo.CurrentCulture, out result))
-        {
-            return result;
-        }
-        return defaultValue;
-    }
-
-    private static DateTime? ParseDate(string? dateStr)
-    {
-        if (string.IsNullOrWhiteSpace(dateStr)) return null;
-
-        string[] formats = ["yyyy-MM-dd", "yyyyMMdd", "MM/dd/yyyy", "dd/MM/yyyy"];
-        if (DateTime.TryParseExact(dateStr.Trim(), formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-        {
-            return dt;
-        }
-
-        if (DateTime.TryParse(dateStr.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.None, out dt))
-        {
-            return dt;
-        }
-
-        return null;
-    }
+    private static DateTime? ParseDate(string? dateStr) => ParseDate(dateStr, UblDateFormats);
 }

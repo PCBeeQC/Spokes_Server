@@ -42,9 +42,7 @@ public static class SpokesEndpointExtensions
         // Core App Mappings
         app.MapControllers();
         app.MapReverseProxy().AllowAnonymous();
-        app.MapHub<ChatHub>("/hubs/chat");
         app.MapHub<SlideshowHub>("/hubs/slideshow").RequireCors("AllowPublicApi");
-        app.MapHub<SlideshowHub>("/slideshowHub").RequireCors("AllowPublicApi");
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode();
 

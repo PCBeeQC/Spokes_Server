@@ -48,7 +48,6 @@ public static class SpokesRequestClassifier
         new("/api"),
         new("/internal"),
         new("/hubs"),
-        new("/slideshowHub"),
         new("/media"),
         new("/setup/api")
     ];
@@ -72,6 +71,14 @@ public static class SpokesRequestClassifier
         new("/robots.txt"),
         new("/api/tls/ask"),
         new("/spokesapi/tls/ask")
+    ];
+
+    private static readonly PathString[] StaticLoginPathPrefixes =
+    [
+        new("/authentication/login"),
+        new("/mobile-login"),
+        new("/access-pending"),
+        new("/banned")
     ];
 
     /// <summary>
@@ -248,6 +255,15 @@ public static class SpokesRequestClassifier
         }
 
         return path.HasValue && MatchesAnySegmentPrefix(path, SetupAllowedPathPrefixes);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> for public authentication and account-status interstitial routes that render
+    /// via Static SSR without starting an InteractiveServer Blazor circuit.
+    /// </summary>
+    public static bool IsStaticLoginRoute(PathString path)
+    {
+        return path.HasValue && MatchesAnySegmentPrefix(path, StaticLoginPathPrefixes);
     }
 
     private static bool MatchesAnySegmentPrefix(PathString path, ReadOnlySpan<PathString> prefixes)

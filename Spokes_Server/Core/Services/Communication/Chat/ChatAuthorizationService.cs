@@ -9,6 +9,7 @@ using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Services.Identity;
 using Spokes_Server.Core.Services.Projects;
 using Spokes_Server.Core.Services.Security;
 
@@ -17,7 +18,7 @@ namespace Spokes_Server.Core.Services.Communication.Chat;
 /// <summary>
 /// Authoritative domain service for evaluating chat channel access, announcement posting permissions,
 /// message modifications, and message deletions.
-/// Centralizes all channel security logic to prevent logic fragmentation across ChatHub, ChatService, and UI components.
+/// Centralizes all channel security logic to prevent logic fragmentation across ChatService and UI components.
 /// </summary>
 public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelAccessService
 {
@@ -41,30 +42,8 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
         _privacyService = privacyService;
     }
 
-    public List<string> GetUserTeamIds(Employee? employee)
-    {
-        if (employee == null) return [];
-
-        var teamIds = new List<string>();
-        if (!string.IsNullOrEmpty(employee.TeamId))
-        {
-            teamIds.Add(employee.TeamId);
-        }
-
-        var ledTeams = _teams.GetAll()
-            .Where(t => t.LeaderId == employee.Id)
-            .Select(t => t.Id);
-
-        foreach (var id in ledTeams)
-        {
-            if (!teamIds.Contains(id))
-            {
-                teamIds.Add(id);
-            }
-        }
-
-        return teamIds;
-    }
+    public List<string> GetUserTeamIds(Employee? employee) =>
+        [.. TeamRepository.GetUserTeamIds(_teams, employee?.Id, employee)];
 
     public List<string> GetUserProjectIds(Employee? employee)
     {
@@ -88,6 +67,16 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
     public bool CanUserAccessChannel(ChatChannel? channel, Employee? employee)
     {
         if (channel == null || employee == null || !employee.IsActive || employee.IsBanned)
+        {
+            return false;
+        }
+
+        if (!employee.HasEffectivePermission(AppPermissions.Chat.Use, allowSuspended: true))
+        {
+            return false;
+        }
+
+        if (channel.IsArchived && !employee.HasEffectivePermission(AppPermissions.Chat.ViewArchive, allowSuspended: true))
         {
             return false;
         }
@@ -163,6 +152,11 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
             return false;
         }
 
+        if (!employee.HasPermission(AppPermissions.Chat.Use))
+        {
+            return false;
+        }
+
         bool treatedAsAnnouncement = channel.IsAnnouncementOnly ||
             (channel.IsPublicChannel && _privacyService?.GetPrivacyConfig().PublicChannels == PublicChannelPolicy.AnnouncementOnly);
 
@@ -227,6 +221,11 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
             return false;
         }
 
+        if (!employee.HasPermission(AppPermissions.Chat.Use))
+        {
+            return false;
+        }
+
         // Caller must currently have access to the channel
         if (!CanUserAccessChannel(channel, employee))
         {
@@ -239,10 +238,23 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
             return true;
         }
 
-        // Administrator or Chat Moderator can delete inappropriate messages
-        if (employee.IsAdmin || employee.HasPermission(AppPermissions.Chat.Moderator))
+        // Direct messages and private group DMs cannot be deleted by non-authors via standard chat deletion
+        if (channel.ChannelType == ChatChannelType.Direct || channel.ChannelType == ChatChannelType.Group)
+        {
+            return false;
+        }
+
+        // Administrators can moderate non-DM channels they have access to
+        if (employee.IsAdmin)
         {
             return true;
+        }
+
+        // Non-admin Chat Moderators must respect the moderation target hierarchy (cannot target admins or peers)
+        if (employee.HasPermission(AppPermissions.Chat.Moderator))
+        {
+            var target = string.IsNullOrWhiteSpace(message.SenderId) ? null : _employees.GetById(message.SenderId);
+            return UserService.CanModerateUserTarget(employee, target);
         }
 
         return false;
@@ -254,12 +266,17 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
         var employee = _employees.GetById(userId);
         if (employee == null || !employee.IsActive || employee.IsBanned) return [];
 
+        if (!employee.HasEffectivePermission(AppPermissions.Chat.Use, allowSuspended: true))
+        {
+            return [];
+        }
+
         var userProjectIds = GetUserProjectIds(employee);
         var userTeamIds = GetUserTeamIds(employee);
 
         var channels = _channels.GetChannelsForUser(userId, userProjectIds, userTeamIds, employee.IsAdmin);
 
-        if (!employee.HasPermission(AppPermissions.Chat.ViewArchive))
+        if (!employee.HasEffectivePermission(AppPermissions.Chat.ViewArchive, allowSuspended: true))
         {
             channels = channels.Where(c => !c.IsArchived).ToList();
         }
@@ -292,9 +309,20 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
         return validUserIds;
     }
 
-    public bool CanUserManageChannel(ChatChannel? channel, Employee? employee, bool isSessionUnlocked = true)
+    public bool CanUserManageChannel(ChatChannel? channel, Employee? employee, bool isSessionUnlocked = true) =>
+        CanUserControlChannel(channel, employee, isSessionUnlocked, allowEditAllPublic: true);
+
+    public bool CanUserDeleteChannel(ChatChannel? channel, Employee? employee, bool isSessionUnlocked = true) =>
+        CanUserControlChannel(channel, employee, isSessionUnlocked, allowEditAllPublic: false);
+
+    private bool CanUserControlChannel(ChatChannel? channel, Employee? employee, bool isSessionUnlocked, bool allowEditAllPublic)
     {
         if (channel == null || employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned)
+        {
+            return false;
+        }
+
+        if (!employee.HasPermission(AppPermissions.Chat.Use))
         {
             return false;
         }
@@ -304,13 +332,13 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
             return false;
         }
 
-        // 1-to-1 Direct channels are immutable and cannot be managed/edited by anyone (including admins)
+        // 1-to-1 Direct channels are immutable and cannot be managed/edited/deleted by anyone (including admins)
         if (channel.ChannelType == ChatChannelType.Direct)
         {
             return false;
         }
 
-        // Private Group channels can only be managed by their creator or an Admin who is already a participant
+        // Private Group channels can only be managed/deleted by their creator or an Admin who is already a participant
         if (channel.ChannelType == ChatChannelType.Group)
         {
             if (!string.IsNullOrEmpty(channel.CreatedById) && channel.CreatedById == employee.Id)
@@ -328,15 +356,18 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
             return true;
         }
 
+        if (!CanUserAccessChannel(channel, employee))
+        {
+            return false;
+        }
+
         if (channel.ChannelType == ChatChannelType.Team)
         {
-            if (channel.AllowedTeamIds != null && channel.AllowedTeamIds.Count > 0)
+            var ledTeams = _teams.GetAll().Where(t => t.LeaderId == employee.Id).Select(t => t.Id).ToHashSet();
+            if ((!string.IsNullOrEmpty(channel.LinkedEntityId) && ledTeams.Contains(channel.LinkedEntityId)) ||
+                (channel.AllowedTeamIds != null && channel.AllowedTeamIds.Any(t => ledTeams.Contains(t))))
             {
-                var ledTeams = _teams.GetAll().Where(t => t.LeaderId == employee.Id).Select(t => t.Id).ToHashSet();
-                if (channel.AllowedTeamIds.Any(t => ledTeams.Contains(t)))
-                {
-                    return true;
-                }
+                return true;
             }
         }
 
@@ -345,68 +376,8 @@ public class ChatAuthorizationService : IChatAuthorizationService, IChatChannelA
             return true;
         }
 
-        if (employee.HasPermission(AppPermissions.Chat.EditAllPublicChannels))
-        {
-            if (channel.ChannelType == ChatChannelType.General || channel.ChannelType == ChatChannelType.Project)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    public bool CanUserDeleteChannel(ChatChannel? channel, Employee? employee, bool isSessionUnlocked = true)
-    {
-        if (channel == null || employee == null || !employee.IsActive || employee.IsSuspended || employee.IsBanned)
-        {
-            return false;
-        }
-
-        if (channel.IsEncrypted && !isSessionUnlocked)
-        {
-            return false;
-        }
-
-        if (channel.ChannelType == ChatChannelType.Direct)
-        {
-            return false;
-        }
-
-        if (channel.ChannelType == ChatChannelType.Group)
-        {
-            if (!string.IsNullOrEmpty(channel.CreatedById) && channel.CreatedById == employee.Id)
-            {
-                return true;
-            }
-
-            return employee.IsAdmin &&
-                   channel.ParticipantIds != null &&
-                   channel.ParticipantIds.Contains(employee.Id);
-        }
-
-        if (employee.IsAdmin)
-        {
-            return true;
-        }
-
-        if (channel.ChannelType == ChatChannelType.Team)
-        {
-            if (channel.AllowedTeamIds != null && channel.AllowedTeamIds.Count > 0)
-            {
-                var ledTeams = _teams.GetAll().Where(t => t.LeaderId == employee.Id).Select(t => t.Id).ToHashSet();
-                if (channel.AllowedTeamIds.Any(t => ledTeams.Contains(t)))
-                {
-                    return true;
-                }
-            }
-        }
-
-        if (!string.IsNullOrEmpty(channel.CreatedById) && channel.CreatedById == employee.Id)
-        {
-            return true;
-        }
-
-        return false;
+        return allowEditAllPublic &&
+               employee.HasPermission(AppPermissions.Chat.EditAllPublicChannels) &&
+               channel.IsPublicChannel;
     }
 }

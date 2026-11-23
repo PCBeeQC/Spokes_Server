@@ -20,7 +20,9 @@ using Spokes_Server.Core.Services.Communication.Email;
 using Spokes_Server.Core.Services.Communication.Notifications.InApp;
 using Spokes_Server.Core.Services.Communication.Notifications.Presentation;
 using Spokes_Server.Core.Services.Communication.Notifications.WebPush;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Services.Security;
+using Spokes_Server.Core.Services.Storage;
 
 namespace Spokes_Server.Core.Services.Communication.Notifications.Routing;
 
@@ -32,16 +34,13 @@ namespace Spokes_Server.Core.Services.Communication.Notifications.Routing;
 public class NotificationRoutingService : INotificationRoutingService
 {
     private readonly EmployeeRepository _employees;
-    private readonly ProjectRepository _projects;
     private readonly ChatReadStateRepository _readStates;
-    private readonly TeamRepository _teams;
     private readonly IWebPushService _webPush;
     private readonly NotificationQueueService _queue;
     private readonly GlobalKeystoreService _keystore;
     private readonly ICryptoService _crypto;
     private readonly PushTokenService? _pushTokenService;
     private readonly EmailFolderRepository _emailFolders;
-    private readonly EmailMessageRepository _emailMessages;
     private readonly IEmailInboxService _emailInboxService;
     private readonly ChatChannelRepository _chatChannels;
     private readonly ChatMessageRepository _chatMessages;
@@ -60,7 +59,6 @@ public class NotificationRoutingService : INotificationRoutingService
     public NotificationRoutingService(
         CommunicationContext communicationContext,
         HrContext hrContext,
-        ProjectsContext projectsContext,
         CoreContext coreContext,
         IWebPushService webPush,
         NotificationQueueService queue,
@@ -79,20 +77,17 @@ public class NotificationRoutingService : INotificationRoutingService
     {
         ArgumentNullException.ThrowIfNull(communicationContext);
         ArgumentNullException.ThrowIfNull(hrContext);
-        ArgumentNullException.ThrowIfNull(projectsContext);
         ArgumentNullException.ThrowIfNull(coreContext);
 
         _employees = hrContext.Employees;
-        _projects = projectsContext.Projects;
         _readStates = communicationContext.ChatReadStates;
-        _teams = hrContext.Teams;
         _webPush = webPush;
         _queue = queue;
         _keystore = keystore;
         _crypto = crypto;
         _pushTokenService = pushTokenService ?? (dataProtection != null ? new PushTokenService(dataProtection) : null);
+        _companyProfile = coreContext.CompanyProfile;
         _emailFolders = communicationContext.EmailFolders;
-        _emailMessages = communicationContext.EmailMessages;
         _emailInboxService = emailInboxService ?? new EmailInboxService(
             communicationContext.EmailAccounts,
             communicationContext.EmailInboxes,
@@ -100,11 +95,11 @@ public class NotificationRoutingService : INotificationRoutingService
             communicationContext.EmailFolders,
             communicationContext.EmailMessages,
             hrContext.Employees,
-            hrContext.Teams);
+            hrContext.Teams,
+            companyProfile: _companyProfile);
         _chatChannels = communicationContext.ChatChannels;
         _chatMessages = communicationContext.ChatMessages;
         _reportedMessages = communicationContext.ReportedMessages;
-        _companyProfile = coreContext.CompanyProfile;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<NotificationRoutingService>.Instance;
         _chatAccess = chatAccess;
         _recipientFilter = recipientFilter ?? new NotificationRecipientFilter(_readStates, _chatMessages);
@@ -114,132 +109,52 @@ public class NotificationRoutingService : INotificationRoutingService
         _inAppDispatcher = inAppDispatcher ?? new InAppNotificationDispatcher();
     }
 
-    public virtual int GetTotalBadgeCount(string userId)
-    {
-        int total = 0;
-        var employee = _employees.GetById(userId);
-        var lastEmailVisitedAt = employee?.LastEmailVisitedAt;
+    private bool CanUserReceiveEmailBadges(Employee? user) =>
+        user != null
+        && FileAccessPermissionHelper.IsReadableUser(user)
+        && !string.Equals(_companyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase)
+        && FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Email.Use);
 
-        // 1. Email Unseen Unread (since the user last visited the Email page)
-        var inboxes = _emailInboxService.GetAccessibleInboxes(userId);
-        var realInboxes = _emailInboxService.GetAccessibleRealInboxes(userId);
-        if (inboxes.Count > 0 || realInboxes.Count > 0)
-        {
-            total += _emailInboxService.GetUnseenUnreadCountForUser(userId);
-        }
-        else
-        {
-            var accountIds = _emailInboxService.GetAccessibleAccounts(userId)
-                .Select(a => a.Id)
-                .Append(userId)
-                .Distinct(StringComparer.OrdinalIgnoreCase);
+    public virtual int GetTotalBadgeCount(string userId) =>
+        ComputeBadgeSummary(userId, includeDetails: false).Count;
 
-            foreach (var accId in accountIds)
-            {
-                var folders = _emailFolders.GetByAccount(accId);
-                foreach (var folder in folders)
-                {
-                    if (folder.IsTrash || folder.IsDrafts) continue;
-                    var unread = lastEmailVisitedAt.HasValue
-                        ? _emailMessages.GetUnreadCount(accId, folder.Path, m => m.Date > lastEmailVisitedAt.Value)
-                        : (folder.UnreadCount > 0
-                            ? folder.UnreadCount
-                            : _emailMessages.GetUnreadCount(accId, folder.Path));
-                    total += unread;
-                }
-            }
-        }
+    public virtual BadgeBreakdownResult GetBadgeBreakdown(string userId) =>
+        ComputeBadgeSummary(userId, includeDetails: true);
 
-        // 2. Chat Notified Unread
-        var channels = _chatAccess.GetChannelsForUser(userId).Where(c => !c.IsArchived).ToList();
-        foreach (var channel in channels)
-        {
-            var notifLevel = _readStates.GetNotificationLevel(userId, channel.Id, channel.ChannelType.ToString(), channel.IsVoiceChannel);
-            if (notifLevel == ChatNotificationLevel.None) continue;
-
-            var lastReadAt = _readStates.GetLastReadAt(userId, channel.Id);
-            if (notifLevel == ChatNotificationLevel.All)
-            {
-                // Fast in-memory index count without loading message JSONs from disk
-                total += _chatMessages.GetUnreadCountSince(channel.Id, lastReadAt, userId);
-            }
-            else if (notifLevel == ChatNotificationLevel.Mentions)
-            {
-                var unreadMessages = _chatMessages.GetUnreadMessagesSince(channel.Id, lastReadAt, userId);
-                var channelIndex = _chatMessages.GetIndexForChannel(channel.Id);
-                foreach (var msg in unreadMessages)
-                {
-                    if (_recipientFilter.IsUserMentioned(userId, employee, msg, channelIndex))
-                    {
-                        total++;
-                    }
-                }
-            }
-        }
-
-        return total;
-    }
-
-    public virtual BadgeBreakdownResult GetBadgeBreakdown(string userId)
+    private BadgeBreakdownResult ComputeBadgeSummary(string userId, bool includeDetails)
     {
         int total = 0;
         int emailUnseenTotal = 0;
-        var breakdown = new Dictionary<string, int>();
-        var unreadByThread = new Dictionary<string, int>();
-        var readWatermarksUtc = new Dictionary<string, DateTime>();
+        var breakdown = includeDetails ? new Dictionary<string, int>() : null;
+        var unreadByThread = includeDetails ? new Dictionary<string, int>() : null;
+        var readWatermarksUtc = includeDetails ? new Dictionary<string, DateTime>() : null;
         var employee = _employees.GetById(userId);
         var lastEmailVisitedAt = employee?.LastEmailVisitedAt;
 
-        var emailThreadId = $"email-{userId}";
-        if (lastEmailVisitedAt.HasValue)
-        {
-            readWatermarksUtc[emailThreadId] = lastEmailVisitedAt.Value.UtcDateTime;
-        }
-
         // 1. Email Unseen Unread (since the user last visited the Email page)
-        var inboxes = _emailInboxService.GetAccessibleInboxes(userId);
-        var realInboxes = _emailInboxService.GetAccessibleRealInboxes(userId);
-        if (inboxes.Count > 0 || realInboxes.Count > 0)
+        var emailThreadId = $"email-{userId}";
+        if (CanUserReceiveEmailBadges(employee))
         {
+            if (includeDetails && lastEmailVisitedAt.HasValue)
+            {
+                readWatermarksUtc![emailThreadId] = lastEmailVisitedAt.Value.UtcDateTime;
+            }
+
             var unseenCount = _emailInboxService.GetUnseenUnreadCountForUser(userId);
             if (unseenCount > 0)
             {
                 total += unseenCount;
-                emailUnseenTotal += unseenCount;
-                breakdown["Email_Unseen"] = unseenCount;
-            }
-        }
-        else
-        {
-            var accountIds = _emailInboxService.GetAccessibleAccounts(userId)
-                .Select(a => a.Id)
-                .Append(userId)
-                .Distinct(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var accId in accountIds)
-            {
-                var folders = _emailFolders.GetByAccount(accId);
-                foreach (var folder in folders)
+                if (includeDetails)
                 {
-                    if (folder.IsTrash || folder.IsDrafts) continue;
-                    var unreadCount = lastEmailVisitedAt.HasValue
-                        ? _emailMessages.GetUnreadCount(accId, folder.Path, m => m.Date > lastEmailVisitedAt.Value)
-                        : (folder.UnreadCount > 0
-                            ? folder.UnreadCount
-                            : _emailMessages.GetUnreadCount(accId, folder.Path));
-                    if (unreadCount > 0)
-                    {
-                        total += unreadCount;
-                        emailUnseenTotal += unreadCount;
-                        breakdown[$"Email_{folder.Path}"] = unreadCount;
-                    }
+                    emailUnseenTotal += unseenCount;
+                    breakdown!["Email_Unseen"] = unseenCount;
                 }
             }
-        }
 
-        if (emailUnseenTotal > 0)
-        {
-            unreadByThread[emailThreadId] = emailUnseenTotal;
+            if (includeDetails && emailUnseenTotal > 0)
+            {
+                unreadByThread![emailThreadId] = emailUnseenTotal;
+            }
         }
 
         // 2. Chat Notified Unread
@@ -250,9 +165,9 @@ public class NotificationRoutingService : INotificationRoutingService
             if (notifLevel == ChatNotificationLevel.None) continue;
 
             var lastReadAt = _readStates.GetLastReadAt(userId, channel.Id);
-            if (lastReadAt > DateTime.MinValue)
+            if (includeDetails && lastReadAt > DateTime.MinValue)
             {
-                readWatermarksUtc[channel.Id] = lastReadAt.Kind == DateTimeKind.Utc
+                readWatermarksUtc![channel.Id] = lastReadAt.Kind == DateTimeKind.Utc
                     ? lastReadAt
                     : (lastReadAt.Kind == DateTimeKind.Local ? lastReadAt.ToUniversalTime() : DateTime.SpecifyKind(lastReadAt, DateTimeKind.Utc));
             }
@@ -279,24 +194,28 @@ public class NotificationRoutingService : INotificationRoutingService
             if (channelTotal > 0)
             {
                 total += channelTotal;
-                unreadByThread[channel.Id] = channelTotal;
-                var channelName = !string.IsNullOrEmpty(channel.Name) ? channel.Name : channel.Id;
-                breakdown[$"Chat_{channelName}"] = channelTotal;
+                if (includeDetails)
+                {
+                    unreadByThread![channel.Id] = channelTotal;
+                    var channelName = !string.IsNullOrEmpty(channel.Name) ? channel.Name : channel.Id;
+                    breakdown![$"Chat_{channelName}"] = channelTotal;
+                }
             }
         }
 
         // 3. Open Moderation Reports (populated in UnreadByThread for wake push reconciliation without altering email+chat badge total)
-        if (_reportedMessages != null &&
-            employee != null &&
-            employee.IsActive &&
-            employee.ModerationNotificationsEnabled &&
-            employee.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator))
+        if (includeDetails &&
+            _reportedMessages != null &&
+            ModerationAuthorizationHelper.CanModerateAny(employee) &&
+            employee!.ModerationNotificationsEnabled)
         {
             foreach (var report in _reportedMessages.GetAll())
             {
-                if (string.Equals(report.Status, ReportedMessageStatus.Open, StringComparison.OrdinalIgnoreCase))
+                var channel = ModerationAuthorizationHelper.ResolveReportChannel(report, _chatChannels, _chatMessages);
+                if (string.Equals(report.Status, ReportedMessageStatus.Open, StringComparison.OrdinalIgnoreCase) &&
+                    ModerationAuthorizationHelper.CanViewReport(employee, report, channel, _chatAccess))
                 {
-                    unreadByThread[$"mod-{report.Id}"] = 1;
+                    unreadByThread![$"mod-{report.Id}"] = 1;
                 }
             }
         }
@@ -304,9 +223,9 @@ public class NotificationRoutingService : INotificationRoutingService
         return new BadgeBreakdownResult
         {
             Count = total,
-            Breakdown = breakdown,
-            UnreadByThread = unreadByThread,
-            ReadWatermarksUtc = readWatermarksUtc,
+            Breakdown = breakdown ?? [],
+            UnreadByThread = unreadByThread ?? [],
+            ReadWatermarksUtc = readWatermarksUtc ?? [],
             ServerTimeUtc = DateTime.UtcNow
         };
     }
@@ -333,97 +252,138 @@ public class NotificationRoutingService : INotificationRoutingService
             var title = $"{sender.FirstName} {sender.LastName}".Trim();
             var body = _contentDecryptor.DecryptAndFormatContent(message, channel, userId, 100);
             var maskedBody = message.IsEncrypted ? "🔒 New Secure Message" : null;
-            var url = $"/chat/{channel.Id}";
-            var icon = GenerateAvatarUrl(sender.Id);
-            var tag = $"chat-{channel.Id}";
-
             bool isCall = message.MessageType == ChatMessageType.CallInvite;
             string category = isCall ? NotificationCategories.Call : NotificationCategories.Chat;
+            var formattedChannelName = channel.ChannelType == ChatChannelType.Direct && channel.ParticipantIds.Count == 2
+                ? $"DM with {sender.FullName}"
+                : (channel.Name ?? "Unknown Channel");
 
-            // 1. Dispatch In-App Notification (Rich Snackbar + Audio) to connected circuits
-            if (_inAppDispatcher != null)
-            {
-                var formattedChannelName = channel.ChannelType == ChatChannelType.Direct && channel.ParticipantIds.Count == 2
-                    ? $"DM with {sender.FullName}"
-                    : (channel.Name ?? "Unknown Channel");
-
-                _inAppDispatcher.Dispatch(new InAppNotification
-                {
-                    RecipientUserId = userId,
-                    Title = sender.FullName,
-                    Content = body,
-                    SenderName = sender.FullName,
-                    SenderAvatarUrl = icon,
-                    Initials = GetInitials(sender.FullName),
-                    ChannelId = channel.Id,
-                    ChannelName = formattedChannelName,
-                    ServerName = serverName,
-                    IsReaction = false,
-                    IsGroupChat = isGroupChat,
-                    Category = category,
-                    IsSilent = isSilent,
-                    IsEncrypted = message.IsEncrypted,
-                    MaskedContent = maskedBody
-                });
-            }
-
-            // 2. Dispatch Push Notification only if user is away/offline and has push enabled
-            IReadOnlyCollection<string>? excludedSessionIds = null;
-            var tier = _pushDecision?.DetermineNotificationTier(userId) ?? PresenceTier.All;
-            if (!ApplyChatPushRouting(userId, isCall, ref tier, out excludedSessionIds))
-            {
-                return;
-            }
-
-            if (!employee!.PushNotificationsEnabled)
-            {
-                return;
-            }
-
-            var userSoundChoice = employee.GetNotificationSound(category);
-            var sound = NotificationSoundCatalog.GetEffectivePushSound(category, userSoundChoice);
-
-            var actions = new object[]
-            {
-                new { action = "open", title = "Open Chat" }
-            };
-
-            var badgeCount = GetTotalBadgeCount(userId);
-
-            var request = new PushNotificationRequest
-            {
-                UserId = userId,
-                Title = title,
-                Body = body,
-                Url = url,
-                Icon = icon,
-                Tier = tier,
-                Tag = tag,
-                Actions = actions,
-                Category = category,
-                ThreadId = channel.Id,
-                ServerName = serverName,
-                ChannelName = channelName,
-                IsGroupChat = isGroupChat,
-                Badge = badgeCount,
-                IsSilent = isSilent,
-                Sound = sound,
-                ExcludedSessionIds = excludedSessionIds,
-                SentAtUtc = message.SentAt == default ? DateTime.UtcNow : message.SentAt,
-                IsEncrypted = message.IsEncrypted,
-                MaskedBody = maskedBody
-            };
-
-            await _webPush.SendNotificationAsync(request);
-
-            if (tier == PresenceTier.DesktopOnly)
-            {
-                // Queue a Delayed Mobile Push to fire in 1 minute if they don't read it
-                _queue.EnqueueDelayedMobilePush(new DelayedMobileNotification(request, message.Id, channel.Id, "Chat", TimeSpan.FromMinutes(1)));
-            }
+            await DispatchChatOrReactionNotificationAsync(
+                recipient: employee!,
+                actor: sender,
+                message: message,
+                channel: channel,
+                inAppTitle: sender.FullName,
+                pushTitle: title,
+                inAppContent: body,
+                pushBody: body,
+                inAppChannelName: formattedChannelName,
+                pushChannelName: channelName,
+                serverName: serverName,
+                isGroupChat: isGroupChat,
+                isReaction: false,
+                isCall: isCall,
+                category: category,
+                isSilent: isSilent,
+                maskedBody: maskedBody,
+                sentAtUtc: message.SentAt == default ? DateTime.UtcNow : message.SentAt);
         });
 
         await Task.WhenAll(tasks);
+    }
+
+    private async Task DispatchChatOrReactionNotificationAsync(
+        Employee recipient,
+        Employee actor,
+        ChatMessage message,
+        ChatChannel channel,
+        string inAppTitle,
+        string pushTitle,
+        string inAppContent,
+        string pushBody,
+        string inAppChannelName,
+        string? pushChannelName,
+        string serverName,
+        bool isGroupChat,
+        bool isReaction,
+        bool isCall,
+        string category,
+        bool isSilent,
+        string? maskedBody,
+        DateTime sentAtUtc)
+    {
+        var url = $"/chat/{channel.Id}";
+        var icon = GenerateAvatarUrl(actor.Id);
+        var tag = $"chat-{channel.Id}";
+
+        // 1. Dispatch In-App Notification (Rich Snackbar + Audio) to connected circuits
+        _inAppDispatcher.Dispatch(new InAppNotification
+        {
+            RecipientUserId = recipient.Id,
+            Title = inAppTitle,
+            Content = inAppContent,
+            SenderName = actor.FullName,
+            SenderAvatarUrl = icon,
+            Initials = GetInitials(actor.FullName),
+            ChannelId = channel.Id,
+            ChannelName = inAppChannelName,
+            ServerName = serverName,
+            IsReaction = isReaction,
+            IsGroupChat = isGroupChat,
+            Category = category,
+            IsSilent = isSilent,
+            IsEncrypted = message.IsEncrypted,
+            MaskedContent = maskedBody
+        });
+
+        // 2. Dispatch Push Notification only if user is away/offline and has push enabled
+        var tier = _pushDecision?.DetermineNotificationTier(recipient.Id) ?? PresenceTier.All;
+        if (!ApplyChatPushRouting(recipient.Id, isCall, ref tier, out var excludedSessionIds))
+        {
+            return;
+        }
+
+        if (!recipient.PushNotificationsEnabled)
+        {
+            return;
+        }
+
+        var userSoundChoice = recipient.GetNotificationSound(category);
+        var sound = NotificationSoundCatalog.GetEffectivePushSound(category, userSoundChoice);
+
+        var request = new PushNotificationRequest
+        {
+            UserId = recipient.Id,
+            Title = pushTitle,
+            Body = pushBody,
+            Url = url,
+            Icon = icon,
+            Tier = tier,
+            Tag = tag,
+            Actions = [new { action = "open", title = "Open Chat" }],
+            Category = category,
+            ThreadId = channel.Id,
+            ServerName = serverName,
+            ChannelName = pushChannelName,
+            IsGroupChat = isGroupChat,
+            Badge = GetTotalBadgeCount(recipient.Id),
+            IsSilent = isSilent,
+            Sound = sound,
+            ExcludedSessionIds = excludedSessionIds,
+            SentAtUtc = sentAtUtc,
+            IsEncrypted = message.IsEncrypted,
+            MaskedBody = maskedBody,
+            SourceChannelId = channel.Id,
+            SourceMessageId = message.Id
+        };
+
+        await DispatchPushWithDelayedMobileAsync(
+            request,
+            tier,
+            () => new DelayedMobileNotification(request, message.Id, channel.Id, "Chat", TimeSpan.FromMinutes(1)));
+    }
+
+    private async Task DispatchPushWithDelayedMobileAsync(
+        PushNotificationRequest request,
+        PresenceTier tier,
+        Func<DelayedMobileNotification> delayedFactory)
+    {
+        await _webPush.SendNotificationAsync(request);
+
+        if (tier == PresenceTier.DesktopOnly)
+        {
+            _queue.EnqueueDelayedMobilePush(delayedFactory());
+        }
     }
 
     private bool ApplyChatPushRouting(
@@ -486,77 +446,33 @@ public class NotificationRoutingService : INotificationRoutingService
         var originalSender = _employees.GetById(message.SenderId);
         if (!_recipientFilter.ShouldNotifyReaction(originalSender, reactionSender)) return;
 
-        bool isSilent = _rateLimiter.ShouldSuppressSound(originalSender, channel.Id);
-
-        var truncatedMessage = _contentDecryptor.DecryptAndFormatContent(message, channel, originalSender.Id, 40, isReaction: true);
+        bool isSilent = _rateLimiter.ShouldSuppressSound(originalSender!, channel.Id);
+        var truncatedMessage = _contentDecryptor.DecryptAndFormatContent(message, channel, originalSender!.Id, 40, isReaction: true);
         var maskedBody = message.IsEncrypted ? "🔒 Secure Message" : null;
         var title = $"{reactionSender.FirstName} reacted {emoji} to:";
-        var body = $"{truncatedMessage}";
-
-        var url = $"/chat/{channel.Id}";
-        var icon = GenerateAvatarUrl(reactionSender.Id);
-        var tag = $"chat-{channel.Id}";
-        var actions = new object[] { new { action = "open", title = "Open Chat" } };
         var serverName = _companyProfile.Get()?.CompanyName ?? "Spokes";
         var isGroupChat = channel.ChannelType != ChatChannelType.Direct;
         var channelName = isGroupChat ? channel.Name : $"DM with {reactionSender.FullName}";
 
-        // 1. Dispatch In-App Notification (Rich Snackbar + Audio) to connected circuits
-        _inAppDispatcher.Dispatch(new InAppNotification
-        {
-            RecipientUserId = originalSender.Id,
-            Title = title,
-            Content = truncatedMessage,
-            SenderName = reactionSender.FullName,
-            SenderAvatarUrl = icon,
-            Initials = GetInitials(reactionSender.FullName),
-            ChannelId = channel.Id,
-            ChannelName = channelName ?? "Chat",
-            ServerName = serverName,
-            IsReaction = true,
-            IsGroupChat = isGroupChat,
-            Category = NotificationCategories.Chat,
-            IsSilent = isSilent,
-            IsEncrypted = message.IsEncrypted,
-            MaskedContent = maskedBody
-        });
-
-        // 2. Dispatch Push Notification only if user is away/offline and has push enabled
-        var tier = _pushDecision?.DetermineNotificationTier(originalSender.Id) ?? PresenceTier.All;
-        if (tier == PresenceTier.None) return;
-
-        if (!originalSender.PushNotificationsEnabled) return;
-
-        var badgeCount = GetTotalBadgeCount(originalSender.Id);
-
-        var request = new PushNotificationRequest
-        {
-            UserId = originalSender.Id,
-            Title = title,
-            Body = body,
-            Url = url,
-            Icon = icon,
-            Tier = tier,
-            Tag = tag,
-            Actions = actions,
-            Category = "chat",
-            ThreadId = channel.Id,
-            ServerName = serverName,
-            ChannelName = channelName,
-            IsGroupChat = isGroupChat,
-            Badge = badgeCount,
-            IsSilent = isSilent,
-            SentAtUtc = DateTime.UtcNow,
-            IsEncrypted = message.IsEncrypted,
-            MaskedBody = maskedBody
-        };
-
-        await _webPush.SendNotificationAsync(request);
-
-        if (tier == PresenceTier.DesktopOnly)
-        {
-            _queue.EnqueueDelayedMobilePush(new DelayedMobileNotification(request, message.Id, channel.Id, "Chat", TimeSpan.FromMinutes(1)));
-        }
+        await DispatchChatOrReactionNotificationAsync(
+            recipient: originalSender,
+            actor: reactionSender,
+            message: message,
+            channel: channel,
+            inAppTitle: title,
+            pushTitle: title,
+            inAppContent: truncatedMessage,
+            pushBody: truncatedMessage,
+            inAppChannelName: channelName ?? "Chat",
+            pushChannelName: channelName,
+            serverName: serverName,
+            isGroupChat: isGroupChat,
+            isReaction: true,
+            isCall: false,
+            category: NotificationCategories.Chat,
+            isSilent: isSilent,
+            maskedBody: maskedBody,
+            sentAtUtc: DateTime.UtcNow);
     }
 
     /// <summary>
@@ -564,17 +480,10 @@ public class NotificationRoutingService : INotificationRoutingService
     /// </summary>
     public async Task RouteEmailNotificationAsync(EmailMessage emailObj)
     {
-        var recipientIds = _emailInboxService.GetAuthorizedEmployeeIdsForMessage(emailObj);
-        if (recipientIds.Count == 0 && !string.IsNullOrEmpty(emailObj.AccountId))
-        {
-            // Fallback when AccountId matches a direct employee ID (e.g. unit tests)
-            var directEmployee = _employees.GetById(emailObj.AccountId);
-            if (directEmployee != null)
-            {
-                recipientIds.Add(directEmployee.Id);
-            }
-        }
+        if (string.Equals(_companyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+            return;
 
+        var recipientIds = _emailInboxService.GetAuthorizedEmployeeIdsForMessage(emailObj);
         if (recipientIds.Count == 0) return;
 
         var folder = _emailFolders.GetByAccount(emailObj.AccountId).FirstOrDefault(f => f.Path == emailObj.FolderPath);
@@ -586,7 +495,13 @@ public class NotificationRoutingService : INotificationRoutingService
         foreach (var userId in recipientIds)
         {
             var employee = _employees.GetById(userId);
-            if (employee == null || !employee.PushNotificationsEnabled || !employee.EmailNotificationsEnabled) continue;
+            if (employee == null
+                || !employee.IsActive
+                || employee.IsBanned
+                || employee.IsSuspended
+                || !FileAccessPermissionHelper.HasAssignedPermission(employee, AppPermissions.Email.Use)
+                || !employee.PushNotificationsEnabled
+                || !employee.EmailNotificationsEnabled) continue;
 
             var tier = _pushDecision?.DetermineNotificationTier(userId) ?? PresenceTier.All;
             if (tier == PresenceTier.None) continue;
@@ -612,16 +527,27 @@ public class NotificationRoutingService : INotificationRoutingService
                 Category = NotificationCategories.Email,
                 Sound = sound,
                 Badge = badgeCount,
-                SentAtUtc = emailObj.Date == default ? DateTime.UtcNow : emailObj.Date.UtcDateTime
+                SentAtUtc = emailObj.Date == default ? DateTime.UtcNow : emailObj.Date.UtcDateTime,
+                SourceEmailAccountId = emailObj.AccountId,
+                SourceEmailFolderPath = emailObj.FolderPath,
+                SourceEmailMessageId = emailObj.Id
             };
 
-            await _webPush.SendNotificationAsync(request);
-
-            if (tier == PresenceTier.DesktopOnly)
-            {
-                var contextChannelId = !string.IsNullOrEmpty(emailObj.AccountId) ? emailObj.AccountId : "email";
-                _queue.EnqueueDelayedMobilePush(new DelayedMobileNotification(request, emailObj.Id, contextChannelId, "Email", TimeSpan.FromMinutes(1)));
-            }
+            await DispatchPushWithDelayedMobileAsync(
+                request,
+                tier,
+                () =>
+                {
+                    var contextChannelId = !string.IsNullOrEmpty(emailObj.AccountId) ? emailObj.AccountId : "email";
+                    return new DelayedMobileNotification(
+                        request,
+                        emailObj.Id,
+                        contextChannelId,
+                        "Email",
+                        TimeSpan.FromMinutes(1),
+                        accountId: emailObj.AccountId,
+                        folderPath: emailObj.FolderPath);
+                });
         }
     }
 
@@ -630,7 +556,8 @@ public class NotificationRoutingService : INotificationRoutingService
     /// </summary>
     public async Task RouteModerationNotificationAsync(ReportedMessage report)
     {
-        var moderators = _employees.GetAll().Where(e => e.IsActive && e.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Moderator));
+        var channel = ModerationAuthorizationHelper.ResolveReportChannel(report, _chatChannels, _chatMessages);
+        var moderators = _employees.GetAll().Where(e => ModerationAuthorizationHelper.CanViewReport(e, report, channel, _chatAccess));
 
         foreach (var mod in moderators)
         {
@@ -660,15 +587,16 @@ public class NotificationRoutingService : INotificationRoutingService
                 Actions = actions,
                 Category = "moderation",
                 Badge = badgeCount,
-                SentAtUtc = report.ReportedAt == default ? DateTime.UtcNow : report.ReportedAt
+                SentAtUtc = report.ReportedAt == default ? DateTime.UtcNow : report.ReportedAt,
+                SourceReportId = report.Id,
+                SourceChannelId = channel?.Id ?? report.ChannelId,
+                SourceMessageId = report.MessageId
             };
 
-            await _webPush.SendNotificationAsync(request);
-
-            if (tier == PresenceTier.DesktopOnly)
-            {
-                _queue.EnqueueDelayedMobilePush(new DelayedMobileNotification(request, report.Id, "moderation", "Moderation", TimeSpan.FromMinutes(1)));
-            }
+            await DispatchPushWithDelayedMobileAsync(
+                request,
+                tier,
+                () => new DelayedMobileNotification(request, report.Id, "moderation", "Moderation", TimeSpan.FromMinutes(1)));
         }
     }
 

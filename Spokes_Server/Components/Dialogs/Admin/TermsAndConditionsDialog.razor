@@ -5,6 +5,7 @@
 @using Microsoft.Extensions.Localization
 @inject Database Db
 @inject ISnackbar Snackbar
+@inject UserService UserService
 @inject IStringLocalizer<BusinessResources> BizLoc
 @inject IStringLocalizer<AppResources> Loc
 
@@ -50,6 +51,12 @@
 
     private async Task Save()
     {
+        if (!await UserService.HasPermissionAsync(Spokes_Server.Core.Constants.AppPermissions.Business.ManageSettings))
+        {
+            Snackbar.Add("Your account is read-only or lacks permission to modify terms and conditions.", Severity.Error);
+            return;
+        }
+
         await form.ValidateAsync();
         if (string.IsNullOrWhiteSpace(Item.Name))
         {

@@ -25,6 +25,15 @@ public class PushNotificationRequest
     public DateTime SentAtUtc { get; set; } = DateTime.UtcNow;
     public int? TtlSeconds { get; set; }
 
+    // Canonical source identifiers used for proactive purge and live ACL/existence re-validation (#78)
+    public string? SourceChannelId { get; set; }
+    public string? SourceMessageId { get; set; }
+    public string? SourceEmailAccountId { get; set; }
+    public string? SourceEmailFolderPath { get; set; }
+    public string? SourceEmailMessageId { get; set; }
+    public string? SourceReportId { get; set; }
+    public string? SourceEventId { get; set; }
+
     /// <summary>
     /// Indicates whether this push notification is for an end-to-end encrypted chat message.
     /// </summary>

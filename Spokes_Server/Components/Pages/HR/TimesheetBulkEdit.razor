@@ -1,0 +1,966 @@
+@page "/planning/timesheet-bulk-edit"
+@page "/planning/timesheet-bulk-edit/{TargetEmployeeId}"
+@attribute [Authorize(Policy = AppPermissions.Timesheets.ViewReport)]
+<PageTitle>Bulk Edit Timesheets</PageTitle>
+
+@using System.Globalization
+@using Microsoft.AspNetCore.Authorization
+@using Spokes_Server.Components.Dialogs.Common
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Services.HR
+@using Spokes_Server.Core.Services.Reports.Helpers
+@using Spokes_Server.Core.Services.UI
+
+@inject Database Db
+@inject HRService HRService
+@inject UserService UserService
+@inject AppLabelService AppLabels
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-6 mb-16">
+    <!-- Page Header -->
+    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4 flex-wrap gap-2">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Outlined" Size="Size.Small" OnClick="NavigateBack" title="@($"Back to {AppLabels.Team} Timesheets")" />
+            <div>
+                <MudText Typo="Typo.h4" Style="font-weight: 700;">Bulk Edit Timesheets</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    Reassign project, task, billability, or notes across multiple historical weeks (including locked and approved timesheets).
+                </MudText>
+            </div>
+        </MudStack>
+
+        @if (_selectedEmployee != null)
+        {
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.CalendarViewWeek" Href="@($"/timesheet/{_selectedEmployee.Id}")">
+                Open @_selectedEmployee.FirstName's Weekly Timesheet
+            </MudButton>
+        }
+    </MudStack>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+    }
+    else if (_manageableEmployees.Count == 0)
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+            You do not have managerial permission to bulk-edit any @(AppLabels.Employee.ToLowerInvariant()) timesheets.
+        </MudAlert>
+    }
+    else
+    {
+        <MudGrid Spacing="4">
+            <!-- STEP 1: FIND ENTRIES TO EDIT -->
+            <MudItem xs="12" md="6">
+                <MudPaper Elevation="0" Outlined="true" Class="pa-5 rounded-lg h-100">
+                    <MudStack Spacing="3">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudAvatar Color="Color.Primary" Size="Size.Small" Style="font-weight: 700;">1</MudAvatar>
+                            <div>
+                                <MudText Typo="Typo.h6" Style="font-weight: 700;">Find Entries to Edit</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Select the @(AppLabels.Employee.ToLowerInvariant()) and filter the time entries you want to modify.</MudText>
+                            </div>
+                        </MudStack>
+
+                        <EmployeeAutocomplete Label="@($"Select {AppLabels.Employee}")"
+                                              Employees="@_manageableEmployees"
+                                              Value="@_selectedEmployee"
+                                              ValueChanged="OnEmployeeSelected"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense" />
+
+                        <MudSelect T="string"
+                                   Value="@_filterProjectId"
+                                   ValueChanged="OnFilterProjectChanged"
+                                   Label="From Project (Currently Logged On)"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   Dense="true"
+                                   Disabled="@(_selectedEmployee == null)">
+                            <MudSelectItem T="string" Value="@("")">
+                                All Projects (@_employeeEntries.Count entries &bull; @FormatHours(_employeeEntries.Sum(e => e.Entry.Hours)) hrs)
+                            </MudSelectItem>
+                            @foreach (var proj in _loggedProjectsSummary)
+                            {
+                                <MudSelectItem T="string" Value="@proj.ProjectId">
+                                    @proj.ProjectDisplayName (@proj.EntriesCount @(proj.EntriesCount == 1 ? "entry" : "entries") &bull; @FormatHours(proj.TotalHours) hrs)
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudSelect T="string"
+                                   Value="@_filterWorkTypeId"
+                                   ValueChanged="OnFilterWorkTypeChanged"
+                                   Label="From Task / Work Type (Optional)"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   Dense="true"
+                                   Disabled="@(_selectedEmployee == null)">
+                            <MudSelectItem T="string" Value="@(FilterAllTasks)">All Tasks</MudSelectItem>
+                            @if (_hasEntriesWithoutTask)
+                            {
+                                <MudSelectItem T="string" Value="@(FilterNoTask)">No Task Assigned (Empty)</MudSelectItem>
+                            }
+                            @foreach (var wt in _loggedWorkTypesSummary)
+                            {
+                                <MudSelectItem T="string" Value="@wt.WorkTypeId">
+                                    @wt.TaskName (@wt.EntriesCount @(wt.EntriesCount == 1 ? "entry" : "entries"))
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1 d-block">Date Period</MudText>
+                            <MudStack Row="true" Spacing="1" Class="flex-wrap">
+                                <MudChip T="string" Color="@(_datePreset == DatePreset.AllTime ? Color.Primary : Color.Default)" Variant="@(_datePreset == DatePreset.AllTime ? Variant.Filled : Variant.Outlined)" Size="Size.Small" OnClick="@(() => SetDatePreset(DatePreset.AllTime))">All Time</MudChip>
+                                <MudChip T="string" Color="@(_datePreset == DatePreset.OlderThan6Months ? Color.Primary : Color.Default)" Variant="@(_datePreset == DatePreset.OlderThan6Months ? Variant.Filled : Variant.Outlined)" Size="Size.Small" OnClick="@(() => SetDatePreset(DatePreset.OlderThan6Months))">Older than 6 Months</MudChip>
+                                <MudChip T="string" Color="@(_datePreset == DatePreset.Last6Months ? Color.Primary : Color.Default)" Variant="@(_datePreset == DatePreset.Last6Months ? Variant.Filled : Variant.Outlined)" Size="Size.Small" OnClick="@(() => SetDatePreset(DatePreset.Last6Months))">Last 6 Months</MudChip>
+                                <MudChip T="string" Color="@(_datePreset == DatePreset.ThisYear ? Color.Primary : Color.Default)" Variant="@(_datePreset == DatePreset.ThisYear ? Variant.Filled : Variant.Outlined)" Size="Size.Small" OnClick="@(() => SetDatePreset(DatePreset.ThisYear))">This Year (@DateTime.Today.Year)</MudChip>
+                                <MudChip T="string" Color="@(_datePreset == DatePreset.LastYear ? Color.Primary : Color.Default)" Variant="@(_datePreset == DatePreset.LastYear ? Variant.Filled : Variant.Outlined)" Size="Size.Small" OnClick="@(() => SetDatePreset(DatePreset.LastYear))">Last Year (@(DateTime.Today.Year - 1))</MudChip>
+                                <MudChip T="string" Color="@(_datePreset == DatePreset.Custom ? Color.Primary : Color.Default)" Variant="@(_datePreset == DatePreset.Custom ? Variant.Filled : Variant.Outlined)" Size="Size.Small" OnClick="@(() => SetDatePreset(DatePreset.Custom))">Custom Range</MudChip>
+                            </MudStack>
+
+                            @if (_datePreset == DatePreset.Custom)
+                            {
+                                <MudGrid Spacing="2" Class="mt-1">
+                                    <MudItem xs="6">
+                                        <MudDatePicker Label="Start Date" Date="@_customStartDate" DateChanged="OnCustomStartChanged" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" />
+                                    </MudItem>
+                                    <MudItem xs="6">
+                                        <MudDatePicker Label="End Date" Date="@_customEndDate" DateChanged="OnCustomEndChanged" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" />
+                                    </MudItem>
+                                </MudGrid>
+                            }
+                        </div>
+
+                        <MudTextField T="string"
+                                      Value="@_filterSearchText"
+                                      ValueChanged="OnFilterSearchChanged"
+                                      Label="Description Keyword (Optional)"
+                                      Placeholder="Filter by note text..."
+                                      Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.Search"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true"
+                                      Clearable="true"
+                                      Disabled="@(_selectedEmployee == null)" />
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+
+            <!-- STEP 2: CHOOSE CHANGES TO APPLY -->
+            <MudItem xs="12" md="6">
+                <MudPaper Elevation="0" Outlined="true" Class="pa-5 rounded-lg h-100 d-flex flex-column justify-space-between">
+                    <MudStack Spacing="3">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudAvatar Color="Color.Primary" Size="Size.Small" Style="font-weight: 700;">2</MudAvatar>
+                            <div>
+                                <MudText Typo="Typo.h6" Style="font-weight: 700;">Choose Changes to Apply</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Check the fields you want to update on the selected entries below.</MudText>
+                            </div>
+                        </MudStack>
+
+                        <!-- Move to Project -->
+                        <MudPaper Elevation="0" Outlined="true" Class="pa-3 rounded-lg">
+                            <MudCheckBox T="bool"
+                                         @bind-Value="_updateProject"
+                                         Color="Color.Primary"
+                                         Dense="true"
+                                         Label="Move to another Project" />
+                            @if (_updateProject)
+                            {
+                                <div class="mt-2">
+                                    <MudAutocomplete T="string"
+                                                     Value="@_newProjectId"
+                                                     ValueChanged="OnNewProjectChanged"
+                                                     SearchFunc="SearchTargetProjects"
+                                                     ToStringFunc="GetProjectName"
+                                                     Label="New Target Project"
+                                                     Placeholder="Type to search destination project..."
+                                                     Variant="Variant.Outlined"
+                                                     Margin="Margin.Dense"
+                                                     Dense="true"
+                                                     ResetValueOnEmptyText="false"
+                                                     CoerceText="false"
+                                                     Clearable="true"
+                                                     MaxItems="null" />
+                                </div>
+                            }
+                        </MudPaper>
+
+                        <!-- Change Task / Sub-Task -->
+                        <MudPaper Elevation="0" Outlined="true" Class="pa-3 rounded-lg">
+                            <MudCheckBox T="bool"
+                                         @bind-Value="_updateTask"
+                                         Color="Color.Primary"
+                                         Dense="true"
+                                         Label="Change Task / Sub-Task" />
+                            @if (_updateTask)
+                            {
+                                <div class="mt-2">
+                                    <WorkTypeSubTaskSelector WorkTypes="@_allWorkTypes"
+                                                             Projects="@_targetProjects"
+                                                             ProjectId="@EffectiveProjectIdForTaskSelector"
+                                                             RequireProject="false"
+                                                             @bind-WorkTypeId="_newWorkTypeId"
+                                                             @bind-SubTaskId="_newSubTaskId"
+                                                             Layout="WorkTypeSelectorLayout.Grid"
+                                                             GridSpacing="2"
+                                                             Variant="Variant.Outlined" />
+                                </div>
+                            }
+                        </MudPaper>
+
+                        <!-- Change Billable Status -->
+                        <MudPaper Elevation="0" Outlined="true" Class="pa-3 rounded-lg">
+                            <MudCheckBox T="bool"
+                                         @bind-Value="_updateBillable"
+                                         Color="Color.Primary"
+                                         Dense="true"
+                                         Label="Change Billable Status" />
+                            @if (_updateBillable)
+                            {
+                                <div class="mt-2">
+                                    <MudSelect T="bool"
+                                               @bind-Value="_newIsBillable"
+                                               Label="New Billable Status"
+                                               Variant="Variant.Outlined"
+                                               Margin="Margin.Dense"
+                                               Dense="true">
+                                        <MudSelectItem Value="true">Billable ($)</MudSelectItem>
+                                        <MudSelectItem Value="false">Non-Billable</MudSelectItem>
+                                    </MudSelect>
+                                </div>
+                            }
+                        </MudPaper>
+
+                        <!-- Update Description / Notes -->
+                        <MudPaper Elevation="0" Outlined="true" Class="pa-3 rounded-lg">
+                            <MudSelect T="BulkNoteUpdateMode"
+                                       @bind-Value="_noteMode"
+                                       Label="Description / Notes"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       Dense="true">
+                                <MudSelectItem Value="@BulkNoteUpdateMode.KeepExisting">Keep existing notes unchanged</MudSelectItem>
+                                <MudSelectItem Value="@BulkNoteUpdateMode.Append">Append text to existing notes</MudSelectItem>
+                                <MudSelectItem Value="@BulkNoteUpdateMode.Replace">Replace existing notes</MudSelectItem>
+                            </MudSelect>
+                            @if (_noteMode != BulkNoteUpdateMode.KeepExisting)
+                            {
+                                <div class="mt-2">
+                                    <MudTextField @bind-Value="_noteText"
+                                                  Label="@(_noteMode == BulkNoteUpdateMode.Append ? "Text to append" : "New description note")"
+                                                  Variant="Variant.Outlined"
+                                                  Margin="Margin.Dense"
+                                                  Lines="2" />
+                                </div>
+                            }
+                        </MudPaper>
+
+                        @if (SelectedBilledCount > 0)
+                        {
+                            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
+                                <div>
+                                    <b>@SelectedBilledCount selected @(SelectedBilledCount == 1 ? "entry is" : "entries are") linked to an active invoice</b>
+                                    (@string.Join(", ", SelectedBilledInvoiceNumbers)).
+                                </div>
+                                <MudCheckBox T="bool"
+                                             @bind-Value="_excludeBilledEntries"
+                                             Disabled="@(!_canManageBilledEntries)"
+                                             Color="Color.Warning"
+                                             Dense="true"
+                                             Class="mt-1"
+                                             Label="Skip entries already billed on an invoice (Recommended)" />
+                            </MudAlert>
+                        }
+                    </MudStack>
+
+                    <div class="mt-4 pt-3" style="border-top: 1px solid var(--mud-palette-lines-default);">
+                        <MudStack Spacing="2">
+                            <div class="d-flex justify-space-between align-center flex-wrap gap-2">
+                                <MudText Typo="Typo.body2">
+                                    <b>@EffectiveUpdateCount</b> @(EffectiveUpdateCount == 1 ? "entry" : "entries") selected
+                                    (<b>@FormatHours(EffectiveSelectedHours) hrs</b> across <b>@SelectedWeeksCount</b> @(SelectedWeeksCount == 1 ? "week" : "weeks"))
+                                </MudText>
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text" Icon="@Icons.Material.Filled.Verified">
+                                    Approved weeks stay Approved
+                                </MudChip>
+                            </div>
+
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       Size="Size.Large"
+                                       FullWidth="true"
+                                       StartIcon="@Icons.Material.Filled.CheckCircle"
+                                       Disabled="@(!CanApplyChanges)"
+                                       OnClick="ConfirmAndApplyBulkEdit">
+                                Apply Changes to @EffectiveUpdateCount @(EffectiveUpdateCount == 1 ? "Entry" : "Entries")
+                            </MudButton>
+                        </MudStack>
+                    </div>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+        <!-- STEP 3: PREVIEW & SELECT MATCHING ENTRIES -->
+        <MudPaper Elevation="0" Outlined="true" Class="rounded-lg mt-4">
+            <MudTable T="EmployeeBulkEntryItem"
+                      Items="@_matchingEntries"
+                      MultiSelection="true"
+                      @bind-SelectedItems="_selectedEntries"
+                      Dense="true"
+                      Hover="true"
+                      Striped="true"
+                      FixedHeader="true"
+                      Height="480px"
+                      Elevation="0" Outlined="true">
+                <ToolBarContent>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="flex-wrap">
+                        <MudAvatar Color="Color.Primary" Size="Size.Small" Style="font-weight: 700;">3</MudAvatar>
+                        <MudText Typo="Typo.h6" Style="font-weight: 700;">Review Matching Entries</MudText>
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                            @_matchingEntries.Count matching &bull; @_selectedEntries.Count checked
+                        </MudChip>
+                    </MudStack>
+                    <MudSpacer />
+                    @if (_matchingEntries.Count > 0)
+                    {
+                        <MudStack Row="true" Spacing="1">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="SelectAllMatching">
+                                Select All (@_matchingEntries.Count)
+                            </MudButton>
+                            <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small" OnClick="ClearSelection" Disabled="@(_selectedEntries.Count == 0)">
+                                Deselect All
+                            </MudButton>
+                        </MudStack>
+                    }
+                </ToolBarContent>
+
+                <HeaderContent>
+                    <MudTh><MudTableSortLabel SortBy="new Func<EmployeeBulkEntryItem, object>(x => x.Entry.Date)">Date</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel SortBy="new Func<EmployeeBulkEntryItem, object>(x => x.Timesheet.Year * 100 + x.Timesheet.WeekNumber)">Week &amp; Status</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel SortBy="new Func<EmployeeBulkEntryItem, object>(x => x.ProjectName)">Current Project</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel SortBy="new Func<EmployeeBulkEntryItem, object>(x => x.TaskDisplayName)">Current Task</MudTableSortLabel></MudTh>
+                    <MudTh>Description</MudTh>
+                    <MudTh Style="text-align: center;">Billable</MudTh>
+                    <MudTh Style="text-align: right;"><MudTableSortLabel SortBy="new Func<EmployeeBulkEntryItem, object>(x => x.Entry.Hours)">Hours</MudTableSortLabel></MudTh>
+                </HeaderContent>
+
+                <RowTemplate>
+                    <MudTd DataLabel="Date" Style="white-space: nowrap;">
+                        <MudText Typo="Typo.body2" Style="font-weight: 600;">@context.Entry.Date.ToString("yyyy-MM-dd")</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Week & Status" Style="white-space: nowrap;">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudLink Href="@($"/timesheet/{context.Timesheet.EmployeeId}?year={context.Timesheet.Year}&week={context.Timesheet.WeekNumber}")" Typo="Typo.body2">
+                                W@(context.Timesheet.WeekNumber), @context.Timesheet.Year
+                            </MudLink>
+                            <StatusChip Status="@context.Timesheet.Status" />
+                            @if (!string.IsNullOrEmpty(context.InvoiceNumber))
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" title="Linked to Invoice">
+                                    @context.InvoiceNumber
+                                </MudChip>
+                            }
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="Current Project">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" Color="Color.Primary" />
+                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.ProjectName</MudText>
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="Current Task">
+                        @if (!string.IsNullOrWhiteSpace(context.TaskDisplayName))
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Default">@context.TaskDisplayName</MudChip>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">No Task</MudText>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Description" Style="max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        <MudTooltip Text="@context.Entry.Description">
+                            <MudText Typo="Typo.body2">@context.Entry.Description</MudText>
+                        </MudTooltip>
+                    </MudTd>
+                    <MudTd DataLabel="Billable" Style="text-align: center;">
+                        @if (context.Entry.IsBillable)
+                        {
+                            <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Filled" Style="font-weight: 700; min-width: 28px;">$</MudChip>
+                        }
+                        else
+                        {
+                            <span style="color: var(--mud-palette-text-disabled); font-weight: bold;">-</span>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Hours" Style="text-align: right; font-weight: 700;">
+                        @FormatHours(context.Entry.Hours)
+                    </MudTd>
+                </RowTemplate>
+
+                <NoRecordsContent>
+                    <div class="pa-8 text-center">
+                        <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" Color="Color.Secondary" Class="mb-2" />
+                        <MudText Typo="Typo.subtitle1">No matching time entries found</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            Try selecting a different project or expanding the date period in Step 1.
+                        </MudText>
+                    </div>
+                </NoRecordsContent>
+
+                <PagerContent>
+                    <MudTablePager PageSizeOptions="new int[] { 25, 50, 100, 250 }" />
+                </PagerContent>
+            </MudTable>
+        </MudPaper>
+    }
+</MudContainer>
+
+@code {
+    private const string FilterAllTasks = "__ALL__";
+    private const string FilterNoTask = "__NONE__";
+
+    [Parameter] public string? TargetEmployeeId { get; set; }
+    [SupplyParameterFromQuery(Name = "projectId")] public string? QueryProjectId { get; set; }
+
+    private bool _loading = true;
+    private Employee? _currentUser;
+    private List<Employee> _manageableEmployees = [];
+    private Employee? _selectedEmployee;
+
+    private List<Project> _allProjects = [];
+    private List<Project> _targetProjects = [];
+    private Dictionary<string, Project> _projectsById = new(StringComparer.OrdinalIgnoreCase);
+    private List<WorkType> _allWorkTypes = [];
+    private Dictionary<string, WorkType> _workTypesById = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, string> _billedEntryToInvoiceNumber = new(StringComparer.Ordinal);
+
+    // Loaded entries for the selected employee
+    private List<EmployeeBulkEntryItem> _employeeEntries = [];
+    private List<EmployeeBulkEntryItem> _matchingEntries = [];
+    private HashSet<EmployeeBulkEntryItem> _selectedEntries = [];
+
+    private List<LoggedProjectSummary> _loggedProjectsSummary = [];
+    private List<LoggedWorkTypeSummary> _loggedWorkTypesSummary = [];
+    private bool _hasEntriesWithoutTask;
+
+    // Step 1 Filter State
+    private string _filterProjectId = "";
+    private string _filterWorkTypeId = FilterAllTasks;
+    private DatePreset _datePreset = DatePreset.AllTime;
+    private DateTime? _customStartDate;
+    private DateTime? _customEndDate;
+    private string _filterSearchText = "";
+
+    // Step 2 Target Changes State
+    private bool _updateProject = true;
+    private string _newProjectId = "";
+
+    private bool _updateTask;
+    private string _newWorkTypeId = "";
+    private string _newSubTaskId = "";
+
+    private bool _updateBillable;
+    private bool _newIsBillable = true;
+
+    private BulkNoteUpdateMode _noteMode = BulkNoteUpdateMode.KeepExisting;
+    private string _noteText = "";
+
+    private bool _excludeBilledEntries = true;
+    private bool _canManageBilledEntries;
+
+    private int SelectedBilledCount => _selectedEntries.Count(e => !string.IsNullOrEmpty(e.InvoiceNumber));
+
+    private List<string> SelectedBilledInvoiceNumbers => _selectedEntries
+        .Where(e => !string.IsNullOrEmpty(e.InvoiceNumber))
+        .Select(e => e.InvoiceNumber!)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(n => n)
+        .ToList();
+
+    private IEnumerable<EmployeeBulkEntryItem> EffectiveSelectedItems =>
+        _excludeBilledEntries
+            ? _selectedEntries.Where(e => string.IsNullOrEmpty(e.InvoiceNumber))
+            : _selectedEntries;
+
+    private int EffectiveUpdateCount => EffectiveSelectedItems.Count();
+    private decimal EffectiveSelectedHours => EffectiveSelectedItems.Sum(e => e.Entry.Hours);
+    private int SelectedWeeksCount => EffectiveSelectedItems.Select(e => e.Timesheet.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+
+    private bool HasAnyFieldChange =>
+        _updateProject || _updateTask || _updateBillable || _noteMode != BulkNoteUpdateMode.KeepExisting;
+
+    private bool CanApplyChanges =>
+        _selectedEmployee != null &&
+        EffectiveUpdateCount > 0 &&
+        HasAnyFieldChange &&
+        (!_updateProject || !string.IsNullOrWhiteSpace(_newProjectId));
+
+    private string? EffectiveProjectIdForTaskSelector =>
+        _updateProject && !string.IsNullOrWhiteSpace(_newProjectId)
+            ? _newProjectId
+            : (!string.IsNullOrWhiteSpace(_filterProjectId) ? _filterProjectId : null);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        if (_currentUser is not { IsActiveUnsuspended: true, IsSystem: false })
+        {
+            Nav.NavigateTo("/", true);
+            return;
+        }
+
+        _canManageBilledEntries = _currentUser.IsEffectiveAdmin ||
+                                  _currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting) ||
+                                  _currentUser.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices);
+        if (!_canManageBilledEntries)
+        {
+            _excludeBilledEntries = true;
+        }
+
+        _allProjects = Db.Projects.GetAll()
+            .Where(p => UserService.CanViewProject(_currentUser, p, allowAccountingFinancialRead: false))
+            .OrderBy(p => p.DisplayName)
+            .ToList();
+        _projectsById = _allProjects.ToDictionary(p => p.Id, p => p, StringComparer.OrdinalIgnoreCase);
+        _targetProjects = _allProjects
+            .Where(p => (p.Status != ProjectStatus.Archived && p.Status != ProjectStatus.Draft) || p.IsInternal)
+            .OrderBy(p => p.DisplayName)
+            .ToList();
+
+        _allWorkTypes = Db.WorkTypes.GetAll();
+        _workTypesById = _allWorkTypes.ToDictionary(w => w.Id, w => w, StringComparer.OrdinalIgnoreCase);
+
+        // Build map of billed time entry IDs from non-void invoices
+        _billedEntryToInvoiceNumber.Clear();
+        foreach (var inv in Db.Invoices.GetAll().Where(i => i.Status != InvoiceStatus.Void))
+        {
+            if (inv.BilledTimeEntryIds == null) continue;
+            var label = !_canManageBilledEntries
+                ? "Invoiced"
+                : (!string.IsNullOrWhiteSpace(inv.InvoiceNumber) ? inv.InvoiceNumber : "Invoiced");
+            foreach (var entryId in inv.BilledTimeEntryIds)
+            {
+                if (!string.IsNullOrWhiteSpace(entryId))
+                {
+                    _billedEntryToInvoiceNumber[entryId] = label;
+                }
+            }
+        }
+
+        // Load employees that the current user can bulk-edit
+        var allEmployees = Db.Employees.GetAll()
+            .Where(e => e.IsActive && HRService.CanOverrideTimesheetLock(_currentUser, e.Id))
+            .OrderBy(e => e.FullName)
+            .ToList();
+        _manageableEmployees = allEmployees;
+
+        if (!string.IsNullOrWhiteSpace(TargetEmployeeId))
+        {
+            _selectedEmployee = _manageableEmployees.FirstOrDefault(e => string.Equals(e.Id, TargetEmployeeId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (_selectedEmployee == null && _manageableEmployees.Count > 0)
+        {
+            _selectedEmployee = _manageableEmployees[0];
+        }
+
+        if (!string.IsNullOrWhiteSpace(QueryProjectId))
+        {
+            _filterProjectId = QueryProjectId;
+        }
+
+        LoadEmployeeEntries();
+        _loading = false;
+    }
+
+    private void OnEmployeeSelected(Employee? emp)
+    {
+        _selectedEmployee = emp;
+        _filterProjectId = "";
+        _filterWorkTypeId = FilterAllTasks;
+        LoadEmployeeEntries();
+    }
+
+    private void LoadEmployeeEntries()
+    {
+        _employeeEntries.Clear();
+        _loggedProjectsSummary.Clear();
+        _loggedWorkTypesSummary.Clear();
+        _hasEntriesWithoutTask = false;
+
+        if (_selectedEmployee == null)
+        {
+            _matchingEntries.Clear();
+            _selectedEntries.Clear();
+            return;
+        }
+
+        var sheets = Db.Timesheets.GetAll()
+            .Where(t => string.Equals(t.EmployeeId, _selectedEmployee.Id, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(t => t.Year)
+            .ThenByDescending(t => t.WeekNumber)
+            .ToList();
+
+        foreach (var sheet in sheets)
+        {
+            foreach (var entry in sheet.Entries.OrderByDescending(e => e.Date))
+            {
+                if (entry.Hours <= 0) continue;
+
+                Project? project = null;
+                if (!string.IsNullOrWhiteSpace(entry.ProjectId) &&
+                    !TimeEntryTypes.IsLeaveProjectKey(entry.ProjectId) &&
+                    !TimeEntryTypes.IsLeaveEntryType(entry.WorkTypeId))
+                {
+                    if (!_projectsById.TryGetValue(entry.ProjectId, out project))
+                    {
+                        var rawProject = Db.Projects.GetById(entry.ProjectId);
+                        if (rawProject != null && !UserService.CanViewProject(_currentUser, rawProject, allowAccountingFinancialRead: false))
+                        {
+                            continue;
+                        }
+                    }
+                }
+                else
+                {
+                    _projectsById.TryGetValue(entry.ProjectId, out project);
+                }
+
+                var projectName = project?.DisplayName ?? (string.IsNullOrWhiteSpace(entry.ProjectId) ? "Unassigned Project" : entry.ProjectId);
+                var taskDisplay = FormatTaskDisplay(entry.WorkTypeId, entry.SubTaskId);
+                _billedEntryToInvoiceNumber.TryGetValue(entry.Id, out var invoiceNum);
+
+                _employeeEntries.Add(new EmployeeBulkEntryItem
+                {
+                    Timesheet = sheet,
+                    Entry = entry,
+                    ProjectName = projectName,
+                    TaskDisplayName = taskDisplay,
+                    InvoiceNumber = invoiceNum
+                });
+            }
+        }
+
+        // Summarize projects this employee actually logged hours on
+        _loggedProjectsSummary = _employeeEntries
+            .Where(e => !string.IsNullOrWhiteSpace(e.Entry.ProjectId))
+            .GroupBy(e => e.Entry.ProjectId, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new LoggedProjectSummary
+            {
+                ProjectId = g.Key,
+                ProjectDisplayName = g.First().ProjectName,
+                EntriesCount = g.Count(),
+                TotalHours = g.Sum(x => x.Entry.Hours)
+            })
+            .OrderByDescending(p => p.TotalHours)
+            .ToList();
+
+        // If the previously selected filterProjectId doesn't exist for this employee, reset it
+        if (!string.IsNullOrEmpty(_filterProjectId) && !_loggedProjectsSummary.Any(p => string.Equals(p.ProjectId, _filterProjectId, StringComparison.OrdinalIgnoreCase)))
+        {
+            _filterProjectId = "";
+        }
+
+        _hasEntriesWithoutTask = _employeeEntries.Any(e => string.IsNullOrWhiteSpace(e.Entry.WorkTypeId));
+
+        _loggedWorkTypesSummary = _employeeEntries
+            .Where(e => !string.IsNullOrWhiteSpace(e.Entry.WorkTypeId))
+            .GroupBy(e => e.Entry.WorkTypeId, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new LoggedWorkTypeSummary
+            {
+                WorkTypeId = g.Key,
+                TaskName = _workTypesById.TryGetValue(g.Key, out var wt) ? wt.Name : g.Key,
+                EntriesCount = g.Count()
+            })
+            .OrderBy(w => w.TaskName)
+            .ToList();
+
+        ApplySourceFilters(selectAllMatching: true);
+    }
+
+    private void OnFilterProjectChanged(string projectId)
+    {
+        _filterProjectId = projectId ?? "";
+        ApplySourceFilters(selectAllMatching: true);
+    }
+
+    private void OnFilterWorkTypeChanged(string workTypeId)
+    {
+        _filterWorkTypeId = string.IsNullOrEmpty(workTypeId) ? FilterAllTasks : workTypeId;
+        ApplySourceFilters(selectAllMatching: true);
+    }
+
+    private void SetDatePreset(DatePreset preset)
+    {
+        _datePreset = preset;
+        ApplySourceFilters(selectAllMatching: true);
+    }
+
+    private void OnCustomStartChanged(DateTime? date)
+    {
+        _customStartDate = date;
+        ApplySourceFilters(selectAllMatching: true);
+    }
+
+    private void OnCustomEndChanged(DateTime? date)
+    {
+        _customEndDate = date;
+        ApplySourceFilters(selectAllMatching: true);
+    }
+
+    private void OnFilterSearchChanged(string text)
+    {
+        _filterSearchText = text ?? "";
+        ApplySourceFilters(selectAllMatching: true);
+    }
+
+    private void ApplySourceFilters(bool selectAllMatching)
+    {
+        IEnumerable<EmployeeBulkEntryItem> query = _employeeEntries;
+
+        if (!string.IsNullOrWhiteSpace(_filterProjectId))
+        {
+            query = query.Where(e => string.Equals(e.Entry.ProjectId, _filterProjectId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (_filterWorkTypeId == FilterNoTask)
+        {
+            query = query.Where(e => string.IsNullOrWhiteSpace(e.Entry.WorkTypeId));
+        }
+        else if (_filterWorkTypeId != FilterAllTasks && !string.IsNullOrWhiteSpace(_filterWorkTypeId))
+        {
+            query = query.Where(e => string.Equals(e.Entry.WorkTypeId, _filterWorkTypeId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var today = DateTime.Today;
+        switch (_datePreset)
+        {
+            case DatePreset.OlderThan6Months:
+                var cutoff6M = today.AddMonths(-6);
+                query = query.Where(e => e.Entry.Date.Date <= cutoff6M);
+                break;
+            case DatePreset.Last6Months:
+                var start6M = today.AddMonths(-6);
+                query = query.Where(e => e.Entry.Date.Date >= start6M);
+                break;
+            case DatePreset.ThisYear:
+                query = query.Where(e => e.Entry.Date.Year == today.Year);
+                break;
+            case DatePreset.LastYear:
+                query = query.Where(e => e.Entry.Date.Year == today.Year - 1);
+                break;
+            case DatePreset.Custom:
+                if (_customStartDate.HasValue)
+                    query = query.Where(e => e.Entry.Date.Date >= _customStartDate.Value.Date);
+                if (_customEndDate.HasValue)
+                    query = query.Where(e => e.Entry.Date.Date <= _customEndDate.Value.Date);
+                break;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterSearchText))
+        {
+            query = query.Where(e => e.Entry.Description?.Contains(_filterSearchText, StringComparison.OrdinalIgnoreCase) ?? false);
+        }
+
+        _matchingEntries = query.OrderByDescending(e => e.Entry.Date).ToList();
+
+        if (selectAllMatching)
+        {
+            _selectedEntries = _matchingEntries.ToHashSet();
+        }
+        else
+        {
+            _selectedEntries.IntersectWith(_matchingEntries);
+        }
+    }
+
+    private void SelectAllMatching() => _selectedEntries = _matchingEntries.ToHashSet();
+    private void ClearSelection() => _selectedEntries.Clear();
+
+    private void OnNewProjectChanged(string projectId)
+    {
+        _newProjectId = projectId ?? "";
+        if (!string.IsNullOrEmpty(_newWorkTypeId) && !string.IsNullOrEmpty(_newProjectId))
+        {
+            var allowed = TimesheetSearchHelper.SearchTasks("", _newProjectId, _targetProjects, _allWorkTypes);
+            if (!allowed.Contains(_newWorkTypeId))
+            {
+                _newWorkTypeId = "";
+                _newSubTaskId = "";
+            }
+        }
+    }
+
+    private Task<IEnumerable<string>> SearchTargetProjects(string value, CancellationToken token)
+        => Task.FromResult(TimesheetSearchHelper.SearchProjects(value, _targetProjects));
+
+    private string GetProjectName(string id)
+        => TimesheetSearchHelper.GetProjectName(id, _allProjects);
+
+    private string FormatTaskDisplay(string workTypeId, string? subTaskId)
+    {
+        if (string.IsNullOrWhiteSpace(workTypeId))
+            return "";
+        if (!_workTypesById.TryGetValue(workTypeId, out var wt))
+            return workTypeId;
+        if (string.IsNullOrWhiteSpace(subTaskId))
+            return wt.Name;
+        var sub = wt.SubTasks.FirstOrDefault(s => string.Equals(s.Id, subTaskId, StringComparison.OrdinalIgnoreCase));
+        return sub != null ? $"{wt.Name} : {sub.Name}" : wt.Name;
+    }
+
+    private async Task ConfirmAndApplyBulkEdit()
+    {
+        var liveUser = await UserService.GetEmployeeAsync();
+        if (liveUser is not { IsActiveUnsuspended: true, IsSystem: false })
+        {
+            Nav.NavigateTo("/", true);
+            return;
+        }
+
+        _currentUser = liveUser;
+        _canManageBilledEntries = _currentUser.IsEffectiveAdmin ||
+                                  _currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting) ||
+                                  _currentUser.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices);
+        if (!_canManageBilledEntries)
+        {
+            _excludeBilledEntries = true;
+        }
+
+        if (_currentUser == null || _selectedEmployee == null || !CanApplyChanges)
+            return;
+
+        var changeLines = new List<string>();
+        if (_updateProject)
+        {
+            changeLines.Add($"• Project → {GetProjectName(_newProjectId)}");
+        }
+        if (_updateTask)
+        {
+            var taskLabel = string.IsNullOrWhiteSpace(_newWorkTypeId) ? "Clear Task" : FormatTaskDisplay(_newWorkTypeId, _newSubTaskId);
+            changeLines.Add($"• Task → {taskLabel}");
+        }
+        if (_updateBillable)
+        {
+            changeLines.Add($"• Billable → {(_newIsBillable ? "Billable ($)" : "Non-Billable")}");
+        }
+        if (_noteMode != BulkNoteUpdateMode.KeepExisting)
+        {
+            changeLines.Add($"• Notes → {_noteMode}: \"{_noteText}\"");
+        }
+
+        var message = $"Update {EffectiveUpdateCount} time {(EffectiveUpdateCount == 1 ? "entry" : "entries")} ({FormatHours(EffectiveSelectedHours)} hrs across {SelectedWeeksCount} {(SelectedWeeksCount == 1 ? "week" : "weeks")}) for {_selectedEmployee.FullName}?\n\n" +
+                      string.Join("\n", changeLines) +
+                      "\n\nApproved historical timesheets will remain Approved.";
+
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, message },
+            { x => x.ButtonText, $"Update {EffectiveUpdateCount} {(EffectiveUpdateCount == 1 ? "Entry" : "Entries")}" },
+            { x => x.Color, Color.Primary }
+        };
+
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm Bulk Timesheet Edit", parameters);
+        var dialogResult = await dialog.Result;
+        if (dialogResult is not { Canceled: false })
+            return;
+
+        var excludedIds = _excludeBilledEntries
+            ? _selectedEntries.Where(e => !string.IsNullOrEmpty(e.InvoiceNumber)).Select(e => e.Entry.Id).ToHashSet(StringComparer.Ordinal)
+            : null;
+
+        var request = new BulkTimesheetEditRequest
+        {
+            EntryIds = _selectedEntries.Select(e => e.Entry.Id).ToList(),
+            ExcludedEntryIds = excludedIds,
+            UpdateProject = _updateProject,
+            ProjectId = _newProjectId,
+            UpdateTask = _updateTask,
+            WorkTypeId = _newWorkTypeId,
+            SubTaskId = _newSubTaskId,
+            UpdateBillable = _updateBillable,
+            IsBillable = _newIsBillable,
+            NoteMode = _noteMode,
+            NoteText = _noteText
+        };
+
+        var result = HRService.BulkUpdateTimeEntries(request, _currentUser.Id);
+        if (result.IsSuccess && result.Value != null)
+        {
+            Snackbar.Add(
+                $"Updated {result.Value.UpdatedEntriesCount} time {(result.Value.UpdatedEntriesCount == 1 ? "entry" : "entries")} across {result.Value.UpdatedTimesheetsCount} {(result.Value.UpdatedTimesheetsCount == 1 ? "week" : "weeks")} for {_selectedEmployee.FullName}.",
+                Severity.Success);
+
+            // If we moved entries from a specific filtered project to a new project, switch the filter or reload
+            if (_updateProject && !string.IsNullOrWhiteSpace(_filterProjectId) && !string.IsNullOrWhiteSpace(_newProjectId))
+            {
+                _filterProjectId = _newProjectId;
+            }
+
+            LoadEmployeeEntries();
+        }
+        else
+        {
+            Snackbar.Add(result.ErrorMessage ?? "Failed to update time entries.", Severity.Error);
+        }
+    }
+
+    private void NavigateBack()
+    {
+        Nav.NavigateTo("/planning/timesheet-approvals");
+    }
+
+    private static string FormatHours(decimal hours) =>
+        hours == 0 ? "0:00" : TimesheetFormatHelper.FormatHours(hours);
+
+    private enum DatePreset
+    {
+        AllTime,
+        OlderThan6Months,
+        Last6Months,
+        ThisYear,
+        LastYear,
+        Custom
+    }
+
+    private sealed class EmployeeBulkEntryItem
+    {
+        public required Timesheet Timesheet { get; init; }
+        public required TimeEntry Entry { get; init; }
+        public required string ProjectName { get; init; }
+        public required string TaskDisplayName { get; init; }
+        public string? InvoiceNumber { get; init; }
+
+        public override bool Equals(object? obj) =>
+            obj is EmployeeBulkEntryItem other && string.Equals(Entry.Id, other.Entry.Id, StringComparison.Ordinal);
+
+        public override int GetHashCode() => Entry.Id.GetHashCode(StringComparison.Ordinal);
+    }
+
+    private sealed class LoggedProjectSummary
+    {
+        public required string ProjectId { get; init; }
+        public required string ProjectDisplayName { get; init; }
+        public int EntriesCount { get; init; }
+        public decimal TotalHours { get; init; }
+    }
+
+    private sealed class LoggedWorkTypeSummary
+    {
+        public required string WorkTypeId { get; init; }
+        public required string TaskName { get; init; }
+        public int EntriesCount { get; init; }
+    }
+}

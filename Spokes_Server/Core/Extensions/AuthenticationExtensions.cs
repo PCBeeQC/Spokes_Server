@@ -31,6 +31,7 @@ public static class AuthenticationExtensions
     public static IServiceCollection AddSpokesAuth(this IServiceCollection services, SystemConfig? systemConfig = null)
     {
         services.AddCascadingAuthenticationState();
+        services.AddScoped<Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider, SpokesRevalidatingAuthenticationStateProvider>();
         services.AddMemoryCache();
         services.AddSingleton<IOpenIdConfigurationProvider, OpenIdConfigurationProvider>();
         services.AddSingleton<SessionService>();
@@ -60,6 +61,7 @@ public static class AuthenticationExtensions
             options.ExpireTimeSpan = TimeSpan.FromDays(90);
             options.SlidingExpiration = true;
             options.LoginPath = "/sso/login/auto";
+            options.AccessDeniedPath = "/access-denied";
 
             options.Events.OnValidatePrincipal = context =>
             {
@@ -153,17 +155,37 @@ public static class AuthenticationExtensions
                     }
                 }
 
-                if (employeeId == "system-renderer")
+                if (string.Equals(employeeId, Spokes_Server.Core.Middleware.RenderTokenMiddleware.SystemRendererId, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (context.Principal?.HasClaim("Spokes_InternalRenderer", "true") != true)
+                    if (IsRevokedBlockedPath(path))
+                    {
+                        context.HttpContext.Items["Spokes.SessionRejected"] = true;
+                    }
+                    context.RejectPrincipal();
+                    return Task.CompletedTask;
+                }
+
+                var isInternalRendererPrincipal = context.Principal?.HasClaim("Spokes_InternalRenderer", "true") == true
+                    || context.Principal?.HasClaim("RenderScope", Spokes_Server.Core.Middleware.RenderTokenMiddleware.DocumentExportScope) == true;
+                var isHeadlessSession = string.Equals(session.DeviceName, Spokes_Server.Core.Middleware.RenderTokenMiddleware.HeadlessRendererName, StringComparison.Ordinal);
+                if (isInternalRendererPrincipal || isHeadlessSession)
+                {
+                    var method = context.HttpContext.Request.Method;
+                    var isReadOnlyOrBlazorTransport = HttpMethods.IsGet(method)
+                        || HttpMethods.IsHead(method)
+                        || context.HttpContext.Request.Path.StartsWithSegments("/_blazor");
+                    if (context.Principal?.HasClaim("Spokes_InternalRenderer", "true") != true ||
+                        !context.Principal.HasClaim("RenderScope", Spokes_Server.Core.Middleware.RenderTokenMiddleware.DocumentExportScope) ||
+                        !isHeadlessSession ||
+                        !isReadOnlyOrBlazorTransport)
                     {
                         if (IsRevokedBlockedPath(path))
                         {
                             context.HttpContext.Items["Spokes.SessionRejected"] = true;
                         }
                         context.RejectPrincipal();
+                        return Task.CompletedTask;
                     }
-                    return Task.CompletedTask;
                 }
 
                 if (!string.IsNullOrEmpty(session.EmployeeId) && session.EmployeeId != employeeId)
@@ -177,7 +199,7 @@ public static class AuthenticationExtensions
                 }
 
                 var employee = employees.GetById(employeeId);
-                if (employee == null || !employee.IsActive)
+                if (employee == null || !employee.IsActive || employee.IsSystem)
                 {
                     sessionService?.RevokeAllUserSessions(employeeId);
                     if (IsRevokedBlockedPath(path))
@@ -190,25 +212,20 @@ public static class AuthenticationExtensions
 
                 if (employee.IsBanned)
                 {
-                    if (context.HttpContext.Request.Cookies.ContainsKey("Spokes_Refresh"))
+                    if (context.HttpContext.Request.Cookies.ContainsKey(VaultCookieProtector.RefreshCookieName))
                     {
-                        context.HttpContext.Response.Cookies.Delete("Spokes_Refresh", new CookieOptions
-                        {
-                            HttpOnly = true,
-                            Secure = context.HttpContext.Request.IsHttps,
-                            SameSite = SameSiteMode.Lax,
-                            Path = "/"
-                        });
+                        VaultCookieProtector.DeleteRefreshCookie(context.HttpContext);
                     }
-                    if (context.HttpContext.Request.Cookies.ContainsKey("chat_vault_key"))
+                    if (context.HttpContext.Request.Cookies.ContainsKey(VaultCookieProtector.VaultCookieName))
                     {
-                        context.HttpContext.Response.Cookies.Delete("chat_vault_key", new CookieOptions
-                        {
-                            Path = "/",
-                            HttpOnly = true,
-                            Secure = true,
-                            SameSite = SameSiteMode.Lax
-                        });
+                        VaultCookieProtector.DeleteVaultCookie(context.HttpContext.Response);
+                    }
+
+                    if (isInternalRendererPrincipal || isHeadlessSession)
+                    {
+                        context.HttpContext.Items["Spokes.SessionRejected"] = true;
+                        context.RejectPrincipal();
+                        return Task.CompletedTask;
                     }
 
                     if (IsRestrictedPrincipalBlockedPath(path))
@@ -235,7 +252,7 @@ public static class AuthenticationExtensions
                     return Task.CompletedTask;
                 }
 
-                if (sessionService != null && context.Principal?.HasClaim("Banned", "true") == true)
+                if (sessionService != null && !isInternalRendererPrincipal && !isHeadlessSession && context.Principal?.HasClaim("Banned", "true") == true)
                 {
                     var restoredIdentity = sessionService.BuildIdentity(employee, sessionId);
                     context.ReplacePrincipal(new ClaimsPrincipal(restoredIdentity));
@@ -296,25 +313,10 @@ public static class AuthenticationExtensions
             {
                 OnRedirectToIdentityProvider = context =>
                 {
-                    var systemConfigs = context.HttpContext.RequestServices.GetRequiredService<SystemConfigRepository>();
-                    var sysConfig = systemConfigs.Get();
-                    if (!string.IsNullOrWhiteSpace(sysConfig.ServerPublicUrl) && context.ProtocolMessage.RedirectUri != null)
+                    var rewritten = RewriteUriToPublicUrl(context.HttpContext, context.ProtocolMessage.RedirectUri, "RedirectUri");
+                    if (rewritten != null)
                     {
-                        try
-                        {
-                            var redirectUri = new UriBuilder(context.ProtocolMessage.RedirectUri);
-                            var publicUri = new Uri(sysConfig.ServerPublicUrl);
-
-                            redirectUri.Scheme = publicUri.Scheme;
-                            redirectUri.Host = publicUri.Host;
-                            redirectUri.Port = publicUri.IsDefaultPort ? -1 : publicUri.Port;
-
-                            context.ProtocolMessage.RedirectUri = redirectUri.ToString();
-                        }
-                        catch (Exception ex)
-                        {
-                            context.HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("OpenIdConnect")?.LogWarning(ex, "[OIDC] Failed to rewrite RedirectUri: {Message}", ex.Message);
-                        }
+                        context.ProtocolMessage.RedirectUri = rewritten;
                     }
                     return Task.CompletedTask;
                 },
@@ -340,56 +342,21 @@ public static class AuthenticationExtensions
                         context.ProtocolMessage.IdTokenHint = idToken;
                     }
 
-                    var systemConfigs = context.HttpContext.RequestServices.GetRequiredService<SystemConfigRepository>();
-                    var sysConfig = systemConfigs.Get();
-                    if (!string.IsNullOrWhiteSpace(sysConfig.ServerPublicUrl) && context.ProtocolMessage.PostLogoutRedirectUri != null)
+                    var rewrittenPostLogout = RewriteUriToPublicUrl(context.HttpContext, context.ProtocolMessage.PostLogoutRedirectUri, "PostLogoutRedirectUri");
+                    if (rewrittenPostLogout != null)
                     {
-                        try
-                        {
-                            var redirectUri = new UriBuilder(context.ProtocolMessage.PostLogoutRedirectUri);
-                            var publicUri = new Uri(sysConfig.ServerPublicUrl);
-
-                            redirectUri.Scheme = publicUri.Scheme;
-                            redirectUri.Host = publicUri.Host;
-                            redirectUri.Port = publicUri.IsDefaultPort ? -1 : publicUri.Port;
-                            context.ProtocolMessage.PostLogoutRedirectUri = redirectUri.ToString();
-                        }
-                        catch (Exception ex)
-                        {
-                            context.HttpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("OpenIdConnect")?.LogWarning(ex, "[OIDC] Failed to rewrite PostLogoutRedirectUri: {Message}", ex.Message);
-                        }
+                        context.ProtocolMessage.PostLogoutRedirectUri = rewrittenPostLogout;
                     }
 
                     context.HandleResponse();
                     context.Response.StatusCode = 200;
                     context.Response.Headers.Remove("Location");
 
-                    var html = $@"
-                        <!DOCTYPE html>
-                        <html>
-                        <head>
-                            <meta charset='utf-8' />
-                            <meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0'>
-                            <title>Logging out...</title>
-                            <style>
-                                body {{ background-color: #1e1e2d; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; font-family: 'Roboto', sans-serif; }}
-                                .spinner {{ width: 40px; height: 40px; border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid #594ae2; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }}
-                                @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-                            </style>
-                        </head>
-                        <body>
-                            <div style='display:flex;flex-direction:column;align-items:center;text-align:center;padding:40px;'>
-                                <div class='spinner'></div>
-                                <p>Securely signing out...</p>
-                            </div>
-                            <form id='logoutForm' method='GET' action='{System.Text.Encodings.Web.HtmlEncoder.Default.Encode(context.ProtocolMessage.IssuerAddress ?? "")}'>
-                                <input type='hidden' name='id_token_hint' value='{System.Text.Encodings.Web.HtmlEncoder.Default.Encode(context.ProtocolMessage.IdTokenHint ?? "")}' />
-                                <input type='hidden' name='post_logout_redirect_uri' value='{System.Text.Encodings.Web.HtmlEncoder.Default.Encode(context.ProtocolMessage.PostLogoutRedirectUri ?? "")}' />
-                                <input type='hidden' name='state' value='{System.Text.Encodings.Web.HtmlEncoder.Default.Encode(context.ProtocolMessage.State ?? "")}' />
-                            </form>
-                            <script>document.getElementById('logoutForm').submit();</script>
-                        </body>
-                        </html>";
+                    var html = MobileSsoHelper.CreateAutoSubmitLogoutFormPage(
+                        context.ProtocolMessage.IssuerAddress,
+                        context.ProtocolMessage.IdTokenHint,
+                        context.ProtocolMessage.PostLogoutRedirectUri,
+                        context.ProtocolMessage.State ?? "");
 
                     context.Response.ContentType = "text/html";
                     await context.Response.WriteAsync(html);
@@ -525,6 +492,34 @@ public static class AuthenticationExtensions
         return services;
     }
 
+    private static string? RewriteUriToPublicUrl(HttpContext httpContext, string? targetUri, string label)
+    {
+        if (targetUri == null) return null;
+        var sysConfig = httpContext.RequestServices.GetRequiredService<SystemConfigRepository>().Get();
+        if (string.IsNullOrWhiteSpace(sysConfig.ServerPublicUrl)) return null;
+
+        try
+        {
+            var redirectUri = new UriBuilder(targetUri);
+            var publicUri = new Uri(sysConfig.ServerPublicUrl);
+            redirectUri.Scheme = publicUri.Scheme;
+            redirectUri.Host = publicUri.Host;
+            redirectUri.Port = publicUri.IsDefaultPort ? -1 : publicUri.Port;
+            return redirectUri.ToString();
+        }
+        catch (Exception ex)
+        {
+            httpContext.RequestServices.GetService<ILoggerFactory>()?.CreateLogger("OpenIdConnect")?.LogWarning(ex, "[OIDC] Failed to rewrite {Label}: {Message}", label, ex.Message);
+            return null;
+        }
+    }
+
+    private static bool IsBlockedTransportPath(string path) =>
+        path.StartsWith("/_blazor", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/hubs", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/media", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/internal", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsRevokedBlockedPath(string path)
     {
         if (string.IsNullOrEmpty(path)) return false;
@@ -534,10 +529,7 @@ public static class AuthenticationExtensions
             return !path.Equals("/spokesapi/auth/force-logout", StringComparison.OrdinalIgnoreCase);
         }
 
-        return path.StartsWith("/_blazor", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/hubs", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/media", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/internal", StringComparison.OrdinalIgnoreCase);
+        return IsBlockedTransportPath(path);
     }
 
     private static bool IsRestrictedPrincipalBlockedPath(string path)
@@ -551,36 +543,27 @@ public static class AuthenticationExtensions
                    !path.Equals("/spokesapi/auth/force-logout", StringComparison.OrdinalIgnoreCase);
         }
 
-        return path.StartsWith("/_blazor", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/hubs", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/media", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/internal", StringComparison.OrdinalIgnoreCase);
+        return IsBlockedTransportPath(path);
     }
 
-    private static bool IsAllowedPendingRoute(string path)
-    {
-        return path.Equals("/access-pending", StringComparison.OrdinalIgnoreCase) ||
-               path.Equals("/logout", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/sso", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/branding", StringComparison.OrdinalIgnoreCase) ||
-               path.Equals("/spokesapi/system/logo", StringComparison.OrdinalIgnoreCase) ||
-               path.Equals("/spokesapi/system/icon", StringComparison.OrdinalIgnoreCase) ||
-               path.Equals("/spokesapi/auth/force-logout", StringComparison.OrdinalIgnoreCase) ||
-               IsStaticAssetPath(path);
-    }
+    private static bool IsSharedRestrictedAllowedRoute(string path) =>
+        path.Equals("/logout", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/branding", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/spokesapi/system/logo", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/spokesapi/system/icon", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/spokesapi/auth/force-logout", StringComparison.OrdinalIgnoreCase) ||
+        IsStaticAssetPath(path);
 
-    private static bool IsAllowedBannedRoute(string path)
-    {
-        return path.Equals("/banned", StringComparison.OrdinalIgnoreCase) ||
-               path.Equals("/logout", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/sso/logout", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/sso/mobile-logout", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/branding", StringComparison.OrdinalIgnoreCase) ||
-               path.Equals("/spokesapi/system/logo", StringComparison.OrdinalIgnoreCase) ||
-               path.Equals("/spokesapi/system/icon", StringComparison.OrdinalIgnoreCase) ||
-               path.Equals("/spokesapi/auth/force-logout", StringComparison.OrdinalIgnoreCase) ||
-               IsStaticAssetPath(path);
-    }
+    private static bool IsAllowedPendingRoute(string path) =>
+        path.Equals("/access-pending", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/sso", StringComparison.OrdinalIgnoreCase) ||
+        IsSharedRestrictedAllowedRoute(path);
+
+    private static bool IsAllowedBannedRoute(string path) =>
+        path.Equals("/banned", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/sso/logout", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/sso/mobile-logout", StringComparison.OrdinalIgnoreCase) ||
+        IsSharedRestrictedAllowedRoute(path);
 
     private static bool IsStaticAssetPath(string path)
     {

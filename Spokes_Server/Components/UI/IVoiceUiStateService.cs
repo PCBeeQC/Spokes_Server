@@ -47,21 +47,31 @@ public interface IVoiceUiStateService
     bool IsOsPipActive { get; }
     bool IsNativeMobilePipMode { get; }
     string? FocusedParticipantId { get; }
-    bool IsGridLayoutForcedByUser { get; }
+    string? FullscreenParticipantId { get; }
+    string? StickySpeakerId { get; }
     bool ShouldShowInAppPip { get; }
     bool IsInAppPipCollapsedPill { get; }
 
     event Action? OnPipStateChanged;
     event Action? OnReturnToCallStageRequested;
 
+    VoicePipPresentationState ComputePipPresentationState(bool isNativeMobileClient = false, IReadOnlySet<string>? verifiedParticipants = null);
+    VoiceStagePresentationState ComputeStagePresentationState(IReadOnlySet<string>? verifiedParticipants = null, string? ringingCalleeId = null);
+    void TogglePipGridOrFocusLayout();
     void SetCallStageVisible(bool visible);
     void SetFocusedParticipant(string? participantId, bool userInitiated = false);
     void ToggleFocusParticipant(string participantId);
+    void SetFullscreenParticipant(string? participantId);
+    Task EnterParticipantFullscreenAsync<T>(string participantId, Microsoft.JSInterop.DotNetObjectReference<T> dotNetHelper) where T : class => Task.CompletedTask;
+    Task SetParticipantFullscreenRotationAsync(int rotationDeg) => Task.CompletedTask;
+    Task ResetParticipantFullscreenZoomAsync() => Task.CompletedTask;
+    Task ExitParticipantFullscreenAsync(bool goBack = true) => Task.CompletedTask;
     void SetInAppPipMinimized(bool minimized);
     void RequestReturnToCallStage();
     Task<bool> ToggleOsPipAsync();
     Task<bool> IsOsPipSupportedAsync();
     Task SyncPipMetadataAsync(VoicePipMetadataPayload payload);
+    Task SyncSpeakingParticipantsAsync(string? channelId, string[] speakerIds) => Task.CompletedTask;
     Task SetInAppPipActiveAsync(bool active);
 
     void UpdateAudioDevices(List<AudioDevice> mics, string activeMicId, List<AudioDevice> speakers, string activeSpeakerId);
@@ -70,7 +80,7 @@ public interface IVoiceUiStateService
     void ResetDeviceState();
 
     void ShowVoiceLog(string message, string severityStr);
-    Task PlayTestSpeakerSoundAsync(string? deviceId = null, IVoiceJsInteropService? jsInterop = null);
+    Task PlayTestSpeakerSoundAsync(string? deviceId = null);
 
     Task LoadDeviceVoiceSettingsAsync();
 }

@@ -19,7 +19,7 @@ public interface IVoiceDeviceService
     ConcurrentDictionary<string, int> RemoteVideoHeights { get; }
     ConcurrentDictionary<string, int> RemoteVideoFps { get; }
 
-    Task SwitchCameraAsync(string deviceId, bool isVideoOn);
+    Task SwitchCameraAsync(string? deviceId, bool isVideoOn);
     Task UpdateCameraSettingsAsync(string quality, int fps, string deviceId, bool isVideoOn);
     Task SwitchMicrophoneAsync(string deviceId);
     Task SwitchSpeakerAsync(string deviceId);
@@ -32,9 +32,9 @@ public interface IVoiceDeviceService
 
     void HandleAudioDevicesUpdated(List<AudioDevice> mics, string activeMicId, List<AudioDevice> speakers, string activeSpeakerId);
     void HandleCamerasUpdated(List<CameraDevice> cameras, string activeCameraId);
-    void HandleParticipantVideoDimensions(string participantId, int height, int fps);
-    void HandleLocalVideoDimensions(int maxEdge, int fps);
-    void HandleLocalScreenDimensions(int maxEdge, int fps);
+    bool HandleParticipantVideoDimensions(string participantId, int height, int fps);
+    bool HandleLocalVideoDimensions(int maxEdge, int fps);
+    bool HandleLocalScreenDimensions(int maxEdge, int fps);
     void RemoveParticipantVideo(string participantId);
     void Reset();
 }

@@ -11,17 +11,11 @@ public enum CalendarReminderUnit
     Weeks = 3
 }
 
-public enum CalendarReminderType
-{
-    Notification = 0
-}
-
 public class CalendarReminder
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public int Value { get; set; } = 10;
     public CalendarReminderUnit Unit { get; set; } = CalendarReminderUnit.Minutes;
-    public CalendarReminderType Type { get; set; } = CalendarReminderType.Notification;
 
     /// <summary>
     /// Computes the offset as a TimeSpan.
@@ -78,8 +72,7 @@ public class CalendarReminder
         {
             Id = Id,
             Value = Value,
-            Unit = Unit,
-            Type = Type
+            Unit = Unit
         };
     }
 }

@@ -40,6 +40,7 @@ public interface ISlideshowSessionService
     void RecordActivity(string sessionId);
     void EndSession(string sessionId);
     SlideshowSession? HandleDisconnect(string connectionId);
+    IReadOnlyList<string> GetUnpairedSessionIdsByTvConnection(string tvConnectionId);
     bool RebindTvConnection(string sessionId, string newConnectionId, string? tvSecret);
 }
 
@@ -72,14 +73,40 @@ public class SlideshowSessionService : ISlideshowSessionService
         _logger = logger;
     }
 
+    public IReadOnlyList<string> GetUnpairedSessionIdsByTvConnection(string tvConnectionId)
+    {
+        if (string.IsNullOrWhiteSpace(tvConnectionId))
+        {
+            return [];
+        }
+
+        return _sessionsById.Values
+            .Where(s => !s.IsPaired && string.Equals(s.TvConnectionId, tvConnectionId, StringComparison.Ordinal))
+            .Select(s => s.SessionId)
+            .ToList();
+    }
+
     public SlideshowSession CreateSession(string tvConnectionId, SlideshowDisplayKind displayKind = SlideshowDisplayKind.BlazorPinStage, string? creatorIp = null)
     {
         CleanExpiredSessions();
 
         string? normalizedIp = string.IsNullOrWhiteSpace(creatorIp) ? null : creatorIp.Trim();
+        string ipBucket = normalizedIp ?? "__unknown__";
 
         lock (_unpairedCreationLock)
         {
+            if (!string.IsNullOrWhiteSpace(tvConnectionId))
+            {
+                var priorForConnection = _sessionsById.Values
+                    .Where(s => !s.IsPaired && string.Equals(s.TvConnectionId, tvConnectionId, StringComparison.Ordinal))
+                    .Select(s => s.SessionId)
+                    .ToList();
+                foreach (var oldId in priorForConnection)
+                {
+                    EndSession(oldId);
+                }
+            }
+
             var unpairedSessions = _sessionsById.Values
                 .Where(s => !s.IsPaired)
                 .ToList();
@@ -90,14 +117,12 @@ public class SlideshowSessionService : ISlideshowSessionService
                 throw new InvalidOperationException("Too many active unpaired slideshow sessions. Please try again shortly.");
             }
 
-            if (normalizedIp != null)
+            int perIpCount = unpairedSessions.Count(s =>
+                string.Equals(s.CreatorIpAddress ?? "__unknown__", ipBucket, StringComparison.OrdinalIgnoreCase));
+            if (perIpCount >= MaxUnpairedSessionsPerIp)
             {
-                int perIpCount = unpairedSessions.Count(s => string.Equals(s.CreatorIpAddress, normalizedIp, StringComparison.OrdinalIgnoreCase));
-                if (perIpCount >= MaxUnpairedSessionsPerIp)
-                {
-                    _logger?.LogWarning("Rejected unpaired slideshow session creation from IP {Ip}: per-IP cap ({MaxPerIp}) reached", normalizedIp, MaxUnpairedSessionsPerIp);
-                    throw new InvalidOperationException("Too many active unpaired slideshow sessions from this address. Please close unused pairing screens or try again shortly.");
-                }
+                _logger?.LogWarning("Rejected unpaired slideshow session creation from IP bucket {Ip}: per-IP cap ({MaxPerIp}) reached", ipBucket, MaxUnpairedSessionsPerIp);
+                throw new InvalidOperationException("Too many active unpaired slideshow sessions from this address. Please close unused pairing screens or try again shortly.");
             }
 
             string pin = GenerateUniqueNumericPin();
@@ -416,30 +441,30 @@ public class SlideshowSessionService : ISlideshowSessionService
             return null;
         }
 
-        foreach (var kvp in _sessionsById)
+        SlideshowSession? firstEndedSession = null;
+        foreach (var session in _sessionsById.Values.ToList())
         {
-            var session = kvp.Value;
             if (!string.IsNullOrEmpty(session.HostConnectionId) && session.HostConnectionId == connectionId)
             {
                 EndSession(session.SessionId);
-                return session;
+                firstEndedSession ??= session;
+                continue;
             }
             if (!string.IsNullOrEmpty(session.TvConnectionId) && session.TvConnectionId == connectionId)
             {
                 if (!session.IsPaired)
                 {
                     EndSession(session.SessionId);
-                    return session;
+                    firstEndedSession ??= session;
                 }
                 else
                 {
                     session.TvConnectionId = string.Empty;
                     _logger?.LogInformation("TV connection {ConnectionId} disconnected from paired session {SessionId}; keeping session alive for reconnect", connectionId, session.SessionId);
-                    return null;
                 }
             }
         }
-        return null;
+        return firstEndedSession;
     }
 
     public bool RebindTvConnection(string sessionId, string newConnectionId, string? tvSecret)

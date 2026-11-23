@@ -41,7 +41,6 @@ public class EmailMessage : IDataEntity
     // Privacy Shield & Newsletter Screener
     public string? UnsubscribeUrl { get; set; }
     public string? UnsubscribeMailto { get; set; }
-    public bool AllowRemoteImages { get; set; }
 
     public DateTimeOffset Date { get; set; }
 
@@ -62,11 +61,13 @@ public class EmailMessage : IDataEntity
         set => _isLocalOnly = value;
     }
 
-    // Company Bill Inbox Workflow Tracking
-    public string? BillingStatus { get; set; } = Spokes_Server.Core.Constants.CompanyBillInboxConstants.BillingStatus.Unprocessed;
+    // Company Bill Inbox Workflow Tracking (null for general Webmail messages not ingested by CompanyBillInboxService)
+    public string? BillingStatus { get; set; }
     public string? LinkedBillId { get; set; }  // Links to primary Bill.Id
     public List<string> LinkedBillIds { get; set; } = []; // Links to all Bills created from this email
     public string? LinkedPoId { get; set; }    // Links to PurchaseOrder.Id
+    public string? LinkedInvoiceId { get; set; } // Links to primary Invoice.Id
+    public List<string> LinkedInvoiceIds { get; set; } = []; // Links to all Invoices associated with this email
     public string? MatchedAttachmentPath { get; set; }
     public string? MatchedAttachmentName { get; set; }
     public decimal? DetectedAmount { get; set; }

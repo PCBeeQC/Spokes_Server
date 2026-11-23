@@ -31,6 +31,15 @@ internal sealed class PairwiseState
         Confidence >= minConfidence &&
         (!requireLatched || IsLatched);
 
+    public bool IsNegligibleBleed =>
+        BleedGain < NegligibleBleedGainThreshold &&
+        PeakBleedGain < NegligiblePeakBleedGainThreshold;
+
+    public bool IsUncorrelatedNegligibleBleedLock =>
+        IsNegligibleBleed &&
+        PeakEnvelopeCorrelation < 0.40 &&
+        PeakWaveformCorrelation < 0.28;
+
     public void ApplyReciprocalPrior(int delaySamples, float bleedGain, bool updateGain = true)
     {
         DelaySamples = delaySamples;
@@ -216,26 +225,100 @@ internal sealed class AcousticCalibrationMatrix
         }
     }
 
-    public int GetTargetLookaheadSamples(string targetUserId)
+    public int GetTargetLookaheadSamples(string targetUserId, IReadOnlyCollection<string>? activeParticipantIds = null)
     {
-        int requiredSamples = LookaheadSamples;
+        bool allRoommatesCalibratedForFloor = AreAllRoommatesCalibratedForMinLookaheadFloor(targetUserId, activeParticipantIds);
+
+        int floorSamples = allRoommatesCalibratedForFloor ? MinCalibratedLookaheadSamples : LookaheadSamples;
+        int requiredSamples = floorSamples;
+        int maxUnverifiedPriorLookahead = (SampleRate * 180) / 1000;
         foreach (var kvp in _pairs)
         {
-            if (string.Equals(kvp.Key.Target, targetUserId, StringComparison.Ordinal) &&
-                kvp.Value.DelaySamples < 0 &&
-                (kvp.Value.IsDirectLock(0.25) || (kvp.Value.IsReciprocalPrior && kvp.Value.Confidence >= 0.24)))
+            if (!string.Equals(kvp.Key.Target, targetUserId, StringComparison.Ordinal) ||
+                kvp.Value.DelaySamples >= FrameSamples10Ms)
+            {
+                continue;
+            }
+
+            // Skip negligible-bleed pairs (< -36.5 dB current and < -32 dB peak) when directly measured
+            // or when backed by a live-verified negligible-bleed reciprocal measurement:
+            // buffering all listeners behind an inaudible negative-lag headset/mic path adds needless delay,
+            // while unverified high-bleed reciprocal priors remain eligible (capped at 180 ms below) for AGC turn-taking.
+            if (kvp.Value.IsNegligibleBleed &&
+                (!kvp.Value.IsReciprocalPrior ||
+                 (TryGetPair(targetUserId, kvp.Key.Source, out var revPair) &&
+                  revPair.IsLiveDirectLock(0.35) &&
+                  revPair.IsNegligibleBleed)))
+            {
+                continue;
+            }
+
+            if (kvp.Value.IsDirectLock(0.25))
             {
                 int needed = (-kvp.Value.DelaySamples) + (FrameSamples10Ms + FrameSamples10Ms / 2);
                 if (needed > requiredSamples) requiredSamples = needed;
             }
+            else if (kvp.Value.IsReciprocalPrior && kvp.Value.Confidence >= 0.24)
+            {
+                int needed = Math.Min(
+                    (-kvp.Value.DelaySamples) + (FrameSamples10Ms + FrameSamples10Ms / 2),
+                    maxUnverifiedPriorLookahead);
+                if (needed > requiredSamples) requiredSamples = needed;
+            }
         }
-        return Math.Clamp(requiredSamples, LookaheadSamples, MaxLookaheadSamples);
+        return Math.Clamp(requiredSamples, floorSamples, MaxLookaheadSamples);
+    }
+
+    private bool AreAllRoommatesCalibratedForMinLookaheadFloor(
+        string targetUserId,
+        IReadOnlyCollection<string>? activeParticipantIds)
+    {
+        if (activeParticipantIds == null || activeParticipantIds.Count < 2)
+        {
+            return false;
+        }
+
+        int roommateCount = 0;
+        foreach (var otherId in activeParticipantIds)
+        {
+            if (string.Equals(otherId, targetUserId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            roommateCount++;
+            bool hasIn = TryGetPair(otherId, targetUserId, out var inPair);
+            bool hasOut = TryGetPair(targetUserId, otherId, out var outPair);
+
+            bool isBidirectionallyLocked =
+                hasIn &&
+                hasOut &&
+                inPair!.IsDirectLock(0.35) &&
+                outPair!.IsDirectLock(0.35) &&
+                (IsConsistentTwoWayAir(inPair.DelaySamples, outPair.DelaySamples) ||
+                 inPair.IsNegligibleBleed ||
+                 outPair.IsNegligibleBleed);
+
+            bool hasLiveNegligibleBleedLock =
+                (hasIn && inPair!.IsLiveDirectLock(0.35) && inPair.IsNegligibleBleed &&
+                 (!hasOut || !outPair!.IsLiveDirectLock(0.35) || outPair.IsNegligibleBleed)) ||
+                (hasOut && outPair!.IsLiveDirectLock(0.35) && outPair.IsNegligibleBleed &&
+                 (!hasIn || !inPair!.IsLiveDirectLock(0.35) || inPair.IsNegligibleBleed));
+
+            if (!isBidirectionallyLocked && !hasLiveNegligibleBleedLock)
+            {
+                return false;
+            }
+        }
+
+        return roommateCount > 0;
     }
 
     public bool HasDirectNegativeLockTo(string targetUserId) =>
         _pairs.Any(kvp =>
             string.Equals(kvp.Key.Target, targetUserId, StringComparison.Ordinal) &&
             kvp.Value.IsDirectLock(0.25) &&
+            !kvp.Value.IsNegligibleBleed &&
             kvp.Value.DelaySamples < 0);
 
     public bool SeedSavedCalibration(
@@ -244,7 +327,7 @@ internal sealed class AcousticCalibrationMatrix
         int delaySamples,
         float bleedGain,
         double confidence,
-        IReadOnlyCollection<string> participantIds)
+        Dictionary<string, AcousticParticipantStream> participants)
     {
         var pairState = GetOrCreatePair(sourceUserId, targetUserId);
         bool conflictsWithLiveReverse = TryGetPair(targetUserId, sourceUserId, out var revLive) &&
@@ -258,6 +341,26 @@ internal sealed class AcousticCalibrationMatrix
             return false;
         }
 
+        float clampedBleed = Math.Clamp(bleedGain, 0.001f, MaxAllowedAgcBleedGain);
+        if (participants.TryGetValue(sourceUserId, out var srcStream) &&
+            participants.TryGetValue(targetUserId, out var tgtStream) &&
+            AcousticLagCorrelator.TryComputeExpectedHardwareDelaySamples(srcStream, tgtStream) is int expectedDelaySamples)
+        {
+            int maxHardwarePlausibleDeviationSamples = (SampleRate * 45) / 1000;
+            if (Math.Abs(delaySamples - expectedDelaySamples) > maxHardwarePlausibleDeviationSamples)
+            {
+                pairState.DelaySamples = Math.Clamp(expectedDelaySamples, -MaxLagSamples, MaxLagSamples);
+                pairState.BleedGain = clampedBleed;
+                pairState.PeakBleedGain = clampedBleed;
+                pairState.Confidence = 0.28;
+                pairState.IsReciprocalPrior = true;
+                pairState.IsLatched = false;
+                pairState.IsLiveVerifiedInCurrentSession = false;
+                pairState.CandidateStreakCount = 0;
+                return true;
+            }
+        }
+
         pairState.DelaySamples = Math.Clamp(delaySamples, -MaxLagSamples, MaxLagSamples);
         pairState.BleedGain = Math.Clamp(bleedGain, 0.001f, MaxAllowedAgcBleedGain);
         pairState.PeakBleedGain = pairState.BleedGain;
@@ -268,7 +371,7 @@ internal sealed class AcousticCalibrationMatrix
         pairState.CandidateStreakCount = 0;
 
         SeedReciprocalDelayPrior(sourceUserId, targetUserId, pairState);
-        RefreshTransitivePriors(participantIds);
+        RefreshTransitivePriors(participants.Keys);
         return true;
     }
 
@@ -282,21 +385,6 @@ internal sealed class AcousticCalibrationMatrix
             return;
         }
 
-        bool anyUncalibrated = false;
-        foreach (var src in participants.Keys)
-        {
-            foreach (var tgt in participants.Keys)
-            {
-                if (!string.Equals(src, tgt, StringComparison.Ordinal) &&
-                    (!TryGetPair(src, tgt, out var ps) || !ps.IsDirectLock(0.20)))
-                {
-                    anyUncalibrated = true;
-                    break;
-                }
-            }
-            if (anyUncalibrated) break;
-        }
-
         const long fullWindowSamples = CorrelationWindowEnvelopeSteps * EnvelopeStepSamples; // 19,200 samples (400ms)
         const long fastWindowSamples = FastOnsetWindowEnvelopeSteps * EnvelopeStepSamples;   // 7,680 samples (160ms)
 
@@ -306,7 +394,7 @@ internal sealed class AcousticCalibrationMatrix
         }
 
         bool canUseFullWindow = currentSampleEdge >= fullWindowSamples + InitialLagHeadroomSamples + EnvelopeStepSamples;
-        long activeWindowSamples = (!anyUncalibrated && canUseFullWindow) ? fullWindowSamples : (canUseFullWindow ? fullWindowSamples : fastWindowSamples);
+        long activeWindowSamples = canUseFullWindow ? fullWindowSamples : fastWindowSamples;
         int extraHeadroom = (int)Math.Max(0, currentSampleEdge - (activeWindowSamples + InitialLagHeadroomSamples + EnvelopeStepSamples));
         int maxPositiveHeadroomTarget = RequiresExtendedPositiveHeadroom(participants, currentSampleEdge, fullWindowSamples)
             ? MaxLagSamples
@@ -320,6 +408,31 @@ internal sealed class AcousticCalibrationMatrix
         long evalEnd = currentSampleEdge - positiveHeadroomSamples;
         long evalStart = evalEnd - activeWindowSamples;
 
+        bool anyPairEligibleForCalibration = false;
+        for (int i = 0; i < participantList.Count && !anyPairEligibleForCalibration; i++)
+        {
+            var src = participantList[i];
+            for (int j = 0; j < participantList.Count; j++)
+            {
+                if (i == j) continue;
+                var tgt = participantList[j];
+                long pairEpoch = Math.Max(src.TrackEpochSample, tgt.TrackEpochSample);
+                if (evalEnd - pairEpoch < fastWindowSamples) continue;
+
+                if (TryGetPair(src.UserId, tgt.UserId, out var ps))
+                {
+                    long minInterval = !ps.IsLiveDirectLock(0.25) ? FrameSamples10Ms * 3 : FrameSamples20Ms * 2;
+                    if (currentSampleEdge - ps.LastCalibratedSample < minInterval) continue;
+                }
+                anyPairEligibleForCalibration = true;
+                break;
+            }
+        }
+
+        if (!anyPairEligibleForCalibration) return;
+
+        var sweepCache = new Dictionary<(string Source, string Target, int? TopoPrior), (bool Success, PairAlignmentMeasurement Measurement)>();
+
         var dominantSpeaker = ResolveNearFieldDominantSpeaker(
             participantList,
             evalStart,
@@ -327,7 +440,8 @@ internal sealed class AcousticCalibrationMatrix
             (int)activeWindowSamples,
             (int)fastWindowSamples,
             positiveHeadroomSamples,
-            maxPositiveLagSteps);
+            maxPositiveLagSteps,
+            sweepCache);
 
         if (dominantSpeaker == null) return;
 
@@ -359,7 +473,7 @@ internal sealed class AcousticCalibrationMatrix
                 ? topoLag
                 : null;
 
-            if (CalibratePair(dominantSpeaker, target, pairState, reversePairState, topologicalPriorSamples, pairEvalStart, pairWindowSamples, maxPositiveLagSteps))
+            if (CalibratePair(dominantSpeaker, target, pairState, reversePairState, topologicalPriorSamples, pairEvalStart, pairWindowSamples, maxPositiveLagSteps, sweepCache))
             {
                 if (pairState.IsLiveDirectLock(0.20))
                 {
@@ -396,6 +510,38 @@ internal sealed class AcousticCalibrationMatrix
         }
     }
 
+    private static bool TryMeasurePairAlignmentCached(
+        AcousticParticipantStream source,
+        AcousticParticipantStream target,
+        PairwiseState? reversePairState,
+        int? topologicalPriorLagSamples,
+        long startSample,
+        int windowSamples,
+        int maxPositiveLagSteps,
+        bool requireDominancePass,
+        Dictionary<(string Source, string Target, int? TopoPrior), (bool Success, PairAlignmentMeasurement Measurement)> sweepCache,
+        out PairAlignmentMeasurement measurement)
+    {
+        var key = (source.UserId, target.UserId, topologicalPriorLagSamples);
+        if (!sweepCache.TryGetValue(key, out var cached))
+        {
+            bool ok = AcousticLagCorrelator.TryMeasurePairAlignment(
+                source, target, reversePairState, topologicalPriorLagSamples,
+                startSample, windowSamples, maxPositiveLagSteps, out var m);
+            cached = (ok, m);
+            sweepCache[key] = cached;
+        }
+
+        if (!cached.Success || (requireDominancePass && cached.Measurement.DominanceScoreDb < 3.1))
+        {
+            measurement = default;
+            return false;
+        }
+
+        measurement = cached.Measurement;
+        return true;
+    }
+
     private AcousticParticipantStream? ResolveNearFieldDominantSpeaker(
         List<AcousticParticipantStream> participantList,
         long evalStart,
@@ -403,7 +549,8 @@ internal sealed class AcousticCalibrationMatrix
         int activeWindowSamples,
         int fastWindowSamples,
         int positiveHeadroomSamples,
-        int maxPositiveLagSteps)
+        int maxPositiveLagSteps,
+        Dictionary<(string Source, string Target, int? TopoPrior), (bool Success, PairAlignmentMeasurement Measurement)> sweepCache)
     {
         var activities = new List<(AcousticParticipantStream State, float WindowRms, float NeighborhoodRms)>(participantList.Count);
         foreach (var p in participantList)
@@ -458,9 +605,9 @@ internal sealed class AcousticCalibrationMatrix
                 int pairWindowSamples = (int)(evalEnd - pairEvalStart);
 
                 TryGetPair(bestCandidate.State.UserId, other.State.UserId, out var reverseForOtherToBest);
-                bool measuredOtherToBest = AcousticLagCorrelator.TryMeasurePairAlignment(
+                bool measuredOtherToBest = TryMeasurePairAlignmentCached(
                     other.State, bestCandidate.State, reverseForOtherToBest, null,
-                    pairEvalStart, pairWindowSamples, maxPositiveLagSteps, requireDominancePass: false, out var otherToBest);
+                    pairEvalStart, pairWindowSamples, maxPositiveLagSteps, requireDominancePass: false, sweepCache, out var otherToBest);
 
                 if (measuredOtherToBest && otherToBest.DominanceScoreDb >= 3.1 && otherToBest.BestEnvCorr >= 0.52 &&
                     !IsDelayedBleedTailFromVerifiedSpeaker(other.State, other.WindowRms, evalStart, activeWindowSamples, participantList))
@@ -487,9 +634,9 @@ internal sealed class AcousticCalibrationMatrix
                 if (bestCandidate.WindowRms < other.WindowRms * 1.45f)
                 {
                     TryGetPair(other.State.UserId, bestCandidate.State.UserId, out var reverseForBestToOther);
-                    bool measuredBestToOther = AcousticLagCorrelator.TryMeasurePairAlignment(
+                    bool measuredBestToOther = TryMeasurePairAlignmentCached(
                         bestCandidate.State, other.State, reverseForBestToOther, null,
-                        pairEvalStart, pairWindowSamples, maxPositiveLagSteps, requireDominancePass: true, out var bestToOther);
+                        pairEvalStart, pairWindowSamples, maxPositiveLagSteps, requireDominancePass: true, sweepCache, out var bestToOther);
 
                     if (!measuredBestToOther || (bestToOther.DirectnessDb < 4.2 && bestToOther.BestEnvCorr < 0.72))
                     {
@@ -559,9 +706,12 @@ internal sealed class AcousticCalibrationMatrix
         {
             if (reverseState.Confidence < 0.25 || reverseState.IsReciprocalPrior || (forwardState.IsLiveVerifiedInCurrentSession && violatesPhysicalConsistency))
             {
+                float reciprocalBleedGain = (forwardState.IsLiveVerifiedInCurrentSession && forwardState.IsNegligibleBleed)
+                    ? Math.Clamp(forwardState.BleedGain, 0.001f, NegligibleBleedGainThreshold - 0.001f)
+                    : ComputeReciprocalBleedGain(forwardState.BleedGain);
                 reverseState.ApplyReciprocalPrior(
                     ComputeReciprocalLagSamples(forwardState.DelaySamples),
-                    ComputeReciprocalBleedGain(forwardState.BleedGain));
+                    reciprocalBleedGain);
             }
             return;
         }
@@ -692,9 +842,8 @@ internal sealed class AcousticCalibrationMatrix
 
                 if (!hasKnownSub165Pair)
                 {
-                    double deltaMs = (tgt.EstimatedCaptureLatencyMs.Value - src.EstimatedCaptureLatencyMs.Value)
-                                   + (((tgt.ServerToClientDelayMs ?? 0.0) - (src.ServerToClientDelayMs ?? 0.0)) * 0.5);
-                    if (deltaMs >= 40.0) return true;
+                    double? deltaMs = AcousticLagCorrelator.ComputeExpectedHardwareDelayMs(src, tgt, includeDefaultAirPropagation: false);
+                    if (deltaMs.HasValue && deltaMs.Value >= 40.0) return true;
                 }
             }
         }
@@ -887,29 +1036,59 @@ internal sealed class AcousticCalibrationMatrix
         int? topologicalPriorLagSamples,
         long startSample,
         int windowSamples,
-        int maxPositiveLagSteps)
+        int maxPositiveLagSteps,
+        Dictionary<(string Source, string Target, int? TopoPrior), (bool Success, PairAlignmentMeasurement Measurement)> sweepCache)
     {
-        if (!AcousticLagCorrelator.TryMeasurePairAlignment(
+        bool isFullWindow = windowSamples >= CorrelationWindowEnvelopeSteps * EnvelopeStepSamples;
+        if (!TryMeasurePairAlignmentCached(
                 source, target, reversePairState, topologicalPriorLagSamples,
-                startSample, windowSamples, maxPositiveLagSteps, requireDominancePass: true, out var m))
+                startSample, windowSamples, maxPositiveLagSteps, requireDominancePass: true, sweepCache, out var m))
         {
+            if ((!pairState.IsLiveDirectLock(0.35) || pairState.IsUncorrelatedNegligibleBleedLock) &&
+                AcousticLagCorrelator.TryMeasureNegligibleBleed(
+                    source, target, topologicalPriorLagSamples,
+                    startSample, windowSamples, maxPositiveLagSteps, out var negMeasurement))
+            {
+                double negConf = isFullWindow ? 0.62 : 0.50;
+                return pairState.CommitDirectMeasurement(
+                    negMeasurement.MeasuredLagSamples,
+                    negMeasurement.MeasuredGain,
+                    negConf,
+                    isLatched: false,
+                    negMeasurement,
+                    resetPriorPeaks: true);
+            }
             return false;
         }
 
         double combinedConfidence = Math.Clamp(m.BestEnvCorr + (m.BarkCorr > 0.20 ? m.BarkCorr * 0.08 : 0.0), 0.25, 0.98);
-        bool isFullWindow = windowSamples >= CorrelationWindowEnvelopeSteps * EnvelopeStepSamples;
         bool isFullyInBounds = startSample + m.MeasuredLagSamples >= target.TrackEpochSample - FrameSamples10Ms;
         double maxWindowConf = isFullWindow ? 0.98 : 0.78;
         double effectiveConfidence = Math.Min(combinedConfidence, maxWindowConf);
 
-        // Cross-session re-anchoring on pre-seeded or unverified pairs
-        if (!pairState.IsLiveVerifiedInCurrentSession)
+        // Instant upgrade when real correlated bleed appears on a previously uncorrelated negligible-bleed headset lock
+        if (pairState.IsUncorrelatedNegligibleBleedLock)
+        {
+            double conf = Math.Clamp(effectiveConfidence, 0.35, maxWindowConf);
+            return pairState.CommitDirectMeasurement(
+                m.MeasuredLagSamples,
+                m.MeasuredGain,
+                conf,
+                isFullWindow && isFullyInBounds && conf >= 0.64,
+                m,
+                resetPriorPeaks: true);
+        }
+
+        // Cross-session re-anchoring on pre-seeded or reciprocal-prior pairs
+        if (!pairState.IsLiveVerifiedInCurrentSession && pairState.Confidence >= 0.20)
         {
             if (Math.Abs(m.MeasuredLagSamples - pairState.DelaySamples) <= EnvelopeStepSamples * 3)
             {
                 bool wasPrior = pairState.IsReciprocalPrior;
                 int blendedLag = (int)Math.Round(pairState.DelaySamples * 0.65 + m.MeasuredLagSamples * 0.35);
-                float blendedGain = pairState.BleedGain * 0.65f + m.MeasuredGain * 0.35f;
+                float blendedGain = (wasPrior || m.MeasuredGain < NegligibleBleedGainThreshold)
+                    ? m.MeasuredGain
+                    : (pairState.BleedGain * 0.65f + m.MeasuredGain * 0.35f);
                 double conf = Math.Clamp(Math.Max(pairState.Confidence, effectiveConfidence), 0.25, 0.99);
                 bool latch = (pairState.IsLatched && conf >= 0.64) || (isFullWindow && isFullyInBounds && conf >= 0.64);
                 return pairState.CommitDirectMeasurement(blendedLag, blendedGain, conf, latch, m, resetPriorPeaks: wasPrior);
@@ -977,13 +1156,13 @@ internal sealed class AcousticCalibrationMatrix
             return false;
         }
 
-        if (pairState.Confidence < 0.45 || pairState.IsReciprocalPrior)
+        if (pairState.Confidence < 0.45 || pairState.IsReciprocalPrior || !pairState.IsLiveVerifiedInCurrentSession)
         {
-            bool wasPrior = pairState.IsReciprocalPrior;
+            bool resetPeaks = !pairState.IsLiveVerifiedInCurrentSession || pairState.IsReciprocalPrior;
             double conf = Math.Clamp(effectiveConfidence, 0.25, maxWindowConf);
             return pairState.CommitDirectMeasurement(
                 m.MeasuredLagSamples, m.MeasuredGain, conf,
-                isFullWindow && isFullyInBounds && conf >= 0.64, m, resetPriorPeaks: wasPrior);
+                isFullWindow && isFullyInBounds && conf >= 0.64, m, resetPriorPeaks: resetPeaks);
         }
 
         int emaTolerance = m.FineWaveCorr >= 0.50 ? (FrameSamples10Ms / 10) : (EnvelopeStepSamples * 3);
@@ -1004,15 +1183,6 @@ internal sealed class AcousticCalibrationMatrix
                 m.MeasuredLagSamples,
                 pairState.BleedGain * 0.60f + m.MeasuredGain * 0.40f,
                 Math.Clamp(Math.Max(pairState.Confidence, effectiveConfidence), 0.25, maxWindowConf),
-                isLatched: false, m);
-        }
-
-        if (pairState.Confidence < 0.68 && combinedConfidence > pairState.Confidence + 0.12 && m.FineWaveCorr >= 0.30)
-        {
-            return pairState.CommitDirectMeasurement(
-                m.MeasuredLagSamples,
-                pairState.BleedGain * 0.60f + m.MeasuredGain * 0.40f,
-                Math.Clamp(effectiveConfidence, 0.55, maxWindowConf),
                 isLatched: false, m);
         }
 

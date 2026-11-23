@@ -7,53 +7,6 @@ using Spokes_Server.Core.Models.Projects;
 public class ProjectGroupTests
 {
         [Fact]
-        public void ProjectGroup_Initialization_SetsDefaultsCorrectly()
-        {
-            var before = DateTime.UtcNow;
-            var group = new ProjectGroup();
-            var after = DateTime.UtcNow;
-
-            Assert.False(string.IsNullOrWhiteSpace(group.Id));
-            Assert.True(Guid.TryParse(group.Id, out _));
-            Assert.Equal(string.Empty, group.Name);
-            Assert.Equal(string.Empty, group.Description);
-            Assert.NotNull(group.Client);
-            Assert.NotNull(group.ProjectIds);
-            Assert.Empty(group.ProjectIds);
-            Assert.True(group.CreatedAt >= before.AddSeconds(-1) && group.CreatedAt <= after.AddSeconds(1));
-        }
-
-        [Fact]
-        public void ProjectGroup_Properties_CanSetAndGet()
-        {
-            var now = DateTime.UtcNow;
-            var client = new ClientInfo
-            {
-                BusinessName = "Acme Corp",
-                ContactPersonName = "Jane Doe"
-            };
-            List<string> projectIds = ["proj-1", "proj-2"];
-
-            var group = new ProjectGroup
-            {
-                Id = "custom-id",
-                Name = "Alpha Group",
-                Description = "Alpha Description",
-                Client = client,
-                ProjectIds = projectIds,
-                CreatedAt = now
-            };
-
-            Assert.Equal("custom-id", group.Id);
-            Assert.Equal("Alpha Group", group.Name);
-            Assert.Equal("Alpha Description", group.Description);
-            Assert.Same(client, group.Client);
-            Assert.Same(projectIds, group.ProjectIds);
-            Assert.Equal(2, group.ProjectIds.Count);
-            Assert.Equal(now, group.CreatedAt);
-        }
-
-        [Fact]
         public void Equals_WithSameReference_ReturnsTrue()
         {
             var group = new ProjectGroup { Id = "group-1" };

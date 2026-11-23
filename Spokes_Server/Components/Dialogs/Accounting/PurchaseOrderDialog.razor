@@ -1,12 +1,18 @@
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Shared
 @inject Database Db
-@inject AuthenticationStateProvider AuthStateProvider
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject IUserPrivacyService PrivacyService
 @inject UserService UserService
 
 <MudDialog>
@@ -23,7 +29,11 @@
                         <MudDatePicker @bind-Date="date" Label="Date Emitted" />
                     </MudItem>
                     <MudItem xs="4">
-                        <MudTextField @bind-Value="PO.IssuedBy" Label="Issued By" HelperText="Person emitting the PO" />
+                        <EmployeeAutocomplete Value="_issuedByEmployee"
+                                              ValueChanged="OnIssuedByEmployeeChanged"
+                                              Label="Issued By"
+                                              HelperText="@(!string.IsNullOrWhiteSpace(_initialIssuedBy) && _issuedByEmployee == null ? $"Current: {_initialIssuedBy}" : "Person emitting the PO")"
+                                              Clearable="false" />
                     </MudItem>
                     <MudItem xs="12" sm="6">
                          <MudSelect @bind-Value="PO.TemplateId" Label="Document Template" Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -117,7 +127,7 @@
                 </div>
             </div>
 
-            <MudTable Items="@PO.LineItems" Dense="true" Hover="true" Elevation="2">
+            <MudTable Items="@PO.LineItems" Dense="true" Hover="true" Elevation="0" Outlined="true">
                 <HeaderContent>
                     <MudTh>Project</MudTh>
                     <MudTh Style="width: 80px;">Qty</MudTh>
@@ -185,7 +195,7 @@
                     @if (PO.ApplyTax)
                     {
                             <div class="d-flex justify-space-between" style="width: 200px;">
-                                <MudText>Taxes (@(PO.TaxRate * 100)%):</MudText>
+                                <MudText>Taxes (@FinancialCalculationEngine.FormatTaxRatePercent(PO.TaxRate)%):</MudText>
                                 <MudText>@PO.TaxAmount.ToString("C")</MudText>
                             </div>
                     }
@@ -218,6 +228,9 @@
     // Track the selected object for the Autocomplete
     private Supplier? selectedRecipient;
     private CompanyProfile? mainProfile;
+    private Employee? _issuedByEmployee;
+    private string _initialIssuedBy = string.Empty;
+    private Dictionary<string, string> _initialItemProjectIds = new(StringComparer.OrdinalIgnoreCase);
 
     private string newColName = "";
     private bool _columnPopoverOpen;
@@ -225,7 +238,18 @@
 
     protected override async Task OnInitializedAsync()
     {
-        Projects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.Name).ToList();
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.HasEffectivePermission(AppPermissions.Purchases.ManagePOs, allowSuspended: false))
+        {
+            MudDialog.Cancel();
+            return;
+        }
+
+        _initialItemProjectIds = PO.LineItems.ToDictionary(i => i.Id, i => i.ProjectId ?? string.Empty);
+        Projects = Db.Projects.GetAll()
+            .Where(p => p.IsActive && ProjectAccessHelper.CanAccess(emp, p, Db.Teams, allowAccountingFinancialRead: false))
+            .OrderBy(p => p.Name)
+            .ToList();
         Templates = Db.DocumentTemplates.GetAll();
 
         // UI Initialization for Supplier/Recipient is handled by InitialCompanyName property on the component
@@ -235,9 +259,31 @@
         // 2. Auto-fill Issued By
         if (string.IsNullOrEmpty(PO.IssuedBy))
         {
-            var emp = await UserService.GetEmployeeAsync();
-            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-            PO.IssuedBy = emp != null ? emp.FullName : (authState.User.Identity?.Name ?? "");
+            PO.IssuedBy = emp.FullName;
+            _issuedByEmployee = emp;
+        }
+        else
+        {
+            var matched = Db.Employees.GetAll().FirstOrDefault(e =>
+                !e.IsSystem &&
+                e.IsActive &&
+                !e.IsBanned &&
+                e.Id != AccountDeletionService.SystemDeletedUserId &&
+                string.Equals(e.FullName, PO.IssuedBy, StringComparison.Ordinal));
+            if (matched != null && (matched.Id == emp.Id || PrivacyService.CanDiscoverUser(emp, matched)))
+            {
+                _issuedByEmployee = matched;
+            }
+        }
+        _initialIssuedBy = PO.IssuedBy;
+    }
+
+    private void OnIssuedByEmployeeChanged(Employee? selected)
+    {
+        _issuedByEmployee = selected;
+        if (selected != null)
+        {
+            PO.IssuedBy = selected.FullName;
         }
     }
 
@@ -245,10 +291,8 @@
     {
         if (s != null)
         {
-            // Snapshot the data into the PO
-            // We use JSON serialization for a deep copy so changing the supplier later doesn't rewrite history
-            var json = System.Text.Json.JsonSerializer.Serialize(s.ContactInfo);
-            var snapshot = System.Text.Json.JsonSerializer.Deserialize<ClientInfo>(json);
+            // Snapshot the data into the PO so changing the supplier later doesn't rewrite history
+            var snapshot = s.ContactInfo.DeepClone();
             if (snapshot != null)
             {
                 var primaryContact = s.Contacts.FirstOrDefault(c => c.IsPrimary) ?? s.Contacts.FirstOrDefault();
@@ -290,9 +334,7 @@
         selectedRecipient = s;
         if (s != null)
         {
-            var json = System.Text.Json.JsonSerializer.Serialize(s.ContactInfo);
-            var snapshot = System.Text.Json.JsonSerializer.Deserialize<ClientInfo>(json);
-            PO.Recipient = snapshot;
+            PO.Recipient = s.ContactInfo.DeepClone();
         }
         else
         {
@@ -355,12 +397,46 @@
 
     private string GetProjectDisplayName(string id)
     {
+        if (string.IsNullOrEmpty(id)) return "";
         var p = Projects.FirstOrDefault(x => x.Id == id);
-        return p?.DisplayName ?? "";
+        return p?.DisplayName ?? "Restricted Project";
     }
 
     private void Cancel() => MudDialog.Cancel();
-    private void Submit() => MudDialog.Close(DialogResult.Ok(PO));
+    private async Task Submit()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.HasEffectivePermission(AppPermissions.Purchases.ManagePOs, allowSuspended: false))
+        {
+            Snackbar.Add("You do not have permission to save purchase orders.", Severity.Error);
+            return;
+        }
+
+        foreach (var item in PO.LineItems)
+        {
+            if (string.IsNullOrWhiteSpace(item.ProjectId)) continue;
+            bool unchanged = _initialItemProjectIds.TryGetValue(item.Id, out var prevProjId) &&
+                             string.Equals(prevProjId, item.ProjectId, StringComparison.OrdinalIgnoreCase);
+            if (!unchanged && !ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, emp, item.ProjectId, allowAccountingFinancialRead: false))
+            {
+                Snackbar.Add("You do not have access to link one or more selected restricted projects.", Severity.Error);
+                return;
+            }
+        }
+
+        bool isValidIssuer = string.Equals(PO.IssuedBy, _initialIssuedBy, StringComparison.Ordinal) ||
+                             string.Equals(PO.IssuedBy, emp.FullName, StringComparison.Ordinal) ||
+                             (_issuedByEmployee != null &&
+                              string.Equals(PO.IssuedBy, _issuedByEmployee.FullName, StringComparison.Ordinal) &&
+                              PrivacyService.CanDiscoverUser(emp, _issuedByEmployee));
+        if (!isValidIssuer)
+        {
+            Snackbar.Add("Invalid or undiscoverable issuer selected.", Severity.Error);
+            return;
+        }
+
+        MudDialog.Close(DialogResult.Ok(PO));
+    }
 
     private async Task DeleteAsync()
     {

@@ -8,12 +8,14 @@ public class RenderTokenService
     {
         public required string SessionId { get; init; }
         public string? ExpectedPath { get; init; }
+        public string? InitiatorEmployeeId { get; init; }
         public DateTimeOffset ExpiresAt { get; set; }
     }
 
     private readonly ConcurrentDictionary<string, TokenData> _tokens = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, TokenData> _consumedSessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly TimeSpan _tokenLifetime = TimeSpan.FromMinutes(2);
+    private readonly TimeSpan _consumedSessionRetention = TimeSpan.FromHours(1);
     private readonly TimeProvider _timeProvider;
 
     public RenderTokenService(TimeProvider? timeProvider = null)
@@ -24,9 +26,7 @@ public class RenderTokenService
     internal int TokenCount => _tokens.Count;
     internal bool ContainsToken(string token) => _tokens.ContainsKey(token);
 
-    public string CreateToken() => CreateToken(null);
-
-    public string CreateToken(string? expectedPath)
+    public string CreateToken(string? expectedPath, string? initiatorEmployeeId)
     {
         CleanupExpired();
 
@@ -35,12 +35,11 @@ public class RenderTokenService
         {
             SessionId = Guid.NewGuid().ToString(),
             ExpectedPath = string.IsNullOrWhiteSpace(expectedPath) ? null : NormalizePath(expectedPath),
+            InitiatorEmployeeId = string.IsNullOrWhiteSpace(initiatorEmployeeId) ? null : initiatorEmployeeId.Trim(),
             ExpiresAt = _timeProvider.GetUtcNow().Add(_tokenLifetime)
         };
         return token;
     }
-
-    public string GenerateToken(string expectedPath) => CreateToken(expectedPath);
 
     /// <summary>
     /// Atomically validates and consumes a single-use render token bound to <paramref name="requestPath"/>.
@@ -48,8 +47,16 @@ public class RenderTokenService
     /// and the token itself can never be replayed.
     /// </summary>
     public bool TryConsumeToken(string token, string? requestPath, out string sessionId)
+        => TryConsumeToken(token, requestPath, out sessionId, out _);
+
+    /// <summary>
+    /// Atomically validates and consumes a single-use render token bound to <paramref name="requestPath"/>
+    /// and an initiating employee ID.
+    /// </summary>
+    public bool TryConsumeToken(string token, string? requestPath, out string sessionId, out string? initiatorEmployeeId)
     {
         sessionId = string.Empty;
+        initiatorEmployeeId = null;
         if (string.IsNullOrWhiteSpace(token)) return false;
 
         CleanupExpired();
@@ -77,27 +84,12 @@ public class RenderTokenService
                 return false;
             }
 
+            // Retain the consumed session mapping beyond _tokenLifetime so DocumentPdfService.finally
+            // can still revoke its temporary system-renderer DeviceSession even on slow PDF renders.
+            data.ExpiresAt = _timeProvider.GetUtcNow().Add(_consumedSessionRetention);
             _consumedSessions[token] = data;
             sessionId = data.SessionId;
-            return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Validates an unconsumed active render token without consuming it.
-    /// </summary>
-    public bool ValidateToken(string token, out string sessionId)
-    {
-        sessionId = string.Empty;
-        if (string.IsNullOrWhiteSpace(token)) return false;
-
-        CleanupExpired();
-
-        if (_tokens.TryGetValue(token, out var data) && _timeProvider.GetUtcNow() <= data.ExpiresAt)
-        {
-            sessionId = data.SessionId;
+            initiatorEmployeeId = data.InitiatorEmployeeId;
             return true;
         }
 
@@ -127,17 +119,6 @@ public class RenderTokenService
         }
 
         return false;
-    }
-
-    public bool RevokeToken(string token) => RevokeToken(token, out _);
-
-    public bool ValidateAndConsume(string token)
-    {
-        if (string.IsNullOrWhiteSpace(token)) return false;
-
-        CleanupExpired();
-
-        return _tokens.TryRemove(token, out var data) && _timeProvider.GetUtcNow() <= data.ExpiresAt;
     }
 
     private static bool PathsMatch(string? actualPath, string expectedNormalizedPath)

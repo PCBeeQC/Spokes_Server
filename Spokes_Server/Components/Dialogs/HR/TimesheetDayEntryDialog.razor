@@ -8,19 +8,28 @@
     <DialogContent>
         <MudStack Spacing="3" Class="px-4 pt-2 pb-2">
             <MudAutocomplete T="string" Value="@ProjectId" ValueChanged="@OnProjectChanged"
-                SearchFunc="SearchProjects" ToStringFunc="GetProjectName" Label="Project" Variant="Variant.Outlined"
+                SearchFunc="SearchProjects" ToStringFunc="GetProjectName" Label="Project or Time Off" Variant="Variant.Outlined"
                 Dense="true" ResetValueOnEmptyText="true" CoerceText="false" MaxItems="null"
                 Required="true" />
 
-            <WorkTypeSubTaskSelector WorkTypes="@WorkTypes"
-                                     Projects="@Projects"
-                                     ProjectId="@ProjectId"
-                                     RequireProject="true"
-                                     @bind-WorkTypeId="WorkTypeId"
-                                     @bind-SubTaskId="SubTaskId"
-                                     Layout="WorkTypeSelectorLayout.Stack"
-                                     Variant="Variant.Outlined"
-                                     Required="true" />
+            @if (!TimeEntryTypes.IsLeaveProjectKey(ProjectId))
+            {
+                <WorkTypeSubTaskSelector WorkTypes="@WorkTypes"
+                                         Projects="@Projects"
+                                         ProjectId="@ProjectId"
+                                         RequireProject="true"
+                                         @bind-WorkTypeId="WorkTypeId"
+                                         @bind-SubTaskId="SubTaskId"
+                                         Layout="WorkTypeSelectorLayout.Stack"
+                                         Variant="Variant.Outlined"
+                                         Required="true" />
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined">
+                    @TimeEntryTypes.GetDisplayLabel(ProjectId)
+                </MudAlert>
+            }
 
             <MudDivider Class="my-1" />
 
@@ -109,6 +118,12 @@
     private void OnProjectChanged(string newProjectId)
     {
         ProjectId = newProjectId;
+        if (TimeEntryTypes.IsLeaveProjectKey(ProjectId))
+        {
+            WorkTypeId = "";
+            SubTaskId = "";
+            return;
+        }
         if (!string.IsNullOrEmpty(WorkTypeId))
         {
             var allowed = TimesheetSearchHelper.SearchTasks("", ProjectId, Projects, WorkTypes);
@@ -136,11 +151,11 @@
 
         if (string.IsNullOrWhiteSpace(ProjectId))
         {
-            Snackbar.Add("Please select a project.", Severity.Warning);
+            Snackbar.Add("Please select a project or time-off type.", Severity.Warning);
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(WorkTypeId))
+        if (!TimeEntryTypes.IsLeaveProjectKey(ProjectId) && string.IsNullOrWhiteSpace(WorkTypeId))
         {
             Snackbar.Add("Please select a task.", Severity.Warning);
             return;
@@ -152,7 +167,7 @@
             return;
         }
 
-        if (RequireNote && string.IsNullOrWhiteSpace(Note))
+        if (RequireNote && !TimeEntryTypes.IsLeaveProjectKey(ProjectId) && string.IsNullOrWhiteSpace(Note))
         {
             Snackbar.Add("A description note is required.", Severity.Warning);
             return;
@@ -162,8 +177,8 @@
         {
             IsDelete = false,
             ProjectId = ProjectId,
-            WorkTypeId = WorkTypeId,
-            SubTaskId = SubTaskId ?? "",
+            WorkTypeId = TimeEntryTypes.IsLeaveProjectKey(ProjectId) ? "" : WorkTypeId,
+            SubTaskId = TimeEntryTypes.IsLeaveProjectKey(ProjectId) ? "" : (SubTaskId ?? ""),
             Hours = Hours,
             Note = Note?.Trim() ?? ""
         }));
@@ -171,7 +186,7 @@
 
     // --- Search Helpers ---
     private Task<IEnumerable<string>> SearchProjects(string value, CancellationToken token)
-        => Task.FromResult(TimesheetSearchHelper.SearchProjects(value, Projects));
+        => Task.FromResult(TimesheetSearchHelper.SearchProjects(value, Projects, includeLeaveOptions: true));
 
     private string GetProjectName(string id)
         => TimesheetSearchHelper.GetProjectName(id, Projects);

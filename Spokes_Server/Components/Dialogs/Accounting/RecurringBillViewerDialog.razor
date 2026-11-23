@@ -1,10 +1,16 @@
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Components.Dialogs.Common
 @using Spokes_Server.Components.Shared
 @inject Database Db
+@inject IAccountingService AccountingService
+@inject UserService UserService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject FileUrlSigner FileUrls
 @inject IStringLocalizer<BusinessResources> BizLoc
 @inject IStringLocalizer<AppResources> Loc
 
@@ -24,9 +30,18 @@
                         </div>
                         <div class="d-flex align-center gap-1">
                             <MudChip T="string" Size="Size.Small" Color="Color.Tertiary">@Expense.Frequency</MudChip>
-                            <MudChip T="string" Size="Size.Small" Color="@(Record.IsPaid ? Color.Success : Color.Warning)">
-                                @(Record.IsPaid ? BizLoc["Paid"].Value : BizLoc["Pending"].Value)
-                            </MudChip>
+                            @if (Record.Status == BillStatus.WrittenOff)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Secondary">@BizLoc["Written Off"]</MudChip>
+                            }
+                            else if (Record.IsPaid || Record.BalanceDue <= 0)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success">@BizLoc["Paid"]</MudChip>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning">@BizLoc["Pending"]</MudChip>
+                            }
                         </div>
                     </div>
                 </MudPaper>
@@ -53,14 +68,23 @@
 
                 <!-- Payments Recorded -->
                 <MudDivider Class="my-3" />
-                <div class="d-flex align-center justify-space-between mb-2">
+                <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2">
                     <MudText Typo="Typo.subtitle2">@BizLoc["Payments Recorded"] (@Record.AmountPaid.ToString("C2"))</MudText>
-                    @if (Record.BalanceDue > 0)
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Warning">
-                            <b>@BizLoc["Balance Due"]: @Record.BalanceDue.ToString("C2")</b>
-                        </MudText>
-                    }
+                    <div class="d-flex align-center gap-2">
+                        @if (Record.BalanceDue > 0)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Warning">
+                                <b>@BizLoc["Balance Due"]: @Record.BalanceDue.ToString("C2")</b>
+                            </MudText>
+                            @if (_canManageBills)
+                            {
+                                <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Warning"
+                                           StartIcon="@Icons.Material.Filled.Balance" OnClick="CloseRecurringBalance">
+                                    @BizLoc["Close Balance"]
+                                </MudButton>
+                            }
+                        }
+                    </div>
                 </div>
 
                 @if (Record.Payments.Any())
@@ -80,7 +104,7 @@
                         </RowTemplate>
                     </MudTable>
                 }
-                else if (Record.DatePaid.HasValue)
+                else if (Record.DatePaid.HasValue && !Record.HasWriteOffs)
                 {
                     <MudText Typo="Typo.body2" Class="text-muted mb-3">
                         @string.Format(BizLoc["Marked as paid on {0} for {1}."].Value, Record.DatePaid.Value.ToShortDateString(), Record.Amount.ToString("C2"))
@@ -91,6 +115,34 @@
                     <MudText Typo="Typo.caption" Class="text-muted mb-3 d-block">
                         @BizLoc["No payments recorded."]
                     </MudText>
+                }
+
+                @if (Record.WriteOffs.Any())
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">@BizLoc["Balance Write-Offs / Adjustments"] (@Record.AmountWrittenOff.ToString("C2"))</MudText>
+                    <MudTable Items="@Record.WriteOffs" Dense="true" Elevation="0" Outlined="true" Class="mb-3">
+                        <HeaderContent>
+                            <MudTh>@BizLoc["Date"]</MudTh>
+                            <MudTh>@BizLoc["Amount"]</MudTh>
+                            <MudTh>@BizLoc["GL Account"]</MudTh>
+                            <MudTh>@BizLoc["Reason"]</MudTh>
+                            <MudTh></MudTh>
+                        </HeaderContent>
+                        <RowTemplate Context="wo">
+                            <MudTd>@wo.Date.ToShortDateString()</MudTd>
+                            <MudTd><span style="font-weight: 600; color: var(--mud-palette-warning);">@wo.Amount.ToString("C2")</span></MudTd>
+                            <MudTd>@(string.IsNullOrWhiteSpace(wo.GlAccountCode) ? "5860" : wo.GlAccountCode)</MudTd>
+                            <MudTd>@wo.Reason</MudTd>
+                            <MudTd Style="text-align: right;">
+                                @if (_canManageBills)
+                                {
+                                    <MudTooltip Text="@BizLoc["Reverse Write-Off"]">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Undo" Size="Size.Small" Color="Color.Error" OnClick="@(() => ReverseRecurringWriteOff(wo))" />
+                                    </MudTooltip>
+                                }
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
                 }
 
                 <!-- Attachment Details -->
@@ -104,7 +156,7 @@
                             @(!string.IsNullOrEmpty(Record.AttachmentName) ? Record.AttachmentName : BizLoc["Attached Invoice"].Value)
                         </MudText>
                         <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.OpenInNew"
-                                   Href="@Record.AttachmentPath" Target="_blank">
+                                   Href="@FileUrls.SignUrl(Record.AttachmentPath)" Target="_blank">
                             @BizLoc["Open in New Tab"]
                         </MudButton>
                     </div>
@@ -140,7 +192,7 @@
             {
                 <MudItem xs="12" md="6">
                     <MudPaper Elevation="0" Outlined="true" Class="pa-2" Style="height: 100%; min-height: 500px;">
-                        <iframe src="@Record.AttachmentPath" style="width:100%; height:100%; min-height: 500px; border:none;"></iframe>
+                        <iframe src="@FileUrls.SignUrl(Record.AttachmentPath)" style="width:100%; height:100%; min-height: 500px; border:none;"></iframe>
                     </MudPaper>
                 </MudItem>
             }
@@ -161,7 +213,114 @@
     [Parameter] public RecurringExpense Expense { get; set; } = default!;
     [Parameter] public RecurringBillRecord Record { get; set; } = default!;
 
+    private bool _canManageBills;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        _canManageBills = emp != null && emp.HasEffectivePermission(
+            Expense.IsEstimate ? AppPermissions.Finance.AccessAccounting : AppPermissions.Purchases.ManageBills,
+            allowSuspended: false);
+    }
+
     private void Close() => MudDialog.Close(DialogResult.Ok(Expense));
+
+    private async Task CloseRecurringBalance()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.HasEffectivePermission(
+            Expense.IsEstimate ? AppPermissions.Finance.AccessAccounting : AppPermissions.Purchases.ManageBills,
+            allowSuspended: false))
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters<WriteOffBalanceDialog>
+        {
+            { x => x.DocumentTypeLabel, Expense.Frequency == RecurringExpenseFrequency.OneTime ? BizLoc["One-Time"].Value : BizLoc["Recurring"].Value },
+            { x => x.DocumentNumber, Expense.Name },
+            { x => x.PartyLabel, BizLoc["Supplier"].Value },
+            { x => x.PartyName, string.IsNullOrWhiteSpace(Expense.Supplier) ? Expense.Name : Expense.Supplier },
+            { x => x.TotalAmount, Record.Amount },
+            { x => x.AmountPaid, Record.AmountPaid },
+            { x => x.RemainingBalance, Record.BalanceDue },
+            { x => x.IsReceivable, false }
+        };
+
+        var dialog = await DialogService.ShowAsync<WriteOffBalanceDialog>(
+            BizLoc["Close / Write Off Balance"].Value,
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false, Data: BalanceWriteOff writeOff })
+        {
+            try
+            {
+                emp = await UserService.GetEmployeeAsync();
+                if (emp == null) return;
+                var userName = emp.FullName ?? emp.Email ?? "User";
+                var liveExpense = Db.RecurringExpenses.GetById(Expense.Id) ?? Expense;
+                var liveRecord = liveExpense.History.FirstOrDefault(h => h.Id == Record.Id) ?? Record;
+                AccountingService.RecordRecurringBillWriteOff(liveExpense, liveRecord, writeOff, userName, emp);
+                Expense = liveExpense.DeepClone() ?? liveExpense;
+                Record = Expense.History.FirstOrDefault(h => h.Id == Record.Id) ?? liveRecord;
+                Snackbar.Add(string.Format(BizLoc["Closed balance of {0} without creating a bank transaction."].Value, writeOff.Amount.ToString("C2")), Severity.Success);
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Warning);
+            }
+        }
+    }
+
+    private async Task ReverseRecurringWriteOff(BalanceWriteOff writeOff)
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.HasEffectivePermission(
+            Expense.IsEstimate ? AppPermissions.Finance.AccessAccounting : AppPermissions.Purchases.ManageBills,
+            allowSuspended: false))
+        {
+            return;
+        }
+
+        var confirmParams = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, string.Format(BizLoc["Are you sure you want to reverse the balance write-off of {0} recorded on {1}? This will reopen the balance and remove its write-off journal entry."].Value, writeOff.Amount.ToString("C2"), writeOff.Date.ToShortDateString()) },
+            { x => x.ButtonText, BizLoc["Reverse Write-Off"].Value },
+            { x => x.Color, Color.Error },
+            { x => x.ShowReasonInput, true },
+            { x => x.ReasonRequired, true },
+            { x => x.ReasonLabel, BizLoc["Reason for reversing write-off"].Value },
+            { x => x.ReasonPlaceholder, BizLoc["Explain why this balance write-off is being reversed..."].Value }
+        };
+
+        var confirmDialog = await DialogService.ShowAsync<ConfirmDialog>(BizLoc["Reverse Write-Off"].Value, confirmParams, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var confirmResult = await confirmDialog.Result;
+
+        if (confirmResult is { Canceled: false } && !string.IsNullOrWhiteSpace(confirmResult.Data as string))
+        {
+            var reason = (confirmResult.Data as string)?.Trim();
+            try
+            {
+                emp = await UserService.GetEmployeeAsync();
+                if (emp == null) return;
+                var userName = emp.FullName ?? emp.Email ?? "User";
+                var liveExpense = Db.RecurringExpenses.GetById(Expense.Id) ?? Expense;
+                var liveRecord = liveExpense.History.FirstOrDefault(h => h.Id == Record.Id) ?? Record;
+                AccountingService.DeleteRecurringBillWriteOff(liveExpense, liveRecord, writeOff.Id, userName, reason, emp);
+                Expense = liveExpense.DeepClone() ?? liveExpense;
+                Record = Expense.History.FirstOrDefault(h => h.Id == Record.Id) ?? liveRecord;
+                Snackbar.Add(BizLoc["Balance write-off reversed successfully."], Severity.Success);
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Warning);
+            }
+        }
+    }
 
     private async Task OpenProfileEditor()
     {

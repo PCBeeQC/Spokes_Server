@@ -127,6 +127,138 @@ public class ChatChannel : IDataEntity
     // Data-at-Rest E2EE
     public bool IsEncrypted { get; set; }
     public Dictionary<string, string> EncryptedChannelKeys { get; set; } = [];
+    public int CurrentKeyEpoch { get; set; } = 0;
+    public Dictionary<int, Dictionary<string, string>> EncryptedEpochKeys { get; set; } = [];
+
+    public bool TryGetEncryptedKeyForEpoch(int epoch, string keyOwnerId, out string cipherKey)
+    {
+        cipherKey = string.Empty;
+        if (string.IsNullOrEmpty(keyOwnerId)) return false;
+
+        if (epoch == CurrentKeyEpoch &&
+            EncryptedChannelKeys != null &&
+            EncryptedChannelKeys.TryGetValue(keyOwnerId, out var currentKey) &&
+            !string.IsNullOrEmpty(currentKey))
+        {
+            cipherKey = currentKey;
+            return true;
+        }
+
+        if (EncryptedEpochKeys != null &&
+            EncryptedEpochKeys.TryGetValue(epoch, out var epochMap) &&
+            epochMap != null &&
+            epochMap.TryGetValue(keyOwnerId, out var epochKey) &&
+            !string.IsNullOrEmpty(epochKey))
+        {
+            cipherKey = epochKey;
+            return true;
+        }
+
+        return false;
+    }
+
+    public bool HasAnyEpochKey(string keyOwnerId)
+    {
+        if (string.IsNullOrEmpty(keyOwnerId)) return false;
+        if (EncryptedChannelKeys != null && EncryptedChannelKeys.ContainsKey(keyOwnerId)) return true;
+        return EncryptedEpochKeys != null &&
+               EncryptedEpochKeys.Values.Any(d => d != null && d.ContainsKey(keyOwnerId));
+    }
+
+    public IEnumerable<string> GetAllEncryptedKeysForOwner(string keyOwnerId)
+    {
+        if (string.IsNullOrEmpty(keyOwnerId)) yield break;
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (EncryptedChannelKeys != null &&
+            EncryptedChannelKeys.TryGetValue(keyOwnerId, out var currentKey) &&
+            !string.IsNullOrEmpty(currentKey) &&
+            seen.Add(currentKey))
+        {
+            yield return currentKey;
+        }
+
+        if (EncryptedEpochKeys != null)
+        {
+            foreach (var kvp in EncryptedEpochKeys.OrderByDescending(k => k.Key))
+            {
+                if (kvp.Value != null &&
+                    kvp.Value.TryGetValue(keyOwnerId, out var epochKey) &&
+                    !string.IsNullOrEmpty(epochKey) &&
+                    seen.Add(epochKey))
+                {
+                    yield return epochKey;
+                }
+            }
+        }
+    }
+
+    public bool RemoveUserKeysFromAllEpochs(string userId)
+    {
+        if (string.IsNullOrEmpty(userId)) return false;
+
+        bool removed = false;
+        if (EncryptedChannelKeys != null && EncryptedChannelKeys.Remove(userId))
+        {
+            removed = true;
+        }
+
+        if (EncryptedEpochKeys != null)
+        {
+            foreach (var epochMap in EncryptedEpochKeys.Values)
+            {
+                if (epochMap != null && epochMap.Remove(userId))
+                {
+                    removed = true;
+                }
+            }
+        }
+
+        return removed;
+    }
+
+    public ChatChannel Clone()
+    {
+        var epochKeysCopy = new Dictionary<int, Dictionary<string, string>>();
+        if (EncryptedEpochKeys != null)
+        {
+            foreach (var kvp in EncryptedEpochKeys)
+            {
+                epochKeysCopy[kvp.Key] = kvp.Value != null
+                    ? new Dictionary<string, string>(kvp.Value)
+                    : [];
+            }
+        }
+
+        return new ChatChannel
+        {
+            Id = Id,
+            Name = Name,
+            Icon = Icon,
+            CategoryId = CategoryId,
+            ChannelType = ChannelType,
+            LinkedEntityId = LinkedEntityId,
+            Description = Description,
+            ParticipantIds = ParticipantIds != null ? [.. ParticipantIds] : [],
+            IsDefaultGeneral = IsDefaultGeneral,
+            IsVoiceChannel = IsVoiceChannel,
+            IsAnnouncementOnly = IsAnnouncementOnly,
+            AllowedPostUserIds = AllowedPostUserIds != null ? [.. AllowedPostUserIds] : [],
+            AllowedPostTeamIds = AllowedPostTeamIds != null ? [.. AllowedPostTeamIds] : [],
+            PinnedMessageIds = PinnedMessageIds != null ? [.. PinnedMessageIds] : [],
+            DisplayOrder = DisplayOrder,
+            AllowedTeamIds = AllowedTeamIds != null ? [.. AllowedTeamIds] : [],
+            IsArchived = IsArchived,
+            IsEncrypted = IsEncrypted,
+            EncryptedChannelKeys = EncryptedChannelKeys != null ? new Dictionary<string, string>(EncryptedChannelKeys) : [],
+            CurrentKeyEpoch = CurrentKeyEpoch,
+            EncryptedEpochKeys = epochKeysCopy,
+            AudioBitrateKbps = AudioBitrateKbps,
+            CreatedAt = CreatedAt,
+            CreatedById = CreatedById,
+            LastActivityAt = LastActivityAt
+        };
+    }
 
     /// <summary>
     /// Preferred Audio Bitrate in Kbps for Voice Channels (e.g. 64, 96, 128, 256, 384).

@@ -5,8 +5,10 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Renci.SshNet;
+using Renci.SshNet.Sftp;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Services.Security;
 
@@ -24,17 +26,16 @@ public class SftpBackupProvider : IBackupDestinationProvider
     public SftpBackupProvider(
         CompanyProfileRepository profiles,
         ILogger<SftpBackupProvider>? logger = null,
-        EncryptionService? encryptionService = null)
+        EncryptionService? encryptionService = null,
+        IConfiguration? configuration = null)
     {
         _profiles = profiles;
         _logger = logger;
-        _encryptionService = encryptionService ?? profiles?.EncryptionService ?? new EncryptionService();
+        _encryptionService = BackupDestinationPruneHelper.ResolveEncryptionService(encryptionService, profiles, configuration);
     }
 
     private string ResolveCredential(string? value) =>
-        string.IsNullOrEmpty(value)
-            ? string.Empty
-            : (_encryptionService.TryDecrypt(value, out var decrypted) ? decrypted : value);
+        BackupDestinationPruneHelper.ResolveCredential(_encryptionService, value);
 
     private sealed class HostKeyVerificationState
     {
@@ -116,8 +117,7 @@ public class SftpBackupProvider : IBackupDestinationProvider
             return false;
         }
 
-        var actualDigest = SHA256.HashData(hostKey);
-        var actualFingerprint = $"SHA256:{Convert.ToBase64String(actualDigest)}";
+        var actualFingerprint = ComputeHostKeyFingerprint(hostKey);
 
         lock (_hostKeyLock)
         {
@@ -144,6 +144,7 @@ public class SftpBackupProvider : IBackupDestinationProvider
                 return true;
             }
 
+            var actualDigest = SHA256.HashData(hostKey);
             if (!TryDecodeSha256Fingerprint(pinnedFingerprint, out var expectedDigest) ||
                 !CryptographicOperations.FixedTimeEquals(actualDigest, expectedDigest))
             {
@@ -213,6 +214,31 @@ public class SftpBackupProvider : IBackupDestinationProvider
         return remoteDir == "/" ? $"/{fileName}" : $"{remoteDir}/{fileName}";
     }
 
+    private T ExecuteWithClient<T>(Func<SftpClient, T> action)
+    {
+        var (client, hostKeyState) = CreateClient();
+        using (client)
+        {
+            ConnectVerified(client, hostKeyState);
+            var result = action(client);
+            client.Disconnect();
+            return result;
+        }
+    }
+
+    private void ExecuteWithClient(Action<SftpClient> action) =>
+        ExecuteWithClient(client =>
+        {
+            action(client);
+            return true;
+        });
+
+    private Task<T> ExecuteWithClientAsync<T>(Func<SftpClient, T> action, CancellationToken cancellationToken) =>
+        Task.Run(() => ExecuteWithClient(action), cancellationToken);
+
+    private Task ExecuteWithClientAsync(Action<SftpClient> action, CancellationToken cancellationToken) =>
+        Task.Run(() => ExecuteWithClient(action), cancellationToken);
+
     public async Task<BackupUploadResult> UploadAsync(
         string localBackupPath,
         string remoteFileName,
@@ -228,45 +254,33 @@ public class SftpBackupProvider : IBackupDestinationProvider
         string? targetPath = null;
         try
         {
-            return await Task.Run(() =>
+            return await ExecuteWithClientAsync(client =>
             {
-                var (client, hostKeyState) = CreateClient();
-                using (client)
+                var remoteDir = EnsureRemoteDirectory(client, config.RemotePath);
+
+                targetPath = CombineRemotePath(remoteDir, remoteFileName);
+
+                var fileInfo = new FileInfo(localBackupPath);
+                long totalBytes = fileInfo.Length;
+                progress?.Report(new BackupUploadProgress(0, totalBytes, 0));
+
+                if (client.Exists(targetPath))
                 {
-                    ConnectVerified(client, hostKeyState);
-
-                    var remoteDir = NormalizeRemoteDirectory(config.RemotePath);
-                    if (!client.Exists(remoteDir))
-                    {
-                        // Create remote directory tree if needed
-                        CreateRemoteDirectoryRecursively(client, remoteDir);
-                    }
-
-                    targetPath = CombineRemotePath(remoteDir, remoteFileName);
-
-                    var fileInfo = new FileInfo(localBackupPath);
-                    long totalBytes = fileInfo.Length;
-                    progress?.Report(new BackupUploadProgress(0, totalBytes, 0));
-
-                    if (client.Exists(targetPath))
-                    {
-                        client.DeleteFile(targetPath);
-                    }
-
-                    using (var localStream = File.OpenRead(localBackupPath))
-                    {
-                        client.UploadFile(localStream, targetPath, uploaded =>
-                        {
-                            double pct = totalBytes > 0 ? (double)uploaded / totalBytes * 100.0 : 0.0;
-                            progress?.Report(new BackupUploadProgress((long)uploaded, totalBytes, Math.Min(100.0, pct)));
-                        });
-                    }
-
-                    client.Disconnect();
-                    progress?.Report(new BackupUploadProgress(fileInfo.Length, fileInfo.Length, 100.0));
-                    _logger?.LogInformation("[SftpBackup] Successfully uploaded {File} to sftp://{Host}{Path}", remoteFileName, config.Host, targetPath);
-                    return BackupUploadResult.Succeeded(targetPath, fileInfo.Length);
+                    client.DeleteFile(targetPath);
                 }
+
+                using (var localStream = File.OpenRead(localBackupPath))
+                {
+                    client.UploadFile(localStream, targetPath, uploaded =>
+                    {
+                        double pct = totalBytes > 0 ? (double)uploaded / totalBytes * 100.0 : 0.0;
+                        progress?.Report(new BackupUploadProgress((long)uploaded, totalBytes, Math.Min(100.0, pct)));
+                    });
+                }
+
+                progress?.Report(new BackupUploadProgress(fileInfo.Length, fileInfo.Length, 100.0));
+                _logger?.LogInformation("[SftpBackup] Successfully uploaded {File} to sftp://{Host}{Path}", remoteFileName, config.Host, targetPath);
+                return BackupUploadResult.Succeeded(targetPath, fileInfo.Length);
             }, cancellationToken);
         }
         catch (Exception ex)
@@ -276,17 +290,14 @@ public class SftpBackupProvider : IBackupDestinationProvider
             {
                 try
                 {
-                    var (cleanupClient, cleanupState) = CreateClient();
-                    using (cleanupClient)
+                    ExecuteWithClient(cleanupClient =>
                     {
-                        ConnectVerified(cleanupClient, cleanupState);
                         if (cleanupClient.Exists(targetPath))
                         {
                             cleanupClient.DeleteFile(targetPath);
                             _logger?.LogInformation("[SftpBackup] Cleaned up partial upload at {Path}", targetPath);
                         }
-                        cleanupClient.Disconnect();
-                    }
+                    });
                 }
                 catch { /* Ignore secondary cleanup errors */ }
             }
@@ -304,33 +315,16 @@ public class SftpBackupProvider : IBackupDestinationProvider
 
         try
         {
-            return await Task.Run(() =>
+            return await ExecuteWithClientAsync(client =>
             {
-                var (client, hostKeyState) = CreateClient();
-                using (client)
+                var remoteDir = NormalizeRemoteDirectory(config.RemotePath);
+                if (!client.Exists(remoteDir))
                 {
-                    ConnectVerified(client, hostKeyState);
-
-                    var remoteDir = NormalizeRemoteDirectory(config.RemotePath);
-                    if (!client.Exists(remoteDir))
-                    {
-                        client.Disconnect();
-                        return new List<RemoteBackupItem>();
-                    }
-
-                    var files = client.ListDirectory(remoteDir);
-                    var items = files
-                        .Where(f => !f.IsDirectory)
-                        .Where(f => f.Name.StartsWith("Spokes_Backup_", StringComparison.OrdinalIgnoreCase))
-                        .Where(f => !f.Name.EndsWith(".tmp.zip", StringComparison.OrdinalIgnoreCase))
-                        .Where(f => f.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith(".spkbackup", StringComparison.OrdinalIgnoreCase))
-                        .Select(f => new RemoteBackupItem(f.FullName, f.Name, f.Length, f.LastWriteTimeUtc, "SFTP"))
-                        .OrderByDescending(f => f.CreatedAtUtc)
-                        .ToList();
-
-                    client.Disconnect();
-                    return items;
+                    return new List<RemoteBackupItem>();
                 }
+
+                var files = client.ListDirectory(remoteDir);
+                return FilterAndOrderBackups(files, excludeManual: false);
             }, cancellationToken);
         }
         catch (Exception ex)
@@ -344,20 +338,12 @@ public class SftpBackupProvider : IBackupDestinationProvider
     {
         try
         {
-            return await Task.Run<Stream?>(() =>
+            return await ExecuteWithClientAsync<Stream?>(client =>
             {
-                var (client, hostKeyState) = CreateClient();
-                using (client)
-                {
-                    ConnectVerified(client, hostKeyState);
-
-                    var ms = new MemoryStream();
-                    client.DownloadFile(remoteFileId, ms);
-                    ms.Position = 0;
-
-                    client.Disconnect();
-                    return ms;
-                }
+                var ms = new MemoryStream();
+                client.DownloadFile(remoteFileId, ms);
+                ms.Position = 0;
+                return ms;
             }, cancellationToken);
         }
         catch (Exception ex)
@@ -371,18 +357,12 @@ public class SftpBackupProvider : IBackupDestinationProvider
     {
         try
         {
-            await Task.Run(() =>
+            await ExecuteWithClientAsync(client =>
             {
-                var (client, hostKeyState) = CreateClient();
-                using (client)
+                if (client.Exists(remoteFileId))
                 {
-                    ConnectVerified(client, hostKeyState);
-                    if (client.Exists(remoteFileId))
-                    {
-                        client.DeleteFile(remoteFileId);
-                        _logger?.LogInformation("[SftpBackup] Deleted {File}", remoteFileId);
-                    }
-                    client.Disconnect();
+                    client.DeleteFile(remoteFileId);
+                    _logger?.LogInformation("[SftpBackup] Deleted {File}", remoteFileId);
                 }
             }, cancellationToken);
         }
@@ -402,70 +382,56 @@ public class SftpBackupProvider : IBackupDestinationProvider
 
         try
         {
-            await Task.Run(() =>
+            await ExecuteWithClientAsync(client =>
             {
-                var (client, hostKeyState) = CreateClient();
-                using (client)
+                var remoteDir = NormalizeRemoteDirectory(config.RemotePath);
+                if (!client.Exists(remoteDir))
                 {
-                    ConnectVerified(client, hostKeyState);
+                    return;
+                }
 
-                    var remoteDir = NormalizeRemoteDirectory(config.RemotePath);
-                    if (client.Exists(remoteDir))
+                var files = client.ListDirectory(remoteDir).ToList();
+
+                // 1. Clean up legacy or abandoned .tmp files (including any previous .zip.tmp)
+                var tempFiles = files
+                    .Where(f => !f.IsDirectory)
+                    .Where(f => f.Name.StartsWith("Spokes_Backup_", StringComparison.OrdinalIgnoreCase))
+                    .Where(f => f.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
+                                f.Name.EndsWith(".tmp.zip", StringComparison.OrdinalIgnoreCase));
+
+                foreach (var tmp in tempFiles)
+                {
+                    try
                     {
-                        var files = client.ListDirectory(remoteDir).ToList();
+                        client.DeleteFile(tmp.FullName);
+                        _logger?.LogInformation("[SftpBackup] Cleaned up legacy temporary file {File}", tmp.FullName);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "[SftpBackup] Could not delete temporary file {File}", tmp.FullName);
+                    }
+                }
 
-                        // 1. Clean up legacy or abandoned .tmp files (including any previous .zip.tmp)
-                        var tempFiles = files
-                            .Where(f => !f.IsDirectory)
-                            .Where(f => f.Name.StartsWith("Spokes_Backup_", StringComparison.OrdinalIgnoreCase))
-                            .Where(f => f.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
-                                        f.Name.EndsWith(".tmp.zip", StringComparison.OrdinalIgnoreCase));
+                // 2. Prune old backups exceeding retention count
+                var scheduled = FilterAndOrderBackups(files, excludeManual: true);
 
-                        foreach (var tmp in tempFiles)
+                if (scheduled.Count > retentionCount)
+                {
+                    foreach (var old in scheduled.Skip(retentionCount))
+                    {
+                        try
                         {
-                            try
+                            if (client.Exists(old.Id))
                             {
-                                client.DeleteFile(tmp.FullName);
-                                _logger?.LogInformation("[SftpBackup] Cleaned up legacy temporary file {File}", tmp.FullName);
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger?.LogWarning(ex, "[SftpBackup] Could not delete temporary file {File}", tmp.FullName);
+                                client.DeleteFile(old.Id);
+                                _logger?.LogInformation("[SftpBackup] Pruned old backup {File}", old.Id);
                             }
                         }
-
-                        // 2. Prune old backups exceeding retention count
-                        var scheduled = files
-                            .Where(f => !f.IsDirectory)
-                            .Where(f => f.Name.StartsWith("Spokes_Backup_", StringComparison.OrdinalIgnoreCase))
-                            .Where(f => !f.Name.Contains("_Manual_", StringComparison.OrdinalIgnoreCase))
-                            .Where(f => !f.Name.EndsWith(".tmp.zip", StringComparison.OrdinalIgnoreCase))
-                            .Where(f => f.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith(".spkbackup", StringComparison.OrdinalIgnoreCase))
-                            .Select(f => new RemoteBackupItem(f.FullName, f.Name, f.Length, f.LastWriteTimeUtc, "SFTP"))
-                            .OrderByDescending(f => f.CreatedAtUtc)
-                            .ToList();
-
-                        if (scheduled.Count > retentionCount)
+                        catch (Exception ex)
                         {
-                            foreach (var old in scheduled.Skip(retentionCount))
-                            {
-                                try
-                                {
-                                    if (client.Exists(old.Id))
-                                    {
-                                        client.DeleteFile(old.Id);
-                                        _logger?.LogInformation("[SftpBackup] Pruned old backup {File}", old.Id);
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger?.LogWarning(ex, "[SftpBackup] Failed to prune {File}", old.Id);
-                                }
-                            }
+                            _logger?.LogWarning(ex, "[SftpBackup] Failed to prune {File}", old.Id);
                         }
                     }
-
-                    client.Disconnect();
                 }
             }, cancellationToken);
         }
@@ -485,35 +451,24 @@ public class SftpBackupProvider : IBackupDestinationProvider
 
         try
         {
-            return await Task.Run(() =>
+            return await ExecuteWithClientAsync(client =>
             {
-                var (client, hostKeyState) = CreateClient();
-                using (client)
+                var remoteDir = EnsureRemoteDirectory(client, config.RemotePath);
+
+                var testFile = CombineRemotePath(remoteDir, $".spokes_test_{Guid.NewGuid():N}");
+                using (var ms = new MemoryStream(new byte[] { 1 }))
                 {
-                    ConnectVerified(client, hostKeyState);
-
-                    var remoteDir = NormalizeRemoteDirectory(config.RemotePath);
-                    if (!client.Exists(remoteDir))
-                    {
-                        CreateRemoteDirectoryRecursively(client, remoteDir);
-                    }
-
-                    var testFile = CombineRemotePath(remoteDir, $".spokes_test_{Guid.NewGuid():N}");
-                    using (var ms = new MemoryStream(new byte[] { 1 }))
-                    {
-                        client.UploadFile(ms, testFile);
-                    }
-
-                    if (client.Exists(testFile))
-                    {
-                        client.DeleteFile(testFile);
-                    }
-
-                    client.Disconnect();
-                    var pinned = _profiles.Get()?.Backup.Sftp.TrustedHostKeyFingerprint;
-                    var fingerprintSuffix = string.IsNullOrWhiteSpace(pinned) ? string.Empty : $" [Host key: {pinned}]";
-                    return TestConnectionResult.Ok($"Successfully connected and verified write access to SFTP host {config.Host}:{config.Port} ({remoteDir}).{fingerprintSuffix}");
+                    client.UploadFile(ms, testFile);
                 }
+
+                if (client.Exists(testFile))
+                {
+                    client.DeleteFile(testFile);
+                }
+
+                var pinned = _profiles.Get()?.Backup.Sftp.TrustedHostKeyFingerprint;
+                var fingerprintSuffix = string.IsNullOrWhiteSpace(pinned) ? string.Empty : $" [Host key: {pinned}]";
+                return TestConnectionResult.Ok($"Successfully connected and verified write access to SFTP host {config.Host}:{config.Port} ({remoteDir}).{fingerprintSuffix}");
             }, cancellationToken);
         }
         catch (Exception ex)
@@ -521,6 +476,27 @@ public class SftpBackupProvider : IBackupDestinationProvider
             return TestConnectionResult.Fail($"SFTP test failed: {ex.Message}");
         }
     }
+
+    private static string EnsureRemoteDirectory(SftpClient client, string? remotePath)
+    {
+        var remoteDir = NormalizeRemoteDirectory(remotePath);
+        if (!client.Exists(remoteDir))
+        {
+            CreateRemoteDirectoryRecursively(client, remoteDir);
+        }
+        return remoteDir;
+    }
+
+    private static List<RemoteBackupItem> FilterAndOrderBackups(IEnumerable<ISftpFile> files, bool excludeManual) =>
+        files
+            .Where(f => !f.IsDirectory)
+            .Where(f => f.Name.StartsWith("Spokes_Backup_", StringComparison.OrdinalIgnoreCase))
+            .Where(f => !excludeManual || !f.Name.Contains("_Manual_", StringComparison.OrdinalIgnoreCase))
+            .Where(f => !f.Name.EndsWith(".tmp.zip", StringComparison.OrdinalIgnoreCase))
+            .Where(f => f.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith(".spkbackup", StringComparison.OrdinalIgnoreCase))
+            .Select(f => new RemoteBackupItem(f.FullName, f.Name, f.Length, f.LastWriteTimeUtc, "SFTP"))
+            .OrderByDescending(f => f.CreatedAtUtc)
+            .ToList();
 
     private static void CreateRemoteDirectoryRecursively(SftpClient client, string path)
     {

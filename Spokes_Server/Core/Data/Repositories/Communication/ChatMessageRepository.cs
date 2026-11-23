@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -17,6 +18,17 @@ using Spokes_Server.Core.Models.Communication;
 namespace Spokes_Server.Core.Data.Repositories.Communication;
 
 /// <summary>
+/// Result of loading a page of channel messages, including cache vs. disk performance telemetry.
+/// </summary>
+public sealed record ChannelMessageLoadResult(
+    List<ChatMessage> Messages,
+    int CacheHits,
+    int DiskReads,
+    double IndexLookupMs,
+    double DiskReadMs,
+    bool HasMore);
+
+/// <summary>
 /// Repository for chat messages with lazy loading support.
 /// On startup, only loads messages from the last 7 days.
 /// Older messages are loaded on-demand when users scroll back or search.
@@ -26,7 +38,6 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
     private const int InitialLoadCount = 55;
     private const int CacheCheckBatchThreshold = 50;
 
-    private readonly CompanyProfileRepository _companyProfiles;
     private readonly ChatMessageIndexService _indexService;
     private readonly ChatMessageCacheService _cacheService;
 
@@ -73,7 +84,6 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
     protected ChatMessageRepository()
         : base(null!, "Data", "*.json", null)
     {
-        _companyProfiles = null!;
         _cacheService = null!;
         _indexService = null!;
         _isLoaded = true;
@@ -96,7 +106,6 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         ILogger<ChatMessageRepository>? logger = null)
         : base(writer, Path.Combine(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data"), "chat"), "*.json", logger)
     {
-        _companyProfiles = companyProfiles;
         _cacheService = cacheService ?? new ChatMessageCacheService(companyProfiles);
         _indexService = new ChatMessageIndexService(writer, _basePath, this);
         _isLoaded = true;
@@ -127,16 +136,13 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         return Path.Combine(channelDir, $"{item.Id}.json");
     }
 
-    private void EnsureDirectoryExists(ChatMessage item)
+    private void EnsureDirectoryExists(string? dir)
     {
+        if (string.IsNullOrEmpty(dir) || Directory.Exists(dir)) return;
+
         try
         {
-            var path = GetFilePath(item);
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
+            Directory.CreateDirectory(dir);
         }
         catch (IOException ex)
         {
@@ -151,7 +157,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
     public override void Save(ChatMessage item)
     {
         if (string.IsNullOrEmpty(item.Id)) item.Id = Guid.NewGuid().ToString();
-        EnsureDirectoryExists(item);
+        EnsureDirectoryExists(Path.GetDirectoryName(GetFilePath(item)));
         _indexService.UpdateIndex(item, item);
         base.Save(item);
         _cacheService.TrackAccess(item);
@@ -171,20 +177,9 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
             if (string.IsNullOrEmpty(item.Id)) item.Id = Guid.NewGuid().ToString();
             var path = GetFilePath(item);
             var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir) && checkedDirs.Add(dir) && !Directory.Exists(dir))
+            if (!string.IsNullOrEmpty(dir) && checkedDirs.Add(dir))
             {
-                try
-                {
-                    Directory.CreateDirectory(dir);
-                }
-                catch (IOException ex)
-                {
-                    _logger?.LogError(ex, "[ChatMessageRepo] IO Error during directory sync");
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    _logger?.LogError(ex, "[ChatMessageRepo] Access Denied during directory sync");
-                }
+                EnsureDirectoryExists(dir);
             }
 
             _indexService.UpdateIndex(item, item);
@@ -214,19 +209,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
             var orphanedPath = GetFilePath(new ChatMessage { Id = id, ChannelId = string.Empty });
             if (File.Exists(orphanedPath))
             {
-                try
-                {
-                    var json = File.ReadAllText(orphanedPath);
-                    msg = JsonSerializer.Deserialize<ChatMessage>(json);
-                }
-                catch (JsonException ex)
-                {
-                    _logger?.LogWarning(ex, "[ChatMessageRepo] Failed to deserialize orphaned message from disk {OrphanedPath}", orphanedPath);
-                }
-                catch (IOException ex)
-                {
-                    _logger?.LogWarning(ex, "[ChatMessageRepo] IO error reading orphaned message from disk {OrphanedPath}", orphanedPath);
-                }
+                msg = ChatMessageIndexService.TryReadMessageFile(orphanedPath, _logger, "[ChatMessageRepo]");
             }
         }
 
@@ -271,18 +254,21 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
     public override void Delete(string id)
     {
         string? filePath = null;
+        ChatMessage? itemToDelete = null;
 
         if (_cache.TryRemove(id, out var item))
         {
             _indexService.RemoveFromIndex(item);
             filePath = GetFilePath(item);
+            itemToDelete = item;
         }
         else
         {
             var (channelId, _) = _indexService.FindIndexEntry(id);
             if (!string.IsNullOrEmpty(channelId))
             {
-                _indexService.RemoveFromIndex(new ChatMessage { Id = id, ChannelId = channelId });
+                itemToDelete = GetMessageFromDisk(channelId, id) ?? new ChatMessage { Id = id, ChannelId = channelId };
+                _indexService.RemoveFromIndex(itemToDelete);
                 filePath = Path.Combine(_basePath, channelId, "messages", $"{id}.json");
             }
             else
@@ -290,6 +276,8 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
                 var orphanedPath = GetFilePath(new ChatMessage { Id = id, ChannelId = string.Empty });
                 if (File.Exists(orphanedPath))
                 {
+                    itemToDelete = ChatMessageIndexService.TryReadMessageFile(orphanedPath, _logger, "[ChatMessageRepo]")
+                        ?? new ChatMessage { Id = id, ChannelId = string.Empty };
                     filePath = orphanedPath;
                 }
             }
@@ -301,6 +289,11 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         }
 
         _cacheService.Remove(id);
+
+        if (itemToDelete != null)
+        {
+            RaiseOnDeleted(itemToDelete);
+        }
     }
 
     public void RefreshChannelPreview(string channelId) =>
@@ -320,23 +313,9 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         if (_cache.TryGetValue(messageId, out var cached)) return cached;
 
         var filePath = Path.Combine(_basePath, channelId, "messages", $"{messageId}.json");
-        if (File.Exists(filePath))
-        {
-            try
-            {
-                var json = File.ReadAllText(filePath);
-                return JsonSerializer.Deserialize<ChatMessage>(json);
-            }
-            catch (JsonException ex)
-            {
-                _logger?.LogWarning(ex, "[ChatMessageRepo] Failed to deserialize message from disk {FilePath}", filePath);
-            }
-            catch (IOException ex)
-            {
-                _logger?.LogWarning(ex, "[ChatMessageRepo] IO error reading message from disk {FilePath}", filePath);
-            }
-        }
-        return null;
+        return File.Exists(filePath)
+            ? ChatMessageIndexService.TryReadMessageFile(filePath, _logger, "[ChatMessageRepo]")
+            : null;
     }
 
     public async Task<ChatMessage?> GetMessageFromDiskAsync(string channelId, string messageId, CancellationToken cancellationToken = default)
@@ -348,7 +327,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         {
             try
             {
-                var json = await File.ReadAllTextAsync(filePath, cancellationToken);
+                var json = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
                 return JsonSerializer.Deserialize<ChatMessage>(json);
             }
             catch (JsonException ex)
@@ -405,27 +384,11 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
 
                     foreach (var entry in targetEntries)
                     {
-                        var filePath = Path.Combine(_basePath, channelId, "messages", $"{entry.Id}.json");
-                        if (File.Exists(filePath))
+                        var item = GetMessageFromDisk(channelId, entry.Id);
+                        if (item != null)
                         {
-                            try
-                            {
-                                var msgJson = File.ReadAllText(filePath);
-                                var item = JsonSerializer.Deserialize<ChatMessage>(msgJson);
-                                if (item != null)
-                                {
-                                    _cache[item.Id] = item;
-                                    _cacheService.TrackAccess(item);
-                                }
-                            }
-                            catch (JsonException ex)
-                            {
-                                _logger?.LogWarning(ex, "[ChatMessageRepo] Failed to deserialize {FilePath}", filePath);
-                            }
-                            catch (IOException ex)
-                            {
-                                _logger?.LogWarning(ex, "[ChatMessageRepo] IO error reading {FilePath}", filePath);
-                            }
+                            _cache[item.Id] = item;
+                            _cacheService.TrackAccess(item);
                         }
                     }
 
@@ -450,27 +413,160 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         }
     }
 
+    /// <summary>
+    /// Fires a non-blocking background pre-warm of the newest messages per channel so first channel opens
+    /// after server restart hit RAM instead of waiting on cold disk reads (even for channels inactive > 7 days).
+    /// </summary>
+    public void StartBackgroundChannelHeadPreWarm(int messagesPerChannel = 12)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await PreWarmChannelHeadsAsync(messagesPerChannel).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "[ChatMessageRepo] Background channel head pre-warm stopped with error.");
+            }
+        });
+    }
+
+    /// <summary>
+    /// Loads up to <paramref name="messagesPerChannel"/> newest uncached messages per channel from disk
+    /// (most recently active channels first) while respecting the configured global chat cache RAM budget.
+    /// </summary>
+    public async Task<int> PreWarmChannelHeadsAsync(int messagesPerChannel = 12, CancellationToken cancellationToken = default)
+    {
+        if (messagesPerChannel <= 0 || _cacheService.IsCacheLimitExceeded())
+        {
+            return 0;
+        }
+
+        var snapshot = _indexService.GetChannelIndexesSnapshot();
+        if (snapshot.Count == 0)
+        {
+            return 0;
+        }
+
+        var channelWork = new List<(DateTime LatestSentAt, string ChannelId, List<string> MissingMessageIds)>();
+        foreach (var (channelId, entries) in snapshot)
+        {
+            if (entries == null || entries.Count == 0) continue;
+
+            var newestEntries = entries
+                .Where(e => !e.IsDeleted)
+                .OrderByDescending(e => e.SentAt)
+                .Take(messagesPerChannel)
+                .ToList();
+
+            if (newestEntries.Count == 0) continue;
+
+            var missingIds = new List<string>();
+            foreach (var entry in newestEntries)
+            {
+                if (!_cache.ContainsKey(entry.Id))
+                {
+                    missingIds.Add(entry.Id);
+                }
+            }
+
+            if (missingIds.Count > 0)
+            {
+                channelWork.Add((newestEntries[0].SentAt, channelId, missingIds));
+            }
+        }
+
+        if (channelWork.Count == 0)
+        {
+            return 0;
+        }
+
+        channelWork.Sort((a, b) => b.LatestSentAt.CompareTo(a.LatestSentAt));
+
+        var flatTargets = new List<(string ChannelId, string MessageId)>();
+        foreach (var (_, channelId, missingIds) in channelWork)
+        {
+            foreach (var messageId in missingIds)
+            {
+                flatTargets.Add((channelId, messageId));
+            }
+        }
+
+        var sw = Stopwatch.StartNew();
+        int loadedCount = 0;
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 2, 3),
+            CancellationToken = cancellationToken
+        };
+
+        await Parallel.ForEachAsync(flatTargets, parallelOptions, async (target, ct) =>
+        {
+            if (ct.IsCancellationRequested || _cacheService.IsCacheLimitExceeded())
+            {
+                return;
+            }
+
+            if (_cache.ContainsKey(target.MessageId))
+            {
+                return;
+            }
+
+            var msg = await GetMessageFromDiskAsync(target.ChannelId, target.MessageId, ct).ConfigureAwait(false);
+            if (msg != null)
+            {
+                _cache[msg.Id] = msg;
+                _cacheService.TrackAccess(msg);
+                Interlocked.Increment(ref loadedCount);
+            }
+        }).ConfigureAwait(false);
+
+        sw.Stop();
+        if (loadedCount > 0)
+        {
+            _logger?.LogInformation(
+                "[ChatMessageRepo] Background head pre-warm loaded {LoadedCount} messages across {ChannelCount} channels in {ElapsedMs:F0}ms.",
+                loadedCount, channelWork.Count, sw.Elapsed.TotalMilliseconds);
+        }
+
+        return loadedCount;
+    }
+
     private void EnsureIndexBuilt(string channelId) =>
         _indexService.EnsureIndexBuilt(channelId);
 
-    public override List<ChatMessage> GetAll()
+    public override List<ChatMessage> GetAll() => CollectMessages(senderId: null);
+
+    public List<ChatMessage> GetAllForSender(string senderId) =>
+        string.IsNullOrEmpty(senderId) ? [] : CollectMessages(senderId);
+
+    private List<ChatMessage> CollectMessages(string? senderId)
     {
         var results = new Dictionary<string, ChatMessage>();
+        bool filterBySender = !string.IsNullOrEmpty(senderId);
 
         // 1. Seed with in-memory cache
         foreach (var kvp in _cache)
         {
-            results[kvp.Key] = kvp.Value;
+            if (!filterBySender || kvp.Value.SenderId == senderId)
+            {
+                results[kvp.Key] = kvp.Value;
+            }
         }
 
         // 2. Ensure channel indexes on disk are built
         _indexService.EnsureAllChannelIndexesBuilt();
 
-        // 3. Query index snapshot for all messages across all channels
+        // 3. Query index snapshot across all channels
         var snapshot = _indexService.GetChannelIndexesSnapshot();
         foreach (var (channelId, entries) in snapshot)
         {
-            foreach (var entry in entries)
+            IEnumerable<ChatIndexEntry> targetEntries = filterBySender
+                ? entries.Where(e => e.SenderId == senderId).ToList()
+                : entries;
+            foreach (var entry in targetEntries)
             {
                 if (!results.ContainsKey(entry.Id))
                 {
@@ -493,7 +589,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         // 4. Scan orphaned messages on disk
         foreach (var item in LoadOrphanedMessagesFromDisk())
         {
-            if (!results.ContainsKey(item.Id))
+            if ((!filterBySender || item.SenderId == senderId) && !results.ContainsKey(item.Id))
             {
                 results[item.Id] = item;
             }
@@ -502,64 +598,9 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         // 5. Add any remaining items in _cache (in case any were added during disk scan)
         foreach (var kvp in _cache)
         {
-            if (!results.ContainsKey(kvp.Key))
+            if ((!filterBySender || kvp.Value.SenderId == senderId) && !results.ContainsKey(kvp.Key))
             {
                 results[kvp.Key] = kvp.Value;
-            }
-        }
-
-        return results.Values.ToList();
-    }
-
-    public List<ChatMessage> GetAllForSender(string senderId)
-    {
-        if (string.IsNullOrEmpty(senderId)) return [];
-
-        var results = new Dictionary<string, ChatMessage>();
-
-        // 1. Seed with in-memory cache for this sender
-        foreach (var kvp in _cache)
-        {
-            if (kvp.Value.SenderId == senderId)
-            {
-                results[kvp.Key] = kvp.Value;
-            }
-        }
-
-        // 2. Ensure channel indexes on disk are built
-        _indexService.EnsureAllChannelIndexesBuilt();
-
-        // 3. Query index snapshot for sender
-        var snapshot = _indexService.GetChannelIndexesSnapshot();
-        foreach (var (channelId, entries) in snapshot)
-        {
-            var senderEntries = entries.Where(e => e.SenderId == senderId).ToList();
-            foreach (var entry in senderEntries)
-            {
-                if (!results.ContainsKey(entry.Id))
-                {
-                    if (_cache.TryGetValue(entry.Id, out var cachedMsg))
-                    {
-                        results[entry.Id] = cachedMsg;
-                    }
-                    else
-                    {
-                        var msg = GetMessageFromDisk(channelId, entry.Id);
-                        if (msg != null)
-                        {
-                            results[entry.Id] = msg;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 4. Scan orphaned messages on disk for this sender
-        foreach (var item in LoadOrphanedMessagesFromDisk())
-        {
-            if (item.SenderId == senderId && !results.ContainsKey(item.Id))
-            {
-                results[item.Id] = item;
             }
         }
 
@@ -575,21 +616,7 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         var files = Directory.GetFiles(orphanedDir, "*.json");
         foreach (var file in files)
         {
-            ChatMessage? item = null;
-            try
-            {
-                var json = File.ReadAllText(file);
-                item = JsonSerializer.Deserialize<ChatMessage>(json);
-            }
-            catch (JsonException ex)
-            {
-                _logger?.LogWarning(ex, "[ChatMessageRepo] Failed to deserialize orphaned message {File}", file);
-            }
-            catch (IOException ex)
-            {
-                _logger?.LogWarning(ex, "[ChatMessageRepo] IO error reading orphaned message {File}", file);
-            }
-
+            var item = ChatMessageIndexService.TryReadMessageFile(file, _logger, "[ChatMessageRepo]");
             if (item != null)
             {
                 yield return item;
@@ -597,114 +624,19 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         }
     }
 
-    public List<ChatMessage> GetByChannel(string channelId, int? limit = null)
-    {
-        var results = new List<ChatMessage>();
-        var channelIndex = _indexService.GetIndexForChannel(channelId);
-        if (channelIndex.Count > 0)
-        {
-            var query = channelIndex.Where(e => !e.IsDeleted).OrderByDescending(e => e.SentAt);
-
-            if (limit.HasValue)
-            {
-                var targetEntries = query.Take(limit.Value).ToList();
-                bool addedToCache = false;
-                foreach (var entry in targetEntries)
-                {
-                    if (_cache.TryGetValue(entry.Id, out var cachedMsg))
-                    {
-                        results.Add(cachedMsg);
-                    }
-                    else
-                    {
-                        var msg = GetMessageFromDisk(channelId, entry.Id);
-                        if (msg != null)
-                        {
-                            _cache[msg.Id] = msg;
-                            results.Add(msg);
-                            addedToCache = true;
-                        }
-                    }
-                }
-                if (addedToCache)
-                {
-                    NotifyCacheItemAdded();
-                }
-            }
-            else
-            {
-                var targetEntries = query.ToList();
-                foreach (var entry in targetEntries)
-                {
-                    if (_cache.TryGetValue(entry.Id, out var cachedMsg))
-                    {
-                        results.Add(cachedMsg);
-                    }
-                }
-            }
-        }
-        return results;
-    }
-
-    public async Task<List<ChatMessage>> GetByChannelAsync(string channelId, int? limit = null, CancellationToken cancellationToken = default)
-    {
-        var results = new List<ChatMessage>();
-        var channelIndex = _indexService.GetIndexForChannel(channelId);
-        if (channelIndex.Count > 0)
-        {
-            var query = channelIndex.Where(e => !e.IsDeleted).OrderByDescending(e => e.SentAt);
-
-            if (limit.HasValue)
-            {
-                var targetEntries = query.Take(limit.Value).ToList();
-                bool addedToCache = false;
-                foreach (var entry in targetEntries)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (_cache.TryGetValue(entry.Id, out var cachedMsg))
-                    {
-                        results.Add(cachedMsg);
-                    }
-                    else
-                    {
-                        var msg = await GetMessageFromDiskAsync(channelId, entry.Id, cancellationToken);
-                        if (msg != null)
-                        {
-                            _cache[msg.Id] = msg;
-                            results.Add(msg);
-                            addedToCache = true;
-                        }
-                    }
-                }
-                if (addedToCache)
-                {
-                    NotifyCacheItemAdded();
-                }
-            }
-            else
-            {
-                var targetEntries = query.ToList();
-                foreach (var entry in targetEntries)
-                {
-                    if (_cache.TryGetValue(entry.Id, out var cachedMsg))
-                    {
-                        results.Add(cachedMsg);
-                    }
-                }
-            }
-        }
-        return results;
-    }
-
-    public List<ChatMessage> GetCachedByChannel(string channelId, int? limit = null)
+    private List<ChatIndexEntry>? GetOrderedChannelEntries(string channelId, int? limit)
     {
         var channelIndex = _indexService.GetIndexForChannel(channelId);
-        if (channelIndex.Count == 0) return [];
+        if (channelIndex.Count == 0) return null;
 
         var query = channelIndex.Where(e => !e.IsDeleted).OrderByDescending(e => e.SentAt);
-        var targetEntries = limit.HasValue ? query.Take(limit.Value) : query;
+        return (limit.HasValue ? query.Take(limit.Value) : query).ToList();
+    }
+
+    private List<ChatMessage> GetCachedMessagesForEntries(IEnumerable<ChatIndexEntry> entries)
+    {
         var results = new List<ChatMessage>();
-        foreach (var entry in targetEntries)
+        foreach (var entry in entries)
         {
             if (_cache.TryGetValue(entry.Id, out var cachedMsg))
             {
@@ -714,34 +646,24 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         return results;
     }
 
-    public List<ChatMessage> GetByChannelBefore(string channelId, DateTime before, int count = 50)
+    private List<ChatMessage> LoadMessagesForEntries(string channelId, IReadOnlyCollection<ChatIndexEntry> entries)
     {
-        var results = new List<ChatMessage>();
+        var results = new List<ChatMessage>(entries.Count);
         bool addedToCache = false;
-        var channelIndex = _indexService.GetIndexForChannel(channelId);
-        if (channelIndex.Count > 0)
+        foreach (var entry in entries)
         {
-            var targetEntries = channelIndex
-                .Where(e => !e.IsDeleted && e.SentAt < before)
-                .OrderByDescending(e => e.SentAt)
-                .Take(count)
-                .ToList();
-
-            foreach (var entry in targetEntries)
+            if (_cache.TryGetValue(entry.Id, out var cachedMsg))
             {
-                if (_cache.TryGetValue(entry.Id, out var cachedMsg))
+                results.Add(cachedMsg);
+            }
+            else
+            {
+                var msg = GetMessageFromDisk(channelId, entry.Id);
+                if (msg != null)
                 {
-                    results.Add(cachedMsg);
-                }
-                else
-                {
-                    var msg = GetMessageFromDisk(channelId, entry.Id);
-                    if (msg != null)
-                    {
-                        _cache[msg.Id] = msg;
-                        results.Add(msg);
-                        addedToCache = true;
-                    }
+                    _cache[msg.Id] = msg;
+                    results.Add(msg);
+                    addedToCache = true;
                 }
             }
         }
@@ -750,6 +672,210 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
             NotifyCacheItemAdded();
         }
         return results;
+    }
+
+    private Task<ChannelMessageLoadResult> LoadMessagesForEntriesWithStatsAsync(
+        string channelId,
+        IReadOnlyList<ChatIndexEntry> entries,
+        bool hasMore,
+        double indexLookupMs,
+        CancellationToken cancellationToken)
+    {
+        if (entries.Count == 0)
+        {
+            return Task.FromResult(new ChannelMessageLoadResult([], 0, 0, indexLookupMs, 0, hasMore));
+        }
+
+        // Fast path: check in-memory cache first. When every entry is already cached, return synchronously
+        // without hopping onto the thread pool or capturing a Blazor synchronization context.
+        var slots = new ChatMessage?[entries.Count];
+        List<int>? missingIndices = null;
+        int cacheHits = 0;
+
+        for (int i = 0; i < entries.Count; i++)
+        {
+            if (_cache.TryGetValue(entries[i].Id, out var cachedMsg))
+            {
+                slots[i] = cachedMsg;
+                cacheHits++;
+            }
+            else
+            {
+                (missingIndices ??= []).Add(i);
+            }
+        }
+
+        if (missingIndices == null)
+        {
+            var fastList = new List<ChatMessage>(entries.Count);
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (slots[i] != null) fastList.Add(slots[i]!);
+            }
+            return Task.FromResult(new ChannelMessageLoadResult(fastList, cacheHits, 0, indexLookupMs, 0, hasMore));
+        }
+
+        // Cold path: offload all uncached File.Exists / open / read / JSON deserialize work off the
+        // Blazor circuit SynchronizationContext onto the thread pool with bounded parallelism so
+        // slow disk or NAS volumes never freeze UI interaction or Back navigation.
+        return LoadMissingEntriesOffCircuitAsync(
+            channelId,
+            entries,
+            slots,
+            missingIndices,
+            cacheHits,
+            hasMore,
+            indexLookupMs,
+            cancellationToken);
+    }
+
+    private Task<ChannelMessageLoadResult> LoadMissingEntriesOffCircuitAsync(
+        string channelId,
+        IReadOnlyList<ChatIndexEntry> entries,
+        ChatMessage?[] slots,
+        List<int> missingIndices,
+        int cacheHits,
+        bool hasMore,
+        double indexLookupMs,
+        CancellationToken cancellationToken)
+    {
+        return Task.Run(async () =>
+        {
+            var diskSw = Stopwatch.StartNew();
+            int diskReads = 0;
+
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 2, 4),
+                CancellationToken = cancellationToken
+            };
+
+            await Parallel.ForEachAsync(missingIndices, parallelOptions, async (slotIndex, ct) =>
+            {
+                var entry = entries[slotIndex];
+                var msg = await GetMessageFromDiskAsync(channelId, entry.Id, ct).ConfigureAwait(false);
+                if (msg != null)
+                {
+                    _cache[msg.Id] = msg;
+                    _cacheService.TrackAccess(msg);
+                    slots[slotIndex] = msg;
+                    Interlocked.Increment(ref diskReads);
+                }
+            }).ConfigureAwait(false);
+
+            diskSw.Stop();
+            var diskMs = diskSw.Elapsed.TotalMilliseconds;
+
+            if (diskReads > 0)
+            {
+                NotifyCacheItemAdded(diskReads);
+            }
+
+            var results = new List<ChatMessage>(entries.Count);
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (slots[i] != null) results.Add(slots[i]!);
+            }
+
+            if (indexLookupMs + diskMs >= 200)
+            {
+                _logger?.LogWarning(
+                    "[Perf][ChatMessageRepo] Slow channel load: channel={ChannelId} loaded={Count} cacheHits={CacheHits} diskReads={DiskReads} indexMs={IndexMs:F1} diskMs={DiskMs:F1}",
+                    channelId, results.Count, cacheHits, diskReads, indexLookupMs, diskMs);
+            }
+
+            return new ChannelMessageLoadResult(results, cacheHits, diskReads, indexLookupMs, diskMs, hasMore);
+        }, cancellationToken);
+    }
+
+    public List<ChatMessage> GetByChannel(string channelId, int? limit = null)
+    {
+        var targetEntries = GetOrderedChannelEntries(channelId, limit);
+        if (targetEntries == null) return [];
+        if (!limit.HasValue) return GetCachedMessagesForEntries(targetEntries);
+
+        return LoadMessagesForEntries(channelId, targetEntries);
+    }
+
+    public Task<ChannelMessageLoadResult> GetByChannelWithStatsAsync(string channelId, int? limit = null, CancellationToken cancellationToken = default)
+    {
+        var indexSw = Stopwatch.StartNew();
+        var channelIndex = _indexService.GetIndexForChannel(channelId);
+        if (channelIndex.Count == 0)
+        {
+            indexSw.Stop();
+            return Task.FromResult(new ChannelMessageLoadResult([], 0, 0, indexSw.Elapsed.TotalMilliseconds, 0, false));
+        }
+
+        var ordered = channelIndex.Where(e => !e.IsDeleted).OrderByDescending(e => e.SentAt);
+        if (!limit.HasValue)
+        {
+            var allEntries = ordered.ToList();
+            indexSw.Stop();
+            var cachedOnly = GetCachedMessagesForEntries(allEntries);
+            return Task.FromResult(new ChannelMessageLoadResult(cachedOnly, cachedOnly.Count, 0, indexSw.Elapsed.TotalMilliseconds, 0, false));
+        }
+
+        var taken = ordered.Take(limit.Value + 1).ToList();
+        bool hasMore = taken.Count > limit.Value;
+        if (hasMore)
+        {
+            taken.RemoveAt(taken.Count - 1);
+        }
+        indexSw.Stop();
+
+        return LoadMessagesForEntriesWithStatsAsync(channelId, taken, hasMore, indexSw.Elapsed.TotalMilliseconds, cancellationToken);
+    }
+
+    public async Task<List<ChatMessage>> GetByChannelAsync(string channelId, int? limit = null, CancellationToken cancellationToken = default)
+    {
+        var result = await GetByChannelWithStatsAsync(channelId, limit, cancellationToken).ConfigureAwait(false);
+        return result.Messages;
+    }
+
+    public List<ChatMessage> GetByChannelBefore(string channelId, DateTime before, int count = 50)
+    {
+        var channelIndex = _indexService.GetIndexForChannel(channelId);
+        if (channelIndex.Count == 0) return [];
+
+        var targetEntries = channelIndex
+            .Where(e => !e.IsDeleted && e.SentAt < before)
+            .OrderByDescending(e => e.SentAt)
+            .Take(count)
+            .ToList();
+
+        return LoadMessagesForEntries(channelId, targetEntries);
+    }
+
+    public Task<ChannelMessageLoadResult> GetByChannelBeforeWithStatsAsync(string channelId, DateTime before, int count = 50, CancellationToken cancellationToken = default)
+    {
+        var indexSw = Stopwatch.StartNew();
+        var channelIndex = _indexService.GetIndexForChannel(channelId);
+        if (channelIndex.Count == 0)
+        {
+            indexSw.Stop();
+            return Task.FromResult(new ChannelMessageLoadResult([], 0, 0, indexSw.Elapsed.TotalMilliseconds, 0, false));
+        }
+
+        var taken = channelIndex
+            .Where(e => !e.IsDeleted && e.SentAt < before)
+            .OrderByDescending(e => e.SentAt)
+            .Take(count + 1)
+            .ToList();
+        bool hasMore = taken.Count > count;
+        if (hasMore)
+        {
+            taken.RemoveAt(taken.Count - 1);
+        }
+        indexSw.Stop();
+
+        return LoadMessagesForEntriesWithStatsAsync(channelId, taken, hasMore, indexSw.Elapsed.TotalMilliseconds, cancellationToken);
+    }
+
+    public async Task<List<ChatMessage>> GetByChannelBeforeAsync(string channelId, DateTime before, int count = 50, CancellationToken cancellationToken = default)
+    {
+        var result = await GetByChannelBeforeWithStatsAsync(channelId, before, count, cancellationToken).ConfigureAwait(false);
+        return result.Messages;
     }
 
     public ChatMessage? GetLatestInChannel(string channelId)
@@ -775,36 +901,46 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         return null;
     }
 
-    public List<ChatMessage> GetReplies(string parentMessageId)
+    public virtual int? ResolveAttachmentKeyEpoch(string channelId, string fileName)
     {
-        var results = new List<ChatMessage>();
-        var snapshot = _indexService.GetChannelIndexesSnapshot();
-        foreach (var kvp in snapshot)
+        if (string.IsNullOrWhiteSpace(channelId) || string.IsNullOrWhiteSpace(fileName))
         {
-            var channelId = kvp.Key;
-            var replyIds = kvp.Value
-                .Where(e => !e.IsDeleted && e.ReplyToId == parentMessageId)
-                .Select(e => e.Id)
-                .ToList();
+            return null;
+        }
 
-            foreach (var id in replyIds)
+        const string smallThumbSuffix = "_thumb_sm.jpg";
+        const string thumbSuffix = "_thumb.jpg";
+        var targetName = fileName;
+        var baseName = fileName.EndsWith(smallThumbSuffix, StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^smallThumbSuffix.Length]
+            : fileName.EndsWith(thumbSuffix, StringComparison.OrdinalIgnoreCase)
+                ? fileName[..^thumbSuffix.Length]
+                : fileName;
+
+        var channelIndex = _indexService.GetIndexForChannel(channelId);
+        foreach (var entry in channelIndex
+            .Where(e => !e.IsDeleted && (e.HasImages || e.HasFiles))
+            .OrderByDescending(e => e.SentAt))
+        {
+            var msg = _cache.TryGetValue(entry.Id, out var cached) ? cached : GetMessageFromDisk(channelId, entry.Id);
+            if (msg?.Attachments == null) continue;
+
+            foreach (var att in msg.Attachments)
             {
-                if (_cache.TryGetValue(id, out var cachedMsg))
+                if (string.IsNullOrWhiteSpace(att.FilePath)) continue;
+                var attPath = att.FilePath;
+                var qIdx = attPath.IndexOf('?');
+                if (qIdx >= 0) attPath = attPath[..qIdx];
+                var attName = Path.GetFileName(attPath.TrimEnd('/'));
+                if (string.Equals(attName, targetName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(attName, baseName, StringComparison.OrdinalIgnoreCase))
                 {
-                    results.Add(cachedMsg);
-                }
-                else
-                {
-                    var msg = GetMessageFromDisk(channelId, id);
-                    if (msg != null)
-                    {
-                        _cache[msg.Id] = msg;
-                        results.Add(msg);
-                    }
+                    return att.KeyEpoch;
                 }
             }
         }
-        return results.OrderBy(m => m.SentAt).ToList();
+
+        return null;
     }
 
     public int GetIndexPosition(string channelId, string messageId) =>
@@ -844,22 +980,6 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
             }
         }
         return results;
-    }
-
-    public int GetMessageCount(string channelId)
-    {
-        var channelIndex = _indexService.GetIndexForChannel(channelId);
-        if (channelIndex.Count > 0)
-        {
-            return channelIndex.Count(e => !e.IsDeleted);
-        }
-        return _cache.Values.Count(m => m.ChannelId == channelId && !m.IsDeleted);
-    }
-
-    public int GetTotalMessageCount(string channelId)
-    {
-        EnsureIndexBuilt(channelId);
-        return GetMessageCount(channelId);
     }
 
     public bool HasMessagesBefore(string channelId, DateTime before)
@@ -954,5 +1074,70 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
     public void EnforceGlobalCacheSizeLimit()
     {
         _cacheService.EnforceGlobalCacheSizeLimit(_cache);
+    }
+
+    public List<ChatMessage> GetAllByChannelIncludingCold(string channelId)
+    {
+        if (string.IsNullOrWhiteSpace(channelId))
+        {
+            return [];
+        }
+
+        var resultsById = new Dictionary<string, ChatMessage>(StringComparer.Ordinal);
+        foreach (var cached in _cache.Values)
+        {
+            if (string.Equals(cached.ChannelId, channelId, StringComparison.Ordinal))
+            {
+                resultsById[cached.Id] = cached;
+            }
+        }
+
+        var messagesDir = Path.Combine(_basePath, channelId, "messages");
+        if (Directory.Exists(messagesDir))
+        {
+            foreach (var filePath in Directory.EnumerateFiles(messagesDir, "*.json"))
+            {
+                var messageId = Path.GetFileNameWithoutExtension(filePath);
+                if (string.IsNullOrEmpty(messageId) || resultsById.ContainsKey(messageId))
+                {
+                    continue;
+                }
+
+                var msg = GetMessageFromDisk(channelId, messageId);
+                if (msg != null)
+                {
+                    resultsById[msg.Id] = msg;
+                }
+            }
+        }
+
+        return resultsById.Values.ToList();
+    }
+
+    public void PurgeChannelDirectory(string channelId)
+    {
+        if (string.IsNullOrWhiteSpace(channelId))
+        {
+            return;
+        }
+
+        var cachedIds = _cache.Values
+            .Where(m => string.Equals(m.ChannelId, channelId, StringComparison.Ordinal))
+            .Select(m => m.Id)
+            .ToList();
+
+        foreach (var id in cachedIds)
+        {
+            _cache.TryRemove(id, out _);
+            _cacheService.Remove(id);
+        }
+
+        _indexService.RemoveChannelIndex(channelId);
+
+        var channelDir = Path.Combine(_basePath, channelId);
+        if (Directory.Exists(channelDir))
+        {
+            _writer.QueueDeleteDirectory(channelDir);
+        }
     }
 }

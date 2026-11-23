@@ -2,48 +2,53 @@
 @inject PresenceStateService PresenceState
 
 @{
-    UserPresenceBadge presenceBadge = (ShowPresence && Employee != null)
-        ? PresenceState.GetUserPresenceBadge(Employee.Id)
-        : UserPresenceBadge.Offline;
-    
-    string safeColor = string.IsNullOrEmpty(Employee?.ProfileColor) ? Colors.DeepPurple.Default : Employee.ProfileColor;
-    string overflowStyle = ShowPresence ? "overflow: visible !important;" : "overflow: hidden;";
-    string calculatedFontSize = !string.IsNullOrEmpty(FontSize)
-        ? FontSize
-        : (Size == Size.Small ? "0.8rem" : "inherit");
+    var presenceBadge = ResolvePresenceBadge();
+    var sizeClass = Size switch
+    {
+        Size.Small => "mud-avatar-small",
+        Size.Large => "mud-avatar-large",
+        _ => "mud-avatar-medium"
+    };
+    var safeColor = string.IsNullOrEmpty(Employee?.ProfileColor) ? Colors.DeepPurple.Default : Employee.ProfileColor;
+    var avatarStyle = string.IsNullOrEmpty(Style)
+        ? $"background-color: {safeColor}; color: #fff;"
+        : $"background-color: {safeColor}; color: #fff; {Style}";
+    var initials = Employee != null && !Employee.HasCustomAvatar
+        ? (!string.IsNullOrWhiteSpace(Employee.Initials)
+            ? Employee.Initials.Trim()
+            : string.Concat(Employee.FirstName?.Trim().Take(1) ?? [], Employee.LastName?.Trim().Take(1) ?? []).ToUpperInvariant())
+        : string.Empty;
 }
 
-<MudAvatar Size="@Size" Class="@Class" Style="@($"{overflowStyle} position: relative; vertical-align: middle; font-size: {calculatedFontSize}; background-color: {safeColor}; color: {Colors.Shades.White}; {Style}")">
+<div class="mud-avatar mud-avatar-filled @sizeClass employee-avatar @(ShowPresence ? "has-presence" : "") @Class" style="@avatarStyle" title="@(string.IsNullOrEmpty(Title) ? null : Title)">
     @if (Employee != null)
     {
-        @if (Employee.HasCustomAvatar)
-        {
-            <div style="width: 100%; height: 100%; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center;">
-                <MudImage Src="@($"/spokesapi/Media/Avatar/{Employee.Id}?v={Employee.AvatarVersion}")" ObjectFit="ObjectFit.Cover" Style="width: 100%; height: 100%; display: block;" />
-            </div>
-        }
-        else
-        {
-            <div style="width: 100%; height: 100%; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center;">
-                @(string.IsNullOrEmpty(Employee.Initials) ? $"{Employee.FirstName?.FirstOrDefault()}{Employee.LastName?.FirstOrDefault()}" : Employee.Initials)
-            </div>
-        }
+        <div class="spokes-avatar-inner employee-avatar-inner">
+            @if (Employee.HasCustomAvatar)
+            {
+                <img src="@($"/spokesapi/Media/Avatar/{Employee.Id}?v={Employee.AvatarVersion}")" alt="" loading="lazy" decoding="async" class="mud-image object-cover employee-avatar-img" />
+            }
+            else
+            {
+                <span class="spokes-avatar-initials @(initials.Length == 1 ? "is-single-char" : "")">@initials</span>
+            }
+        </div>
     }
-    @if (presenceBadge != UserPresenceBadge.Offline)
+    @if (presenceBadge == UserPresenceBadge.OnlineMobile)
     {
-        @if (presenceBadge == UserPresenceBadge.OnlineMobile)
-        {
-            <div class="presence-mobile-badge" title="@Loc["Online on Mobile"]">
-                <MudIcon Icon="@Icons.Material.Filled.Smartphone" Class="presence-mobile-icon" />
-            </div>
-        }
-        else
-        {
-            var badgeHexColor = presenceBadge == UserPresenceBadge.Away ? "var(--mud-palette-warning)" : "var(--mud-palette-success)";
-            <div class="presence-dot" style="background-color: @badgeHexColor;"></div>
-        }
+        <div class="presence-mobile-badge" title="@Loc["Online on Mobile"]">
+            <svg class="mud-icon-root mud-svg-icon presence-mobile-icon" focusable="false" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z" fill="currentColor" /></svg>
+        </div>
     }
-</MudAvatar>
+    else if (presenceBadge != UserPresenceBadge.Offline)
+    {
+        <div class="presence-dot @(presenceBadge == UserPresenceBadge.Away ? "presence-dot-away" : "presence-dot-online")"></div>
+    }
+</div>
+@{
+    _lastFingerprint = ComputeFingerprint(presenceBadge);
+    _hasRenderedOnce = true;
+}
 
 @code {
     [Parameter] public Employee? Employee { get; set; }
@@ -51,7 +56,44 @@
     [Parameter] public string Class { get; set; } = "";
     [Parameter] public string Style { get; set; } = "";
     [Parameter] public bool ShowPresence { get; set; } = true;
-    [Parameter] public string? FontSize { get; set; }
+    [Parameter] public string? Title { get; set; }
+
+    private int _lastFingerprint;
+    private bool _hasRenderedOnce;
+
+    private UserPresenceBadge ResolvePresenceBadge() =>
+        (ShowPresence && Employee != null)
+            ? PresenceState.GetUserPresenceBadge(Employee.Id)
+            : UserPresenceBadge.Offline;
+
+    private int ComputeFingerprint(UserPresenceBadge badge)
+    {
+        var hash = new HashCode();
+        hash.Add(Employee?.Id, StringComparer.Ordinal);
+        hash.Add(Employee?.HasCustomAvatar ?? false);
+        hash.Add(Employee?.AvatarVersion ?? 0);
+        hash.Add(Employee?.Initials, StringComparer.Ordinal);
+        hash.Add(Employee?.FirstName, StringComparer.Ordinal);
+        hash.Add(Employee?.LastName, StringComparer.Ordinal);
+        hash.Add(Employee?.ProfileColor, StringComparer.Ordinal);
+        hash.Add(Size);
+        hash.Add(Class, StringComparer.Ordinal);
+        hash.Add(Style, StringComparer.Ordinal);
+        hash.Add(ShowPresence);
+        hash.Add(Title, StringComparer.Ordinal);
+        hash.Add(badge);
+        return hash.ToHashCode();
+    }
+
+    protected override bool ShouldRender()
+    {
+        if (!_hasRenderedOnce)
+        {
+            return true;
+        }
+
+        return ComputeFingerprint(ResolvePresenceBadge()) != _lastFingerprint;
+    }
 
     protected override void OnInitialized()
     {

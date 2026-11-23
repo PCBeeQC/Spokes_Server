@@ -18,7 +18,6 @@ public class CalendarReminderTests
         Assert.True(Guid.TryParse(reminder.Id, out _));
         Assert.Equal(10, reminder.Value);
         Assert.Equal(CalendarReminderUnit.Minutes, reminder.Unit);
-        Assert.Equal(CalendarReminderType.Notification, reminder.Type);
     }
 
     [Theory]
@@ -88,8 +87,7 @@ public class CalendarReminderTests
         {
             Id = "rem-123",
             Value = 30,
-            Unit = CalendarReminderUnit.Minutes,
-            Type = CalendarReminderType.Notification
+            Unit = CalendarReminderUnit.Minutes
         };
 
         var copy = original.Clone();
@@ -97,7 +95,6 @@ public class CalendarReminderTests
         Assert.Equal(original.Id, copy.Id);
         Assert.Equal(original.Value, copy.Value);
         Assert.Equal(original.Unit, copy.Unit);
-        Assert.Equal(original.Type, copy.Type);
 
         copy.Value = 45;
         copy.Unit = CalendarReminderUnit.Hours;

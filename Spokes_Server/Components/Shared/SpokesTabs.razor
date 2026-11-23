@@ -1,0 +1,32 @@
+@namespace Spokes_Server.Components.Shared
+
+@* Standardized flat, outlined tab container with bordered header and padded panel area. *@
+<MudTabs Elevation="0"
+         Outlined="true"
+         Border="true"
+         Rounded="true"
+         ApplyEffectsToContainer="true"
+         Color="@Color"
+         SliderColor="@SliderColor"
+         KeepPanelsAlive="@KeepPanelsAlive"
+         ActivePanelIndex="@ActivePanelIndex"
+         ActivePanelIndexChanged="@ActivePanelIndexChanged"
+         Class="@Class"
+         TabPanelsClass="@TabPanelsClass"
+         TabHeaderClass="@TabHeaderClass"
+         Style="@Style">
+    @ChildContent
+</MudTabs>
+
+@code {
+    [Parameter] public int ActivePanelIndex { get; set; }
+    [Parameter] public EventCallback<int> ActivePanelIndexChanged { get; set; }
+    [Parameter] public Color Color { get; set; } = Color.Default;
+    [Parameter] public Color SliderColor { get; set; } = Color.Inherit;
+    [Parameter] public bool KeepPanelsAlive { get; set; }
+    [Parameter] public string Class { get; set; } = string.Empty;
+    [Parameter] public string TabPanelsClass { get; set; } = "pa-4";
+    [Parameter] public string TabHeaderClass { get; set; } = string.Empty;
+    [Parameter] public string Style { get; set; } = string.Empty;
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

@@ -1,7 +1,5 @@
 namespace Spokes_Server.Core.Services.Reports;
 
-using System.Text;
-using MudBlazor;
 using Spokes_Server.Aggregate.Contexts;
 using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Core.Data.Repositories.Core;
@@ -49,7 +47,9 @@ public class TimesheetReportService
 
     public async Task<List<TimesheetReportEntry>> LoadAllEntriesAsync(
         bool includeCostRates = true,
-        IReadOnlySet<string>? allowedProjectIds = null)
+        IReadOnlySet<string>? allowedProjectIds = null,
+        IReadOnlySet<string>? allowedEmployeeIds = null,
+        bool includeBillingRates = true)
     {
         return await Task.Run(() =>
         {
@@ -70,6 +70,12 @@ public class TimesheetReportService
 
             foreach (var ts in timesheets)
             {
+                if (allowedEmployeeIds != null &&
+                    (string.IsNullOrWhiteSpace(ts.EmployeeId) || !allowedEmployeeIds.Contains(ts.EmployeeId)))
+                {
+                    continue;
+                }
+
                 employeeMap.TryGetValue(ts.EmployeeId ?? string.Empty, out var emp);
                 var empName = emp?.FullName ?? (!string.IsNullOrWhiteSpace(ts.EmployeeName) ? ts.EmployeeName : "Unknown Employee");
                 var empInitials = emp?.Initials ?? (empName.Length >= 2 ? empName[..2].ToUpper() : "??");
@@ -98,13 +104,16 @@ public class TimesheetReportService
                     }
 
                     var hourlyRate = 0m;
-                    if (proj != null)
+                    if (includeBillingRates)
                     {
-                        hourlyRate = proj.GetEffectiveRate(entry.WorkTypeId ?? string.Empty, task?.DefaultRate ?? 0, card);
-                    }
-                    else if (task != null)
-                    {
-                        hourlyRate = task.DefaultRate;
+                        if (proj != null)
+                        {
+                            hourlyRate = proj.GetEffectiveRate(entry.WorkTypeId ?? string.Empty, task?.DefaultRate ?? 0, card);
+                        }
+                        else if (task != null)
+                        {
+                            hourlyRate = task.DefaultRate;
+                        }
                     }
 
                     var costRate = 0m;
@@ -121,7 +130,7 @@ public class TimesheetReportService
                     }
 
                     decimal? allocatedHours = null;
-                    if (proj != null && proj.Allocations.Count > 0)
+                    if (includeBillingRates && proj != null && proj.Allocations.Count > 0)
                     {
                         allocatedHours = proj.Allocations.Sum(a => a.QuotedHours);
                     }
@@ -213,40 +222,4 @@ public class TimesheetReportService
 
         return roundedEntries;
     }
-
-    public TimesheetKPISummary CalculateKPISummary(List<TimesheetReportEntry> entries)
-        => TimesheetCalculationHelper.CalculateKPISummary(entries);
-
-    public List<TimesheetGroupSummary> BuildSummaryGroups(
-        List<TimesheetReportEntry> entries,
-        ReportGroupBy primaryGroup,
-        ReportSubGroupBy secondaryGroup)
-        => TimesheetCalculationHelper.BuildSummaryGroups(entries, primaryGroup, secondaryGroup);
-
-    public TimesheetWeeklyMatrix BuildWeeklyMatrix(
-        List<TimesheetReportEntry> entries,
-        DateTime weekStartDate,
-        WeeklyGroupBy groupBy)
-        => TimesheetCalculationHelper.BuildWeeklyMatrix(entries, weekStartDate, groupBy);
-
-    public string FormatDuration(decimal hours, TimeDisplayFormat format)
-        => TimesheetFormatHelper.FormatDuration(hours, format);
-
-    public string FormatCurrency(decimal amount)
-        => TimesheetFormatHelper.FormatCurrency(amount, _companyProfiles.Get()?.CurrencySymbol ?? "$");
-
-    public DateRange GetPresetDateRange(string preset)
-        => TimesheetDateRangeHelper.GetPresetDateRange(preset);
-
-    public DateRange ShiftDateRange(DateRange currentRange, int direction)
-        => TimesheetDateRangeHelper.ShiftDateRange(currentRange, direction);
-
-    public string GenerateSummaryCsv(List<TimesheetGroupSummary> groups, TimeDisplayFormat format)
-        => TimesheetCsvExportHelper.GenerateSummaryCsv(groups, format);
-
-    public string GenerateDetailedCsv(List<TimesheetReportEntry> entries, TimeDisplayFormat format)
-        => TimesheetCsvExportHelper.GenerateDetailedCsv(entries, format);
-
-    public string GenerateWeeklyCsv(TimesheetWeeklyMatrix matrix, TimeDisplayFormat format)
-        => TimesheetCsvExportHelper.GenerateWeeklyCsv(matrix, format);
 }

@@ -15,12 +15,9 @@ export function initInfiniteScroll(containerId, sentinelId, dotNetHelper) {
         return;
     }
 
-    console.log('[Email] initInfiniteScroll: Attaching to', container, sentinel);
-
     currentObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
-                console.log('[Email] Triggering LoadOlderMessagesJS');
                 dotNetHelper.invokeMethodAsync('LoadOlderMessagesJS');
             }
         });
@@ -41,14 +38,14 @@ export function scrollToTopOfEmail() {
 
 export function printEmail(subject, from, to, date, htmlContent) {
     const iframe = document.createElement('iframe');
+    iframe.setAttribute('sandbox', 'allow-same-origin allow-modals');
     iframe.style.position = 'absolute';
     iframe.style.top = '-9999px';
     iframe.style.left = '-9999px';
     iframe.style.width = '1000px';
     iframe.style.height = '1000px';
-    document.body.appendChild(iframe);
 
-    // Create a clean header
+    // Create a clean header (header fields are HTML-encoded server-side; htmlContent is server-sanitized)
     const headerHtml = `
         <div style="margin-bottom: 20px; border-bottom: 1px solid #ddd; padding-bottom: 15px;">
             <h2 style="margin: 0 0 15px 0;">${subject}</h2>
@@ -60,12 +57,11 @@ export function printEmail(subject, from, to, date, htmlContent) {
         </div>
     `;
 
-    const doc = iframe.contentWindow.document;
-    doc.open();
-    doc.write(`
+    const documentHtml = `
         <!DOCTYPE html>
         <html>
         <head>
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: cid: http: https:; style-src 'unsafe-inline'; font-src data:;" />
             <style>
                 body { 
                     font-family: Roboto, Helvetica, Arial, sans-serif; 
@@ -84,20 +80,22 @@ export function printEmail(subject, from, to, date, htmlContent) {
             ${htmlContent}
         </body>
         </html>
-    `);
-    doc.close();
+    `;
 
-    // Set a short delay to allow images and layout to process before triggering print
-    setTimeout(() => {
-        if (iframe.contentWindow) {
-            iframe.contentWindow.focus();
-            iframe.contentWindow.print();
-        }
-        // Cleanup iframe after print dialog is handled
+    iframe.onload = () => {
         setTimeout(() => {
-            if (document.body.contains(iframe)) {
-                document.body.removeChild(iframe);
+            if (iframe.contentWindow) {
+                iframe.contentWindow.focus();
+                iframe.contentWindow.print();
             }
-        }, 1000);
-    }, 500);
+            setTimeout(() => {
+                if (document.body.contains(iframe)) {
+                    document.body.removeChild(iframe);
+                }
+            }, 1000);
+        }, 250);
+    };
+
+    iframe.srcdoc = documentHtml;
+    document.body.appendChild(iframe);
 }

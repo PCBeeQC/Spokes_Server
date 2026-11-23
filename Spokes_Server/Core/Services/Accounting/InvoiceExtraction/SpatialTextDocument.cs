@@ -116,11 +116,6 @@ public class SpatialPage
     public IEnumerable<SpatialLine> HeaderLines => Lines.Where(l => l.Y >= Height * 0.65);
 
     /// <summary>
-    /// Middle tabular and body area (between 25% and 65% of page height).
-    /// </summary>
-    public IEnumerable<SpatialLine> BodyLines => Lines.Where(l => l.Y < Height * 0.65 && l.Y >= Height * 0.25);
-
-    /// <summary>
     /// Bottom summary and tax totals area (bottom 25% of page).
     /// </summary>
     public IEnumerable<SpatialLine> FooterLines => Lines.Where(l => l.Y < Height * 0.25);
@@ -134,15 +129,13 @@ public class SpatialTextDocument
     public List<SpatialPage> Pages { get; } = [];
     public string FullLayoutText { get; }
     public string RawFullText { get; }
-    public int TotalPageCount { get; init; }
-    public bool HasSelectableText { get; init; }
+    public bool HasSelectableText { get; }
 
     private SpatialTextDocument(List<SpatialPage> pages, string fullLayoutText, string rawFullText)
     {
         Pages = pages;
         FullLayoutText = fullLayoutText;
         RawFullText = rawFullText;
-        TotalPageCount = pages.Count;
         HasSelectableText = pages.Any(p => p.Lines.Any(l => !string.IsNullOrWhiteSpace(l.Text))) || !string.IsNullOrWhiteSpace(fullLayoutText);
     }
 
@@ -358,13 +351,7 @@ public class SpatialTextDocument
         }
 
         var fullLayoutText = string.Join("\n", pages.SelectMany(p => p.Lines.Select(l => l.Text)));
-        bool hasSelectableText = pages.Any(p => p.Lines.Any(l => !string.IsNullOrWhiteSpace(l.Text))) || !string.IsNullOrWhiteSpace(fullLayoutText);
-
-        return new SpatialTextDocument(pages, fullLayoutText, rawSb.ToString())
-        {
-            TotalPageCount = totalPages,
-            HasSelectableText = hasSelectableText
-        };
+        return new SpatialTextDocument(pages, fullLayoutText, rawSb.ToString());
     }
 
     /// <summary>

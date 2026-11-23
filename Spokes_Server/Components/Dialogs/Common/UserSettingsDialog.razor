@@ -380,7 +380,38 @@
                                 </div>
                             }
                             </div>
-                        
+                        <MudDivider />
+                        <div class="d-flex align-center justify-space-between px-4 py-3 gap-2">
+                            <div>
+                                <MudText Typo="Typo.body1" Style="font-weight: 500;">@Loc["Local Media Cache"]</MudText>
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                    @if (_isLoadingMediaCacheStats)
+                                    {
+                                        @Loc["Calculating..."]
+                                    }
+                                    else if (_mediaCacheEntries == 0)
+                                    {
+                                        @Loc["No cached images on this device."]
+                                    }
+                                    else
+                                    {
+                                        @string.Format(Loc["{0} ({1} cached images)"].Value, Spokes_Server.Core.Helpers.FileHelper.FormatBytes(_mediaCacheBytes), _mediaCacheEntries)
+                                    }
+                                </MudText>
+                            </div>
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Secondary"
+                                       Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.CleaningServices"
+                                       Disabled="@(_isClearingMediaCache || _isLoadingMediaCacheStats || _mediaCacheEntries == 0)"
+                                       OnClick="ClearLocalMediaCacheAsync">
+                                @if (_isClearingMediaCache)
+                                {
+                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                }
+                                @Loc["Clear Cache"]
+                            </MudButton>
+                        </div>
                     </MudPaper>
                 </div>
             </div>
@@ -432,7 +463,7 @@
                                         {
 
                                             <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Text" Class="ml-n2"
-                                                     Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">@Loc["This device"]</MudChip>
+                                                     Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">@Loc["This Device"]</MudChip>
                                         
                                         }
 
@@ -597,11 +628,13 @@
     private bool IsConfigured = false;
     private bool IsSubscribed = false;
     private bool IsLoading = false;
-    private bool _isNativeMobile = false;
     private bool _isDesktopApp = false;
     private bool _requiresRelay = false;
     private bool _isNativePushLicensed = true;
-    private string _nativePushMessage = "";
+    private bool _isLoadingMediaCacheStats = true;
+    private bool _isClearingMediaCache = false;
+    private long _mediaCacheBytes = 0;
+    private int _mediaCacheEntries = 0;
 
     // Preferences
     private string _selectedLanguage = "en-US";
@@ -720,6 +753,7 @@
         if (firstRender)
         {
             await LoadClientDeviceStateAsync();
+            await LoadMediaCacheStatsAsync();
             if (_objRef != null)
             {
                 try
@@ -747,7 +781,6 @@
             {
                 try
                 {
-                    _isNativeMobile = await JS.InvokeAsync<bool>("pushNotifications.isNativePlatform");
                     _isDesktopApp = await JS.InvokeAsync<bool>("pushNotifications.isDesktopApp");
                     _requiresRelay = await JS.InvokeAsync<bool>("pushNotifications.requiresPushRelay");
                 }
@@ -758,13 +791,30 @@
                 var licenseResult = LicenseValidationService.ValidateLicense(profile?.LicensePayload, currentConfig);
                 _isNativePushLicensed = licenseResult.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock &&
                                         licenseResult.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
-                _nativePushMessage = licenseResult.Message;
 
                 IsConfigured = !string.IsNullOrEmpty(profile?.VapidPublicKey);
 
                 if (IsConfigured)
                 {
-                    var existingSub = await JS.InvokeAsync<Dictionary<string, object>?>("pushNotifications.getExistingSubscription");
+                    var currentSessionForPush = !string.IsNullOrEmpty(_currentSessionId)
+                        ? Db.DeviceSessions.GetById(_currentSessionId)
+                        : null;
+                    var currentDeviceForPush = _devices.FirstOrDefault(d => d.Id == _currentSessionId);
+                    bool serverHasActivePush = currentDeviceForPush?.HasPush == true && currentSessionForPush?.PushExplicitlyDisabled != true;
+
+                    if (currentSessionForPush?.PushExplicitlyDisabled == true)
+                    {
+                        try { await JS.InvokeVoidAsync("pushNotifications.setServerPushDisabled", true); } catch { }
+                    }
+                    else if (serverHasActivePush)
+                    {
+                        try { await JS.InvokeVoidAsync("pushNotifications.setServerPushDisabled", false); } catch { }
+                    }
+
+                    var existingSub = await JS.InvokeAsync<Dictionary<string, object>?>("pushNotifications.getExistingSubscription", new
+                    {
+                        allowNativeTokenFetch = serverHasActivePush
+                    });
                     if (existingSub != null && existingSub.TryGetValue("endpoint", out var epObj))
                     {
                         _currentEndpoint = epObj?.ToString();
@@ -777,8 +827,7 @@
                     // Keep IsSubscribed strictly server-authoritative from current session in _devices
                     if (!string.IsNullOrEmpty(_currentSessionId))
                     {
-                        var current = _devices.FirstOrDefault(d => d.Id == _currentSessionId);
-                        IsSubscribed = current?.HasPush == true && current.IsEnabled;
+                        IsSubscribed = currentDeviceForPush?.HasPush == true && currentDeviceForPush.IsEnabled;
                     }
                 }
 
@@ -792,25 +841,7 @@
             Logger.LogError(ex, "Error loading push status");
         }
 
-        if (!string.IsNullOrEmpty(_currentSessionId))
-        {
-            try
-            {
-                var vaultRes = await JS.InvokeAsync<System.Text.Json.JsonElement>("spokesVault.getStatus");
-                if (vaultRes.ValueKind != System.Text.Json.JsonValueKind.Null && vaultRes.TryGetProperty("hasCookie", out var hc))
-                {
-                    var hasCookie = hc.GetBoolean();
-                    var currentSession = Db.DeviceSessions.GetById(_currentSessionId);
-                    if (!IsReadOnlyOrRestricted && currentSession != null && currentSession.EmployeeId == _currentUser!.Id && currentSession.HasVaultCookie != hasCookie)
-                    {
-                        currentSession.HasVaultCookie = hasCookie;
-                        Db.DeviceSessions.Save(currentSession);
-                        LoadDevices();
-                    }
-                }
-            }
-            catch { }
-        }
+        // Vault HasVaultCookie state is server-controlled by VaultController and SessionService.
     }
 
     private bool IsReadOnlyOrRestricted => _currentUser == null || !_currentUser.IsActive || _currentUser.IsBanned || _currentUser.IsSuspended;
@@ -865,7 +896,7 @@
                 var currentDevice = _devices.FirstOrDefault(d => d.Id == _currentSessionId);
                 if (currentDevice != null)
                 {
-                    IsSubscribed = currentDevice.HasPush;
+                    IsSubscribed = currentDevice.HasPush && currentDevice.IsEnabled;
                 }
             }
         }
@@ -873,19 +904,6 @@
         {
             _devices = new List<DeviceInfo>();
         }
-    }
-
-    private string ParseUserAgentToDeviceInfo(string userAgent)
-    {
-        if (string.IsNullOrEmpty(userAgent)) return "Unknown Device";
-        var deviceInfo = "Unknown Device";
-        if (userAgent.Contains("Windows")) deviceInfo = "Windows";
-        else if (userAgent.Contains("iPhone") || userAgent.Contains("iPad")) deviceInfo = "iOS";
-        else if (userAgent.Contains("Android")) deviceInfo = "Android";
-        else if (userAgent.Contains("Mac OS")) deviceInfo = "macOS";
-        
-        if (userAgent.Contains("Capacitor") || userAgent.Contains("wv")) deviceInfo += " (App)";
-        return deviceInfo;
     }
 
     private async Task RevokeSession(string sessionId)
@@ -896,6 +914,8 @@
         {
             session.RevokedAt = DateTime.UtcNow;
             session.HasVaultCookie = false;
+            session.VaultNonce = Guid.NewGuid().ToString("N");
+            session.PushExplicitlyDisabled = false;
             // Push fields live on the session — clear them on revocation
             if (session.HasPush)
             {
@@ -906,12 +926,13 @@
                 Db.DeviceSessions.Save(session);
             }
 
-            FileTokenService.InvalidateUserTokens(session.EmployeeId);
+            FileTokenService.InvalidateUserEncryptedTokens(session.EmployeeId);
             SessionService.EvictGlobalKeystoreIfNoUnlockedSessions(session.EmployeeId);
 
             if (sessionId == _currentSessionId)
             {
                 // Force logout immediately if revoking the current session
+                try { await JS.InvokeVoidAsync("spokesMediaLoader.clearAllCache"); } catch { }
                 bool isCapacitor = false;
                 try { isCapacitor = await JS.InvokeAsync<bool>("eval", "!!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())"); } catch { }
                 var suffix = isCapacitor ? "?client=mobile" : "";
@@ -1187,7 +1208,12 @@
 
         try
         {
-            var result = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.unsubscribeAndNotifyServer");
+            var fallbackEndpoint = _currentEndpoint;
+            if (string.IsNullOrEmpty(fallbackEndpoint) && !string.IsNullOrEmpty(_currentSessionId))
+            {
+                fallbackEndpoint = _devices.FirstOrDefault(d => d.Id == _currentSessionId)?.Endpoint;
+            }
+            var result = await JS.InvokeAsync<Dictionary<string, object>>("pushNotifications.unsubscribeAndNotifyServer", fallbackEndpoint);
             var success = result?.GetValueOrDefault("success")?.ToString() == "True";
 
             if (success)
@@ -1232,12 +1258,12 @@
             var device = _devices.FirstOrDefault(d => d.Id == deviceId);
             if (device == null) return;
 
-            // Update the DeviceSession directly (push fields and session are now unified)
+            // Update the DeviceSession directly (push fields and session are now unified).
+            // Preserve session.DeviceInfo (e.g., "Android (App)") so platform classification is not lost.
             var session = Db.DeviceSessions.GetById(deviceId);
             if (session != null && session.EmployeeId == _currentUser.Id)
             {
                 session.DeviceName = _editingDeviceName;
-                session.DeviceInfo = _editingDeviceName;
                 Db.DeviceSessions.Save(session);
             }
 
@@ -1274,10 +1300,12 @@
             var device = _devices.FirstOrDefault(d => d.Id == deviceId);
             if (device != null) device.IsEnabled = enabled;
 
-            if (deviceId == _currentSessionId || (device != null && device.Endpoint == _currentEndpoint))
+            if (deviceId == _currentSessionId || (device != null && !string.IsNullOrEmpty(_currentEndpoint) && device.Endpoint == _currentEndpoint))
             {
+                IsSubscribed = enabled && (device?.HasPush ?? false);
                 CircuitContext.HasPushEnabled = enabled;
                 PresenceState.UpdatePushEnabledState(CircuitContext.SubscriptionId, enabled);
+                try { await JS.InvokeVoidAsync("pushNotifications.setServerPushDisabled", !enabled); } catch { }
             }
         }
         catch (Exception ex)
@@ -1315,6 +1343,7 @@
                 // The server-side push data is cleared, but the browser push subscription may still exist.
                 // Unsubscribe locally too.
                 await JS.InvokeAsync<object>("pushNotifications.unsubscribe");
+                try { await JS.InvokeVoidAsync("pushNotifications.setServerPushDisabled", true); } catch { }
                 IsSubscribed = false;
                 _currentEndpoint = null;
                 CircuitContext.HasPushEnabled = false;
@@ -1334,6 +1363,12 @@
     private async Task ConfirmDeleteAccount()
     {
         if (IsReadOnlyOrRestricted) return;
+        if (_currentUser != null && UserService.IsSoleActiveAdmin(Db.Employees, _currentUser.Id))
+        {
+            Snackbar.Add(Loc["Cannot delete the sole active administrator account. Promote another administrator first."].Value, Severity.Error);
+            return;
+        }
+
         bool? result = await DialogService.ShowMessageBoxAsync(
             Loc["Delete Account"].Value,
             Loc["Are you absolutely sure? This will permanently delete your account and all associated data from this server. This action cannot be undone."].Value,
@@ -1341,11 +1376,25 @@
 
         if (result == true && _currentUser != null)
         {
+            if (UserService.IsSoleActiveAdmin(Db.Employees, _currentUser.Id))
+            {
+                Snackbar.Add(Loc["Cannot delete the sole active administrator account. Promote another administrator first."].Value, Severity.Error);
+                return;
+            }
+
             bool isDemo = Config.GetValue<bool>("Spokes_DemoMode");
             
             if (!isDemo)
             {
-                AccountDeletionService.DeleteAccount(_currentUser.Id, _currentSessionId);
+                try
+                {
+                    AccountDeletionService.DeleteAccount(_currentUser.Id, _currentSessionId);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    Snackbar.Add(ex.Message, Severity.Error);
+                    return;
+                }
             }
 
             var successMessage = isDemo 
@@ -1381,11 +1430,6 @@
                 ");
             }
         }
-    }
-
-    private string EscapeJs(string input)
-    {
-        return (input ?? "").Replace("\\", "\\\\").Replace("'", "\\'").Replace("\n", "\\n").Replace("\r", "");
     }
 
     private async Task TestDevice(string deviceId)
@@ -1507,7 +1551,69 @@
             _currentUser = Db.Employees.GetById(_currentUser.Id) ?? _currentUser;
         }
         LoadDevices();
+        await LoadMediaCacheStatsAsync();
         StateHasChanged(); // Refresh UI in case they enabled it or removed device cookie
+    }
+
+    private async Task LoadMediaCacheStatsAsync()
+    {
+        _isLoadingMediaCacheStats = true;
+        try
+        {
+            var stats = await JS.InvokeAsync<MediaCacheStatsDto?>("spokesMediaLoader.getCacheStatsAsync");
+            if (stats != null)
+            {
+                _mediaCacheBytes = Math.Max(0, stats.TotalBytes);
+                _mediaCacheEntries = Math.Max(0, stats.TotalEntries);
+            }
+            else
+            {
+                _mediaCacheBytes = 0;
+                _mediaCacheEntries = 0;
+            }
+        }
+        catch
+        {
+            _mediaCacheBytes = 0;
+            _mediaCacheEntries = 0;
+        }
+        finally
+        {
+            _isLoadingMediaCacheStats = false;
+        }
+    }
+
+    private async Task ClearLocalMediaCacheAsync()
+    {
+        if (_isClearingMediaCache) return;
+        _isClearingMediaCache = true;
+        StateHasChanged();
+        try
+        {
+            await JS.InvokeVoidAsync("spokesMediaLoader.clearAllCache");
+            await LoadMediaCacheStatsAsync();
+            Snackbar.Add(Loc["Local media cache cleared."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to clear local media cache");
+            Snackbar.Add(Loc["Failed to clear local media cache."].Value, Severity.Error);
+        }
+        finally
+        {
+            _isClearingMediaCache = false;
+            StateHasChanged();
+        }
+    }
+
+    private sealed class MediaCacheStatsDto
+    {
+        public int MemoryEntries { get; set; }
+        public long MemoryBytes { get; set; }
+        public int DiskEntries { get; set; }
+        public long DiskBytes { get; set; }
+        public int TotalEntries { get; set; }
+        public long TotalBytes { get; set; }
     }
 
     private async Task OpenNotificationSoundsDialog()

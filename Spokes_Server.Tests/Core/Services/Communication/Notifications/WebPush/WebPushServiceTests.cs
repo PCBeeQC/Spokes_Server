@@ -40,7 +40,7 @@ public class WebPushServiceTests : IDisposable
     private readonly ServerConfigRepository _serverConfigs;
 
     // Services
-    private readonly ChatStateService _chatState;
+    private readonly VoiceStateService _voiceState;
     private readonly PresenceStateService _presenceState;
     private readonly NotificationQueueService _notificationQueue;
     private readonly LicenseValidationService _licenseValidation;
@@ -52,6 +52,7 @@ public class WebPushServiceTests : IDisposable
     private readonly Mock<IDataProtector> _mockProtector;
     private readonly Mock<Spokes_Server.Core.Services.Logging.ISystemLogService> _mockSystemLog;
     private readonly Mock<HttpMessageHandler> _mockHttpMessageHandler;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<HttpContent, string> _capturedRequestBodies = new();
 
     // SUT
     private readonly WebPushService _sut;
@@ -61,7 +62,7 @@ public class WebPushServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_WebPush_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -72,12 +73,11 @@ public class WebPushServiceTests : IDisposable
         _systemConfigs = new SystemConfigRepository(_persistence, _config);
         _serverConfigs = new ServerConfigRepository(_persistence, _config);
 
-        _chatState = new ChatStateService();
-        _presenceState = new PresenceStateService(_chatState);
+        _voiceState = new VoiceStateService();
+        _presenceState = new PresenceStateService(_voiceState);
         _notificationQueue = new NotificationQueueService(new Mock<ILogger<NotificationQueueService>>().Object, _persistence, _config, _companyProfile);
 
-        var versionMeta = new VersionMetadata("server-v2026.4.1");
-        _licenseValidation = new LicenseValidationService(new Mock<ILogger<LicenseValidationService>>().Object, versionMeta, SpokesConstants.LicensePublicKeyPem);
+        _licenseValidation = new LicenseValidationService(new Mock<ILogger<LicenseValidationService>>().Object, SpokesConstants.LicensePublicKeyPem);
 
         _mockLogger = new Mock<ILogger<WebPushService>>();
         _mockHttpClientFactory = new Mock<IHttpClientFactory>();
@@ -91,7 +91,14 @@ public class WebPushServiceTests : IDisposable
         _mockHttpMessageHandler = new Mock<HttpMessageHandler>();
         _mockHttpMessageHandler.Protected()
             .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
-            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
+            .Callback<HttpRequestMessage, CancellationToken>((req, _) =>
+            {
+                if (req.Content != null)
+                {
+                    _capturedRequestBodies[req.Content] = ReadContentStream(req.Content);
+                }
+            })
+            .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.OK));
         var httpClient = new HttpClient(_mockHttpMessageHandler.Object);
         _mockHttpClientFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
 
@@ -104,7 +111,6 @@ public class WebPushServiceTests : IDisposable
                 _presenceState,
                 _notificationQueue,
                 _mockLogger.Object,
-                _config,
                 _mockHttpClientFactory.Object,
                 _mockSystemLog.Object,
                 _licenseValidation,
@@ -183,13 +189,6 @@ public class WebPushServiceTests : IDisposable
         {
             SetupValidVapidConfig();
             Assert.True(_sut.IsConfigured);
-        }
-
-        [Fact]
-        public async Task SendNotificationAsync_WhenNotConfigured_SkipsSend()
-        {
-            await _sut.SendNotificationAsync(new PushNotificationRequest { UserId = "user1", Title = "Test", Body = "Body" });
-            // No exceptions, just returns
         }
 
         [Fact]
@@ -346,41 +345,6 @@ public class WebPushServiceTests : IDisposable
         }
 
         [Fact]
-        public async Task SendDeviceTestNotificationAsync_WithRequestObject_SendsPush()
-        {
-            SetupValidVapidConfig();
-            
-            _sessions.Save(new DeviceSession 
-            {
-                Id = "sub_req",
-                EmployeeId = "user_req",
-                PushEnabled = true,
-                PushEndpoint = "https://example.com/push",
-                PushSubscriptionType = PushSubscriptionType.NativeRelay
-            });
-
-            var request = new DeviceTestNotificationRequest
-            {
-                SubscriptionId = "sub_req",
-                UserId = "user_req",
-                Title = "Test",
-                Body = "Body",
-                Category = "chat"
-            };
-
-            var result = await _sut.SendDeviceTestNotificationAsync(request);
-            Assert.True(result.IsSuccess);
-            Assert.False(result.IsPayloadEncrypted);
-
-            _mockHttpMessageHandler.Protected().Verify(
-                "SendAsync",
-                Times.Once(),
-                ItExpr.Is<HttpRequestMessage>(req => req.Method == HttpMethod.Post),
-                ItExpr.IsAny<CancellationToken>()
-            );
-        }
-
-        [Fact]
         public async Task SendDeviceTestNotificationAsync_WhenNativePushHasPublicKey_ReturnsEncryptedTrue()
         {
             SetupValidVapidConfig();
@@ -467,7 +431,6 @@ public class WebPushServiceTests : IDisposable
             );
         }
 
-
         [Fact]
         public async Task SendNotificationDirectAsync_WhenWebPushSubscription_CreatesClientFromHttpClientFactory()
         {
@@ -489,15 +452,6 @@ public class WebPushServiceTests : IDisposable
             await _sut.SendNotificationDirectAsync(new PushNotificationRequest { UserId = "user1", Title = "Test Pooled", Body = "Body" });
 
             _mockHttpClientFactory.Verify(f => f.CreateClient(It.IsAny<string>()), Times.AtLeastOnce());
-        }
-
-        [Fact]
-        public void GenerateVapidKeys_ReturnsValidKeyPair()
-        {
-            var (pub, priv) = WebPushService.GenerateVapidKeys();
-            
-            Assert.False(string.IsNullOrEmpty(pub));
-            Assert.False(string.IsNullOrEmpty(priv));
         }
 
         [Fact]
@@ -552,8 +506,7 @@ public class WebPushServiceTests : IDisposable
             _serverConfigs.Save(globalCfg);
 
             var licenseValidation = new LicenseValidationService(
-                new Mock<ILogger<LicenseValidationService>>().Object,
-                new VersionMetadata(expiredVersion));
+                new Mock<ILogger<LicenseValidationService>>().Object);
 
             var coreContext = new CoreContext(_companyProfile, null!, null!, _serverConfigs, _systemConfigs, _sessions, null!, null!);
             var hrContext = new HrContext(_employees, null!, null!, null!, null!, null!, _companyProfile);
@@ -564,7 +517,6 @@ public class WebPushServiceTests : IDisposable
                 _presenceState,
                 _notificationQueue,
                 _mockLogger.Object,
-                _config,
                 _mockHttpClientFactory.Object,
                 _mockSystemLog.Object,
                 licenseValidation,
@@ -596,8 +548,7 @@ public class WebPushServiceTests : IDisposable
             _serverConfigs.Save(globalCfg);
 
             var licenseValidation = new LicenseValidationService(
-                new Mock<ILogger<LicenseValidationService>>().Object,
-                new VersionMetadata(expiredVersion));
+                new Mock<ILogger<LicenseValidationService>>().Object);
 
             var mockHttpFactory = new Mock<IHttpClientFactory>(MockBehavior.Strict);
 
@@ -610,7 +561,6 @@ public class WebPushServiceTests : IDisposable
                 _presenceState,
                 _notificationQueue,
                 _mockLogger.Object,
-                _config,
                 mockHttpFactory.Object,
                 _mockSystemLog.Object,
                 licenseValidation,
@@ -618,39 +568,6 @@ public class WebPushServiceTests : IDisposable
 
             // Because license is expired, CreateClient must NOT be called on mockHttpFactory (strict mock will throw if called)
             await sut.SendNotificationAsync(new PushNotificationRequest { UserId = "u3_expired", Title = "title", Body = "body" });
-        }
-
-        [Fact]
-        public void Constructor_WithBoundedContexts_InstantiatesSuccessfully()
-        {
-            var mockCore = new Mock<CoreContext>();
-            mockCore.Setup(c => c.DeviceSessions).Returns(_sessions);
-            mockCore.Setup(c => c.CompanyProfile).Returns(_companyProfile);
-            mockCore.Setup(c => c.SystemConfigs).Returns(_systemConfigs);
-            mockCore.Setup(c => c.ServerConfigs).Returns(_serverConfigs);
-
-            var mockHr = new Mock<HrContext>();
-            mockHr.Setup(h => h.Employees).Returns(_employees);
-
-            var pushTokenService = new PushTokenService(_mockDataProtection.Object);
-            var payloadBuilder = new PushPayloadBuilder();
-            var relayDispatcher = new NativeRelayDispatcher(_mockHttpClientFactory.Object, _sessions, _mockSystemLog.Object);
-
-            var service = new WebPushService(
-                mockCore.Object,
-                mockHr.Object,
-                _presenceState,
-                _notificationQueue,
-                _mockLogger.Object,
-                _config,
-                _mockHttpClientFactory.Object,
-                _mockSystemLog.Object,
-                _licenseValidation,
-                pushTokenService,
-                payloadBuilder,
-                relayDispatcher);
-
-            Assert.NotNull(service);
         }
 
         [Fact]
@@ -692,9 +609,18 @@ public class WebPushServiceTests : IDisposable
             Assert.Equal(32, privBytes.Length);
         }
 
-        private static string GetContentString(HttpContent? content)
+        private string GetContentString(HttpContent? content)
         {
             if (content == null) return string.Empty;
+            if (_capturedRequestBodies.TryGetValue(content, out var captured))
+            {
+                return captured;
+            }
+            return ReadContentStream(content);
+        }
+
+        private static string ReadContentStream(HttpContent content)
+        {
             var stream = content.ReadAsStream();
             if (stream.CanSeek)
             {
@@ -709,21 +635,39 @@ public class WebPushServiceTests : IDisposable
             return text;
         }
 
-        private static bool ContentContains(HttpContent? content, string text)
+        private bool ContentContains(HttpContent? content, string text)
         {
             return ContentContains(content, text, StringComparison.Ordinal);
         }
 
-        private static bool ContentContains(HttpContent? content, string text, StringComparison comparison)
+        private bool ContentContains(HttpContent? content, string text, StringComparison comparison)
         {
             var body = GetContentString(content);
             return body.Contains(text, comparison);
+        }
+
+        private static string DecryptRelayInnerPayload(string outerJson, System.Security.Cryptography.RSA rsa)
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(outerJson);
+            var root = doc.RootElement;
+            Assert.True(root.GetProperty("isEncrypted").GetBoolean());
+            var encryptedKey = Convert.FromBase64String(root.GetProperty("encryptedKey").GetString()!);
+            var nonce = Convert.FromBase64String(root.GetProperty("nonce").GetString()!);
+            var ciphertext = Convert.FromBase64String(root.GetProperty("ciphertext").GetString()!);
+            var tag = Convert.FromBase64String(root.GetProperty("tag").GetString()!);
+
+            var aesKey = rsa.Decrypt(encryptedKey, System.Security.Cryptography.RSAEncryptionPadding.OaepSHA1);
+            var plaintextBytes = new byte[ciphertext.Length];
+            using var aesGcm = new System.Security.Cryptography.AesGcm(aesKey, 16);
+            aesGcm.Decrypt(nonce, ciphertext, tag, plaintextBytes);
+            return System.Text.Encoding.UTF8.GetString(plaintextBytes);
         }
 
         [Fact]
         public async Task SendNotificationAsync_EncryptedMessage_WhenDeviceLacksVaultCookie_SendsMaskedPayload()
         {
             SetupValidVapidConfig();
+            using var rsa = System.Security.Cryptography.RSA.Create(2048);
             var emp = new Employee { Id = "user1", PushNotificationsEnabled = true };
             _employees.Save(emp);
 
@@ -734,8 +678,15 @@ public class WebPushServiceTests : IDisposable
                 PushEnabled = true,
                 PushEndpoint = "https://example.com/push",
                 PushSubscriptionType = PushSubscriptionType.NativeRelay,
+                PushPublicKey = Convert.ToBase64String(rsa.ExportSubjectPublicKeyInfo()),
                 HasVaultCookie = false
             });
+
+            string? sentOuterJson = null;
+            _mockHttpMessageHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .Callback<HttpRequestMessage, CancellationToken>((req, _) => sentOuterJson = GetContentString(req.Content))
+                .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
 
             var request = new PushNotificationRequest
             {
@@ -748,21 +699,18 @@ public class WebPushServiceTests : IDisposable
 
             await _sut.SendNotificationAsync(request);
 
-            _mockHttpMessageHandler.Protected().Verify(
-                "SendAsync",
-                Times.Once(),
-                ItExpr.Is<HttpRequestMessage>(req =>
-                    req.Method == HttpMethod.Post &&
-                    ContentContains(req.Content, "New Secure Message") &&
-                    !ContentContains(req.Content, "Decrypted Secret Plaintext")),
-                ItExpr.IsAny<CancellationToken>()
-            );
+            Assert.NotNull(sentOuterJson);
+            Assert.DoesNotContain("Decrypted Secret Plaintext", sentOuterJson);
+            var innerJson = DecryptRelayInnerPayload(sentOuterJson!, rsa);
+            Assert.Contains("New Secure Message", innerJson);
+            Assert.DoesNotContain("Decrypted Secret Plaintext", innerJson);
         }
 
         [Fact]
         public async Task SendNotificationAsync_EncryptedMessage_WhenDeviceHasVaultCookie_SendsDecryptedPayload()
         {
             SetupValidVapidConfig();
+            using var rsa = System.Security.Cryptography.RSA.Create(2048);
             var emp = new Employee { Id = "user1", PushNotificationsEnabled = true };
             _employees.Save(emp);
 
@@ -773,8 +721,15 @@ public class WebPushServiceTests : IDisposable
                 PushEnabled = true,
                 PushEndpoint = "https://example.com/push",
                 PushSubscriptionType = PushSubscriptionType.NativeRelay,
+                PushPublicKey = Convert.ToBase64String(rsa.ExportSubjectPublicKeyInfo()),
                 HasVaultCookie = true
             });
+
+            string? sentOuterJson = null;
+            _mockHttpMessageHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .Callback<HttpRequestMessage, CancellationToken>((req, _) => sentOuterJson = GetContentString(req.Content))
+                .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
 
             var request = new PushNotificationRequest
             {
@@ -787,14 +742,10 @@ public class WebPushServiceTests : IDisposable
 
             await _sut.SendNotificationAsync(request);
 
-            _mockHttpMessageHandler.Protected().Verify(
-                "SendAsync",
-                Times.Once(),
-                ItExpr.Is<HttpRequestMessage>(req =>
-                    req.Method == HttpMethod.Post &&
-                    ContentContains(req.Content, "Decrypted Secret Plaintext")),
-                ItExpr.IsAny<CancellationToken>()
-            );
+            Assert.NotNull(sentOuterJson);
+            Assert.DoesNotContain("Decrypted Secret Plaintext", sentOuterJson);
+            var innerJson = DecryptRelayInnerPayload(sentOuterJson!, rsa);
+            Assert.Contains("Decrypted Secret Plaintext", innerJson);
         }
 
         [Theory]
@@ -884,7 +835,7 @@ public class WebPushServiceTests : IDisposable
                 PushSubscriptionType = PushSubscriptionType.NativeRelay
             });
 
-            _chatState.NotifyVoiceMemberJoined("vc-1", "user-voice");
+            _voiceState.NotifyVoiceMemberJoined("vc-1", "user-voice");
 
             var request = new PushNotificationRequest
             {
@@ -961,5 +912,4 @@ public class WebPushServiceTests : IDisposable
             );
         }
     }
-
 

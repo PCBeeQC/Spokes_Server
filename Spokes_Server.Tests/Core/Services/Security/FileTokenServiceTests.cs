@@ -148,25 +148,6 @@ public class FileTokenServiceTests
     }
 
     [Fact]
-    public void FileTokenPayload_Properties_CanGetAndSet()
-    {
-        var payload = new FileTokenPayload();
-        long nowTicks = DateTime.UtcNow.Ticks;
-
-        payload.Category = "invoices";
-        payload.ContextId = "inv-123";
-        payload.FileName = "invoice.pdf";
-        payload.EncryptionKeyBase64 = "c2VjcmV0";
-        payload.ExpiryTicks = nowTicks;
-
-        Assert.Equal("invoices", payload.Category);
-        Assert.Equal("inv-123", payload.ContextId);
-        Assert.Equal("invoice.pdf", payload.FileName);
-        Assert.Equal("c2VjcmV0", payload.EncryptionKeyBase64);
-        Assert.Equal(nowTicks, payload.ExpiryTicks);
-    }
-
-    [Fact]
     public void ValidateAccessToken_NullOrEmptyToken_ReturnsNone()
     {
         var service = new FileTokenService(_dataProtection, _memoryCache);
@@ -227,19 +208,6 @@ public class FileTokenServiceTests
     }
 
     [Fact]
-    public void ValidateAccessToken_WithMatchingUserIdAndSessionId_ReturnsSuccess()
-    {
-        var service = new FileTokenService(_dataProtection, _memoryCache);
-        string token = service.GenerateAccessToken("chat", "ch1", "file.png", "aesKey123", "user-123", "sess-456");
-
-        var result = service.ValidateAccessToken("chat", "ch1", "file.png", token, "user-123", "sess-456");
-
-        Assert.Equal(FileTokenStatus.Valid, result.Status);
-        Assert.True(result.IsSuccess);
-        Assert.Equal("aesKey123", result.EncryptionKey);
-    }
-
-    [Fact]
     public void ValidateAccessToken_WithMismatchedUserId_ReturnsInvalid()
     {
         var service = new FileTokenService(_dataProtection, _memoryCache);
@@ -283,19 +251,6 @@ public class FileTokenServiceTests
     }
 
     [Fact]
-    public void GenerateAccessToken_WithUserAndSession_PayloadContainsThem()
-    {
-        var service = new FileTokenService(_dataProtection, _memoryCache);
-        string token = service.GenerateAccessToken("albums", "alb-1", "pic.jpg", "key", "u-1", "s-1");
-
-        var payload = service.UnprotectToken(token);
-
-        Assert.NotNull(payload);
-        Assert.Equal("u-1", payload.UserId);
-        Assert.Equal("s-1", payload.SessionId);
-    }
-
-    [Fact]
     public void InvalidateUserTokens_InvalidatesBothEncryptedAndUnencryptedTokensForUser_PreservesOtherUsers()
     {
         var service = new FileTokenService(_dataProtection, _memoryCache);
@@ -308,7 +263,7 @@ public class FileTokenServiceTests
         Assert.True(service.ValidateAccessToken("albums", "alb-pub", "pub.jpg", user1UnencryptedToken, "user-1", "sess-1").IsSuccess);
         Assert.True(service.ValidateAccessToken("albums", "alb-2", "pic2.jpg", user2EncryptedToken, "user-2", "sess-2").IsSuccess);
 
-        service.InvalidateUserTokens("user-1");
+        service.InvalidateUserEncryptedTokens("user-1");
 
         var afterLockUser1Enc = service.ValidateAccessToken("albums", "alb-1", "pic.jpg", user1EncryptedToken, "user-1", "sess-1");
         var afterLockUser1Unenc = service.ValidateAccessToken("albums", "alb-pub", "pub.jpg", user1UnencryptedToken, "user-1", "sess-1");
@@ -371,6 +326,7 @@ public class FileTokenServiceTests
             var sc = new ServiceCollection();
             var mockConfig = new Moq.Mock<Microsoft.Extensions.Configuration.IConfiguration>();
             mockConfig.Setup(c => c["DataPath"]).Returns(tempDir);
+            mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
             sc.AddSingleton<Microsoft.Extensions.Configuration.IConfiguration>(mockConfig.Object);
             sc.AddLogging();
             sc.AddSingleton<EncryptionService>();
@@ -398,5 +354,169 @@ public class FileTokenServiceTests
                 try { Directory.Delete(tempDir, true); } catch { }
             }
         }
+    }
+
+    [Fact]
+    public void ValidateAccessToken_RequireTokenTrue_WithNullOrEmptyToken_ReturnsMissingFailure()
+    {
+        var service = new FileTokenService(_dataProtection, _memoryCache);
+
+        var nullResult = service.ValidateAccessToken("chat", "ch1", "file.png", null, "user-1", "sess-1", requireToken: true);
+        var emptyResult = service.ValidateAccessToken("chat", "ch1", "file.png", "   ", "user-1", "sess-1", requireToken: true);
+
+        Assert.Equal(FileTokenStatus.Missing, nullResult.Status);
+        Assert.False(nullResult.IsSuccess);
+        Assert.Equal(FileTokenStatus.Missing, emptyResult.Status);
+        Assert.False(emptyResult.IsSuccess);
+    }
+
+    [Fact]
+    public void InvalidateUserAndContextTokens_DoNotBustUnrelatedUserOrContextDedupTokens()
+    {
+        var service = new FileTokenService(_dataProtection, _memoryCache);
+
+        string userAToken = service.GenerateAccessToken("chat", "ch-a", "photo.jpg", null, "user-a", "sess-a");
+        string userBToken = service.GenerateAccessToken("chat", "ch-b", "photo.jpg", null, "user-b", "sess-b");
+
+        // Invalidating user-a must NOT rotate user-b's deduplicated cached token
+        service.InvalidateUserEncryptedTokens("user-a");
+
+        string userBTokenAfterUserALock = service.GenerateAccessToken("chat", "ch-b", "photo.jpg", null, "user-b", "sess-b");
+        Assert.Equal(userBToken, userBTokenAfterUserALock);
+
+        // Invalidating chat/ch-a must NOT rotate chat/ch-b's deduplicated cached token
+        service.InvalidateContextTokens("chat", "ch-a");
+        string userBTokenAfterOtherCtxRevoke = service.GenerateAccessToken("chat", "ch-b", "photo.jpg", null, "user-b", "sess-b");
+        Assert.Equal(userBToken, userBTokenAfterOtherCtxRevoke);
+
+        // Meanwhile user-a's regenerated token IS freshly rotated
+        string userARotated = service.GenerateAccessToken("chat", "ch-a", "photo.jpg", null, "user-a", "sess-a");
+        Assert.NotEqual(userAToken, userARotated);
+        Assert.True(service.ValidateAccessToken("chat", "ch-a", "photo.jpg", userARotated, "user-a", "sess-a", requireToken: true).IsSuccess);
+    }
+
+    [Fact]
+    public void SignFileUrl_SignsSpokesRoutesPreservingQueryAndFragment_AndLeavesExternalUrlsUntouched()
+    {
+        var service = new FileTokenService(_dataProtection, _memoryCache);
+
+        var signed = service.SignFileUrl("/spokesapi/files/projects/proj-1/receipt.jpg?s=sm&fn=receipt.jpg#page=1", "emp-1", "sess-1");
+        Assert.StartsWith("/spokesapi/files/projects/proj-1/receipt.jpg?", signed);
+        Assert.Contains("s=sm", signed);
+        Assert.Contains("fn=receipt.jpg", signed);
+        Assert.Contains("t=", signed);
+        Assert.EndsWith("#page=1", signed);
+
+        // Re-signing replaces stale t= instead of duplicating it
+        var resigned = service.SignFileUrl("/spokesapi/files/projects/proj-1/receipt.jpg?t=stale&s=sm", "emp-1", "sess-1");
+        Assert.DoesNotContain("t=stale", resigned);
+        Assert.Contains("s=sm", resigned);
+        Assert.Equal(1, resigned.Split("t=").Length - 1);
+
+        // Non-tokenizable and external routes pass through untouched
+        Assert.Equal("https://example.com/pic.png", service.SignFileUrl("https://example.com/pic.png", "emp-1", "sess-1"));
+        Assert.Equal("data:image/png;base64,AAA", service.SignFileUrl("data:image/png;base64,AAA", "emp-1", "sess-1"));
+        Assert.Equal("/spokesapi/files/demo-media/sample.jpg", service.SignFileUrl("/spokesapi/files/demo-media/sample.jpg", "emp-1", "sess-1"));
+        Assert.Equal("/spokesapi/files/email/msg1/att1", service.SignFileUrl("/spokesapi/files/email/msg1/att1", "emp-1", "sess-1"));
+    }
+
+    [Fact]
+    public void GenerateAccessToken_BinaryV2_IsCompactAndRoundTripsGuidsAndAesKey()
+    {
+        var service = new FileTokenService(_dataProtection, _memoryCache);
+        var channelId = Guid.NewGuid().ToString("D");
+        var userId = Guid.NewGuid().ToString("D");
+        var sessionId = Guid.NewGuid().ToString("D");
+        var aesKeyBytes = new byte[32];
+        for (int i = 0; i < aesKeyBytes.Length; i++) aesKeyBytes[i] = (byte)(i * 7 + 3);
+        var aesKeyBase64 = Convert.ToBase64String(aesKeyBytes);
+
+        string token = service.GenerateAccessToken(
+            "chat",
+            channelId,
+            "1731982012345_thumb.jpg",
+            aesKeyBase64,
+            userId,
+            sessionId,
+            isThumbnail: true);
+
+        // Binary v2 + Base64Url encoding should be dramatically shorter than ~500-char legacy JSON tokens
+        Assert.True(token.Length < 300, $"Expected compact binary v2 token (<300 chars), got {token.Length} chars.");
+
+        var payload = service.UnprotectToken(token);
+        Assert.NotNull(payload);
+        Assert.Equal("chat", payload!.Category);
+        Assert.Equal(channelId, payload.ContextId);
+        Assert.Equal("1731982012345_thumb.jpg", payload.FileName);
+        Assert.Equal(userId, payload.UserId);
+        Assert.Equal(sessionId, payload.SessionId);
+        Assert.Equal(aesKeyBase64, payload.EncryptionKeyBase64);
+        Assert.True(payload.IsThumbnail);
+
+        var validation = service.ValidateAccessToken("chat", channelId, "1731982012345_thumb.jpg", token, userId, sessionId, requireToken: true, isThumbnail: true);
+        Assert.Equal(FileTokenStatus.Valid, validation.Status);
+        Assert.Equal(aesKeyBase64, validation.EncryptionKey);
+
+        // Thumbnail-scoped token must still be rejected for full-resolution non-thumbnail requests
+        var nonThumbValidation = service.ValidateAccessToken("chat", channelId, "1731982012345_thumb.jpg", token, userId, sessionId, requireToken: true, isThumbnail: false);
+        Assert.Equal(FileTokenStatus.Invalid, nonThumbValidation.Status);
+
+        // Uppercase GUIDs must round-trip with exact case preserved under Ordinal validation
+        var upperId = Guid.NewGuid().ToString("D").ToUpperInvariant();
+        string upperToken = service.GenerateAccessToken("chat", upperId, "doc.pdf", null, upperId, upperId);
+        var upperPayload = service.UnprotectToken(upperToken);
+        Assert.NotNull(upperPayload);
+        Assert.Equal(upperId, upperPayload!.ContextId);
+        Assert.Equal(upperId, upperPayload.UserId);
+        Assert.Equal(upperId, upperPayload.SessionId);
+        Assert.Equal(FileTokenStatus.Valid, service.ValidateAccessToken("chat", upperId, "doc.pdf", upperToken, upperId, upperId, requireToken: true).Status);
+    }
+
+    [Fact]
+    public void UnprotectToken_StillDecodesLegacyJsonV1Tokens_ForRollingUpgradeCompatibility()
+    {
+        var service = new FileTokenService(_dataProtection, _memoryCache);
+        var protector = _dataProtection.CreateProtector("SpokesFileToken");
+        var expiryTicks = DateTime.UtcNow.AddHours(1).Ticks;
+        var legacyJson = System.Text.Json.JsonSerializer.Serialize(new FileTokenPayload
+        {
+            Category = "chat",
+            ContextId = "legacy-channel-1",
+            FileName = "photo.jpg",
+            EncryptionKeyBase64 = "bGVnYWN5LWtleQ==",
+            ExpiryTicks = expiryTicks,
+            UserId = "legacy-user",
+            SessionId = "legacy-session",
+            IsThumbnail = true,
+            TokenSequence = 0
+        });
+        var legacyToken = protector.Protect(legacyJson);
+
+        var payload = service.UnprotectToken(legacyToken);
+        Assert.NotNull(payload);
+        Assert.Equal("chat", payload!.Category);
+        Assert.Equal("legacy-channel-1", payload.ContextId);
+        Assert.Equal("photo.jpg", payload.FileName);
+        Assert.Equal("bGVnYWN5LWtleQ==", payload.EncryptionKeyBase64);
+        Assert.Equal("legacy-user", payload.UserId);
+        Assert.Equal("legacy-session", payload.SessionId);
+        Assert.True(payload.IsThumbnail);
+    }
+
+    [Fact]
+    public void ComputeUserMediaScope_ReturnsDeterministic16CharLowerHex_AndNullForEmpty()
+    {
+        Assert.Null(FileTokenService.ComputeUserMediaScope(null));
+        Assert.Null(FileTokenService.ComputeUserMediaScope(string.Empty));
+
+        var scope1 = FileTokenService.ComputeUserMediaScope("emp-123");
+        var scope2 = FileTokenService.ComputeUserMediaScope("emp-123");
+        var scopeOther = FileTokenService.ComputeUserMediaScope("emp-456");
+
+        Assert.NotNull(scope1);
+        Assert.Equal(16, scope1!.Length);
+        Assert.Equal(scope1, scope2);
+        Assert.Equal(scope1.ToLowerInvariant(), scope1);
+        Assert.NotEqual(scope1, scopeOther);
     }
 }

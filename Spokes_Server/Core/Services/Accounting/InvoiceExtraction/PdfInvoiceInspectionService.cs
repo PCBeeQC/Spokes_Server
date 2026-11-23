@@ -5,7 +5,9 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Data.Repositories.Core;
 using UglyToad.PdfPig;
 
 /// <summary>
@@ -17,9 +19,22 @@ using UglyToad.PdfPig;
 /// </summary>
 public class PdfInvoiceInspectionService
 {
-    private readonly FacturXInvoiceExtractor _facturXExtractor = new();
-    private readonly UblInvoiceExtractor _ublExtractor = new();
+    private static readonly IElectronicInvoiceExtractor[] XmlExtractors =
+    [
+        new FacturXInvoiceExtractor(),
+        new UblInvoiceExtractor()
+    ];
+    private readonly CompanyProfileRepository? _companyProfiles;
     private readonly ILogger<PdfInvoiceInspectionService>? _logger;
+
+    [ActivatorUtilitiesConstructor]
+    public PdfInvoiceInspectionService(
+        CompanyProfileRepository companyProfiles,
+        ILogger<PdfInvoiceInspectionService>? logger = null)
+    {
+        _companyProfiles = companyProfiles;
+        _logger = logger;
+    }
 
     public PdfInvoiceInspectionService(ILogger<PdfInvoiceInspectionService>? logger = null)
     {
@@ -54,6 +69,9 @@ public class PdfInvoiceInspectionService
         // 2. PDF file inspection
         if (ext == ".pdf")
         {
+            context ??= _companyProfiles != null
+                ? InvoiceExtractionContext.FromCompanyProfile(_companyProfiles.Get())
+                : null;
             return InspectPdf(stream, fileName, context);
         }
 
@@ -141,17 +159,12 @@ public class PdfInvoiceInspectionService
         return null;
     }
 
-    private ExtractedInvoiceData? ExtractFromXml(string xml)
+    private static ExtractedInvoiceData? ExtractFromXml(string xml)
     {
-        if (_facturXExtractor.CanExtract(xml))
+        foreach (var extractor in XmlExtractors)
         {
-            var data = _facturXExtractor.Extract(xml);
-            if (data != null) return data;
-        }
-
-        if (_ublExtractor.CanExtract(xml))
-        {
-            var data = _ublExtractor.Extract(xml);
+            if (!extractor.CanExtract(xml)) continue;
+            var data = extractor.Extract(xml);
             if (data != null) return data;
         }
 
@@ -171,7 +184,7 @@ public class PdfInvoiceInspectionService
         {
             if (document.NumberOfPages > 0)
             {
-                UniversalDocumentClassifier.ClassifyDocument(data, spatialDoc);
+                UniversalDocumentClassifier.ClassifyDocument(data, spatialDoc, fileName);
                 data.RawDocumentType = "Scanned-PDF";
                 return data;
             }
@@ -201,16 +214,9 @@ public class PdfInvoiceInspectionService
         UniversalTaxReconciler.ReconcileTotals(data, spatialDoc);
 
         // 8. Universal Document Classification (Statement, Credit Note, Payment Receipt)
-        UniversalDocumentClassifier.ClassifyDocument(data, spatialDoc);
+        UniversalDocumentClassifier.ClassifyDocument(data, spatialDoc, fileName);
 
-        // Check for Account Statement filename/body signatures
-        if (!data.IsAccountStatement && IsStatementDocument(spatialDoc, fileName))
-        {
-            data.IsAccountStatement = true;
-            data.RawDocumentType = "Statement";
-            data.ClassificationReason ??= "Statement of account";
-        }
-        else if (data.IsAccountStatement)
+        if (data.IsAccountStatement)
         {
             data.RawDocumentType = "Statement";
         }
@@ -224,7 +230,7 @@ public class PdfInvoiceInspectionService
         }
 
         // Return extracted data if a monetary total or document classification was identified
-        return (data.TotalAmount != 0 || data.IsStatement || data.IsPaymentReceipt || data.IsScannedImagePdf) ? data : null;
+        return (data.TotalAmount != 0 || data.IsAccountStatement || data.IsPaymentReceipt || data.IsScannedImagePdf) ? data : null;
     }
 
     private static string DetectCurrency(string combinedText, ExtractedInvoiceData data, InvoiceExtractionContext? context)
@@ -277,38 +283,4 @@ public class PdfInvoiceInspectionService
 
         return context?.DefaultCurrency ?? "CAD";
     }
-
-    private static bool IsStatementDocument(SpatialTextDocument spatialDoc, string? fileName)
-    {
-        if (!string.IsNullOrWhiteSpace(fileName))
-        {
-            var fnLower = fileName.ToLowerInvariant();
-            if (fnLower.Contains("statement") || fnLower.Contains("releve") || fnLower.Contains("relevé") ||
-                fnLower.Contains("etat_de_compte") || fnLower.Contains("etat-de-compte") || fnLower.Contains("kontoauszug") ||
-                fnLower.Contains("extracto") || fnLower.Contains("sommaire"))
-            {
-                return true;
-            }
-        }
-
-        var text = (spatialDoc.FullLayoutText + "\n" + spatialDoc.RawFullText).ToLowerInvariant();
-
-        string[] statementKeywords =
-        [
-            "statement of account", "account statement", "monthly statement", "billing statement",
-            "account summary", "statement summary", "statement date", "statement period",
-            "aging summary", "current 30 60 90", "balance forward", "previous balance",
-            "relevé de compte", "releve de compte", "état de compte", "etat de compte",
-            "sommaire de compte", "rapport de compte", "date de relevé", "date de releve",
-            "kontoauszug", "rechnungsauszug", "offene posten",
-            "extracto de cuenta", "estado de cuenta", "resumen de cuenta"
-        ];
-
-        return statementKeywords.Any(k => text.Contains(k));
-    }
-
-    /// <summary>
-    /// Legacy helper method exposed for backwards compatibility.
-    /// </summary>
-    public static decimal ParseAmount(string? raw) => UniversalTaxReconciler.ParseAmount(raw);
 }

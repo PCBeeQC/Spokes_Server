@@ -8,22 +8,18 @@
 @using Spokes_Server.Core.Configuration
 @implements IDisposable
 
-@inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
-@inject ChatService ChatService
-@inject NavigationManager Nav
 @inject UserService UserService
 @inject IUserPrivacyService PrivacyService
 @inject PresenceStateService PresenceState
-@inject AppLabelService AppLabels
 
 <div class="d-flex flex-wrap gap-4 align-center mb-6">
     <MudTextField @bind-Value="_searchString" Placeholder="@Loc["Search Contacts..."]" Variant="Variant.Outlined" Margin="Margin.Dense"
                   Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium"
                   Class="flex-grow-1" Style="max-width: 600px; background-color: var(--mud-palette-surface);" />
     <MudSpacer />
-    @if (_canDiscover)
+    @if (_canDiscover && _canMutateContacts)
     {
         <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PersonAdd" OnClick="OpenAddContactDialog">
             @Loc["Add Contact"]
@@ -37,9 +33,13 @@
         <MudIcon Icon="@Icons.Material.Filled.Contacts" Size="Size.Large" Color="Color.Secondary" Class="mb-3" />
         <MudText Typo="Typo.h6" Class="mb-1">@Loc["No Connected Contacts"]</MudText>
         <MudText Typo="Typo.body2" Color="Color.Secondary" Align="Align.Center" Style="max-width: 480px;">
-            @if (_canDiscover)
+            @if (_canDiscover && _canMutateContacts)
             {
                 <text>@Loc["You don't have any external contacts connected yet. Use the 'Add Contact' button above to connect by entering an email address or full name."]</text>
+            }
+            else if (!_canMutateContacts)
+            {
+                <text>@Loc["Your account is currently in read-only mode and cannot modify contacts."]</text>
             }
             else
             {
@@ -63,7 +63,7 @@ else
                 <MudItem xs="12" sm="6" md="4" lg="3">
                     <UserDirectoryCard Employee="@contact"
                                        CurrentUser="@_currentUser"
-                                       OnRemoveContact="@ConfirmRemoveContact" />
+                                       OnRemoveContact="@(_canMutateContacts ? EventCallback.Factory.Create<Employee>(this, ConfirmRemoveContact) : default)" />
                 </MudItem>
             }
         </MudGrid>
@@ -107,6 +107,7 @@ else
     private Employee? _currentUser;
     private string _searchString = "";
     private bool _canDiscover;
+    private bool _canMutateContacts => _currentUser is { IsActiveUnsuspended: true };
 
     // Add dialog state
     private bool _showAddDialog;
@@ -117,7 +118,7 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        _currentUser = await UserService.GetEmployeeAsync();
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
         var privacy = PrivacyService.GetPrivacyConfig();
         _canDiscover = privacy.DiscoveryMethod != UserDiscoveryMethod.None;
         RefreshContacts();
@@ -153,12 +154,20 @@ else
     {
         if (string.IsNullOrWhiteSpace(_searchString)) return true;
         return (e.FullName?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false) ||
-               (e.Email?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false) ||
+               (PrivacyService.CanViewUserEmail(_currentUser, e) && (e.Email?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false)) ||
                (e.Position?.Contains(_searchString, StringComparison.OrdinalIgnoreCase) ?? false);
     }
 
-    private void OpenAddContactDialog()
+    private async Task OpenAddContactDialog()
     {
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        if (!_canDiscover || !_canMutateContacts)
+        {
+            Snackbar.Add(Loc["Your account is currently suspended or inactive."].Value, Severity.Error);
+            StateHasChanged();
+            return;
+        }
+
         _identifierInput = "";
         _addError = null;
         _showAddDialog = true;
@@ -166,14 +175,26 @@ else
 
     private async Task SubmitAddContact()
     {
-        if (string.IsNullOrWhiteSpace(_identifierInput) || _currentUser == null) return;
+        if (string.IsNullOrWhiteSpace(_identifierInput)) return;
 
+        var liveUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        if (liveUser == null)
+        {
+            _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+            _showAddDialog = false;
+            Snackbar.Add(Loc["Your account is currently suspended or inactive."].Value, Severity.Error);
+            RefreshContacts();
+            StateHasChanged();
+            return;
+        }
+
+        _currentUser = liveUser;
         _isSubmitting = true;
         _addError = null;
 
         try
         {
-            var result = await PrivacyService.AddContactByIdentifierAsync(_currentUser, _identifierInput);
+            var result = await PrivacyService.AddContactByIdentifierAsync(liveUser, _identifierInput);
             if (result.Status == AddContactStatus.Success)
             {
                 Snackbar.Add(result.Message ?? Loc["Contact added successfully!"], Severity.Success);
@@ -184,6 +205,14 @@ else
             {
                 Snackbar.Add(result.Message ?? Loc["User is already in your contacts."], Severity.Info);
                 _showAddDialog = false;
+            }
+            else if (result.Status == AddContactStatus.Forbidden)
+            {
+                _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+                _showAddDialog = false;
+                Snackbar.Add(result.Message ?? Loc["Your account is currently suspended or inactive."].Value, Severity.Error);
+                RefreshContacts();
+                StateHasChanged();
             }
             else
             {
@@ -202,7 +231,15 @@ else
 
     private async Task ConfirmRemoveContact(Employee contact)
     {
-        if (_currentUser == null) return;
+        var liveBefore = await UserService.GetEmployeeAsync(allowSuspended: false);
+        if (liveBefore == null)
+        {
+            _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+            Snackbar.Add(Loc["Your account is currently suspended or inactive."].Value, Severity.Error);
+            RefreshContacts();
+            StateHasChanged();
+            return;
+        }
 
         bool? confirmed = await DialogService.ShowMessageBoxAsync(
             Loc["Remove Contact"].Value,
@@ -211,8 +248,26 @@ else
 
         if (confirmed == true)
         {
-            await PrivacyService.RemoveContactAsync(_currentUser, contact.Id);
-            Snackbar.Add(string.Format(Loc["Removed {0} from contacts."].Value, contact.FullName), Severity.Info);
+            var liveAfter = await UserService.GetEmployeeAsync(allowSuspended: false);
+            if (liveAfter == null)
+            {
+                _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+                Snackbar.Add(Loc["Your account is currently suspended or inactive."].Value, Severity.Error);
+                RefreshContacts();
+                StateHasChanged();
+                return;
+            }
+
+            _currentUser = liveAfter;
+            var removed = await PrivacyService.RemoveContactAsync(liveAfter, contact.Id);
+            if (removed)
+            {
+                Snackbar.Add(string.Format(Loc["Removed {0} from contacts."].Value, contact.FullName), Severity.Info);
+            }
+            else
+            {
+                Snackbar.Add(Loc["Failed to remove contact."].Value, Severity.Error);
+            }
             RefreshContacts();
             StateHasChanged();
         }

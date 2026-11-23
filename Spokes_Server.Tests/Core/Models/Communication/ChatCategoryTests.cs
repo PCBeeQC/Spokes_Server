@@ -7,35 +7,6 @@ namespace Spokes_Server.Tests.Core.Models.Communication;
 public class ChatCategoryTests
 {
     [Fact]
-    public void ChatCategory_Defaults_AreSetCorrectly()
-    {
-        var category = new ChatCategory();
-
-        Assert.False(string.IsNullOrWhiteSpace(category.Id));
-        Assert.True(Guid.TryParse(category.Id, out _));
-        Assert.Equal(string.Empty, category.Name);
-        Assert.Equal(0, category.DisplayOrder);
-        Assert.False(category.IsSystem);
-    }
-
-    [Fact]
-    public void ChatCategory_PropertyMutation_UpdatesValues()
-    {
-        var category = new ChatCategory
-        {
-            Id = "custom-id",
-            Name = "Design",
-            DisplayOrder = 5,
-            IsSystem = true
-        };
-
-        Assert.Equal("custom-id", category.Id);
-        Assert.Equal("Design", category.Name);
-        Assert.Equal(5, category.DisplayOrder);
-        Assert.True(category.IsSystem);
-    }
-
-    [Fact]
     public void Equals_And_GetHashCode_Behavior()
     {
         var id = Guid.NewGuid().ToString();

@@ -1,0 +1,383 @@
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Documents
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Security
+@inject Database Db
+@inject IFinancialReportService ReportService
+@inject UserService UserService
+@inject ISnackbar Snackbar
+
+<MudDialog Style="min-width: min(760px, 95vw);">
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Insights" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">
+                @(ExistingReport == null ? BizLoc["Generate Shareholder / Investor Report"] : $"{BizLoc["Edit Report"].Value}: {ExistingReport.ReportNumber}")
+            </MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudGrid Spacing="2">
+            <MudItem xs="12" sm="4">
+                <MudSelect T="string"
+                           Value="_periodType"
+                           ValueChanged="OnPeriodTypeChanged"
+                           Label="@BizLoc["Period Type"]"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Dense="true">
+                    <MudSelectItem Value="@FinancialReportType.Annual">@BizLoc["Annual"]</MudSelectItem>
+                    <MudSelectItem Value="@FinancialReportType.Quarterly">@BizLoc["Quarterly"]</MudSelectItem>
+                    <MudSelectItem Value="@FinancialReportType.Monthly">@BizLoc["Monthly"]</MudSelectItem>
+                    <MudSelectItem Value="@FinancialReportType.Custom">@BizLoc["Custom"]</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="6" sm="4">
+                <MudDatePicker Label="@BizLoc["Period Start"]"
+                               @bind-Date="_periodStart"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="6" sm="4">
+                <MudDatePicker Label="@BizLoc["Period End (As Of)"]"
+                               @bind-Date="_periodEnd"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense" />
+            </MudItem>
+
+            <MudItem xs="12" sm="7">
+                <MudTextField @bind-Value="_title"
+                              Label="@BizLoc["Report Title"]"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="12" sm="5">
+                <MudTextField @bind-Value="_subtitle"
+                              Label="@BizLoc["Subtitle / Audience (e.g. Q3 Board Update)"]"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense" />
+            </MudItem>
+
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_approvedByName"
+                              Label="@BizLoc["Prepared / Approved By"]"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="string"
+                           Value="@_templateId"
+                           ValueChanged="OnTemplateChanged"
+                           Label="@BizLoc["Document Template"]"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Clearable="true"
+                           Placeholder="@BizLoc["Company Default Template"]"
+                           Dense="true">
+                    @foreach (var tmpl in _templates)
+                    {
+                        <MudSelectItem T="string" Value="@tmpl.Id">
+                            @tmpl.Name @(tmpl.IsDefault ? $"({BizLoc["Default"].Value})" : "")
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudText Typo="Typo.subtitle2" Class="mb-1"><b>@BizLoc["Included Sections"]</b></MudText>
+                <div class="d-flex flex-wrap gap-3">
+                    <MudCheckBox T="bool" @bind-Value="_options.IncludeExecutiveSummary" Label="@BizLoc["Executive Summary & KPIs"]" Dense="true" />
+                    <MudCheckBox T="bool" @bind-Value="_options.IncludeIncomeStatement" Label="@BizLoc["Income Statement (P&L)"]" Dense="true" />
+                    <MudCheckBox T="bool" @bind-Value="_options.IncludeBalanceSheet" Label="@BizLoc["Balance Sheet"]" Dense="true" />
+                    <MudCheckBox T="bool" @bind-Value="_options.IncludeCashFlowStatement" Label="@BizLoc["Cash Flow Statement"]" Dense="true" />
+                    <MudCheckBox T="bool" @bind-Value="_options.IncludeFinancialRatios" Label="@BizLoc["Financial Ratios"]" Dense="true" />
+                    <MudCheckBox T="bool" @bind-Value="_options.IncludeComparativePriorPeriod" Label="@BizLoc["Prior Period Comparison"]" Dense="true" />
+                    <MudCheckBox T="bool" @bind-Value="_options.ShowGlAccountCodes" Label="@BizLoc["Show GL Codes"]" Dense="true" />
+                </div>
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_executiveSummary"
+                              Label="@BizLoc["Executive Summary / Highlights for Shareholders & Investors"]"
+                              Lines="3"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_managementNotes"
+                              Label="@BizLoc["Notes to Financial Statements & Management Discussion"]"
+                              Lines="3"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_basisNote"
+                              Label="@BizLoc["Notice to Reader / Basis of Presentation Disclaimer"]"
+                              Lines="2"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense" />
+            </MudItem>
+
+            @if (ExistingReport != null)
+            {
+                <MudItem xs="12">
+                    <MudCheckBox T="bool"
+                                 @bind-Value="_refreshSnapshotOnSave"
+                                 Label="@BizLoc["Recalculate Financial Statements & Cash Flows from current General Ledger"]"
+                                 Dense="true" />
+                </MudItem>
+            }
+        </MudGrid>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="@(() => MudDialog.Cancel())">@Loc["Cancel"]</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Save"
+                   OnClick="SaveAsync">
+            @(ExistingReport == null ? BizLoc["Generate & Open Report"].Value : Loc["Save"].Value)
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public FinancialReport? ExistingReport { get; set; }
+    [Parameter] public DateTime? DefaultStartDate { get; set; }
+    [Parameter] public DateTime? DefaultEndDate { get; set; }
+
+    private List<DocumentTemplate> _templates = [];
+    private string? _templateId;
+    private string _periodType = FinancialReportType.Quarterly;
+    private DateTime? _periodStart;
+    private DateTime? _periodEnd;
+    private string _title = "Financial Statements";
+    private string _subtitle = "Prepared for Shareholders & Investors";
+    private string _approvedByName = string.Empty;
+    private string _executiveSummary = string.Empty;
+    private string _managementNotes = string.Empty;
+    private string _basisNote = string.Empty;
+    private bool _refreshSnapshotOnSave = true;
+    private FinancialReportOptions _options = new();
+
+    protected override void OnInitialized()
+    {
+        _templates = Db.DocumentTemplates.GetAll().OrderBy(t => t.Name).ToList();
+
+        if (ExistingReport != null)
+        {
+            _templateId = ExistingReport.TemplateId;
+            if (string.IsNullOrWhiteSpace(_templateId))
+            {
+                _templateId = DocumentTemplateHelper.ResolveEffectiveTemplate(
+                    null,
+                    Db.DocumentTemplates,
+                    ExistingReport.Options.Language).Id;
+            }
+
+            _periodType = ExistingReport.PeriodType;
+            _periodStart = ExistingReport.PeriodStart;
+            _periodEnd = ExistingReport.PeriodEnd;
+            _title = ExistingReport.Title;
+            _subtitle = ExistingReport.Subtitle;
+            _approvedByName = ExistingReport.ApprovedByName;
+            _executiveSummary = ExistingReport.ExecutiveSummary;
+            _managementNotes = ExistingReport.ManagementDiscussionNotes;
+            _basisNote = ExistingReport.BasisOfPresentationNote;
+            _options = new FinancialReportOptions
+            {
+                IncludeExecutiveSummary = ExistingReport.Options.IncludeExecutiveSummary,
+                IncludeIncomeStatement = ExistingReport.Options.IncludeIncomeStatement,
+                IncludeBalanceSheet = ExistingReport.Options.IncludeBalanceSheet,
+                IncludeCashFlowStatement = ExistingReport.Options.IncludeCashFlowStatement,
+                IncludeFinancialRatios = ExistingReport.Options.IncludeFinancialRatios,
+                IncludeComparativePriorPeriod = ExistingReport.Options.IncludeComparativePriorPeriod,
+                ShowGlAccountCodes = ExistingReport.Options.ShowGlAccountCodes,
+                Language = ExistingReport.Options.Language
+            };
+        }
+        else
+        {
+            var defaultTemplate = Db.DocumentTemplates.GetDefault();
+            _templateId = _templates.Any(t => t.Id == defaultTemplate.Id) ? defaultTemplate.Id : null;
+            _periodStart = DefaultStartDate ?? new DateTime(DateTime.Today.Year, 1, 1);
+            _periodEnd = DefaultEndDate ?? DateTime.Today;
+            ApplyTemplateDefaults(defaultTemplate, overwriteAll: true);
+        }
+    }
+
+    private void OnTemplateChanged(string? newTemplateId)
+    {
+        var previousTemplate = ResolveSelectedTemplate(_templateId);
+        var (prevTitle, prevSubtitle, prevBasis) = GetTemplateDefaults(previousTemplate);
+
+        _templateId = newTemplateId;
+        var nextTemplate = ResolveSelectedTemplate(newTemplateId);
+        var (nextTitle, nextSubtitle, nextBasis) = GetTemplateDefaults(nextTemplate);
+
+        _options.Language = DocumentTemplateHelper.IsFrench(nextTemplate) ? "FR" : "EN";
+
+        if (string.IsNullOrWhiteSpace(_title) ||
+            string.Equals(_title.Trim(), prevTitle, StringComparison.Ordinal) ||
+            string.Equals(_title.Trim(), "Financial Statements", StringComparison.Ordinal))
+        {
+            _title = nextTitle;
+        }
+
+        if (string.IsNullOrWhiteSpace(_subtitle) ||
+            string.Equals(_subtitle.Trim(), prevSubtitle, StringComparison.Ordinal) ||
+            string.Equals(_subtitle.Trim(), "Prepared for Shareholders & Investors", StringComparison.Ordinal))
+        {
+            _subtitle = nextSubtitle;
+        }
+
+        if (string.IsNullOrWhiteSpace(_basisNote) ||
+            string.Equals(_basisNote.Trim(), prevBasis, StringComparison.Ordinal) ||
+            string.Equals(_basisNote.Trim(), DocumentTemplateHelper.DefaultBasisOfPresentationEn, StringComparison.Ordinal))
+        {
+            _basisNote = nextBasis;
+        }
+    }
+
+    private void ApplyTemplateDefaults(DocumentTemplate template, bool overwriteAll)
+    {
+        var (title, subtitle, basis) = GetTemplateDefaults(template);
+        _options.Language = DocumentTemplateHelper.IsFrench(template) ? "FR" : "EN";
+        if (overwriteAll)
+        {
+            _title = title;
+            _subtitle = subtitle;
+            _basisNote = basis;
+        }
+    }
+
+    private DocumentTemplate ResolveSelectedTemplate(string? id)
+    {
+        if (!string.IsNullOrWhiteSpace(id))
+        {
+            var match = _templates.FirstOrDefault(t => t.Id == id);
+            if (match != null) return match;
+        }
+
+        return Db.DocumentTemplates.GetDefault();
+    }
+
+    private static (string title, string subtitle, string basis) GetTemplateDefaults(DocumentTemplate template)
+    {
+        var isFr = DocumentTemplateHelper.IsFrench(template);
+        var title = DocumentTemplateHelper.ResolveLabel(
+            isFr,
+            template.Label_FinancialStatements,
+            "Financial Statements",
+            "États financiers");
+        var subtitle = DocumentTemplateHelper.ResolveLabel(
+            isFr,
+            template.Label_FinancialStatementsSubtitle,
+            "Prepared for Shareholders & Investors",
+            "Préparé pour les actionnaires et investisseurs");
+        var basis = DocumentTemplateHelper.ResolveLabel(
+            isFr,
+            template.Label_BasisOfPresentationDefault,
+            DocumentTemplateHelper.DefaultBasisOfPresentationEn,
+            DocumentTemplateHelper.DefaultBasisOfPresentationFr);
+
+        return (title, subtitle, basis);
+    }
+
+    private void OnPeriodTypeChanged(string newType)
+    {
+        _periodType = newType;
+        var today = DateTime.Today;
+        switch (newType)
+        {
+            case FinancialReportType.Annual:
+                _periodStart = new DateTime(today.Year, 1, 1);
+                _periodEnd = today;
+                break;
+            case FinancialReportType.Quarterly:
+                var qStartMonth = ((today.Month - 1) / 3) * 3 + 1;
+                _periodStart = new DateTime(today.Year, qStartMonth, 1);
+                _periodEnd = today;
+                break;
+            case FinancialReportType.Monthly:
+                _periodStart = new DateTime(today.Year, today.Month, 1);
+                _periodEnd = today;
+                break;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        var start = (_periodStart ?? DateTime.Today).Date;
+        var end = (_periodEnd ?? DateTime.Today).Date;
+        if (start > end) (start, end) = (end, start);
+
+        var selectedTemplate = ResolveSelectedTemplate(_templateId);
+        _options.Language = DocumentTemplateHelper.IsFrench(selectedTemplate) ? "FR" : "EN";
+
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false))
+        {
+            Snackbar.Add(BizLoc["Failed to save report: active Finance.AccessAccounting permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        var userId = actor.Id;
+        var userName = !string.IsNullOrWhiteSpace(actor.FullName) ? actor.FullName : "Administrator";
+
+        try
+        {
+            FinancialReport saved;
+            if (ExistingReport == null)
+            {
+                saved = ReportService.CreateDraft(
+                    _title,
+                    _subtitle,
+                    _periodType,
+                    start,
+                    end,
+                    _options,
+                    _executiveSummary,
+                    _managementNotes,
+                    _approvedByName,
+                    userId,
+                    userName,
+                    templateId: _templateId,
+                    actor: actor);
+
+                if (!string.IsNullOrWhiteSpace(_basisNote))
+                {
+                    saved.BasisOfPresentationNote = _basisNote.Trim();
+                    saved = ReportService.UpdateReport(saved, refreshSnapshot: false, userId, userName, actor: actor);
+                }
+            }
+            else
+            {
+                ExistingReport.TemplateId = _templateId;
+                ExistingReport.PeriodType = _periodType;
+                ExistingReport.PeriodStart = start;
+                ExistingReport.PeriodEnd = end;
+                ExistingReport.Title = string.IsNullOrWhiteSpace(_title) ? "Financial Statements" : _title.Trim();
+                ExistingReport.Subtitle = _subtitle?.Trim() ?? string.Empty;
+                ExistingReport.ApprovedByName = _approvedByName?.Trim() ?? string.Empty;
+                ExistingReport.ExecutiveSummary = _executiveSummary?.Trim() ?? string.Empty;
+                ExistingReport.ManagementDiscussionNotes = _managementNotes?.Trim() ?? string.Empty;
+                ExistingReport.BasisOfPresentationNote = _basisNote?.Trim() ?? string.Empty;
+                ExistingReport.Options = _options;
+                saved = ReportService.UpdateReport(ExistingReport, _refreshSnapshotOnSave, userId, userName, actor: actor);
+            }
+
+            MudDialog.Close(DialogResult.Ok(saved));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"{BizLoc["Failed to save report"].Value}: {ex.Message}", Severity.Error);
+        }
+    }
+}

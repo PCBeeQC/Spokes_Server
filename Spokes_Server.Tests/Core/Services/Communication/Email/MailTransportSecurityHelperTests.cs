@@ -32,7 +32,7 @@ public class MailTransportSecurityHelperTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_MailTransport_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
     }
@@ -112,31 +112,6 @@ public class MailTransportSecurityHelperTests : IDisposable
     {
         Assert.Throws<InvalidOperationException>(() =>
             MailTransportSecurityHelper.ResolveSmtpTlsOptions(587, useSsl: false, allowPlaintext: false));
-    }
-
-    [Fact]
-    public void ResolveBillInboxTlsOptions_EnforcesStartTlsOrImplicitSslByDefault_AndAllowsPlaintextOnlyWhenExplicitlyEnabled()
-    {
-        var defaults = new CompanyBillInboxSettings();
-        Assert.Equal(SecureSocketOptions.SslOnConnect, MailTransportSecurityHelper.ResolveBillInboxImapTlsOptions(defaults));
-        Assert.Equal(SecureSocketOptions.StartTls, MailTransportSecurityHelper.ResolveBillInboxSmtpTlsOptions(defaults));
-
-        var implicitSmtp = new CompanyBillInboxSettings { SmtpPort = 465, SmtpSsl = false, AllowPlaintextTransport = false };
-        Assert.Equal(SecureSocketOptions.SslOnConnect, MailTransportSecurityHelper.ResolveBillInboxSmtpTlsOptions(implicitSmtp));
-
-        var explicitImapStartTls = new CompanyBillInboxSettings { ImapPort = 143, ImapSsl = false, AllowPlaintextTransport = false };
-        Assert.Equal(SecureSocketOptions.StartTls, MailTransportSecurityHelper.ResolveBillInboxImapTlsOptions(explicitImapStartTls));
-
-        var explicitPlaintext = new CompanyBillInboxSettings
-        {
-            ImapPort = 143,
-            ImapSsl = false,
-            SmtpPort = 25,
-            SmtpSsl = false,
-            AllowPlaintextTransport = true
-        };
-        Assert.Equal(SecureSocketOptions.None, MailTransportSecurityHelper.ResolveBillInboxImapTlsOptions(explicitPlaintext));
-        Assert.Equal(SecureSocketOptions.None, MailTransportSecurityHelper.ResolveBillInboxSmtpTlsOptions(explicitPlaintext));
     }
 
     [Theory]

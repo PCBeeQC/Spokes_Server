@@ -4,55 +4,67 @@
 @inject IVoiceDeviceService VoiceDeviceService
 @inject IDemoVoiceAdapter DemoVoiceAdapter
 @inject IVoiceUiStateService VoiceUiState
+@inject UserCircuitContext CircuitContext
 @inject Database Db
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject IConfiguration Config
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
 @inject UserService UserService
+@inject StartupTimingService StartupTimings
 @inject ILogger<GlobalVoiceBar> Logger
-@implements IDisposable
+@implements IAsyncDisposable
 
+@if (StartupTimings.IsChatProfilerEnabled)
+{
+    StartupTimings.AddChatTransition($"Server: RenderTree GlobalVoiceBar[{_diagTag}] Markup Start (inCall={VoiceService.IsInVoiceCall}, connecting={VoiceService.IsConnecting}, drawer={_isDrawerExpanded})");
+}
+
+@{
+    _renderedHasPullDrawer = false;
+    _renderedDrawerExpanded = false;
+    _renderedChannelId = null;
+}
 @if (VoiceService.IsInVoiceCall)
 {
     var channel = Db.ChatChannels.GetById(VoiceService.CurrentChannelId ?? "");
-    var channelName = channel?.Name ?? Loc["Voice channel"].Value;
+    var channelName = channel?.Name ?? Loc["Voice Channel"].Value;
     var isDemo = Config.GetValue<bool>("Spokes_DemoMode");
     
-    <div style="position: relative; width: 100%; z-index: 100;">
-        <div class="voice-call-panel px-4 py-1 d-flex align-center justify-space-between" style="background: var(--mud-palette-primary-darken); color: white; width: 100%; min-height: 48px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); position: relative; z-index: 101;">
+    <div class="global-voice-bar-root">
+        <div class="voice-call-panel px-4 py-1 d-flex align-center justify-space-between">
             @if (isDemo)
             {
-                <div class="d-flex align-center gap-2" style="cursor: pointer;" @onclick="ReturnToChat">
+                <div class="d-flex align-center gap-2 voice-bar-title-trigger" @onclick="ReturnToChat">
                     <MudIcon Icon="@Icons.Material.Filled.RecordVoiceOver" Color="Color.Success" Size="Size.Small" />
-                    <MudText Typo="Typo.body2" Style="text-decoration: underline; text-underline-offset: 2px;"><b>@channelName</b></MudText>
+                    <MudText Typo="Typo.body2" Class="voice-bar-title-text"><b>@channelName</b></MudText>
                 </div>
                 <div class="d-flex align-center gap-1">
                     <MudText Typo="Typo.caption" Style="color: var(--mud-palette-warning);" Class="mr-2">@Loc["This is just a UI demo, voice chat is inactive in the Demo Server."]</MudText>
                     <MudIconButton Icon="@Icons.Material.Filled.Tune" Color="Color.Inherit" Size="Size.Small" title="@Loc["Voice Settings"]" OnClick="OpenVoiceSettings" />
-                    <MudIconButton Icon="@Icons.Material.Filled.PhoneDisabled" Style="height: 28px;"
-                                   Color="Color.Error" Variant="Variant.Filled" Class="ml-2"
+                    <MudIconButton Icon="@Icons.Material.Filled.PhoneDisabled"
+                                   Color="Color.Error" Variant="Variant.Filled" Class="ml-2 voice-bar-disconnect-btn"
                                    OnClick="Disconnect" Size="Size.Small" title="@Loc["Disconnect"]" />
                 </div>
             }
             else
             {
-                <div class="d-flex align-center gap-2" style="cursor: pointer;" @onclick="ReturnToChat">
+                <div class="d-flex align-center gap-2 voice-bar-title-trigger" @onclick="ReturnToChat">
                     <MudIcon Icon="@Icons.Material.Filled.RecordVoiceOver" Color="Color.Success" Size="Size.Small" />
-                    <MudText Typo="Typo.body2" Style="text-decoration: underline; text-underline-offset: 2px;"><b>@channelName</b></MudText>
-                    <MudText Typo="Typo.body2" Class="d-none d-sm-block">- @VoiceService.ActiveSpeakers.Count @Loc["speaking"]</MudText>
+                    <MudText Typo="Typo.body2" Class="voice-bar-title-text"><b>@channelName</b></MudText>
+                    <MudText Typo="Typo.body2" Class="d-none d-sm-block">- <span data-voice-speaker-count="@VoiceService.CurrentChannelId">@VoiceService.ActiveSpeakers.Count</span> @Loc["speaking"]</MudText>
                 </div>
                 <div class="d-flex gap-2 align-center">
-                    <MudTooltip Text="@GetMuteTooltipText()">
-                        <MudIconButton Icon="@(VoiceService.IsMuted ? Icons.Material.Filled.MicOff : Icons.Material.Filled.Mic)" 
-                                       Color="@(VoiceService.IsMuted ? Color.Error : Color.Success)" 
-                                       OnClick="() => VoiceService.ToggleMuteAsync()" Size="Size.Small"
-                                       title="@GetMuteTooltipText()" />
-                    </MudTooltip>
+                    <MudIconButton Icon="@(VoiceService.IsMuted ? Icons.Material.Filled.MicOff : Icons.Material.Filled.Mic)" 
+                                   Color="@(VoiceService.IsMuted ? Color.Error : Color.Success)" 
+                                   OnClick="() => VoiceService.ToggleMuteAsync()" Size="Size.Small"
+                                   title="@GetMuteTooltipText()"
+                                   aria-label="@GetMuteTooltipText()" />
                     @if (VoiceService.IsTogglingVideo)
                     {
-                        <div class="d-flex align-center justify-center" style="width: 34px; height: 34px;" title="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])">
-                            <MudProgressCircular Size="Size.Small" Color="Color.Inherit" Indeterminate="true" Style="width: 18px; height: 18px;" />
+                        <div class="d-flex align-center justify-center voice-bar-video-spinner-wrap" title="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])">
+                            <MudProgressCircular Size="Size.Small" Color="Color.Inherit" Indeterminate="true" Class="voice-bar-video-spinner" />
                         </div>
                     }
                     else
@@ -61,6 +73,17 @@
                                        Color="@(VoiceService.IsVideoOn ? Color.Success : Color.Inherit)" 
                                        OnClick="() => VoiceService.ToggleVideoAsync(VoiceUiState.MaxVideoSendQuality, VoiceUiState.MaxVideoSendFps, VoiceUiState.ActiveCameraDeviceId)" Size="Size.Small"
                                        title="@(VoiceService.IsVideoOn ? Loc["Turn off Video"] : Loc["Turn on Video"])" />
+                    }
+
+                    @if (CanShowMobileSwitchCameraButton)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Cameraswitch"
+                                       Color="Color.Inherit"
+                                       Size="Size.Small"
+                                       Disabled="@(_isSwitchingCamera || VoiceService.IsTogglingVideo)"
+                                       OnClick="OnFlipCameraAsync"
+                                       title="@Loc["Switch Camera"]"
+                                       aria-label="@Loc["Switch Camera"]" />
                     }
 
                     <MudIconButton Class="d-none d-sm-inline-flex"
@@ -73,33 +96,45 @@
                                    Size="Size.Small"
                                    title="@Loc["Voice Settings"]"
                                    OnClick="OpenVoiceSettings" />
-                    <MudIconButton Icon="@Icons.Material.Filled.PhoneDisabled" Style="height: 28px;"
-                                   Color="Color.Error" Variant="Variant.Filled" Class="ml-2"
+                    <MudIconButton Icon="@Icons.Material.Filled.PhoneDisabled"
+                                   Color="Color.Error" Variant="Variant.Filled" Class="ml-2 voice-bar-disconnect-btn"
                                    OnClick="Disconnect" Size="Size.Small" title="@Loc["Disconnect"]" />
                 </div>
             }
         </div>
 
-        @if (VoiceService.IsVideoOn || VoiceService.IsScreenSharing || _isChangingVideo || _isChangingScreen || VoiceUiState.AvailableMicrophones.Count > 0 || VoiceUiState.AvailableSpeakers.Count > 0)
+        @if (HasPullDrawer)
         {
-            <div style="position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); z-index: 100; cursor: pointer; display: flex; justify-content: center; width: 60px; height: 20px; background: var(--mud-palette-primary-darken); border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);"
-                 @onclick="() => _isDrawerExpanded = !_isDrawerExpanded">
-                <MudIcon Icon="@(_isDrawerExpanded ? Icons.Material.Filled.KeyboardArrowUp : Icons.Material.Filled.KeyboardArrowDown)" Size="Size.Small" Style="color: white; margin-top: -2px;" />
+            _renderedHasPullDrawer = true;
+            _renderedDrawerExpanded = _isDrawerExpanded;
+            _renderedChannelId = VoiceService.CurrentChannelId;
+            <div id="voice-bar-pull-tab"
+                 class="voice-bar-pull-tab"
+                 role="button"
+                 tabindex="0"
+                 aria-expanded="@(_isDrawerExpanded ? "true" : "false")"
+                 aria-label="@Loc["Voice Controls Drawer"]">
+                <span id="voice-bar-pull-icon" class="voice-bar-pull-icon">
+                    <MudIcon Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" Class="voice-bar-pull-icon-svg" />
+                </span>
             </div>
 
-            <MudCollapse Expanded="_isDrawerExpanded">
-                <div class="voice-drawer-content py-3 px-4 d-flex flex-column align-center justify-center gap-4 flex-wrap" style="background: linear-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.1)), var(--mud-palette-primary-darken); border-bottom: 1px solid rgba(0, 0, 0, 0.2); box-shadow: inset 0 3px 6px rgba(0,0,0,0.1); --mud-palette-text-primary: #ffffff; --mud-palette-action-default: rgba(255,255,255,0.3);">
-                    
-                    @if ((VoiceUiState.AvailableMicrophones.Count > 0 && !VoiceService.IsAndroid) || (VoiceUiState.AvailableSpeakers.Count > 0) || VoiceService.IsAndroid)
+            <div id="voice-bar-drawer-wrapper"
+                 class="voice-bar-drawer-wrapper @(_isDrawerExpanded ? "is-expanded" : "")">
+                <div id="voice-bar-drawer-content" class="voice-drawer-content py-3 px-4 d-flex flex-column align-center justify-center gap-4 flex-wrap">
+                    @if (_isDrawerExpanded)
                     {
-                        <div class="d-flex align-center justify-center gap-6 flex-wrap" style="width: 100%">
-                            @if (VoiceUiState.AvailableMicrophones.Count > 0 && !VoiceService.IsAndroid)
+                    @if (HasAudioDrawerControls)
+                    {
+                        <div class="d-flex align-center justify-center gap-6 flex-wrap voice-drawer-row">
+                            @if (HasMicSelector)
                             {
                                 <div class="d-flex align-center gap-3">
-                                    <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["INPUT"]</MudText>
-                                    <MudSelect T="string" Value="@VoiceUiState.ActiveMicrophoneDeviceId" ValueChanged="OnMicrophoneSelected" 
+                                    <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["INPUT"]</MudText>
+                                    <MudSelect T="string" Value="@VoiceUiState.ActiveMicrophoneDeviceId" ValueChanged="OnMicrophoneSelected"
+                                               ToStringFunc="@(id => VoiceUiStateService.ResolveAudioDeviceLabel(VoiceUiState.AvailableMicrophones, id))"
                                                Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" 
-                                               Style="color: white; font-size: 0.75rem; background-color: rgba(255,255,255,0.1); border-radius: 4px; min-width: 150px; max-width: 250px;"
+                                               Class="voice-drawer-select"
                                                Underline="false" ReadOnly="@(VoiceUiState.AvailableMicrophones.Count <= 1)">
                                         @foreach (var mic in VoiceUiState.AvailableMicrophones)
                                         {
@@ -109,13 +144,14 @@
                                 </div>
                             }
                             
-                            @if (VoiceUiState.AvailableSpeakers.Count > 0 && !VoiceService.IsIOS)
+                            @if (HasSpeakerSelector)
                             {
                                 <div class="d-flex align-center gap-3">
-                                    <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["OUTPUT"]</MudText>
-                                    <MudSelect T="string" Value="@VoiceUiState.ActiveSpeakerDeviceId" ValueChanged="OnSpeakerSelected" 
+                                    <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["OUTPUT"]</MudText>
+                                    <MudSelect T="string" Value="@VoiceUiState.ActiveSpeakerDeviceId" ValueChanged="OnSpeakerSelected"
+                                               ToStringFunc="@(id => VoiceUiStateService.ResolveAudioDeviceLabel(VoiceUiState.AvailableSpeakers, id))"
                                                Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" 
-                                               Style="color: white; font-size: 0.75rem; background-color: rgba(255,255,255,0.1); border-radius: 4px; min-width: 150px; max-width: 250px;"
+                                               Class="voice-drawer-select"
                                                Underline="false" ReadOnly="@(VoiceUiState.AvailableSpeakers.Count <= 1)">
                                         @foreach (var spk in VoiceUiState.AvailableSpeakers)
                                         {
@@ -125,13 +161,14 @@
                                 </div>
                             }
 
-                            @if ((VoiceUiState.AvailableMicrophones.Count > 0 || VoiceService.IsAndroid) && !VoiceService.IsIOS)
+                            @if (HasNoiseFilterSelector)
                             {
                                 <div class="d-flex align-center gap-3">
-                                    <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["NOISE FILTER"]</MudText>
-                                    <MudSelect T="string" Value="@VoiceService.CurrentNoiseSuppression" ValueChanged="OnNoiseSuppressionChanged" 
+                                    <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["Noise Filter"]</MudText>
+                                    <MudSelect T="string" Value="@VoiceService.CurrentNoiseSuppression" ValueChanged="OnNoiseSuppressionChanged"
+                                               ToStringFunc="@(v => v switch { "webrtc" => Loc["Basic"].Value, "rnnoise" => "RNNoise", "deepfilternet" => "DeepFilterNet", "none" => Loc["None"].Value, _ => v ?? string.Empty })"
                                                Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" 
-                                               Style="color: white; font-size: 0.75rem; background-color: rgba(255,255,255,0.1); border-radius: 4px; min-width: 150px; max-width: 250px;"
+                                               Class="voice-drawer-select"
                                                Underline="false">
                                         <MudSelectItem Value="@("webrtc")">@Loc["Basic"]</MudSelectItem>
                                         <MudSelectItem Value="@("rnnoise")">RNNoise</MudSelectItem>
@@ -141,10 +178,10 @@
                                 </div>
                             }
 
-                            @if (VoiceService.IsIOS)
+                            @if (HasIosVoiceIsolationControl)
                             {
                                 <div class="d-flex align-center gap-2">
-                                    <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["NOISE FILTER"]</MudText>
+                                    <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["Noise Filter"]</MudText>
                                     <MudButton Variant="Variant.Outlined" Size="Size.Small" 
                                                Style="color: white; border-color: rgba(255, 255, 255, 0.3); font-size: 0.75rem; height: 32px;"
                                                StartIcon="@(VoiceUiState.IsIosVoiceIsolationActive ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Tune)"
@@ -156,16 +193,16 @@
                         </div>
                     }
 
-                    @if (VoiceService.IsVideoOn || _isChangingVideo)
+                    @if (VoiceService.IsVideoOn)
                     {
-                        <div class="d-flex align-center justify-center gap-6 flex-wrap" style="width: 100%">
+                        <div class="d-flex align-center justify-center gap-6 flex-wrap voice-drawer-row">
                             <div class="d-flex align-center justify-center gap-2" style="width: 100px;">
                                 <MudIcon Icon="@Icons.Material.Filled.Videocam" Size="Size.Small" Style="color: rgba(255, 255, 255, 0.7);" />
-                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["CAMERA"]</MudText>
+                                <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["CAMERA"]</MudText>
                             </div>
 
                             <div class="d-flex align-center gap-3">
-                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["FPS"]</MudText>
+                                <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["FPS"]</MudText>
                                 <MudToggleGroup T="int" Value="@VoiceUiState.MaxVideoSendFps" ValueChanged="OnFpsChanged" Outlined="true" Delimiters="true" CheckMark="false" Color="Color.Secondary" Size="Size.Small">
                                     <MudToggleItem Value="30" Text="30" Disabled="@(VoiceUiState.MaxVideoSendQuality == "Auto")" />
                                     <MudToggleItem Value="60" Text="60" Disabled="@(VoiceUiState.MaxVideoSendQuality == "Auto")" />
@@ -173,7 +210,7 @@
                             </div>
 
                             <div class="d-flex align-center gap-3">
-                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["QUALITY"]</MudText>
+                                <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["QUALITY"]</MudText>
                                 <MudToggleGroup T="string" Value="@VoiceUiState.MaxVideoSendQuality" ValueChanged="OnQualityChanged" Outlined="true" Delimiters="true" CheckMark="false" Color="Color.Secondary" Size="Size.Small">
                                     <MudToggleItem Value="@("Auto")" Text="@Loc["Auto"]" />
                                     <MudToggleItem Value="@("1080p")" Text="1080p" Disabled="@(VoiceUiState.MaxCameraHeight < 1800)" />
@@ -184,10 +221,11 @@
                             @if (VoiceUiState.AvailableCameras.Count > 1)
                             {
                                 <div class="d-flex align-center gap-3">
-                                    <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["DEVICE"]</MudText>
-                                    <MudSelect T="string" Value="@VoiceUiState.ActiveCameraDeviceId" ValueChanged="OnCameraSelected" 
+                                    <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["DEVICE"]</MudText>
+                                    <MudSelect T="string" Value="@VoiceUiState.ActiveCameraDeviceId" ValueChanged="OnCameraSelected"
+                                               ToStringFunc="@(id => VoiceUiStateService.ResolveCameraDeviceLabel(VoiceUiState.AvailableCameras, id))"
                                                Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" 
-                                               Style="color: white; font-size: 0.75rem; background-color: rgba(255,255,255,0.1); border-radius: 4px; min-width: 150px; max-width: 250px;"
+                                               Class="voice-drawer-select"
                                                Underline="false">
                                         @foreach (var cam in VoiceUiState.AvailableCameras)
                                         {
@@ -201,7 +239,7 @@
 
                     @if (VoiceService.IsScreenSharing || _isChangingScreen)
                     {
-                        <div class="d-flex align-center justify-center gap-6 flex-wrap" style="width: 100%">
+                        <div class="d-flex align-center justify-center gap-6 flex-wrap voice-drawer-row">
                             <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
                                        StartIcon="@Icons.Material.Filled.ScreenShare"
                                        OnClick="OnSwitchScreenSource"
@@ -212,7 +250,7 @@
                             </MudButton>
 
                             <div class="d-flex align-center gap-3">
-                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["AUDIO"]</MudText>
+                                <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["AUDIO"]</MudText>
                                 <MudToggleGroup T="bool" Value="@VoiceUiState.IsScreenShareAudioEnabled" ValueChanged="OnScreenAudioChanged" SelectionMode="SelectionMode.SingleSelection" Outlined="true" Delimiters="true" CheckMark="false" Color="Color.Secondary" Size="Size.Small">
                                     <MudToggleItem Value="true" Text="@Loc["On"]" />
                                     <MudToggleItem Value="false" Text="@Loc["Off"]" />
@@ -220,7 +258,7 @@
                             </div>
 
                             <div class="d-flex align-center gap-3">
-                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["MODE"]</MudText>
+                                <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["MODE"]</MudText>
                                 <MudToggleGroup T="string" Value="@VoiceUiState.ScreenShareMode" ValueChanged="OnScreenModeChanged" Outlined="true" Delimiters="true" CheckMark="false" Color="Color.Secondary" Size="Size.Small">
                                     <MudToggleItem Value="@("motion")" Text="@Loc["Smooth"]" />
                                     <MudToggleItem Value="@("detail")" Text="@Loc["Clarity"]" />
@@ -228,7 +266,7 @@
                             </div>
 
                             <div class="d-flex align-center gap-3">
-                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["FPS"]</MudText>
+                                <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["FPS"]</MudText>
                                 <MudToggleGroup T="int" Value="@VoiceUiState.MaxScreenShareFps" ValueChanged="OnScreenFpsChanged" Outlined="true" Delimiters="true" CheckMark="false" Color="Color.Secondary" Size="Size.Small">
                                     <MudToggleItem Value="30" Text="30" />
                                     <MudToggleItem Value="60" Text="60" />
@@ -236,7 +274,7 @@
                             </div>
 
                             <div class="d-flex align-center gap-3">
-                                <MudText Typo="Typo.caption" Style="color: rgba(255, 255, 255, 0.7); font-weight: 600; letter-spacing: 0.5px;">@Loc["QUALITY"]</MudText>
+                                <MudText Typo="Typo.caption" Class="voice-drawer-label">@Loc["QUALITY"]</MudText>
                                 <MudToggleGroup T="string" Value="@VoiceUiState.MaxScreenShareQuality" ValueChanged="OnScreenQualityChanged" Outlined="true" Delimiters="true" CheckMark="false" Color="Color.Secondary" Size="Size.Small">
                                     <MudToggleItem Value="@("Auto")" Text="@Loc["Auto"]" />
                                     <MudToggleItem Value="@("1080p")" Text="1080p" Disabled="@(VoiceUiState.MaxScreenHeight < 1800)" />
@@ -246,31 +284,251 @@
                             </div>
                         </div>
                     }
+                    }
                 </div>
-            </MudCollapse>
+            </div>
         }
     </div>
 }
+else if (VoiceService.IsConnecting)
+{
+    var connectingChannelId = VoiceService.ConnectingChannelId ?? VoiceService.CurrentChannelId ?? "";
+    var connectingChannel = Db.ChatChannels.GetById(connectingChannelId);
+    var connectingChannelName = connectingChannel?.Name ?? Loc["Voice Channel"].Value;
 
-<div id="voice-audio-container" style="position: absolute; left: -9999px; top: -9999px; width: 0; height: 0; opacity: 0; pointer-events: none; overflow: hidden;"></div>
+    <div class="global-voice-bar-root">
+        <div class="voice-call-panel px-4 py-1 d-flex align-center justify-space-between">
+            <div class="d-flex align-center gap-2 voice-bar-title-trigger" @onclick="ReturnToChat">
+                <MudProgressCircular Size="Size.Small" Color="Color.Inherit" Indeterminate="true" Class="voice-bar-connecting-spinner" />
+                <MudText Typo="Typo.body2" Class="voice-bar-title-text"><b>@connectingChannelName</b></MudText>
+                <MudText Typo="Typo.caption" Class="voice-bar-connecting-stage">- @VoiceService.ConnectingStage.GetLocalizedStageText(Loc)</MudText>
+            </div>
+        </div>
+    </div>
+}
+
+<div id="voice-audio-container" class="voice-audio-container"></div>
+@if (StartupTimings.IsChatProfilerEnabled)
+{
+    StartupTimings.AddChatTransition($"Server: RenderTree GlobalVoiceBar[{_diagTag}] Markup End");
+}
 
 @code {
+    private readonly string _diagTag = Guid.NewGuid().ToString("N")[..4];
     private bool _isDrawerExpanded = false;
-    private bool _isChangingVideo = false;
     private bool _isChangingScreen = false;
     private string? _lastChannelId;
+    private bool _renderedHasPullDrawer;
+    private bool _renderedDrawerExpanded;
+    private string? _renderedChannelId;
+    private bool _lastSyncHasPullDrawer;
+    private bool _lastSyncDrawerExpanded;
+    private string? _lastSyncChannelId;
+    private bool _hasSyncedPullDrawerOnce;
+    private bool _hasAttemptedPullDrawerBind;
+    private int _pullDrawerSyncVersion;
+    private bool _isDisposed;
+
+    private bool IsDemoMode => Config.GetValue<bool>("Spokes_DemoMode");
+    private bool IsMobileClient => CircuitContext.IsCapacitorApp || VoiceService.IsNativePlatform || CircuitContext.IsMobile;
+    private bool CanShowMobileSwitchCameraButton =>
+        !IsDemoMode
+        && IsMobileClient
+        && VoiceService.IsVideoOn
+        && (VoiceUiState.AvailableCameras.Count == 0 || VoiceUiState.AvailableCameras.Count > 1);
+    private bool HasMicSelector => (VoiceUiState.AvailableMicrophones?.Count ?? 0) > 0 && !VoiceService.IsAndroid;
+    private bool HasSpeakerSelector => (VoiceUiState.AvailableSpeakers?.Count ?? 0) > 0 && !VoiceService.IsIOS;
+    private bool HasNoiseFilterSelector => ((VoiceUiState.AvailableMicrophones?.Count ?? 0) > 0 || VoiceService.IsAndroid) && !VoiceService.IsIOS;
+    private bool HasIosVoiceIsolationControl => VoiceService.IsIOS && (VoiceUiState.AvailableMicrophones?.Count ?? 0) > 0;
+    private bool HasAudioDrawerControls => HasMicSelector || HasSpeakerSelector || HasNoiseFilterSelector || HasIosVoiceIsolationControl;
+
+    // Single source of truth for pull-tab visibility and drawer contents: only show the pull-down
+    // chevron when at least one real drawer control row is available for the active non-demo call.
+    private bool HasPullDrawer => !IsDemoMode && (HasAudioDrawerControls || VoiceService.IsVideoOn || VoiceService.IsScreenSharing || _isChangingScreen);
 
     private bool _hasCheckedIosViPrompt = false;
+    private bool _isSwitchingCamera = false;
+    private IJSObjectReference? _drawerModule;
+    private Task<IJSObjectReference?>? _drawerModuleLoadTask;
+    private DotNetObjectReference<GlobalVoiceBar>? _dotNetRef;
+    private int _lastRenderFingerprint;
+    private bool _hasRenderedOnce;
+
+    private int ComputeVoiceBarRenderFingerprint()
+    {
+        var hash = new HashCode();
+        hash.Add(VoiceService.IsInVoiceCall);
+        hash.Add(VoiceService.IsConnecting);
+        hash.Add(VoiceService.ConnectingStage);
+        hash.Add(VoiceService.ConnectingChannelId, StringComparer.Ordinal);
+        hash.Add(VoiceService.CurrentChannelId, StringComparer.Ordinal);
+        hash.Add(VoiceService.IsMuted);
+        hash.Add(VoiceService.IsHardwareMuted);
+        hash.Add(VoiceService.IsSoftwareMuted);
+        hash.Add(VoiceService.IsVideoOn);
+        hash.Add(VoiceService.IsTogglingVideo);
+        hash.Add(CanShowMobileSwitchCameraButton);
+        hash.Add(_isSwitchingCamera);
+        hash.Add(VoiceService.IsScreenSharing);
+        hash.Add(_isChangingScreen);
+        hash.Add(HasPullDrawer);
+        hash.Add(_isDrawerExpanded);
+        if (_isDrawerExpanded)
+        {
+            hash.Add(VoiceService.IsIOS);
+            hash.Add(VoiceService.IsAndroid);
+            hash.Add(VoiceService.CurrentNoiseSuppression, StringComparer.Ordinal);
+            hash.Add(VoiceUiState.ActiveMicrophoneDeviceId, StringComparer.Ordinal);
+            hash.Add(VoiceUiState.ActiveSpeakerDeviceId, StringComparer.Ordinal);
+            hash.Add(VoiceUiState.ActiveCameraDeviceId, StringComparer.Ordinal);
+            var mics = VoiceUiState.AvailableMicrophones;
+            hash.Add(mics?.Count ?? 0);
+            if (mics != null)
+            {
+                foreach (var mic in mics)
+                {
+                    hash.Add(mic.DeviceId, StringComparer.Ordinal);
+                    hash.Add(mic.Label, StringComparer.Ordinal);
+                }
+            }
+            var speakers = VoiceUiState.AvailableSpeakers;
+            hash.Add(speakers?.Count ?? 0);
+            if (speakers != null)
+            {
+                foreach (var spk in speakers)
+                {
+                    hash.Add(spk.DeviceId, StringComparer.Ordinal);
+                    hash.Add(spk.Label, StringComparer.Ordinal);
+                }
+            }
+            var cameras = VoiceUiState.AvailableCameras;
+            hash.Add(cameras?.Count ?? 0);
+            if (cameras != null)
+            {
+                foreach (var cam in cameras)
+                {
+                    hash.Add(cam.DeviceId, StringComparer.Ordinal);
+                    hash.Add(cam.Label, StringComparer.Ordinal);
+                }
+            }
+            hash.Add(VoiceUiState.MaxVideoSendFps);
+            hash.Add(VoiceUiState.MaxVideoSendQuality, StringComparer.Ordinal);
+            hash.Add(VoiceUiState.MaxCameraHeight);
+            hash.Add(VoiceUiState.IsScreenShareAudioEnabled);
+            hash.Add(VoiceUiState.ScreenShareMode, StringComparer.Ordinal);
+            hash.Add(VoiceUiState.MaxScreenShareFps);
+            hash.Add(VoiceUiState.MaxScreenShareQuality, StringComparer.Ordinal);
+            hash.Add(VoiceUiState.MaxScreenHeight);
+            hash.Add(VoiceUiState.IsIosVoiceIsolationActive);
+        }
+        return hash.ToHashCode();
+    }
+
+    protected override bool ShouldRender()
+    {
+        var fp = ComputeVoiceBarRenderFingerprint();
+        if (!_hasRenderedOnce || fp != _lastRenderFingerprint)
+        {
+            _hasRenderedOnce = true;
+            _lastRenderFingerprint = fp;
+            return true;
+        }
+        return false;
+    }
 
     protected override void OnInitialized()
     {
         _lastChannelId = VoiceService.CurrentChannelId;
         VoiceService.OnChange += OnVoiceServiceChanged;
+        VoiceService.OnDiagnosticsOrSettingsChanged += OnDiagnosticsOrSettingsChanged;
+        VoiceDeviceService.OnAudioDevicesChanged += OnAudioDevicesChanged;
+        VoiceService.OnVideoDimensionsChanged += OnVideoDimensionsChanged;
+        VoiceService.OnOutgoingCallDeclined += OnOutgoingCallDeclined;
+        CircuitContext.OnDeviceTypeChanged += OnVoiceServiceChanged;
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
+        _isDisposed = true;
         VoiceService.OnChange -= OnVoiceServiceChanged;
+        VoiceService.OnDiagnosticsOrSettingsChanged -= OnDiagnosticsOrSettingsChanged;
+        VoiceDeviceService.OnAudioDevicesChanged -= OnAudioDevicesChanged;
+        VoiceService.OnVideoDimensionsChanged -= OnVideoDimensionsChanged;
+        VoiceService.OnOutgoingCallDeclined -= OnOutgoingCallDeclined;
+        CircuitContext.OnDeviceTypeChanged -= OnVoiceServiceChanged;
+        if (_drawerModule != null)
+        {
+            try
+            {
+                await _drawerModule.InvokeVoidAsync("disposeVoiceBarPullDrawer");
+                await _drawerModule.DisposeAsync();
+            }
+            catch { }
+            _drawerModule = null;
+        }
+        _dotNetRef?.Dispose();
+        _dotNetRef = null;
+    }
+
+    private void OnDiagnosticsOrSettingsChanged()
+    {
+        if (!_isDrawerExpanded)
+        {
+            return;
+        }
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnAudioDevicesChanged(List<AudioDevice> mics, string activeMicId, List<AudioDevice> speakers, string activeSpeakerId)
+    {
+        if (!VoiceService.IsInVoiceCall)
+        {
+            return;
+        }
+        if (_isDrawerExpanded && !HasPullDrawer)
+        {
+            _isDrawerExpanded = false;
+        }
+        else if (!_isDrawerExpanded && HasPullDrawer == _renderedHasPullDrawer)
+        {
+            return;
+        }
+        InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public void OnDrawerExpandedChanged(bool expanded)
+    {
+        if (expanded && !HasPullDrawer)
+        {
+            expanded = false;
+        }
+        if (_isDrawerExpanded != expanded)
+        {
+            _isDrawerExpanded = expanded;
+            StateHasChanged();
+        }
+    }
+
+    private void OnOutgoingCallDeclined(string channelId)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            if (VoiceService.IsInVoiceCall && string.Equals(VoiceService.CurrentChannelId, channelId, StringComparison.Ordinal))
+            {
+                await Disconnect();
+                Snackbar.Add(Loc["Call was declined."].Value, Severity.Info);
+            }
+        });
+    }
+
+    private void OnVideoDimensionsChanged()
+    {
+        if (!_isDrawerExpanded)
+        {
+            return;
+        }
+        InvokeAsync(StateHasChanged);
     }
 
     private void OnVoiceServiceChanged()
@@ -283,6 +541,10 @@
             {
                 _hasCheckedIosViPrompt = false;
             }
+        }
+        else if (_isDrawerExpanded && !HasPullDrawer)
+        {
+            _isDrawerExpanded = false;
         }
         
         InvokeAsync(StateHasChanged);
@@ -309,6 +571,130 @@
         {
             await CheckIosVoiceIsolationPromptAsync();
         }
+
+        await SyncPullDrawerJsAsync();
+    }
+
+    private Task<IJSObjectReference?> EnsureDrawerModuleLoadedAsync()
+    {
+        if (_isDisposed) return Task.FromResult<IJSObjectReference?>(null);
+        if (_drawerModule != null) return Task.FromResult<IJSObjectReference?>(_drawerModule);
+        return _drawerModuleLoadTask ??= LoadDrawerModuleCoreAsync();
+    }
+
+    private async Task<IJSObjectReference?> LoadDrawerModuleCoreAsync()
+    {
+        try
+        {
+            var module = await JS.InvokeAsync<IJSObjectReference>("import", $"./{Assets.Bypassed("Components/Shared/GlobalVoiceBar.razor.js")}");
+            if (_isDisposed)
+            {
+                if (module != null)
+                {
+                    try { await module.DisposeAsync(); } catch { }
+                }
+                _drawerModuleLoadTask = null;
+                return null;
+            }
+
+            if (module == null)
+            {
+                _drawerModuleLoadTask = null;
+                return null;
+            }
+
+            _drawerModule = module;
+            return _drawerModule;
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+        {
+            _drawerModuleLoadTask = null;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _drawerModuleLoadTask = null;
+            Logger.LogDebug(ex, "GlobalVoiceBar.razor.js preload skipped.");
+            return null;
+        }
+    }
+
+    private async Task SyncPullDrawerJsAsync()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        // Snapshot the state actually committed by the render that just finished so an async
+        // IsInVoiceCall transition before the call-bar DOM mounts never syncs prematurely
+        // against a missing #voice-bar-pull-tab and latches future syncs off.
+        bool hasPullDrawer = _renderedHasPullDrawer;
+        bool drawerExpanded = _renderedDrawerExpanded;
+        string? channelId = _renderedChannelId;
+
+        if (!hasPullDrawer && !_lastSyncHasPullDrawer && !_hasAttemptedPullDrawerBind)
+        {
+            return;
+        }
+
+        if (_hasSyncedPullDrawerOnce &&
+            hasPullDrawer == _lastSyncHasPullDrawer &&
+            drawerExpanded == _lastSyncDrawerExpanded &&
+            string.Equals(channelId, _lastSyncChannelId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (hasPullDrawer)
+        {
+            _hasAttemptedPullDrawerBind = true;
+        }
+
+        int syncVersion = ++_pullDrawerSyncVersion;
+
+        try
+        {
+            var module = _drawerModule ?? await EnsureDrawerModuleLoadedAsync();
+            if (module == null || _isDisposed || syncVersion != _pullDrawerSyncVersion)
+            {
+                return;
+            }
+
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            bool isBound = await module.InvokeAsync<bool>(
+                "syncVoiceBarPullDrawer",
+                "voice-bar-drawer-wrapper",
+                "voice-bar-drawer-content",
+                "voice-bar-pull-tab",
+                "voice-bar-pull-icon",
+                _dotNetRef,
+                drawerExpanded);
+
+            if (_isDisposed || syncVersion != _pullDrawerSyncVersion)
+            {
+                return;
+            }
+
+            // Only latch as synced once JS confirms live DOM binding (or teardown).
+            // If hasPullDrawer was true but JS returned false, leave _lastSyncHasPullDrawer false
+            // so the next render retries binding.
+            _hasSyncedPullDrawerOnce = !hasPullDrawer || isBound;
+            _lastSyncHasPullDrawer = isBound;
+            _lastSyncDrawerExpanded = isBound && drawerExpanded;
+            _lastSyncChannelId = isBound ? channelId : null;
+            if (!isBound && !hasPullDrawer)
+            {
+                _hasAttemptedPullDrawerBind = false;
+            }
+        }
+        catch (JSDisconnectedException) { }
+        catch (TaskCanceledException) { }
+        catch (ObjectDisposedException) { }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "SyncPullDrawerJsAsync skipped.");
+        }
     }
 
     private async Task PrewarmVoiceContextAsync()
@@ -321,7 +707,14 @@
             var settingsTask = !VoiceUiState.HasLoadedVoiceSettings
                 ? VoiceUiState.LoadDeviceVoiceSettingsAsync()
                 : Task.CompletedTask;
-            await Task.WhenAll(identityTask, settingsTask);
+            var drawerModuleTask = EnsureDrawerModuleLoadedAsync();
+            Task prepareConnectionTask = Task.CompletedTask;
+            if (!Config.GetValue<bool>("Spokes_DemoMode"))
+            {
+                var livekitUrl = LiveKitService.ResolveClientWebSocketUrl(Config, Db.SystemConfigs.Get(), Nav.BaseUri);
+                prepareConnectionTask = VoiceService.PrepareConnectionAsync(livekitUrl);
+            }
+            await Task.WhenAll(identityTask, settingsTask, drawerModuleTask, prepareConnectionTask);
         }
         catch (JSDisconnectedException) { }
         catch (TaskCanceledException) { }
@@ -452,6 +845,28 @@
         await VoiceDeviceService.SwitchCameraAsync(deviceId, VoiceService.IsVideoOn);
     }
 
+    private async Task OnFlipCameraAsync()
+    {
+        if (!VoiceService.IsVideoOn || _isSwitchingCamera || VoiceService.IsTogglingVideo)
+        {
+            return;
+        }
+        _isSwitchingCamera = true;
+        StateHasChanged();
+        try
+        {
+            await VoiceDeviceService.SwitchCameraAsync(null, VoiceService.IsVideoOn);
+        }
+        finally
+        {
+            _isSwitchingCamera = false;
+            if (!_isDisposed)
+            {
+                StateHasChanged();
+            }
+        }
+    }
+
     private async Task OnMicrophoneSelected(string deviceId)
     {
         VoiceUiState.ActiveMicrophoneDeviceId = deviceId;
@@ -485,9 +900,12 @@
 
     private void ReturnToChat()
     {
-        if (!string.IsNullOrEmpty(VoiceService.CurrentChannelId))
+        var targetChannelId = !string.IsNullOrEmpty(VoiceService.CurrentChannelId)
+            ? VoiceService.CurrentChannelId
+            : VoiceService.ConnectingChannelId;
+        if (!string.IsNullOrEmpty(targetChannelId))
         {
-            Nav.NavigateTo($"/chat/{VoiceService.CurrentChannelId}");
+            Nav.NavigateTo($"/chat/{targetChannelId}");
         }
     }
 
@@ -509,10 +927,4 @@
     }
 }
 
-<style>
-    .voice-drawer-content .mud-disabled {
-        opacity: 0.25 !important;
-        background-color: rgba(0, 0, 0, 0.15) !important;
-        border-color: transparent !important;
-    }
-</style>
+@* Voice bar & pull-drawer styles live in wwwroot/css/app.css so they are HTTP-cached rather than streamed over SignalR. *@

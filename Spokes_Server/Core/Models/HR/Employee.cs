@@ -39,12 +39,14 @@ public class Employee : IDataEntity, IHasAssociatedFiles
     public string TeamId { get; set; } = string.Empty;
     public decimal WeeklyHours { get; set; } = 40.0m; // Default to 40 hours
     public List<EmployeeWorkSchedule> WorkSchedules { get; set; } = [];
-    public decimal HourlyRate { get; set; } // For "Forward Looking" cost calculation only. Not for Payroll.
+    public decimal HourlyRate { get; set; }
+    public EmployeePayrollProfile Payroll { get; set; } = new();
 
     // Personal Info
+    public string SocialInsuranceNumber { get; set; } = string.Empty;
     public string PhoneNumber { get; set; } = string.Empty;
     public string Address { get; set; } = string.Empty;
-    public DateOnly DateOfBirth { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+    public DateOnly? DateOfBirth { get; set; }
     public string EmergencyContact { get; set; } = string.Empty;
     public string EmergencyContactPhone { get; set; } = string.Empty;
     public string PersonalEmail { get; set; } = string.Empty;
@@ -132,6 +134,12 @@ public class Employee : IDataEntity, IHasAssociatedFiles
     [JsonIgnore]
     public bool IsSelectable => IsActive && !IsSuspended && !IsBanned && !IsSystem;
 
+    [JsonIgnore]
+    public bool IsActiveUnsuspended => IsActive && !IsSuspended && !IsBanned;
+
+    [JsonIgnore]
+    public bool IsEffectiveAdmin => IsActiveUnsuspended && IsAdmin;
+
     // Secure Chat / Vault Keys
     public string? PublicKey { get; set; }
     public string? EncryptedPrivateKey { get; set; }
@@ -174,37 +182,23 @@ public class Employee : IDataEntity, IHasAssociatedFiles
     [JsonIgnore]
     public List<PermissionGroup> PermissionGroups { get; set; } = [];
 
-    [JsonIgnore]
-    public PermissionGroup? PermissionGroup
-    {
-        get => PermissionGroups.FirstOrDefault();
-        set
-        {
-            PermissionGroups.Clear();
-            if (value != null)
-            {
-                PermissionGroups.Add(value);
-                if (!string.IsNullOrEmpty(value.Id))
-                {
-                    PermissionGroupIds = [value.Id];
-                }
-            }
-            else
-            {
-                PermissionGroupIds.Clear();
-            }
-        }
-    }
-
     // Blocked Users
     public List<string> BlockedUserIds { get; set; } = [];
 
     // The Logic: Admin can do anything. Others check assigned PermissionGroups and granular Permissions.
-    public bool HasPermission(string permission)
+    public bool HasPermission(string permission) => HasEffectivePermission(permission, allowSuspended: false);
+
+    /// <summary>
+    /// Evaluates whether this employee currently holds <paramref name="permission"/>,
+    /// enforcing active, non-banned, and (unless <paramref name="allowSuspended"/> is true)
+    /// non-suspended account status, and checking multi-group assignments consistently.
+    /// </summary>
+    public bool HasEffectivePermission(string permission, bool allowSuspended = false)
     {
-        if (!IsActive || IsSuspended || IsBanned) return false;
-        if (IsAdmin) return true;
-        
+        if (!IsActive || IsBanned) return false;
+        if (IsSuspended && !allowSuspended) return false;
+        if (IsAdmin) return !IsSuspended || allowSuspended;
+
         if (PermissionGroupIds.Count > 0 && PermissionGroups.Any(g => g != null && g.Permissions.Contains(permission)))
         {
             return true;
@@ -213,11 +207,50 @@ public class Employee : IDataEntity, IHasAssociatedFiles
         return Permissions.Contains(permission);
     }
 
+    /// <summary>
+    /// Returns the union of all permissions granted via assigned <see cref="PermissionGroups"/>
+    /// and direct <see cref="Permissions"/> when the employee is active and not banned.
+    /// </summary>
+    public HashSet<string> GetEffectivePermissionSet(bool allowSuspended = false)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!IsActive || IsBanned) return result;
+        if (IsSuspended && !allowSuspended) return result;
+
+        if (PermissionGroupIds.Count > 0 && PermissionGroups.Count > 0)
+        {
+            foreach (var group in PermissionGroups)
+            {
+                if (group?.Permissions == null) continue;
+                foreach (var perm in group.Permissions)
+                {
+                    result.Add(perm);
+                }
+            }
+        }
+
+        if (Permissions != null)
+        {
+            foreach (var perm in Permissions)
+            {
+                result.Add(perm);
+            }
+        }
+
+        return result;
+    }
+
     public IEnumerable<string> GetAssociatedFilePaths()
     {
         if (!string.IsNullOrWhiteSpace(AvatarFile))
         {
             yield return AvatarFile;
+        }
+
+        if (!string.IsNullOrWhiteSpace(SignatureImageBase64) &&
+            SignatureImageBase64.StartsWith("/spokesapi/files/", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return SignatureImageBase64;
         }
     }
 }

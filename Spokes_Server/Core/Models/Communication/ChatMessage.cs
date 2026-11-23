@@ -1,10 +1,5 @@
 namespace Spokes_Server.Core.Models.Communication;
 
-using Spokes_Server.Core.Models.Core;
-using Spokes_Server.Core.Models.Projects;
-using Spokes_Server.Core.Models.Accounting;
-using Spokes_Server.Core.Models.HR;
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -62,6 +57,7 @@ public class ChatMessage : IDataEntity, IHasAssociatedFiles
     public DateTime? EditedAt { get; set; }
     public bool IsDeleted { get; set; } = false;
     public bool IsEncrypted { get; set; } = false;
+    public int KeyEpoch { get; set; } = 0;
 
     /// <summary>
     /// Simple emoji reactions as strings (e.g., "👍", "❤️").
@@ -114,47 +110,6 @@ public class ChatMessage : IDataEntity, IHasAssociatedFiles
     /// </summary>
     public List<string> ReadBy { get; set; } = new();
 
-    /// <summary>
-    /// Checks whether a given user has read this message.
-    /// The sender is always considered to have read their own message.
-    /// </summary>
-    public bool IsReadBy(string userId)
-    {
-        if (string.IsNullOrEmpty(userId)) return false;
-        if (userId == SenderId) return true;
-        return ReadBy != null && ReadBy.Contains(userId);
-    }
-
-    /// <summary>
-    /// Returns all user IDs who have seen this message, ensuring the sender is included.
-    /// </summary>
-    public IEnumerable<string> GetAllReaders()
-    {
-        if (ReadBy == null || ReadBy.Count == 0)
-        {
-            if (!string.IsNullOrEmpty(SenderId))
-            {
-                yield return SenderId;
-            }
-            yield break;
-        }
-
-        bool senderYielded = false;
-        foreach (var reader in ReadBy)
-        {
-            if (reader == SenderId)
-            {
-                senderYielded = true;
-            }
-            yield return reader;
-        }
-
-        if (!senderYielded && !string.IsNullOrEmpty(SenderId))
-        {
-            yield return SenderId;
-        }
-    }
-
     public IEnumerable<string> GetAssociatedFilePaths()
     {
         return Attachments?.Select(a => a.FilePath).Where(p => !string.IsNullOrWhiteSpace(p)) ?? Enumerable.Empty<string>();
@@ -168,34 +123,18 @@ public class ChatAttachment : IFileAttachment
     public string FilePath { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
     public long FileSizeBytes { get; set; }
+    public int KeyEpoch { get; set; } = 0;
     public bool HasServerThumbnail { get; set; } = false;
     public int? ImageWidth { get; set; }
     public int? ImageHeight { get; set; }
 
     [System.Text.Json.Serialization.JsonIgnore]
-    public string ThumbnailUrl
-    {
-        get
-        {
-            if (!HasServerThumbnail || string.IsNullOrWhiteSpace(FilePath)) 
-                return FilePath;
-                
-            if (FilePath.StartsWith("/spokesapi/files/"))
-            {
-                return FilePath.Replace("/spokesapi/files/", "/spokesapi/files/thumb/");
-            }
-            if (FilePath.StartsWith("/internal/attachments/"))
-            {
-                return FilePath.Replace("/internal/attachments/", "/internal/attachments/thumb/");
-            }
-            if (FilePath.StartsWith("/spokesapi/attachments/"))
-            {
-                return FilePath.Replace("/spokesapi/attachments/", "/spokesapi/attachments/thumb/");
-            }
-            
-            return FilePath;
-        }
-    }
+    public bool CanUseServerThumbnail =>
+        HasServerThumbnail || Spokes_Server.Core.Helpers.FileHelper.CanSelfHealThumbnail(FilePath);
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string ThumbnailUrl =>
+        Spokes_Server.Core.Helpers.FileHelper.BuildThumbnailUrl(FilePath, CanUseServerThumbnail);
 }
 
 public static class ChatChannelType

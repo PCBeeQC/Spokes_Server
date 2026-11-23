@@ -50,7 +50,7 @@ public class BackupServiceTests : IDisposable
 
             // Repositories requiring SequenceService or specific loggers
             var quotes = new QuoteRepository(_persistence, _config, sequenceService, new Mock<ILogger<QuoteRepository>>().Object);
-            var purchases = new PurchaseOrderRepository(_persistence, _config);
+            var purchases = new PurchaseOrderRepository(_persistence, _config, sequenceService);
             var suppliers = new SupplierRepository(_persistence, _config);
             var invoices = new InvoiceRepository(_persistence, _config, sequenceService);
             var profile = new CompanyProfileRepository(_persistence, _config);
@@ -86,13 +86,12 @@ public class BackupServiceTests : IDisposable
             var deviceSessions = new DeviceSessionRepository(_persistence, _config);
             var albums = new AlbumRepository(_persistence, _config);
             var demoConfigs = new DemoConfigRepository(_persistence, _config);
-            var clientStates = new UserClientStateRepository(_persistence, _config);
             var hourBankAdjustments = new HourBankAdjustmentRepository(_persistence, _config);
 
             var projectsContext = new ProjectsContext(projects, projectGroups, workTypes, rateCards, quotes, notes, boards, boardCards, boardTemplates, projectDocs, profile);
             var hrContext = new HrContext(employees, timesheets, hourBankAdjustments, plans, teams, events, profile);
             var accountingContext = new AccountingContext(invoices, purchases, suppliers, commissionLedgers, expenses, bills, contrib, recExpenses, profile);
-            var communicationContext = new CommunicationContext(channels, categories, messages, readStates, clientStates, reportedMessages, albums, mailFolders, mailMsgs, pubContacts, privContacts, profile);
+            var communicationContext = new CommunicationContext(channels, categories, messages, readStates, reportedMessages, albums, mailFolders, mailMsgs, pubContacts, privContacts, profile);
             var coreContext = new CoreContext(profile, templates, oidc, serverConfigs, systemConfigs, deviceSessions, demoConfigs, standardDocs);
 
             _db = new Database(projectsContext, hrContext, accountingContext, communicationContext, coreContext);
@@ -321,33 +320,6 @@ public class BackupServiceTests : IDisposable
         }
 
         [Fact]
-        public async Task GetBackupBytes_ReturnsContent()
-        {
-            var backupDir = Path.Combine(_testDataDir, "Backups");
-            Directory.CreateDirectory(backupDir);
-            var path = Path.Combine(backupDir, "Spokes_Backup_bytes.zip");
-            var content = new byte[] { 1, 2, 3 };
-            File.WriteAllBytes(path, content);
-
-            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config);
-
-            var result = await service.GetBackupBytesAsync(path);
-            Assert.Equal(content, result);
-        }
-
-        [Theory]
-        [InlineData(null)]
-        [InlineData("")]
-        [InlineData("   ")]
-        public async Task GetBackupBytesAsync_WhenPathIsNullOrEmpty_ReturnsNull(string? path)
-        {
-            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config);
-
-            var result = await service.GetBackupBytesAsync(path!);
-            Assert.Null(result);
-        }
-
-        [Fact]
         public async Task RestoreBackup_RestoresFilesAndReloadsDb()
         {
             // 1. Create a "Good" state and zip it
@@ -489,24 +461,6 @@ public class BackupServiceTests : IDisposable
         }
 
         [Fact]
-        public async Task RestoreBackupAsync_ValidZip_ReturnsTrueOnSuccess()
-        {
-            var goodDir = Path.Combine(_testDataDir, "GoodSync");
-            Directory.CreateDirectory(goodDir);
-            File.WriteAllText(Path.Combine(goodDir, "data.json"), "{\"id\":\"sync_good\"}");
-
-            var backupPath = Path.Combine(_testDataDir, "test_restore_sync.zip");
-            ZipFile.CreateFromDirectory(goodDir, backupPath);
-
-            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config, _persistence, _db);
-
-            var result = await service.RestoreBackupAsync(backupPath, _mockLogger.Object);
-
-            Assert.True(result.Success);
-            Assert.Equal("{\"id\":\"sync_good\"}", File.ReadAllText(Path.Combine(_testDataDir, "data.json")));
-        }
-
-        [Fact]
         public async Task RestoreBackupAsync_WhenExtractionCancelled_PreservesExistingData()
         {
             var existingFile = Path.Combine(_testDataDir, "preserve_on_cancel.json");
@@ -557,7 +511,7 @@ public class BackupServiceTests : IDisposable
         }
 
         [Fact]
-        public async Task DeleteBackup_And_GetBackupBytesAsync_WithTraversalPath_RejectsOperation()
+        public void DeleteBackup_WithTraversalPath_RejectsOperation()
         {
             var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config);
             var sensitiveFile = Path.Combine(_testDataDir, "sensitive.json");
@@ -569,10 +523,6 @@ public class BackupServiceTests : IDisposable
             // DeleteBackup should not delete the file outside Backups
             service.DeleteBackup(traversalPath);
             Assert.True(File.Exists(sensitiveFile), "Sensitive file outside Backups should not be deleted via traversal path!");
-
-            // GetBackupBytesAsync should not read the file outside Backups
-            var bytes = await service.GetBackupBytesAsync(traversalPath);
-            Assert.Null(bytes);
         }
 
         [Fact]
@@ -1014,5 +964,4 @@ public class BackupServiceTests : IDisposable
             Assert.True(File.Exists(validArchive));
         }
     }
-
 

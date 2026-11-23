@@ -9,6 +9,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.Unicode;
 using System.Threading;
@@ -86,7 +87,7 @@ public class GitHubBackupProvider : IBackupDestinationProvider
         _profiles = profiles;
         _httpClientFactory = httpClientFactory;
         _dataPath = configuration["DataPath"] ?? "Data";
-        _encryptionService = encryptionService ?? profiles?.EncryptionService ?? new EncryptionService(configuration);
+        _encryptionService = BackupDestinationPruneHelper.ResolveEncryptionService(encryptionService, profiles, configuration);
         _logger = logger;
     }
 
@@ -95,7 +96,7 @@ public class GitHubBackupProvider : IBackupDestinationProvider
         if (!string.IsNullOrWhiteSpace(tokenOverride)) return tokenOverride;
         var stored = _profiles.Get()?.Backup.GitHub.PersonalAccessToken;
         if (string.IsNullOrWhiteSpace(stored)) return null;
-        return _encryptionService.TryDecrypt(stored, out var decrypted) ? decrypted : stored;
+        return BackupDestinationPruneHelper.ResolveCredential(_encryptionService, stored);
     }
 
     internal static string NormalizeTargetFolder(string? folder)
@@ -154,6 +155,100 @@ public class GitHubBackupProvider : IBackupDestinationProvider
         }
 
         return Convert.ToHexStringLower(sha1.GetHashAndReset());
+    }
+
+    internal static bool IsCompanyProfileSettingsPath(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath)) return false;
+        var normalized = relativePath.Replace('\\', '/').TrimStart('/');
+        return string.Equals(normalized, "Settings/company.json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static byte[] SanitizeCompanySettingsJsonBytes(byte[] rawBytes)
+    {
+        JsonObject? rootObj;
+        try
+        {
+            rootObj = JsonNode.Parse(rawBytes) as JsonObject;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "Refusing to upload malformed Settings/company.json to GitHub without secret redaction.", ex);
+        }
+
+        if (rootObj == null)
+        {
+            throw new InvalidOperationException(
+                "Refusing to upload malformed Settings/company.json to GitHub without secret redaction.");
+        }
+
+        if (rootObj.ContainsKey("PublicChannelMasterPassword"))
+        {
+            rootObj["PublicChannelMasterPassword"] = string.Empty;
+        }
+
+        if (rootObj["Chat"] is JsonObject chatObj && chatObj.ContainsKey("PublicChannelMasterPassword"))
+        {
+            chatObj["PublicChannelMasterPassword"] = string.Empty;
+        }
+
+        if (rootObj["Backup"] is JsonObject backupObj)
+        {
+            ClearSecretProperties(backupObj, "S3", "AccessKey", "SecretKey");
+            ClearSecretProperties(backupObj, "GoogleDrive", "RefreshToken");
+            ClearSecretProperties(backupObj, "GitHub", "PersonalAccessToken");
+            ClearSecretProperties(backupObj, "WebDav", "Username", "Password");
+            ClearSecretProperties(backupObj, "Sftp", "Username", "Password");
+        }
+
+        return JsonSerializer.SerializeToUtf8Bytes(rootObj, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static void ClearSecretProperties(JsonObject backupObj, string sectionName, params string[] propertyNames)
+    {
+        if (backupObj[sectionName] is not JsonObject sectionObj) return;
+        foreach (var prop in propertyNames)
+        {
+            if (sectionObj.ContainsKey(prop))
+            {
+                sectionObj[prop] = string.Empty;
+            }
+        }
+    }
+
+    internal static string ComputeGitBlobSha1(ReadOnlySpan<byte> contentBytes)
+    {
+        using var sha1 = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+        var headerBytes = Encoding.ASCII.GetBytes($"blob {contentBytes.Length}\0");
+        sha1.AppendData(headerBytes);
+        sha1.AppendData(contentBytes);
+        return Convert.ToHexStringLower(sha1.GetHashAndReset());
+    }
+
+    internal static async Task<byte[]> ReadUploadPayloadBytesAsync(
+        string filePath,
+        string relativePath,
+        CancellationToken cancellationToken = default)
+    {
+        var rawBytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
+        return IsCompanyProfileSettingsPath(relativePath)
+            ? SanitizeCompanySettingsJsonBytes(rawBytes)
+            : rawBytes;
+    }
+
+    internal static async Task<string> ComputeLocalUploadSha1Async(
+        string filePath,
+        string relativePath,
+        CancellationToken cancellationToken = default)
+    {
+        if (IsCompanyProfileSettingsPath(relativePath))
+        {
+            var sanitizedBytes = await ReadUploadPayloadBytesAsync(filePath, relativePath, cancellationToken);
+            return ComputeGitBlobSha1(sanitizedBytes);
+        }
+
+        return await ComputeGitBlobSha1Async(filePath, cancellationToken);
     }
 
     /// <summary>
@@ -816,7 +911,7 @@ public class GitHubBackupProvider : IBackupDestinationProvider
                 var repoPath = CombineRepoPath(normalizedFolder, relPath);
                 seenRepoPaths.Add(repoPath);
 
-                var localSha = await ComputeGitBlobSha1Async(file.FullName, cancellationToken);
+                var localSha = await ComputeLocalUploadSha1Async(file.FullName, relPath, cancellationToken);
                 if (existingRemoteBlobs.TryGetValue(repoPath, out var remoteSha) &&
                     string.Equals(localSha, remoteSha, StringComparison.OrdinalIgnoreCase))
                 {
@@ -958,7 +1053,7 @@ public class GitHubBackupProvider : IBackupDestinationProvider
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!file.Exists) continue;
 
-                byte[] fileBytes = await File.ReadAllBytesAsync(file.FullName, cancellationToken);
+                byte[] fileBytes = await ReadUploadPayloadBytesAsync(file.FullName, relPath, cancellationToken);
                 long fileLength = fileBytes.Length;
 
                 if (TryDecodeInlineUtf8Content(fileBytes, out var inlineUtf8))

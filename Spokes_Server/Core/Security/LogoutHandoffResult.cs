@@ -41,9 +41,6 @@ public class LogoutHandoffResult
     public static LogoutHandoffResult MobileLocal(string serverBaseUrl) =>
         new() { HandoffType = LogoutHandoffType.MobileLocalRedirect, ServerBaseUrl = serverBaseUrl };
 
-    public static LogoutHandoffResult MobileIdp(string logoutRequestId) =>
-        new() { HandoffType = LogoutHandoffType.MobileIdpLogout, LogoutRequestId = logoutRequestId };
-
     public static LogoutHandoffResult LocalRedirect(string redirectUri, bool handledViaSignOutAsync = false) =>
         new() { HandoffType = LogoutHandoffType.Redirect, RedirectUri = redirectUri, HandledViaSignOutAsync = handledViaSignOutAsync };
 

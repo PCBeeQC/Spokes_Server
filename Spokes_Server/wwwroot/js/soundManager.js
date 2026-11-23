@@ -7,18 +7,53 @@ window.SoundManager = (function() {
     let previewAudio = null;
     let callTimeout = null;
     let currentSinkId = '';
+    let hasAppliedNonDefaultSink = false;
+
+    const SYNTHETIC_MOBILE_ROUTES = new Set(['earpiece', 'speaker', 'speakerphone', 'headset', 'bluetooth']);
+
+    function isNativeMobilePlatform() {
+        if (typeof window === 'undefined') return false;
+        if (typeof window.isCapacitorNative === 'function') {
+            return Boolean(window.isCapacitorNative());
+        }
+        return Boolean(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
+    }
+
+    function isSyntheticMobileRouteId(sinkId) {
+        return Boolean(sinkId) && SYNTHETIC_MOBILE_ROUTES.has(String(sinkId).trim().toLowerCase());
+    }
+
+    function normalizeWebAudioSinkId(sinkId) {
+        if (!sinkId || isNativeMobilePlatform()) return '';
+        const clean = String(sinkId).trim();
+        if (!clean || clean === 'default' || isSyntheticMobileRouteId(clean)) {
+            return '';
+        }
+        return clean;
+    }
 
     try {
-        currentSinkId = localStorage.getItem('spokes_active_speaker_id') || '';
+        const storedSinkId = localStorage.getItem('spokes_active_speaker_id') || '';
+        if (isSyntheticMobileRouteId(storedSinkId) || (isNativeMobilePlatform() && storedSinkId)) {
+            localStorage.removeItem('spokes_active_speaker_id');
+            currentSinkId = '';
+        } else {
+            currentSinkId = normalizeWebAudioSinkId(storedSinkId);
+        }
     } catch(e) {}
 
     const defaultSoundsToLoad = ['spokesnotif1', 'channel_leave'];
 
     async function applySinkId() {
+        if (isNativeMobilePlatform()) return;
         if (audioCtx && typeof audioCtx.setSinkId === 'function') {
+            const targetSink = normalizeWebAudioSinkId(currentSinkId);
+            if (!targetSink && !hasAppliedNonDefaultSink) {
+                return;
+            }
             try {
-                const targetSink = currentSinkId === 'default' ? '' : currentSinkId;
                 await audioCtx.setSinkId(targetSink);
+                hasAppliedNonDefaultSink = Boolean(targetSink);
             } catch (e) {
                 console.warn('[SoundManager] Failed to apply sinkId to audioCtx:', e);
             }
@@ -26,16 +61,32 @@ window.SoundManager = (function() {
     }
 
     async function setSinkId(deviceId) {
-        currentSinkId = deviceId === 'default' ? '' : (deviceId || '');
+        if (isNativeMobilePlatform() || isSyntheticMobileRouteId(deviceId)) {
+            currentSinkId = '';
+            return;
+        }
+        currentSinkId = normalizeWebAudioSinkId(deviceId);
         await applySinkId();
+    }
+
+    function ensureAudioContext(applySink = false) {
+        if (!audioCtx) {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (AudioContext) {
+                audioCtx = new AudioContext();
+                if (applySink) {
+                    applySinkId();
+                }
+            }
+        }
+        return audioCtx;
     }
 
     async function init(preloadDefaults = false) {
         if (isInitialized) return;
         
         try {
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            audioCtx = new AudioContext();
+            ensureAudioContext();
             await applySinkId();
             
             // Preload essential default sounds
@@ -50,35 +101,59 @@ window.SoundManager = (function() {
         }
     }
 
+    const unlockEvents = ['pointerdown', 'keydown'];
+    let unlockListenersAttached = false;
+
+    function detachUnlockListeners() {
+        if (!unlockListenersAttached) return;
+        unlockListenersAttached = false;
+        unlockEvents.forEach(evt => {
+            document.removeEventListener(evt, unlockAudio, { capture: true });
+        });
+    }
+
     function unlockAudio() {
         try {
-            if (!audioCtx) {
-                const AudioContext = window.AudioContext || window.webkitAudioContext;
-                if (AudioContext) {
-                    audioCtx = new AudioContext();
-                    applySinkId();
-                }
+            if (isNativeMobilePlatform()) {
+                detachUnlockListeners();
+                return;
             }
-            if (audioCtx && audioCtx.state === 'suspended') {
-                audioCtx.resume().catch(() => {});
+            const ctx = ensureAudioContext(true);
+            if (!ctx) {
+                detachUnlockListeners();
+                return;
             }
-            if (audioCtx) {
-                try {
-                    const buffer = audioCtx.createBuffer(1, 1, 22050);
-                    const source = audioCtx.createBufferSource();
-                    source.buffer = buffer;
-                    source.connect(audioCtx.destination);
-                    source.start(0);
-                } catch (e) {}
+            if (ctx.state === 'running') {
+                detachUnlockListeners();
+                return;
+            }
+            if (ctx.state === 'suspended') {
+                ctx.resume().then(() => {
+                    if (audioCtx && audioCtx.state === 'running') {
+                        detachUnlockListeners();
+                    }
+                }).catch(() => {});
+            }
+            try {
+                const buffer = ctx.createBuffer(1, 1, 22050);
+                const source = ctx.createBufferSource();
+                source.buffer = buffer;
+                source.connect(ctx.destination);
+                source.start(0);
+            } catch (e) {}
+            if (ctx.state === 'running') {
+                detachUnlockListeners();
             }
         } catch (e) {}
     }
 
-    // Attach unlock listeners for user gestures to satisfy iOS WebKit autoplay restrictions
-    const unlockEvents = ['touchstart', 'touchend', 'pointerdown', 'click', 'keydown'];
-    unlockEvents.forEach(evt => {
-        document.addEventListener(evt, unlockAudio, { passive: true, capture: true });
-    });
+    // Attach self-removing unlock listeners on Web/Desktop only (native mobile initializes WebAudio lazily on explicit playback)
+    if (!isNativeMobilePlatform() && typeof document !== 'undefined') {
+        unlockListenersAttached = true;
+        unlockEvents.forEach(evt => {
+            document.addEventListener(evt, unlockAudio, { passive: true, capture: true });
+        });
+    }
 
     function sanitizeSoundName(soundName) {
         if (!soundName) return '';
@@ -95,12 +170,7 @@ window.SoundManager = (function() {
         if (audioBuffers[key]) return audioBuffers[key];
 
         try {
-            if (!audioCtx) {
-                const AudioContext = window.AudioContext || window.webkitAudioContext;
-                if (AudioContext) {
-                    audioCtx = new AudioContext();
-                }
-            }
+            ensureAudioContext();
 
             const response = await fetch(`/sounds/${key}.wav`);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -159,9 +229,9 @@ window.SoundManager = (function() {
                     if (previewAudio === audio) previewAudio = null;
                 };
             }
-            if (currentSinkId && typeof audio.setSinkId === 'function') {
+            if (!isNativeMobilePlatform() && currentSinkId && typeof audio.setSinkId === 'function') {
                 try {
-                    await audio.setSinkId(currentSinkId === 'default' ? '' : currentSinkId);
+                    await audio.setSinkId(normalizeWebAudioSinkId(currentSinkId));
                 } catch(e) {}
             }
             await audio.play();
@@ -180,10 +250,6 @@ window.SoundManager = (function() {
     });
 
     return {
-        load: async function(soundName) {
-            return await loadSound(soundName);
-        },
-
         preloadSounds: async function(soundNames) {
             if (!Array.isArray(soundNames)) return;
             for (const name of soundNames) {
@@ -206,9 +272,7 @@ window.SoundManager = (function() {
 
                 const key = sanitizeSoundName(soundName);
                 const isChannelLeave = key === 'channel_leave';
-                const isNativeMobile = typeof window.isCapacitorNative === 'function'
-                    ? window.isCapacitorNative()
-                    : Boolean(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+                const isNativeMobile = isNativeMobilePlatform();
                 const isMobileDevice = isNativeMobile || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '');
                 // CRITICAL FIX: Playing Web Audio on mobile WebViews during active WebRTC VoiceChat 
                 // forces the OS to switch AudioSession categories and revokes mic permissions.
@@ -289,17 +353,8 @@ window.SoundManager = (function() {
             stopPreview();
         },
 
-        stopAll: function() {
-            stopCallRingtone();
-            stopPreview();
-        },
-
         setSinkId: async function(deviceId) {
             await setSinkId(deviceId);
-        },
-
-        getSinkId: function() {
-            return currentSinkId;
         }
     };
 })();

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Core;
@@ -39,7 +40,7 @@ public class SearchServiceTests : IDisposable
             _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Search_{Guid.NewGuid()}");
             Directory.CreateDirectory(_testDataDir);
 
-            Dictionary<string, string?> configDict = new() { { "DataPath", _testDataDir } };
+            Dictionary<string, string?> configDict = new() { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
             _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -51,7 +52,7 @@ public class SearchServiceTests : IDisposable
 
             _quotes = new QuoteRepository(_persistence, _config, mockSequence.Object, new Mock<ILogger<QuoteRepository>>().Object);
             _invoices = new InvoiceRepository(_persistence, _config, mockSequence.Object);
-            _purchases = new PurchaseOrderRepository(_persistence, _config);
+            _purchases = new PurchaseOrderRepository(_persistence, _config, mockSequence.Object);
             _expenseReports = new ExpenseReportRepository(_persistence, _config, mockSequence.Object);
 
             _boardCards = new BoardCardRepository(_persistence, _config);
@@ -60,7 +61,14 @@ public class SearchServiceTests : IDisposable
             var mockAuthState = new Mock<AuthenticationStateProvider>();
             var openIdAccounts = new OpenIdAccountRepository(_persistence, _config);
             _mockUserService = new Mock<UserService>(mockAuthState.Object, _employees, openIdAccounts, null, null);
-            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync((Employee?)null);
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(new Employee
+            {
+                Id = "test-admin",
+                FirstName = "Test",
+                LastName = "Admin",
+                IsActive = true,
+                IsAdmin = true
+            });
 
             _mockPrivacy = new Mock<IUserPrivacyService>();
             _mockPrivacy.Setup(p => p.CanViewDirectory(It.IsAny<Employee?>())).Returns(true);
@@ -120,7 +128,8 @@ public class SearchServiceTests : IDisposable
         [Fact]
         public void Search_FindsQuotes_ByNumberOrTitle()
         {
-            _quotes.Save(new Quote { Id = "q1", QuoteNumber = "Q-1234", Title = "Main Quote" });
+            _projects.Save(new Project { Id = "p-q1", Name = "Quote Project", AccessPolicy = ProjectAccessPolicy.Public });
+            _quotes.Save(new Quote { Id = "q1", ProjectId = "p-q1", QuoteNumber = "Q-1234", Title = "Main Quote" });
 
             var results = _service.Search("Q-1234");
             Assert.Single(results);
@@ -224,6 +233,7 @@ public class SearchServiceTests : IDisposable
             {
                 Id = "exp-1",
                 ReportNumber = "EXP-777",
+                EmployeeId = "test-admin",
                 EmployeeName = "Jane Smith",
                 DateSubmitted = DateTime.Today
             };
@@ -234,6 +244,20 @@ public class SearchServiceTests : IDisposable
             Assert.Equal("Expense Report", byNumber[0].Type);
             Assert.Equal("Jane Smith · Submitted", byNumber[0].Subtitle);
             Assert.Equal("/me/expenses", byNumber[0].Url);
+
+            var otherReport = new ExpenseReport
+            {
+                Id = "exp-other-1",
+                ReportNumber = "EXP-888",
+                EmployeeId = "emp-other",
+                EmployeeName = "Mark Other",
+                DateSubmitted = DateTime.Today
+            };
+            _expenseReports.Save(otherReport);
+
+            var otherResults = _service.Search("EXP-888");
+            Assert.Single(otherResults);
+            Assert.Equal("/business/accounting", otherResults[0].Url);
 
             var byEmployee = _service.Search("Jane");
             Assert.Single(byEmployee);
@@ -372,6 +396,162 @@ public class SearchServiceTests : IDisposable
             var results = _service.Search("User");
             Assert.Single(results);
             Assert.Equal("Allowed User", results[0].Title);
+        }
+
+        [Fact]
+        public void Search_ReturnsEmpty_WhenCallerNullInactiveBannedOrSystem()
+        {
+            _projects.Save(new Project { Id = "p-open-auth", Name = "Open Beacon", AccessPolicy = ProjectAccessPolicy.Public });
+            _employees.Save(new Employee { Id = "e-open-auth", FirstName = "Beacon", LastName = "User", IsActive = true });
+
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync((Employee?)null);
+            Assert.Empty(_service.Search("Beacon"));
+
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(new Employee { Id = "u-inact", IsActive = false, IsAdmin = true });
+            Assert.Empty(_service.Search("Beacon"));
+
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(new Employee { Id = "u-ban", IsActive = true, IsBanned = true, IsAdmin = true });
+            Assert.Empty(_service.Search("Beacon"));
+
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(new Employee { Id = "u-sys", IsActive = true, IsSystem = true, IsAdmin = true });
+            Assert.Empty(_service.Search("Beacon"));
+        }
+
+        [Fact]
+        public void Search_EnforcesRestrictedProjectAclAcrossProjectsQuotesInvoicesAndPurchaseOrders_AndGroupInvoiceUrl()
+        {
+            _projects.Save(new Project
+            {
+                Id = "p-sec",
+                Name = "Apollo Classified",
+                Description = "OmegaSecretPhrase",
+                AccessPolicy = ProjectAccessPolicy.Restricted,
+                AllowedUserIds = ["emp-member"]
+            });
+            _quotes.Save(new Quote { Id = "q-sec", ProjectId = "p-sec", QuoteNumber = "Q-SEC-1", Title = "Classified Quote" });
+            _invoices.Save(new Invoice { Id = "inv-sec", ProjectId = "p-sec", ProjectGroupId = "pg-9", InvoiceNumber = "INV-SEC-1", Status = "Sent" });
+            _purchases.Save(new PurchaseOrder
+            {
+                Id = "po-sec",
+                PoNumber = "PO-SEC-1",
+                Status = PurchaseOrderStatus.Final,
+                Supplier = new ClientInfo { BusinessName = "Restricted Vendor" },
+                LineItems = [new PoItem { Description = "Part", Quantity = 1m, UnitPrice = 10m, ProjectId = "p-sec" }]
+            });
+
+            var outsider = new Employee
+            {
+                Id = "emp-outsider",
+                IsActive = true,
+                Permissions = [AppPermissions.Projects.View, AppPermissions.Purchases.ViewPOs]
+            };
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(outsider);
+
+            Assert.Empty(_service.Search("Apollo"));
+            Assert.Empty(_service.Search("OmegaSecretPhrase"));
+            Assert.Empty(_service.Search("Q-SEC-1"));
+            Assert.Empty(_service.Search("INV-SEC-1"));
+            Assert.Empty(_service.Search("PO-SEC-1"));
+
+            var member = new Employee
+            {
+                Id = "emp-member",
+                IsActive = true,
+                Permissions = [AppPermissions.Projects.View, AppPermissions.Purchases.ViewPOs]
+            };
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(member);
+
+            Assert.Single(_service.Search("Apollo"));
+            Assert.Single(_service.Search("Q-SEC-1"));
+            var invHit = Assert.Single(_service.Search("INV-SEC-1"));
+            Assert.Equal("/project-groups/pg-9/invoice/inv-sec", invHit.Url);
+            Assert.Single(_service.Search("PO-SEC-1"));
+        }
+
+        [Fact]
+        public void Search_HidesPrivateEmployeeEmailFromNonAdminPeer_InQueryAndSubtitle()
+        {
+            _employees.Save(new Employee
+            {
+                Id = "e-priv",
+                FirstName = "Clara",
+                LastName = "Vance",
+                Email = "clara.secret@spokes.app",
+                Position = "Architect",
+                IsEmailPublic = false,
+                IsActive = true
+            });
+
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(new Employee
+            {
+                Id = "e-peer",
+                IsActive = true,
+                IsAdmin = false,
+                Permissions = []
+            });
+
+            Assert.Empty(_service.Search("clara.secret"));
+            var nameHit = Assert.Single(_service.Search("Clara"));
+            Assert.Equal("Clara Vance", nameHit.Title);
+            Assert.Equal("Architect", nameHit.Subtitle);
+        }
+
+        [Fact]
+        public void Search_EnforcesDraftPo_DraftExpenseReport_AndPrivateBoardCardRules()
+        {
+            _purchases.Save(new PurchaseOrder { Id = "po-drf-10", PoNumber = "PO-DRF-10", Status = PurchaseOrderStatus.Draft });
+            _purchases.Save(new PurchaseOrder { Id = "po-void-10", PoNumber = "PO-VOID-10", Status = PurchaseOrderStatus.Void });
+
+            var viewPoOnly = new Employee { Id = "emp-po-view", IsActive = true, Permissions = [AppPermissions.Purchases.ViewPOs] };
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(viewPoOnly);
+            Assert.Empty(_service.Search("PO-DRF-10"));
+            Assert.Empty(_service.Search("PO-VOID-10"));
+
+            var managePo = new Employee { Id = "emp-po-mgr", IsActive = true, Permissions = [AppPermissions.Purchases.ManagePOs] };
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(managePo);
+            Assert.Single(_service.Search("PO-DRF-10"));
+            Assert.Empty(_service.Search("PO-VOID-10"));
+
+            _expenseReports.Save(new ExpenseReport
+            {
+                Id = "exp-drf-99",
+                ReportNumber = "EXP-DRF-99",
+                EmployeeId = "emp-owner",
+                EmployeeName = "Expense Owner",
+                DateSubmitted = null
+            });
+
+            var accountantNonOwner = new Employee { Id = "emp-fin", IsActive = true, Permissions = [AppPermissions.Finance.AccessAccounting] };
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(accountantNonOwner);
+            Assert.Empty(_service.Search("EXP-DRF-99"));
+
+            var owner = new Employee { Id = "emp-owner", IsActive = true, Permissions = [AppPermissions.Finance.AccessExpenses] };
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(owner);
+            var ownHit = Assert.Single(_service.Search("EXP-DRF-99"));
+            Assert.Equal("/me/expenses", ownHit.Url);
+
+            _boards.Save(new Board
+            {
+                Id = "b-priv",
+                Title = "Exec Board",
+                IsPublic = false,
+                OwnerId = "emp-owner",
+                MemberIds = ["emp-board-mem"]
+            });
+            _boardCards.Save(new BoardCard
+            {
+                Id = "c-priv",
+                BoardId = "b-priv",
+                Title = "Secret Acquisition"
+            });
+
+            var nonMember = new Employee { Id = "emp-nonboard", IsActive = true, Permissions = [] };
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(nonMember);
+            Assert.Empty(_service.Search("Acquisition"));
+
+            var boardMember = new Employee { Id = "emp-board-mem", IsActive = true, Permissions = [] };
+            _mockUserService.Setup(u => u.GetEmployeeAsync()).ReturnsAsync(boardMember);
+            Assert.Single(_service.Search("Acquisition"));
         }
     }
 

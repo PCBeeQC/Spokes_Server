@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Reflection;
+using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Core;
@@ -20,7 +21,6 @@ public class SpokesLicenseFile
 public enum LicenseStatus
 {
     Valid,
-    Tolerated,
     HardLock,
     Expired
 }
@@ -31,14 +31,12 @@ public class LicenseValidationResult
     public string Message { get; set; } = string.Empty;
     public SpokesLicenseFile? ParsedLicense { get; set; }
     public string? FirstInstalledVersion { get; set; }
-    public string? LockupVersion { get; set; }
     public string? MaxAllowedVersion { get; set; }
 }
 
 public class LicenseValidationService
 {
     private readonly ILogger<LicenseValidationService> _logger;
-    private readonly VersionMetadata _versionMetadata;
     private readonly string _publicKeyPem;
 
     // This is the release version of THIS specific compiled binary. 
@@ -50,15 +48,21 @@ public class LicenseValidationService
     // Hardcoded blacklist of leaked licenses
     private static readonly List<string> BlacklistedKeys = [];
 
+    private static readonly JsonSerializerOptions LicenseJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        AllowTrailingCommas = true
+    };
+
+    private volatile Tuple<string, SpokesLicenseFile?, LicenseValidationResult?>? _cachedSignatureCheck;
+
     public LicenseValidationService(
         ILogger<LicenseValidationService> logger,
-        VersionMetadata versionMetadata,
         string? publicKeyPem = null,
         Microsoft.Extensions.Options.IOptions<Spokes_Server.Core.Configuration.SpokesOptions>? options = null,
         IConfiguration? configuration = null)
     {
         _logger = logger;
-        _versionMetadata = versionMetadata;
         _publicKeyPem = publicKeyPem ?? options?.Value.LicensePublicKeyPem ?? configuration?["Spokes:LicensePublicKeyPem"] ?? SpokesConstants.LicensePublicKeyPem;
     }
 
@@ -74,9 +78,28 @@ public class LicenseValidationService
     }
 
     public static bool IsLicenseActive(LicenseStatus status) =>
-        status != LicenseStatus.HardLock && status != LicenseStatus.Expired;
+        status == LicenseStatus.Valid;
 
     public static bool IsLifetimeExpiry(DateTime expiry) => expiry.Year >= 9000;
+
+    public static string FormatTimeUntilExpiry(DateTime expiry, IStringLocalizer Loc)
+    {
+        if (IsLifetimeExpiry(expiry))
+            return Loc["Lifetime"].Value;
+
+        var span = expiry - DateTime.UtcNow;
+        if (span.TotalDays < 0)
+            return string.Format(Loc["Expired {0} days ago"].Value, (int)Math.Abs(span.TotalDays));
+
+        int totalDays = (int)span.TotalDays;
+        int years = totalDays / 365;
+        int months = (totalDays % 365) / 30;
+        int days = (totalDays % 365) % 30;
+
+        if (years > 0) return string.Format(Loc["{0} years, {1} months"].Value, years, months);
+        if (months > 0) return string.Format(Loc["{0} months, {1} days"].Value, months, days);
+        return string.Format(Loc["{0} days"].Value, days);
+    }
 
     public bool IsNativePushAllowed(string? jsonPayload, ServerConfig? config = null)
     {
@@ -179,34 +202,54 @@ public class LicenseValidationService
                     return EvaluateTrial(config);
                 }
 
-                var options = new JsonSerializerOptions
+                SpokesLicenseFile license;
+                var cached = _cachedSignatureCheck;
+                if (cached != null && string.Equals(cached.Item1, jsonPayload, StringComparison.Ordinal))
                 {
-                    PropertyNameCaseInsensitive = true,
-                    AllowTrailingCommas = true
-                };
-                var license = JsonSerializer.Deserialize<SpokesLicenseFile>(jsonPayload, options);
-                if (license == null) return new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = "Invalid license format." };
-
-                license.AvailableEditions ??= [];
-
-                if (BlacklistedKeys.Contains(license.LicenseId))
-                {
-                    return new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = "This license key has been revoked." };
+                    if (cached.Item3 != null)
+                    {
+                        return cached.Item3;
+                    }
+                    license = cached.Item2!;
                 }
-
-                // Verify Cryptographic Signature
-                string dataToSign = $"{license.Email}|{license.LicenseId}|{license.ValidForUpdatesUntil:O}|{string.Join(",", license.AvailableEditions)}";
-                byte[] dataBytes = Encoding.UTF8.GetBytes(dataToSign);
-                byte[] signatureBytes = Convert.FromBase64String(license.Signature);
-
-                using var rsa = RSA.Create();
-                rsa.ImportFromPem(_publicKeyPem);
-
-                bool isSignatureValid = rsa.VerifyData(dataBytes, signatureBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-
-                if (!isSignatureValid)
+                else
                 {
-                    return new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = "License signature is invalid or tampered with." };
+                    var parsed = JsonSerializer.Deserialize<SpokesLicenseFile>(jsonPayload, LicenseJsonOptions);
+                    if (parsed == null)
+                    {
+                        var invalidResult = new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = "Invalid license format." };
+                        _cachedSignatureCheck = Tuple.Create<string, SpokesLicenseFile?, LicenseValidationResult?>(jsonPayload, null, invalidResult);
+                        return invalidResult;
+                    }
+
+                    parsed.AvailableEditions ??= [];
+
+                    if (BlacklistedKeys.Contains(parsed.LicenseId))
+                    {
+                        var revokedResult = new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = "This license key has been revoked." };
+                        _cachedSignatureCheck = Tuple.Create<string, SpokesLicenseFile?, LicenseValidationResult?>(jsonPayload, null, revokedResult);
+                        return revokedResult;
+                    }
+
+                    // Verify Cryptographic Signature
+                    string dataToSign = $"{parsed.Email}|{parsed.LicenseId}|{parsed.ValidForUpdatesUntil:O}|{string.Join(",", parsed.AvailableEditions)}";
+                    byte[] dataBytes = Encoding.UTF8.GetBytes(dataToSign);
+                    byte[] signatureBytes = Convert.FromBase64String(parsed.Signature);
+
+                    using var rsa = RSA.Create();
+                    rsa.ImportFromPem(_publicKeyPem);
+
+                    bool isSignatureValid = rsa.VerifyData(dataBytes, signatureBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+
+                    if (!isSignatureValid)
+                    {
+                        var badSigResult = new LicenseValidationResult { Status = LicenseStatus.HardLock, Message = "License signature is invalid or tampered with." };
+                        _cachedSignatureCheck = Tuple.Create<string, SpokesLicenseFile?, LicenseValidationResult?>(jsonPayload, null, badSigResult);
+                        return badSigResult;
+                    }
+
+                    license = parsed;
+                    _cachedSignatureCheck = Tuple.Create<string, SpokesLicenseFile?, LicenseValidationResult?>(jsonPayload, license, null);
                 }
 
                 string maxPaidAllowed = $"v{license.ValidForUpdatesUntil.Year}.{license.ValidForUpdatesUntil.Month}.0";

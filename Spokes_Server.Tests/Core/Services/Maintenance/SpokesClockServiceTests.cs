@@ -28,7 +28,7 @@ public class SpokesClockServiceTests : IDisposable
         Directory.CreateDirectory(_tempDir);
         var persistence = new DiskPersistenceService(NullLogger<DiskPersistenceService>.Instance);
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _tempDir })
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _tempDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"})
             .Build();
         _companyRepo = new CompanyProfileRepository(persistence, config);
         _mockLogger = new Mock<ILogger<SpokesClockService>>();

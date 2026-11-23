@@ -2,34 +2,36 @@
 
 let _maxHeightsByOrientation = {};
 
+function isIosDevice() {
+    if (typeof navigator === 'undefined') return false;
+    return /iPad|iPhone|iPod/.test(navigator.userAgent || '') ||
+        (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1);
+}
+
 function updateViewport() {
-    if (!window.visualViewport) return;
-    
-    const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    
-    if (isIos) {
-        // Detect orientation to maintain separate max heights
-        const isLandscape = window.innerWidth > window.innerHeight;
-        const orientationKey = isLandscape ? 'landscape' : 'portrait';
-        
-        // Update max height for current orientation
-        if (!_maxHeightsByOrientation[orientationKey] || window.visualViewport.height > _maxHeightsByOrientation[orientationKey]) {
-            _maxHeightsByOrientation[orientationKey] = window.visualViewport.height;
-        }
-        
-        const maxVp = _maxHeightsByOrientation[orientationKey];
-        // If current height is significantly less than max height, keyboard is open
-        const isKeyboardOpen = window.visualViewport.height < maxVp - 100;
-        
-        if (isKeyboardOpen) {
-            document.documentElement.classList.add('keyboard-open-ios');
-        } else {
-            document.documentElement.classList.remove('keyboard-open-ios');
-        }
+    if (!window.visualViewport || !isIosDevice()) return;
+
+    // Detect orientation to maintain separate max heights
+    const isLandscape = window.innerWidth > window.innerHeight;
+    const orientationKey = isLandscape ? 'landscape' : 'portrait';
+
+    // Update max height for current orientation
+    if (!_maxHeightsByOrientation[orientationKey] || window.visualViewport.height > _maxHeightsByOrientation[orientationKey]) {
+        _maxHeightsByOrientation[orientationKey] = window.visualViewport.height;
+    }
+
+    const maxVp = _maxHeightsByOrientation[orientationKey];
+    // If current height is significantly less than max height, keyboard is open
+    const isKeyboardOpen = window.visualViewport.height < maxVp - 100;
+
+    if (isKeyboardOpen) {
+        document.documentElement.classList.add('keyboard-open-ios');
+    } else {
+        document.documentElement.classList.remove('keyboard-open-ios');
     }
 
     document.documentElement.style.setProperty('--viewport-height', `${window.visualViewport.height}px`);
-    
+
     // Directly target the main content wrapper to force WebKit to repaint
     const mainContent = document.querySelector('.mud-main-content.chat-channel-open');
     if (mainContent) {
@@ -42,12 +44,11 @@ function updateViewport() {
     document.documentElement.scrollTop = 0;
 }
 
-// Global visualViewport handler to fix iOS Safari keyboard overlap and ensure 
-// the chat composer is always perfectly positioned above the virtual keyboard.
-if (window.visualViewport) {
+// Global visualViewport handler strictly for iOS Safari / WKWebView keyboard overlap.
+// Android uses native `interactive-widget=resizes-content` + `100dvh` without JS viewport fights.
+if (typeof window !== 'undefined' && window.visualViewport && isIosDevice()) {
     window.visualViewport.addEventListener('resize', updateViewport);
     window.visualViewport.addEventListener('scroll', updateViewport);
-    // Initial call
     updateViewport();
 }
 
@@ -83,29 +84,31 @@ export function initComposer(textareaId, preventEnter, autofocus, dotNetHelper) 
     });
 
     // iOS Safari sometimes fails to fire the visualViewport.resize event on the very first tap.
-    // Instead of fighting the OS animation with a blind scroll lock, we poll the visualViewport height.
-    // When the keyboard slides up and the height changes, we apply the new layout gracefully.
-    textarea.addEventListener('focus', () => {
-        if (!window.visualViewport) return;
+    // Instead of fighting the OS animation with a blind scroll lock, we poll the visualViewport height
+    // strictly on iOS. Android handles keyboard resizing natively via interactive-widget=resizes-content.
+    if (isIosDevice()) {
+        textarea.addEventListener('focus', () => {
+            if (!window.visualViewport) return;
 
-        let checkCount = 0;
-        let lastHeight = window.visualViewport.height;
+            let checkCount = 0;
+            let lastHeight = window.visualViewport.height;
 
-        const pollInterval = setInterval(() => {
-            // If the height has shrunk (keyboard opened), immediately update the layout
-            if (window.visualViewport.height !== lastHeight) {
-                lastHeight = window.visualViewport.height;
-                updateViewport();
-            }
-            
-            checkCount++;
-            // Stop polling after ~1000ms (keyboard animation takes ~300-400ms)
-            if (checkCount > 50) { // 50 * 20ms = 1000ms
-                clearInterval(pollInterval);
-                updateViewport(); // One final ensure
-            }
-        }, 20);
-    });
+            const pollInterval = setInterval(() => {
+                // If the height has shrunk (keyboard opened), immediately update the layout
+                if (window.visualViewport.height !== lastHeight) {
+                    lastHeight = window.visualViewport.height;
+                    updateViewport();
+                }
+
+                checkCount++;
+                // Stop polling after ~1000ms (keyboard animation takes ~300-400ms)
+                if (checkCount > 50) { // 50 * 20ms = 1000ms
+                    clearInterval(pollInterval);
+                    updateViewport(); // One final ensure
+                }
+            }, 20);
+        });
+    }
 
     textarea.addEventListener('paste', (e) => {
         const items = e.clipboardData.items;
@@ -120,7 +123,10 @@ export function initComposer(textareaId, preventEnter, autofocus, dotNetHelper) 
 
         if (files.length > 0) {
             e.preventDefault(); // Prevent pasting filename text if it's a file
-            handleFiles(files, dotNetHelper);
+            window.spokesUpload?.uploadFilesWithDotNet(files, dotNetHelper, {
+                allowInputUrlFallback: true,
+                errorPrefix: 'Error uploading pasted file:'
+            });
         }
     });
 
@@ -136,69 +142,28 @@ export function initComposer(textareaId, preventEnter, autofocus, dotNetHelper) 
         }
     }
 
-    // Force MudBlazor AutoGrow / InputSizing to collapse to the correct 1-line height on load
-    setTimeout(() => {
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    }, 50);
-}
-
-async function handleFiles(fileList, dotNetHelper) {
-    let uploadUrl = null;
-    if (dotNetHelper && typeof dotNetHelper.invokeMethodAsync === 'function') {
-        try {
-            uploadUrl = await dotNetHelper.invokeMethodAsync('GetUploadUrl');
-        } catch (e) {
-            console.warn("Could not retrieve upload URL from dotNetHelper:", e);
-        }
-    }
-    if (!uploadUrl) {
-        const fileInput = document.querySelector('input[data-upload-url]');
-        if (fileInput) {
-            uploadUrl = fileInput.getAttribute('data-upload-url');
-        }
-    }
-    if (!uploadUrl) {
-        console.error("Could not find upload input or URL to route pasted file");
-        return;
-    }
-
-    for (const file of fileList) {
-        
-        await dotNetHelper.invokeMethodAsync('OnPasteUploadStarted');
-        try {
-            const proxyDotNetRef = {
-                invokeMethodAsync: async (methodName, ...args) => {
-                    if (methodName === 'OnProgressUpdateCallback') {
-                        return dotNetHelper.invokeMethodAsync('OnPasteProgressUpdate', ...args);
-                    }
-                }
-            };
-
-            const result = await window.spokesUpload.uploadFileObject(file, uploadUrl, proxyDotNetRef);
-            await dotNetHelper.invokeMethodAsync('OnPasteUploadCompleted', JSON.stringify(result));
-        } catch (error) {
-            console.error("Error uploading pasted file:", error);
-            await dotNetHelper.invokeMethodAsync('OnPasteUploadError', error.message || "Upload failed");
-        }
+    // Force MudBlazor AutoGrow / InputSizing to collapse/adjust only when initial text is non-empty
+    if (textarea.value && textarea.value.length > 0) {
+        setTimeout(() => {
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        }, 50);
     }
 }
 
-/**
- * Get current selection range in the textarea.
- */
-export function getSelection(textareaId) {
-    const container = document.getElementById(textareaId);
-    if (!container) return { start: 0, end: 0 };
-    const textarea = container.querySelector('textarea') || container;
-    return {
-        start: textarea.selectionStart ?? 0,
-        end: textarea.selectionEnd ?? 0
-    };
+function replaceTextareaRange(textarea, replaceStart, replaceEnd, insertion, cursorPos, focus = true) {
+    const text = textarea.value || '';
+    textarea.value = text.substring(0, replaceStart) + insertion + text.substring(replaceEnd);
+    textarea.selectionStart = cursorPos;
+    textarea.selectionEnd = cursorPos;
+    if (focus) {
+        textarea.focus();
+    }
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 /**
  * Insert text at cursor position or wrap selected text, then update the Blazor binding.
- * Returns the new full text value.
  */
 export function insertFormatting(textareaId, prefix, suffix) {
     const container = document.getElementById(textareaId);
@@ -207,27 +172,12 @@ export function insertFormatting(textareaId, prefix, suffix) {
 
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
-    const text = textarea.value;
-    const selectedText = text.substring(start, end);
-
-    const newText = text.substring(0, start) + prefix + selectedText + suffix + text.substring(end);
-
-    // Update the textarea value
-    textarea.value = newText;
-
-    // Set cursor position: if no selection, place between prefix and suffix; 
-    // if selection, place after the wrapped text
+    const selectedText = (textarea.value || '').substring(start, end);
     const cursorPos = selectedText.length > 0
         ? start + prefix.length + selectedText.length + suffix.length
         : start + prefix.length;
 
-    textarea.selectionStart = cursorPos;
-    textarea.selectionEnd = cursorPos;
-    textarea.focus();
-
-    // Trigger input event so Blazor picks up the change
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+    replaceTextareaRange(textarea, start, end, prefix + selectedText + suffix, cursorPos);
 }
 
 /**
@@ -239,21 +189,8 @@ export function insertLinePrefix(textareaId, prefix) {
     const textarea = container.querySelector('textarea') || container;
 
     const start = textarea.selectionStart;
-    const text = textarea.value;
-
-    // Find the start of the current line
-    let lineStart = text.lastIndexOf('\n', start - 1) + 1;
-
-    const newText = text.substring(0, lineStart) + prefix + text.substring(lineStart);
-    textarea.value = newText;
-
-    const cursorPos = start + prefix.length;
-    textarea.selectionStart = cursorPos;
-    textarea.selectionEnd = cursorPos;
-    textarea.focus();
-
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+    const lineStart = (textarea.value || '').lastIndexOf('\n', start - 1) + 1;
+    replaceTextareaRange(textarea, lineStart, lineStart, prefix, start + prefix.length);
 }
 
 function isElementVisible(el) {
@@ -302,22 +239,7 @@ export function insertEmojiAtCursor(idSuffix, emoji, focusAfterInsert = false) {
 
     const start = textarea.selectionStart ?? (textarea.value ? textarea.value.length : 0);
     const end = textarea.selectionEnd ?? (textarea.value ? textarea.value.length : 0);
-    const text = textarea.value || '';
-
-    const newText = text.substring(0, start) + emoji + text.substring(end);
-    textarea.value = newText;
-
-    const cursorPos = start + emoji.length;
-    textarea.selectionStart = cursorPos;
-    textarea.selectionEnd = cursorPos;
-
-    if (focusAfterInsert) {
-        textarea.focus();
-    }
-
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.dispatchEvent(new Event('change', { bubbles: true }));
-
+    replaceTextareaRange(textarea, start, end, emoji, start + emoji.length, focusAfterInsert);
     return true;
 }
 
@@ -329,33 +251,6 @@ export function focusComposer(idSuffix) {
     if (textarea) {
         textarea.focus();
     }
-}
-
-/**
- * Insert an emoji at the current cursor position.
- */
-export function insertAtCursor(textareaId, textToInsert, focusAfterInsert = true) {
-    const container = document.getElementById(textareaId);
-    if (!container) return;
-    const textarea = container.querySelector('textarea') || container;
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const text = textarea.value;
-
-    const newText = text.substring(0, start) + textToInsert + text.substring(end);
-    textarea.value = newText;
-
-    const cursorPos = start + textToInsert.length;
-    textarea.selectionStart = cursorPos;
-    textarea.selectionEnd = cursorPos;
-    
-    if (focusAfterInsert !== false) {
-        textarea.focus();
-    }
-
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 /**
@@ -590,8 +485,9 @@ export async function uploadSharedFilesToComposer(filesArray, uploadUrl, dotNetH
         await dotNetHelper.invokeMethodAsync('OnPasteUploadStarted');
         try {
             // Convert native URI to web-accessible local URL
-            const webUrl = window.Capacitor.convertFileSrc(f.uri);
+            const webUrl = window.Capacitor?.convertFileSrc ? window.Capacitor.convertFileSrc(f.uri) : f.uri;
             const response = await fetch(webUrl);
+            if (!response.ok) throw new Error(`Failed to fetch shared file (${response.status})`);
             const blob = await response.blob();
             
             // spokesUpload expects a File object with .name and .type for compression logic

@@ -1,285 +1,510 @@
 @page "/admin/data-migration"
+@attribute [Authorize(Policy = AppPermissions.Admin.PolicyName)]
+@using Spokes_Server.Components.Dialogs.Accounting
 @using Spokes_Server.Core.Constants
-@using Microsoft.AspNetCore.Components.Forms
-@inject ClockifyMigrationService MigrationService
-@inject Spokes_Server.Aggregate.Database Db
-@inject ISnackbar Snackbar
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Migrations
+@inject IAccountingMigrationService MigrationService
+@inject ClockifyMigrationService ClockifyService
 @inject UserService UserService
-@inject NavigationManager Nav
-@attribute [Authorize(Policy = AppPermissions.Admin.ManageSettings)]
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
 
-<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4 pb-6">
-<MudText Typo="Typo.h5" Class="mb-4">Data Migration</MudText>
+<PageTitle>@BizLoc["Unified Data Import & Cutover"] - Spokes</PageTitle>
 
-<MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4">
-    <MudText Typo="Typo.body1">
-        Welcome to the Data Migration tool. Currently, we support importing historical time entries and projects from Clockify via their Detailed Report CSV export.
-    </MudText>
-</MudPaper>
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4">
+    @if (!_isAuthorized)
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+            @BizLoc["You do not have permission to access Data Migration. Global Administrator access is required."]
+        </MudAlert>
+    }
+    else
+    {
+        <MudStack Spacing="3">
+            @* Header *@
+            <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                <div class="d-flex flex-wrap align-center justify-space-between gap-3">
+                    <div>
+                        <MudText Typo="Typo.h5"><b>@BizLoc["Unified Data Import & Accounting Cutover"]</b></MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            @BizLoc["Drop all company export files here in one batch: Sage 50 (.txt / .imp), Chart of Accounts, Vendors, Customers, Employees, Projects, Payroll YTD CSV, Open AR/AP Invoices & Bills, or Clockify Timesheets CSV. You will review, filter, and pick what to keep before anything is saved."]
+                        </MudText>
+                    </div>
+                    <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.FactCheck">
+                        @BizLoc["Interactive Review & 1-Click Rollback"]
+                    </MudChip>
+                </div>
+            </MudPaper>
 
-<MudStepper ActiveIndex="_index" ActiveIndexChanged="OnActiveIndexChanged" ShowResetButton>
-    <MudStep Title="Upload CSV Data">
-        <MudStack Spacing="4">
-            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
-                <MudText Typo="Typo.subtitle2" Class="mb-1">How to export your data from Clockify:</MudText>
-                <MudText Typo="Typo.body2">
-                    1. Go to <strong>Reports</strong> -> <strong>Detailed</strong> in Clockify.<br/>
-                    2. Select the specific <strong>year</strong> (Clockify free tier limits exports to 1 year at a time).<br/>
-                    3. Click <strong>Export</strong> and choose <strong>CSV</strong>.<br/>
-                    4. Repeat for all the years you want to migrate, and upload all the CSVs here at once.
-                </MudText>
-            </MudAlert>
+            @* Step 1: Configuration & Single Multi-File Drop Zone *@
+            <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                <MudGrid Spacing="3" Class="align-center">
+                    <MudItem xs="12" md="4">
+                        <MudSelect T="AccountingMigrationMode"
+                                   Label="@BizLoc["Cutover Mode"]"
+                                   @bind-Value="_mode"
+                                   Variant="Variant.Outlined"
+                                   Dense="true">
+                            <MudSelectItem Value="AccountingMigrationMode.FreshCutover">
+                                @BizLoc["Fresh Cutover (New Spokes Workspace)"]
+                            </MudSelectItem>
+                            <MudSelectItem Value="AccountingMigrationMode.ExistingWorkspaceDelta">
+                                @BizLoc["Existing Workspace Delta (Sync with Existing GL)"]
+                            </MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
 
-            <MudFileUpload T="IReadOnlyList<IBrowserFile>" Accept=".csv" FilesChanged="HandleFilesUploaded" MaximumFileCount="100">
-                <CustomContent>
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CloudUpload">
-                        Upload Clockify CSV(s)
-                    </MudButton>
-                </CustomContent>
-            </MudFileUpload>
+                    <MudItem xs="12" md="4">
+                        <MudSelect T="AccountingMigrationSourceFormat"
+                                   Label="@BizLoc["Source Format"]"
+                                   @bind-Value="_format"
+                                   Variant="Variant.Outlined"
+                                   Dense="true">
+                            <MudSelectItem Value="AccountingMigrationSourceFormat.AutoDetect">@BizLoc["Auto-Detect (Recommended)"]</MudSelectItem>
+                            <MudSelectItem Value="AccountingMigrationSourceFormat.Sage50DesktopImp">@BizLoc["Sage 50 Desktop (.imp)"]</MudSelectItem>
+                            <MudSelectItem Value="AccountingMigrationSourceFormat.Sage50ExportCsv">@BizLoc["Sage 50 Export (.txt / CSV)"]</MudSelectItem>
+                            <MudSelectItem Value="AccountingMigrationSourceFormat.SageBusinessCloudCsv">@BizLoc["Sage Business Cloud CSV"]</MudSelectItem>
+                            <MudSelectItem Value="AccountingMigrationSourceFormat.StandardCsv">@BizLoc["Generic / Clockify CSV"]</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
 
-            @if (_parsedFiles.Any())
+                    <MudItem xs="12" md="4">
+                        <MudDatePicker Label="@BizLoc["Cutover As-Of Date"]"
+                                       @bind-Date="_asOfDate"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       DateFormat="yyyy-MM-dd" />
+                    </MudItem>
+
+                    <MudItem xs="12">
+                        <div class="d-flex flex-wrap align-center gap-3">
+                            <InputFile id="unified-migration-upload"
+                                       OnChange="OnFilesSelected"
+                                       multiple
+                                       accept=".csv,.txt,.imp,.gff"
+                                       style="display:none;" />
+                            <MudButton HtmlTag="label"
+                                       for="unified-migration-upload"
+                                       Variant="Variant.Outlined"
+                                       Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.CloudUpload"
+                                       Disabled="@_isBusy">
+                                @BizLoc["Select Export Files (.txt, .imp, .csv)"]
+                            </MudButton>
+
+                            @if (_queuedFiles.Count > 0)
+                            {
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.FactCheck"
+                                           Disabled="@_isBusy"
+                                           OnClick="AnalyzeAndReviewAsync">
+                                    @(_isBusy ? BizLoc["Analyzing Files..."].Value : $"{BizLoc["Analyze & Review Import"].Value} ({_queuedFiles.Count})")
+                                </MudButton>
+
+                                <MudButton Variant="Variant.Text"
+                                           Color="Color.Secondary"
+                                           StartIcon="@Icons.Material.Filled.ClearAll"
+                                           Disabled="@_isBusy"
+                                           OnClick="ClearQueue">
+                                    @BizLoc["Clear Files"]
+                                </MudButton>
+                            }
+                        </div>
+                    </MudItem>
+
+                    @if (_queuedFiles.Count > 0)
+                    {
+                        <MudItem xs="12">
+                            <MudTable Items="@_queuedFiles" Dense="true" Hover="true" Outlined="true" Elevation="0">
+                                <HeaderContent>
+                                    <MudTh>@BizLoc["File Name"]</MudTh>
+                                    <MudTh>@BizLoc["Detected Content"]</MudTh>
+                                    <MudTh>@BizLoc["Size"]</MudTh>
+                                    <MudTh></MudTh>
+                                </HeaderContent>
+                                <RowTemplate Context="q">
+                                    <MudTd><b>@q.File.FileName</b></MudTd>
+                                    <MudTd>
+                                        <MudSelect T="MigrationFileKind"
+                                                   @bind-Value="q.File.ExplicitKind"
+                                                   Dense="true"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense">
+                                            <MudSelectItem Value="MigrationFileKind.Auto">@($"{BizLoc["Auto"].Value}: {FormatKindLabel(q.DetectedKind)}")</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.SageImp">@BizLoc["Sage 50 .imp Package"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.ChartOfAccounts">@BizLoc["Chart of Accounts"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.TrialBalance">@BizLoc["GL Trial Balance"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.Customers">@BizLoc["Customers / Clients"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.Vendors">@BizLoc["Suppliers / Vendors"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.Employees">@BizLoc["Employees Directory"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.PayrollYtd">@BizLoc["Payroll YTD Seed"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.Projects">@BizLoc["Projects"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.Inventory">@BizLoc["Inventory Items (Info)"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.OpenReceivables">@BizLoc["Open AR Invoices"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.OpenPayables">@BizLoc["Open AP Bills"]</MudSelectItem>
+                                            <MudSelectItem Value="MigrationFileKind.ClockifyTimesheets">@BizLoc["Clockify Timesheets CSV"]</MudSelectItem>
+                                        </MudSelect>
+                                    </MudTd>
+                                    <MudTd>@($"{q.File.Content.Length / 1024.0:N1} KB")</MudTd>
+                                    <MudTd Style="text-align:right">
+                                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                                       Size="Size.Small"
+                                                       Color="Color.Error"
+                                                       OnClick="@(() => { _queuedFiles.Remove(q); })" />
+                                    </MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        </MudItem>
+                    }
+                </MudGrid>
+            </MudPaper>
+
+            @* Last Execution Result *@
+            @if (_lastResult != null)
             {
-                <MudTable Items="_parsedFiles" Dense="true" Hover="true">
+                <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" ShowCloseIcon="true" CloseIconClicked="@(() => { _lastResult = null; })">
+                    <b>@string.Format(BizLoc["Import Batch {0} completed."].Value, _lastResult.Batch.BatchNumber)</b>
+                    @($" · {_lastResult.Batch.CreatedEmployeeIds.Count} {BizLoc["Employees"]} · {_lastResult.Batch.CreatedSupplierIds.Count} {BizLoc["Address Book"]} · {_lastResult.Batch.CreatedProjectIds.Count} {BizLoc["Projects"]} · {_lastResult.Batch.CreatedGlAccountIds.Count} {BizLoc["GL Accounts"]} · {_lastResult.Batch.CreatedInvoiceIds.Count} AR · {_lastResult.Batch.CreatedBillIds.Count} AP · {_lastResult.Batch.CreatedPayRunIds.Count} YTD")
+                    @if (_lastClockifyCount > 0)
+                    {
+                        @($" · {_lastClockifyCount} {BizLoc["Clockify Time Entries"]}")
+                    }
+                </MudAlert>
+            }
+
+            @* Step 2: Executed Migration Batches & 1-Click Rollback *@
+            <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                <div class="d-flex align-center justify-space-between mb-2">
+                    <MudText Typo="Typo.subtitle1"><b>@BizLoc["Migration Cutover History & 1-Click Rollback"]</b></MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="RefreshHistory" />
+                </div>
+
+                <MudTable Items="@_history" Dense="true" Hover="true" Outlined="true" Elevation="0">
                     <HeaderContent>
-                        <MudTh>File Name</MudTh>
-                        <MudTh>Records</MudTh>
-                        <MudTh>Date Range</MudTh>
-                        <MudTh>Action</MudTh>
+                        <MudTh>@BizLoc["Batch #"]</MudTh>
+                        <MudTh>@BizLoc["Executed At (UTC)"]</MudTh>
+                        <MudTh>@BizLoc["Cutover Date"]</MudTh>
+                        <MudTh>@BizLoc["Mode / Format"]</MudTh>
+                        <MudTh>@BizLoc["Imported Entities"]</MudTh>
+                        <MudTh>@BizLoc["3900 Residual"]</MudTh>
+                        <MudTh>@BizLoc["Status"]</MudTh>
+                        <MudTh></MudTh>
                     </HeaderContent>
-                    <RowTemplate Context="file">
-                        <MudTd>@file.FileName</MudTd>
-                        <MudTd>@file.Records.Count</MudTd>
-                        <MudTd>@file.DateRangeDisplay</MudTd>
+                    <RowTemplate Context="b">
+                        <MudTd><b>@b.BatchNumber</b></MudTd>
+                        <MudTd>@b.ExecutedAtUtc.ToString("yyyy-MM-dd HH:mm")</MudTd>
+                        <MudTd>@b.AsOfDate.ToString("yyyy-MM-dd")</MudTd>
+                        <MudTd>@($"{b.Mode} · {b.DetectedFormat}")</MudTd>
                         <MudTd>
-                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => RemoveFile(file))" />
+                            @($"{b.CreatedEmployeeIds.Count} Emp · {b.CreatedSupplierIds.Count} Dir · {b.CreatedProjectIds.Count} Proj · {b.CreatedGlAccountIds.Count} GL · {b.CreatedInvoiceIds.Count} AR · {b.CreatedBillIds.Count} AP · {b.CreatedJournalEntryIds.Count} JE · {b.CreatedPayRunIds.Count} YTD")
+                        </MudTd>
+                        <MudTd>@b.ResidualClearingBalance3900.ToString("N2")</MudTd>
+                        <MudTd>
+                            <MudChip T="string"
+                                     Size="Size.Small"
+                                     Color="@(b.Status == AccountingMigrationBatchStatus.Applied ? Color.Success : Color.Default)"
+                                     Variant="Variant.Outlined">
+                                @b.Status
+                            </MudChip>
+                        </MudTd>
+                        <MudTd Style="text-align:right">
+                            @if (b.Status == AccountingMigrationBatchStatus.Applied)
+                            {
+                                <MudButton Variant="Variant.Outlined"
+                                           Color="Color.Error"
+                                           Size="Size.Small"
+                                           StartIcon="@Icons.Material.Filled.Undo"
+                                           OnClick="@(() => ConfirmRollbackAsync(b))">
+                                    @BizLoc["Rollback"]
+                                </MudButton>
+                            }
                         </MudTd>
                     </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-2">
+                            @BizLoc["No migration cutovers executed yet."]
+                        </MudText>
+                    </NoRecordsContent>
                 </MudTable>
-            }
-            else
-            {
-                <MudAlert Severity="Severity.Info">No files uploaded yet.</MudAlert>
-            }
+            </MudPaper>
         </MudStack>
-    </MudStep>
-
-    <MudStep Title="Map Employees" Disabled="@(!_parsedFiles.Any())">
-        <MudStack Spacing="4">
-            <MudText>Review the users extracted from your Clockify data and map them to existing Spokes Employees, or choose to create new placeholder accounts.</MudText>
-            
-            <MudTable Items="_userMaps" Dense="true" Hover="true">
-                <HeaderContent>
-                    <MudTh>Clockify User</MudTh>
-                    <MudTh>Clockify Email</MudTh>
-                    <MudTh>Action</MudTh>
-                </HeaderContent>
-                <RowTemplate Context="map">
-                    <MudTd>@map.ClockifyName</MudTd>
-                    <MudTd>@map.ClockifyEmail</MudTd>
-                    <MudTd>
-                        <MudStack Row="true" AlignItems="AlignItems.Center">
-                            <MudSelect @bind-Value="map.SpokesEmployeeId" Disabled="map.CreateNew" Clearable="true" Label="Match to Spokes Employee" Dense="true" Style="min-width: 200px;">
-                                @foreach(var emp in _allEmployees)
-                                {
-                                    <MudSelectItem Value="@((string?)emp.Id)">@emp.FullName</MudSelectItem>
-                                }
-                            </MudSelect>
-                            <MudSwitch @bind-Value="map.CreateNew" Color="Color.Primary" Label="Create new placeholder" />
-                        </MudStack>
-                    </MudTd>
-                </RowTemplate>
-            </MudTable>
-        </MudStack>
-    </MudStep>
-
-    <MudStep Title="Review Projects" Disabled="@(!_parsedFiles.Any())">
-        <MudStack Spacing="4">
-            <MudText>Review the projects extracted from your Clockify data. Projects missing in Spokes will be created automatically.</MudText>
-            
-            <MudTable Items="_projectMaps" Dense="true" Hover="true">
-                <HeaderContent>
-                    <MudTh>Clockify Project Name</MudTh>
-                    <MudTh>Extracted Code</MudTh>
-                    <MudTh>Status in Spokes</MudTh>
-                </HeaderContent>
-                <RowTemplate Context="map">
-                    <MudTd>@map.OriginalName</MudTd>
-                    <MudTd>@map.ExtractedCode</MudTd>
-                    <MudTd>
-                        <MudStack Row="true" AlignItems="AlignItems.Center">
-                            <MudSelect @bind-Value="map.SpokesProjectId" Disabled="map.IsNew" Clearable="true" Label="Match to Spokes Project" Dense="true" Style="min-width: 250px;">
-                                @foreach(var proj in _allProjects)
-                                {
-                                    <MudSelectItem Value="@((string?)proj.Id)">@proj.DisplayName</MudSelectItem>
-                                }
-                            </MudSelect>
-                            <MudSwitch @bind-Value="map.IsNew" Color="Color.Primary" Label="Create New" />
-                        </MudStack>
-                    </MudTd>
-                </RowTemplate>
-            </MudTable>
-        </MudStack>
-    </MudStep>
-
-    <MudStep Title="Execute Migration" Disabled="@(!_parsedFiles.Any())">
-        <MudStack Spacing="4">
-            <MudText>You are ready to begin the migration. This process will create any missing projects, users, and generate historical timesheets. This operation cannot be undone.</MudText>
-            
-            @if (_isMigrating)
-            {
-                <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="my-4" />
-                <MudText>Migrating data, please wait...</MudText>
-            }
-            else if (_migrationComplete)
-            {
-                <MudAlert Severity="Severity.Success">Migration completed successfully!</MudAlert>
-            }
-            else
-            {
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" OnClick="ExecuteMigration" StartIcon="@Icons.Material.Filled.PlayArrow">Start Migration</MudButton>
-            }
-        </MudStack>
-    </MudStep>
-</MudStepper>
+    }
 </MudContainer>
 
 @code {
-    private int _index;
-    private List<MigrationParsedFile> _parsedFiles = new();
-    private List<ClockifyUserMap> _userMaps = new();
-    private List<ClockifyProjectMap> _projectMaps = new();
-    
-    private List<Spokes_Server.Core.Models.HR.Employee> _allEmployees = new();
-    private List<Spokes_Server.Core.Models.Projects.Project> _allProjects = new();
+    private sealed class QueuedImportFile
+    {
+        public MigrationUploadedFile File { get; set; } = new();
+        public MigrationFileKind DetectedKind { get; set; }
+    }
 
-    private bool _isMigrating = false;
-    private bool _migrationComplete = false;
-
-    private Spokes_Server.Core.Models.HR.Employee? _currentEmployee;
+    private AccountingMigrationMode _mode = AccountingMigrationMode.FreshCutover;
+    private AccountingMigrationSourceFormat _format = AccountingMigrationSourceFormat.AutoDetect;
+    private DateTime? _asOfDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddDays(-1);
+    private List<QueuedImportFile> _queuedFiles = [];
+    private List<AccountingMigrationBatch> _history = [];
+    private AccountingMigrationResult? _lastResult;
+    private int _lastClockifyCount;
+    private bool _isBusy;
+    private bool _isAuthorized;
 
     protected override async Task OnInitializedAsync()
     {
-        _currentEmployee = await UserService.GetEmployeeAsync();
-        var hasAccess = _currentEmployee != null && (_currentEmployee.IsAdmin || _currentEmployee.HasPermission(AppPermissions.Admin.ManageSettings));
-
-        if (!hasAccess)
+        var currentEmp = await UserService.GetEmployeeAsync();
+        _isAuthorized = currentEmp is { IsActiveUnsuspended: true } && currentEmp.IsEffectiveAdmin;
+        if (_isAuthorized)
         {
-            Nav.NavigateTo("/", true);
-            return;
+            RefreshHistory();
         }
-
-        _allEmployees = Db.Employees.GetAll().OrderBy(e => e.FullName).ToList();
-        _allProjects = Db.Projects.GetAll().OrderBy(p => p.ProjectNumber).ToList();
     }
 
-    private async Task HandleFilesUploaded(IReadOnlyList<IBrowserFile> files)
+    private void RefreshHistory()
+    {
+        _history = MigrationService.GetMigrationHistory();
+    }
+
+    private async Task OnFilesSelected(InputFileChangeEventArgs e)
     {
         try
         {
-            foreach (var file in files)
+            foreach (var browserFile in e.GetMultipleFiles(30))
             {
-                using var stream = file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024); // 50MB limit
-                var parsed = await MigrationService.ParseCsvAsync(stream, file.Name);
-                _parsedFiles.Add(parsed);
+                await using var stream = browserFile.OpenReadStream(maxAllowedSize: 15 * 1024 * 1024);
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms);
+                var bytes = ms.ToArray();
+
+                var detected = AccountingMigrationParser.DetectBannerKind(bytes);
+                _queuedFiles.Add(new QueuedImportFile
+                {
+                    File = new MigrationUploadedFile
+                    {
+                        FileName = browserFile.Name,
+                        Content = bytes,
+                        ExplicitKind = MigrationFileKind.Auto
+                    },
+                    DetectedKind = detected
+                });
             }
-            
-            Snackbar.Add($"Successfully parsed {files.Count} file(s).", Severity.Success);
-            
-            RefreshMappings();
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Error parsing files: {ex.Message}", Severity.Error);
+            Snackbar.Add($"{BizLoc["Failed to read selected file"].Value}: {ex.Message}", Severity.Error);
         }
     }
 
-    private void RemoveFile(MigrationParsedFile file)
+    private void ClearQueue()
     {
-        _parsedFiles.Remove(file);
-        RefreshMappings();
+        _queuedFiles.Clear();
     }
 
-    private void RefreshMappings()
+    private async Task AnalyzeAndReviewAsync()
     {
-        var allRecords = _parsedFiles.SelectMany(f => f.Records).ToList();
-        _userMaps = MigrationService.MapUsers(allRecords);
-        _projectMaps = MigrationService.MapProjects(allRecords);
-    }
+        if (_queuedFiles.Count == 0) return;
 
-    private void OnActiveIndexChanged(int newIndex)
-    {
-        _index = newIndex;
-        if (_index == 2) // Step 3: Review Projects
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor is not { IsActiveUnsuspended: true } || !actor.IsEffectiveAdmin)
         {
-            RefreshProjectMappingsBasedOnUsers();
-        }
-    }
-
-    private void RefreshProjectMappingsBasedOnUsers()
-    {
-        var allRecords = _parsedFiles.SelectMany(f => f.Records).ToList();
-        
-        var validUserKeys = _userMaps
-            .Where(u => u.CreateNew || !string.IsNullOrEmpty(u.SpokesEmployeeId))
-            .Select(u => new { Email = u.ClockifyEmail?.Trim().ToLower() ?? "", Name = u.ClockifyName?.Trim().ToLower() ?? "" })
-            .ToList();
-
-        var filteredRecords = allRecords.Where(r => 
-        {
-            var e = r.Email?.Trim().ToLower() ?? "";
-            var n = r.User?.Trim().ToLower() ?? "";
-            return validUserKeys.Any(v => v.Email == e && v.Name == n);
-        }).ToList();
-
-        var newProjectMaps = MigrationService.MapProjects(filteredRecords);
-        
-        // Preserve manual selections from previous mappings
-        foreach (var newMap in newProjectMaps)
-        {
-            var oldMap = _projectMaps.FirstOrDefault(p => p.OriginalName == newMap.OriginalName);
-            if (oldMap != null)
-            {
-                newMap.SpokesProjectId = oldMap.SpokesProjectId;
-                newMap.IsNew = oldMap.IsNew;
-            }
-        }
-        
-        _projectMaps = newProjectMaps;
-    }
-
-    private async Task ExecuteMigration()
-    {
-        if (_currentEmployee == null)
-        {
-            _currentEmployee = await UserService.GetEmployeeAsync();
-        }
-
-        if (_currentEmployee == null || (!_currentEmployee.IsAdmin && !_currentEmployee.HasPermission(AppPermissions.Admin.ManageSettings)))
-        {
-            Snackbar.Add("Unauthorized to execute migration.", Severity.Error);
+            _isAuthorized = false;
+            Snackbar.Add(BizLoc["Only an active Global Administrator may analyze or execute migrations."].Value, Severity.Error);
             return;
         }
 
-        _isMigrating = true;
-        StateHasChanged();
-        
+        _isBusy = true;
         try
         {
-            var allRecords = _parsedFiles.SelectMany(f => f.Records).ToList();
-            await MigrationService.ExecuteMigrationAsync(allRecords, _userMaps, _projectMaps, _currentEmployee);
-            
-            _migrationComplete = true;
-            Snackbar.Add("Data migrated successfully!", Severity.Success);
+            var asOf = _asOfDate ?? DateTime.Today;
+            var clockifyFiles = _queuedFiles
+                .Where(q => q.File.ExplicitKind == MigrationFileKind.ClockifyTimesheets ||
+                            (q.File.ExplicitKind == MigrationFileKind.Auto && q.DetectedKind == MigrationFileKind.ClockifyTimesheets))
+                .ToList();
+
+            var accountingFiles = _queuedFiles
+                .Except(clockifyFiles)
+                .Select(q => q.File)
+                .ToList();
+
+            var preview = MigrationService.BuildPreview(new AccountingMigrationPreviewRequest
+            {
+                Mode = _mode,
+                Format = _format,
+                AsOfDate = asOf,
+                Files = accountingFiles
+            }, actor);
+
+            var clockifyRecords = new List<ClockifyRecord>();
+            foreach (var cf in clockifyFiles)
+            {
+                await using var ms = new MemoryStream(cf.File.Content);
+                var parsed = await ClockifyService.ParseCsvAsync(ms, cf.File.FileName);
+                clockifyRecords.AddRange(parsed.Records);
+            }
+
+            var clockifyUsers = clockifyRecords.Count > 0 ? ClockifyService.MapUsers(clockifyRecords) : null;
+            var clockifyProjects = clockifyRecords.Count > 0 ? ClockifyService.MapProjects(clockifyRecords) : null;
+
+            var parameters = new DialogParameters<MigrationReviewDialog>
+            {
+                { x => x.Preview, preview },
+                { x => x.ClockifyUsers, clockifyUsers },
+                { x => x.ClockifyProjects, clockifyProjects },
+                { x => x.ClockifyRecordCount, clockifyRecords.Count }
+            };
+
+            var options = new DialogOptions
+            {
+                MaxWidth = MaxWidth.ExtraLarge,
+                FullWidth = true,
+                CloseOnEscapeKey = true,
+                BackdropClick = false
+            };
+
+            var dialog = await DialogService.ShowAsync<MigrationReviewDialog>(
+                BizLoc["Review & Curate Import Data"].Value,
+                parameters,
+                options);
+
+            var result = await dialog.Result;
+            if (result == null || result.Canceled)
+                return;
+
+            await ExecuteConfirmedImportAsync(preview, clockifyRecords, clockifyUsers, clockifyProjects);
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Migration failed: {ex.Message}", Severity.Error);
+            Snackbar.Add($"{BizLoc["Import analysis failed"].Value}: {ex.Message}", Severity.Error);
         }
         finally
         {
-            _isMigrating = false;
-            StateHasChanged();
+            _isBusy = false;
         }
     }
+
+    private async Task ExecuteConfirmedImportAsync(
+        AccountingMigrationPreview preview,
+        List<ClockifyRecord> clockifyRecords,
+        List<ClockifyUserMap>? clockifyUsers,
+        List<ClockifyProjectMap>? clockifyProjects)
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor is not { IsActiveUnsuspended: true } || !actor.IsEffectiveAdmin)
+        {
+            _isAuthorized = false;
+            Snackbar.Add(BizLoc["Only an active Global Administrator may execute migrations."].Value, Severity.Error);
+            return;
+        }
+
+        var userId = actor.Id;
+        var userName = !string.IsNullOrWhiteSpace(actor.FullName) ? actor.FullName : actor.Email;
+
+        AccountingMigrationResult? accountingResult = null;
+        var hasAccountingOrEntityWork =
+            preview.GlMappings.Any(g => g.Include && g.Action != MigrationGlAction.Ignore) ||
+            preview.Vendors.Any(v => v.Include && v.Action != MigrationPartyAction.Skip) ||
+            preview.Customers.Any(c => c.Include && c.Action != MigrationPartyAction.Skip) ||
+            preview.Projects.Any(p => p.Include && p.Action != MigrationProjectAction.Skip) ||
+            preview.OpenInvoices.Any(i => i.Include) ||
+            preview.OpenBills.Any(b => b.Include) ||
+            preview.PayrollYtds.Any(p => p.Include && p.Action != MigrationEmployeeAction.Skip);
+
+        if (hasAccountingOrEntityWork)
+        {
+            accountingResult = MigrationService.ExecuteMigration(preview, userId, userName, actor);
+            _lastResult = accountingResult;
+        }
+
+        _lastClockifyCount = 0;
+        if (clockifyRecords.Count > 0 && clockifyUsers != null && clockifyProjects != null)
+        {
+            // Link Clockify users/projects against any Sage Employees/Projects just created above
+            if (hasAccountingOrEntityWork)
+            {
+                ClockifyService.RelinkUnmatchedMappings(clockifyUsers, clockifyProjects);
+            }
+
+            await ClockifyService.ExecuteMigrationAsync(clockifyRecords, clockifyUsers, clockifyProjects, actor);
+            _lastClockifyCount = clockifyRecords.Count;
+        }
+
+        RefreshHistory();
+        _queuedFiles.Clear();
+
+        if (accountingResult != null)
+        {
+            Snackbar.Add(
+                string.Format(
+                    BizLoc["Migration batch {0} executed successfully."].Value,
+                    accountingResult.Batch.BatchNumber),
+                Severity.Success);
+        }
+        else if (_lastClockifyCount > 0)
+        {
+            Snackbar.Add(
+                string.Format(BizLoc["Imported {0} Clockify time entries."].Value, _lastClockifyCount),
+                Severity.Success);
+        }
+    }
+
+    private async Task ConfirmRollbackAsync(AccountingMigrationBatch batch)
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor is not { IsActiveUnsuspended: true } || !actor.IsEffectiveAdmin)
+        {
+            _isAuthorized = false;
+            Snackbar.Add(BizLoc["Only an active Global Administrator may roll back migrations."].Value, Severity.Error);
+            return;
+        }
+
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            BizLoc["Confirm Migration Rollback"].Value,
+            string.Format(
+                BizLoc["Roll back migration batch {0}? This deletes imported opening journal entries, un-paid invoices/bills, created employees, created suppliers, created projects, GL accounts, and payroll YTD seed runs created by this batch."].Value,
+                batch.BatchNumber),
+            yesText: BizLoc["Rollback"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirmed != true) return;
+
+        actor = await UserService.GetEmployeeAsync();
+        if (actor is not { IsActiveUnsuspended: true } || !actor.IsEffectiveAdmin)
+        {
+            _isAuthorized = false;
+            Snackbar.Add(BizLoc["Only an active Global Administrator may roll back migrations."].Value, Severity.Error);
+            return;
+        }
+
+        try
+        {
+            var userName = !string.IsNullOrWhiteSpace(actor.FullName) ? actor.FullName : actor.Email;
+            MigrationService.RollbackMigrationBatch(batch.Id, userName, actor);
+            RefreshHistory();
+            Snackbar.Add(string.Format(BizLoc["Rolled back migration batch {0}."].Value, batch.BatchNumber), Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"{BizLoc["Rollback failed"].Value}: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string FormatKindLabel(MigrationFileKind kind) => kind switch
+    {
+        MigrationFileKind.SageImp => BizLoc["Sage 50 .imp"].Value,
+        MigrationFileKind.ChartOfAccounts => BizLoc["Chart of Accounts"].Value,
+        MigrationFileKind.TrialBalance => BizLoc["GL Trial Balance"].Value,
+        MigrationFileKind.Customers => BizLoc["Customers / Clients"].Value,
+        MigrationFileKind.Vendors => BizLoc["Suppliers / Vendors"].Value,
+        MigrationFileKind.Employees => BizLoc["Employees Directory"].Value,
+        MigrationFileKind.PayrollYtd => BizLoc["Payroll YTD"].Value,
+        MigrationFileKind.Projects => BizLoc["Projects"].Value,
+        MigrationFileKind.Inventory => BizLoc["Inventory (Info)"].Value,
+        MigrationFileKind.OpenReceivables => BizLoc["Open AR Invoices"].Value,
+        MigrationFileKind.OpenPayables => BizLoc["Open AP Bills"].Value,
+        MigrationFileKind.ClockifyTimesheets => BizLoc["Clockify Timesheets"].Value,
+        _ => BizLoc["Auto"].Value
+    };
 }

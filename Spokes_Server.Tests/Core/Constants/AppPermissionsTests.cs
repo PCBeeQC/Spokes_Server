@@ -45,6 +45,8 @@ public class AppPermissionsTests
         var expectedCategories = new[]
         {
             "Admin",
+            "HR",
+            "Business",
             "Projects",
             "Chat",
             "Email",
@@ -75,8 +77,11 @@ public class AppPermissionsTests
     }
 
     [Theory]
-    [InlineData(AppPermissions.Admin.ManageUsers, "Full admin access to create, edit, and modify users.")]
+    [InlineData(AppPermissions.Admin.ManageUsers, "Full admin access to manage user access permissions, roles, and account activation.")]
     [InlineData(AppPermissions.Admin.ManageSettings, "Access to system-wide settings and configurations.")]
+    [InlineData(AppPermissions.Hr.ManageEmployees, "Allows managing employee profiles, HR details (vacation, overtime, hire date, emergency contacts), teams, and the organization chart.")]
+    [InlineData(AppPermissions.Hr.ManageSalaries, "Allows viewing and editing employee salaries, hourly costs, employer contributions, payroll estimates, and labor cost/profit margins.")]
+    [InlineData(AppPermissions.Business.ManageSettings, "Allows configuring business settings: task definitions, rate cards, document templates, terms & conditions, standard documents, project statuses, and timesheet rules.")]
     [InlineData(AppPermissions.Projects.View, "Allows viewing projects.")]
     [InlineData(AppPermissions.Projects.Create, "Allows creating new projects.")]
     [InlineData(AppPermissions.Projects.Edit, "Allows editing existing project details.")]

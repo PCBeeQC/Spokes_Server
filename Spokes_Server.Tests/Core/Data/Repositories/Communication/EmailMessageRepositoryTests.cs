@@ -82,7 +82,7 @@ public class EmailMessageRepositoryTests : RepositoryTestFixture<EmailMessageRep
         var updated = _repo.TryUpdateFlags("emp1", "Inbox", 123, true, true);
 
         Assert.True(updated);
-        var retrieved = _repo.GetByUid("emp1", "Inbox", 123);
+        var retrieved = _repo.GetByUniqueId("emp1", 123);
         Assert.NotNull(retrieved);
         Assert.True(retrieved.IsRead);
         Assert.True(retrieved.IsFlagged);

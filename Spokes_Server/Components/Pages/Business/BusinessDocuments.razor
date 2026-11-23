@@ -73,9 +73,19 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var user = await UserService.GetEmployeeAsync();
-        CanEdit = user != null && (user.IsAdmin || user.HasPermission(AppPermissions.BusinessDocuments.View));
+        var user = await UserService.GetEmployeeAsync(allowSuspended: true);
+        CanEdit = user != null && user.IsActiveUnsuspended && user.HasPermission(AppPermissions.BusinessDocuments.View);
         Reload();
+    }
+
+    private async Task<bool> AuthorizeBusinessDocumentMutationAsync()
+    {
+        var user = await UserService.GetEmployeeAsync();
+        CanEdit = user != null && user.IsActiveUnsuspended && user.HasPermission(AppPermissions.BusinessDocuments.View);
+        if (CanEdit) return true;
+        Snackbar.Add("You do not have permission to modify business documents.", Severity.Warning);
+        StateHasChanged();
+        return false;
     }
 
     private void Reload()
@@ -85,9 +95,10 @@
 
     private async Task CreateBlankDocument()
     {
-        if (!CanEdit) return;
+        if (!await AuthorizeBusinessDocumentMutationAsync()) return;
         var name = await PromptForName("Untitled Document");
         if (name == null) return;
+        if (!await AuthorizeBusinessDocumentMutationAsync()) return;
 
         var doc = new ProjectDocument
             {
@@ -127,10 +138,9 @@
 
     private async Task RenameDocument(ProjectDocument doc)
     {
-        if (!CanEdit || !string.IsNullOrEmpty(doc.ProjectId)) return;
+        if (!string.IsNullOrEmpty(doc.ProjectId) || !await AuthorizeBusinessDocumentMutationAsync()) return;
         var parameters = new DialogParameters
             {
-                ["ContentText"] = "Enter a new name for this document:",
                 ["CurrentName"] = doc.Name
             };
         var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
@@ -139,6 +149,7 @@
 
         if (result != null && !result.Canceled && result.Data is string newName && !string.IsNullOrWhiteSpace(newName))
         {
+            if (!await AuthorizeBusinessDocumentMutationAsync()) return;
             doc.Name = newName;
             doc.UpdatedAt = DateTime.UtcNow;
             Db.ProjectDocuments.Save(doc);
@@ -154,13 +165,14 @@
 
     private async Task OnDelete(ProjectDocument doc)
     {
-        if (!CanEdit || !string.IsNullOrEmpty(doc.ProjectId)) return;
+        if (!string.IsNullOrEmpty(doc.ProjectId) || !await AuthorizeBusinessDocumentMutationAsync()) return;
         var confirm = await DialogService.ShowMessageBoxAsync("Delete Document",
         $"Are you sure you want to delete '{doc.Name}'?",
         yesText: "Delete", cancelText: "Cancel");
 
         if (confirm == true)
         {
+            if (!await AuthorizeBusinessDocumentMutationAsync()) return;
             Db.ProjectDocuments.Delete(doc.Id);
             Snackbar.Add("Document deleted", Severity.Info);
             Reload();

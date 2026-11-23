@@ -4,7 +4,6 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>c63dbdc3-b76e-4a41-9f26-417786143fa7</UserSecretsId>
-    <NoWarn>$(NoWarn);MSB3568</NoWarn>
     <!-- .NET 9 Build generates NoCompression .gz wrappers that block runtime Brotli ResponseCompression; Publish still precompresses .br/.gz. -->
     <DisableBuildCompression>true</DisableBuildCompression>
   </PropertyGroup>
@@ -47,5 +46,10 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="wwwroot\data\emoji.json" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Update="Spokes_Marketplace\accounting-templates\*.spokes-jurisdiction.json"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

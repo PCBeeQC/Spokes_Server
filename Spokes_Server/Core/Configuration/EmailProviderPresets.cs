@@ -281,10 +281,38 @@ public static class EmailProviderPresets
             string.Equals(p.ImapHost, imapHost.Trim(), StringComparison.OrdinalIgnoreCase));
     }
 
+    private static readonly HashSet<string> PublicMailboxDomains = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "gmail.com", "googlemail.com",
+        "outlook.com", "hotmail.com", "live.com", "msn.com",
+        "icloud.com", "me.com", "mac.com",
+        "yahoo.com", "ymail.com",
+        "zoho.com", "fastmail.com",
+        "proton.me", "protonmail.com", "pm.me",
+        "aol.com", "gmx.com", "gmx.net", "mail.com"
+    };
+
+    private static readonly string[] PublicMailboxProviderPrefixes =
+    [
+        "gmail.", "googlemail.", "outlook.", "hotmail.", "live.", "yahoo.", "icloud.", "protonmail.", "fastmail."
+    ];
+
     public static EmailProviderPreset? DetectBySmtpHost(string? smtpHost)
     {
         if (string.IsNullOrWhiteSpace(smtpHost)) return null;
         return All.FirstOrDefault(p =>
             string.Equals(p.SmtpHost, smtpHost.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Returns true if the domain belongs to a shared consumer/public mailbox provider (e.g. gmail.com, outlook.com)
+    /// rather than an organization's own custom domain.
+    /// </summary>
+    public static bool IsPublicMailboxDomain(string? domain)
+    {
+        if (string.IsNullOrWhiteSpace(domain)) return false;
+        var normalized = domain.Trim().TrimStart('@').ToLowerInvariant();
+        if (PublicMailboxDomains.Contains(normalized)) return true;
+        return PublicMailboxProviderPrefixes.Any(prefix => normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
     }
 }

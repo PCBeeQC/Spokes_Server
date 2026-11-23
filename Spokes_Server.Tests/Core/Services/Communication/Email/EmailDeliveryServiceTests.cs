@@ -51,11 +51,14 @@ public class EmailDeliveryServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_EmailDelivery_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
         _companyProfile = new CompanyProfileRepository(_persistence, _config);
+        var initialProfile = _companyProfile.GetOrCreate();
+        initialProfile.Edition = "Business";
+        _companyProfile.Save(initialProfile);
         _accounts = new EmailAccountRepository(_persistence, _config);
         _inboxes = new EmailInboxRepository(_persistence, _config);
         _identities = new EmailSendingIdentityRepository(_persistence, _config);
@@ -140,8 +143,8 @@ public class EmailDeliveryServiceTests : IDisposable
         using var smtp = new LoopbackSmtpTestServer();
         var server = ConfigureTrustedLoopbackSendingServer(smtp.Port);
 
-        var ceo = new Employee { Id = "emp-ceo", FirstName = "CEO", IsActive = true };
-        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", IsActive = true };
+        var ceo = new Employee { Id = "emp-ceo", FirstName = "CEO", IsActive = true, Permissions = [AppPermissions.Email.Use] };
+        var alice = new Employee { Id = "emp-alice", FirstName = "Alice", IsActive = true, Permissions = [AppPermissions.Email.Use] };
         _employees.Save(ceo);
         _employees.Save(alice);
 
@@ -177,8 +180,8 @@ public class EmailDeliveryServiceTests : IDisposable
         using var smtp = new LoopbackSmtpTestServer();
         var server = ConfigureTrustedLoopbackSendingServer(smtp.Port);
 
-        var ceo = new Employee { Id = "emp-ceo-2", FirstName = "CEO", IsActive = true };
-        var alice = new Employee { Id = "emp-alice-2", FirstName = "Alice", IsActive = true };
+        var ceo = new Employee { Id = "emp-ceo-2", FirstName = "CEO", IsActive = true, Permissions = [AppPermissions.Email.Use] };
+        var alice = new Employee { Id = "emp-alice-2", FirstName = "Alice", IsActive = true, Permissions = [AppPermissions.Email.Use] };
         _employees.Save(ceo);
         _employees.Save(alice);
 
@@ -221,7 +224,8 @@ public class EmailDeliveryServiceTests : IDisposable
             FirstName = "Support",
             LastName = "Agent",
             TeamId = supportTeam.Id,
-            IsActive = true
+            IsActive = true,
+            Permissions = [AppPermissions.Email.Use]
         };
         _employees.Save(agent);
 
@@ -316,8 +320,8 @@ public class EmailDeliveryServiceTests : IDisposable
         using var smtp = new LoopbackSmtpTestServer();
         var server = ConfigureTrustedLoopbackSendingServer(smtp.Port);
 
-        var alice = new Employee { Id = "emp-draft-alice", FirstName = "Alice", IsActive = true };
-        var bob = new Employee { Id = "emp-draft-bob", FirstName = "Bob", IsActive = true };
+        var alice = new Employee { Id = "emp-draft-alice", FirstName = "Alice", IsActive = true, Permissions = [AppPermissions.Email.Use] };
+        var bob = new Employee { Id = "emp-draft-bob", FirstName = "Bob", IsActive = true, Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
         _employees.Save(bob);
 
@@ -379,23 +383,40 @@ public class EmailDeliveryServiceTests : IDisposable
     public async Task SendEmailAsync_InteractiveBillInbox_EnforcesAccountingOrBillsPermissions_AndDeliversWhenAuthorized()
     {
         using var smtp = new LoopbackSmtpTestServer();
+        var server = ConfigureTrustedLoopbackSendingServer(smtp.Port, "smtp-bill-interactive");
+
+        var billAccount = new EmailAccount
+        {
+            Id = "acc-bill-inbox",
+            IsServerManaged = true,
+            EmailAddress = "billing@company.com",
+            Name = "Accounts Payable"
+        };
+        _accounts.Save(billAccount);
+
+        var billIdentity = new EmailSendingIdentity
+        {
+            Id = "id-bill-inbox",
+            IsServerManaged = true,
+            Username = "billing@company.com",
+            DisplayName = "Accounts Payable",
+            SendingServerConfigId = server.Id,
+            SourceAccountId = billAccount.Id
+        };
+        _identities.Save(billIdentity);
 
         var profile = _companyProfile.GetOrCreate();
         profile.Accounting.BillInbox = new CompanyBillInboxSettings
         {
             Enabled = true,
+            AccountId = billAccount.Id,
+            SendingIdentityId = billIdentity.Id,
             EmailAddress = "billing@company.com",
-            DisplayName = "Accounts Payable",
-            SmtpHost = "127.0.0.1",
-            SmtpPort = smtp.Port,
-            SmtpSsl = false,
-            AllowPlaintextTransport = true,
-            SmtpUsername = "billing@company.com",
-            EncryptedSmtpPassword = _encryption.Encrypt("ap-secret")
+            DisplayName = "Accounts Payable"
         };
         _companyProfile.Save(profile);
 
-        var unprivilegedUser = new Employee { Id = "emp-regular", FirstName = "Regular", IsActive = true };
+        var unprivilegedUser = new Employee { Id = "emp-regular", FirstName = "Regular", IsActive = true, Permissions = [AppPermissions.Email.Use] };
         var billsManager = new Employee
         {
             Id = "emp-ap",
@@ -433,7 +454,7 @@ public class EmailDeliveryServiceTests : IDisposable
         Assert.Contains("billing@company.com", rawMime, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Re: Invoice #9001", rawMime, StringComparison.Ordinal);
 
-        var billSent = _messages.GetByFolder(CompanyBillInboxConstants.SystemEmployeeId, "Sent");
+        var billSent = _messages.GetByFolder(billAccount.Id, "Sent");
         var recorded = Assert.Single(billSent);
         Assert.Equal("billing@company.com", recorded.FromAddress);
         Assert.Equal(billsManager.Id, recorded.CreatedByEmployeeId);
@@ -444,17 +465,36 @@ public class EmailDeliveryServiceTests : IDisposable
     public async Task SendSystemBillInboxEmailAsync_DeliversAutomatedSystemMailWithoutInteractiveEmployee()
     {
         using var smtp = new LoopbackSmtpTestServer();
+        var server = ConfigureTrustedLoopbackSendingServer(smtp.Port, "smtp-bill-automated");
+
+        var billAccount = new EmailAccount
+        {
+            Id = "acc-factures",
+            IsServerManaged = true,
+            EmailAddress = "factures@company.com",
+            Name = "Facturation"
+        };
+        _accounts.Save(billAccount);
+
+        var billIdentity = new EmailSendingIdentity
+        {
+            Id = "id-factures",
+            IsServerManaged = true,
+            Username = "factures@company.com",
+            DisplayName = "Facturation",
+            SendingServerConfigId = server.Id,
+            SourceAccountId = billAccount.Id
+        };
+        _identities.Save(billIdentity);
 
         var profile = _companyProfile.GetOrCreate();
         profile.Accounting.BillInbox = new CompanyBillInboxSettings
         {
             Enabled = true,
+            AccountId = billAccount.Id,
+            SendingIdentityId = billIdentity.Id,
             EmailAddress = "factures@company.com",
-            DisplayName = "Facturation",
-            SmtpHost = "127.0.0.1",
-            SmtpPort = smtp.Port,
-            SmtpSsl = false,
-            AllowPlaintextTransport = true
+            DisplayName = "Facturation"
         };
         _companyProfile.Save(profile);
 
@@ -463,15 +503,14 @@ public class EmailDeliveryServiceTests : IDisposable
             AccountId = CompanyBillInboxConstants.SystemEmployeeId,
             To = "supplier@example.com",
             Subject = "Automated Remittance Notice",
-            Body = "<p>Automated notice</p>",
-            IsSystemAutomatedSend = true
+            Body = "<p>Automated notice</p>"
         });
 
         var rawMime = Assert.Single(smtp.ReceivedMessages);
         Assert.Contains("factures@company.com", rawMime, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Automated Remittance Notice", rawMime, StringComparison.Ordinal);
 
-        var billSent = _messages.GetByFolder(CompanyBillInboxConstants.SystemEmployeeId, "Sent");
+        var billSent = _messages.GetByFolder(billAccount.Id, "Sent");
         Assert.Single(billSent);
     }
 
@@ -480,7 +519,7 @@ public class EmailDeliveryServiceTests : IDisposable
     {
         using var smtp = new LoopbackSmtpTestServer();
 
-        var alice = new Employee { Id = "emp-ssrf-alice", FirstName = "Alice", IsActive = true };
+        var alice = new Employee { Id = "emp-ssrf-alice", FirstName = "Alice", IsActive = true, Permissions = [AppPermissions.Email.Use] };
         _employees.Save(alice);
 
         var loopbackIdentity = new EmailSendingIdentity

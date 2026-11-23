@@ -1,0 +1,635 @@
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Communication.Voice
+@using Spokes_Server.Core.Services.Communication.Voice.Dsp
+@using Spokes_Server.Components.Shared
+@implements IDisposable
+@inject GlobalVoiceService VoiceService
+@inject PhysicalVoiceRoomService PhysicalRoomService
+@inject VoiceStateService VoiceState
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject ILogger<PhysicalRoomDiagnosticsSection> Logger
+
+@* ── Room Isolation Diagnostics & Diagnostic Log Recorder (Visible to all users in the room) ── *@
+<div class="d-flex flex-column gap-2">
+    <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Small" Color="Color.Primary" />
+            <MudText Typo="Typo.caption" Style="font-weight: 600;">@Loc["Room Isolation Diagnostics"]</MudText>
+            @if (VoiceService.IsInVoiceCall && !string.IsNullOrEmpty(VoiceService.CurrentChannelId))
+            {
+                if (_roomDiagnosticSnapshot != null && _roomDiagnosticSnapshot.Participants.Count >= 2)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="py-0 px-2 ma-0" Style="height: 18px; font-size: 0.65rem;">
+                        @Loc["Isolation Active"]
+                    </MudChip>
+                }
+                else
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" Class="py-0 px-2 ma-0" Style="height: 18px; font-size: 0.65rem;">
+                        @Loc["Standby (1 Device)"]
+                    </MudChip>
+                }
+            }
+            else
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined" Class="py-0 px-2 ma-0" Style="height: 18px; font-size: 0.65rem;">
+                    @Loc["Join Call to Test"]
+                </MudChip>
+            }
+        </div>
+
+        <div class="d-flex align-center gap-2">
+            @if (VoiceService.IsInVoiceCall && !string.IsNullOrEmpty(VoiceService.CurrentChannelId))
+            {
+                @if (!_isRecordingRoomDiagnostic)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.GraphicEq"
+                               OnClick="StartRoomDiagnosticTestAsync">
+                        @Loc["Test Room Isolation"]
+                    </MudButton>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Stop"
+                               OnClick="StopRoomDiagnosticTestAsync">
+                        @Loc["Stop & Analyze"]
+                    </MudButton>
+                    <div class="d-flex align-center gap-1">
+                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Color="Color.Error" Size="Size.Small" Style="animation: pulse 1s infinite;" />
+                        <MudText Typo="Typo.caption" Color="Color.Error" Style="font-weight: 600;">@_roomDiagDurationText</MudText>
+                    </div>
+                }
+
+                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary"
+                           StartIcon="@(_showLiveRoomDiagnostics ? Icons.Material.Filled.KeyboardArrowUp : Icons.Material.Filled.KeyboardArrowDown)"
+                           OnClick="ToggleLiveRoomDiagnostics">
+                    @Loc["Live Telemetry"]
+                </MudButton>
+            }
+        </div>
+    </div>
+
+    @if (_isRecordingRoomDiagnostic)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="my-1">
+            @Loc["Recording room acoustics... Speak normally for a few seconds. One person speaking tests one-way bleed and auto-latency; having roommates speak or talk together tests all directions and double-talk."]
+        </MudAlert>
+    }
+
+    <MudCollapse Expanded="@_showLiveRoomDiagnostics">
+        @if (_showLiveRoomDiagnostics)
+        {
+            <div class="d-flex flex-column gap-2 mt-1 pt-2" style="border-top: 1px dashed var(--mud-palette-divider);">
+                @{
+                    var isDirectLanCurrentlyActive = VoiceService.GetPhysicalRoomDirectStatus(SelectedRoom.Id) == DirectRoomOperatingStatus.ActiveDirectLan
+                        && VoiceService.DirectRoomTelemetry != null;
+                }
+                @if (isDirectLanCurrentlyActive)
+                {
+                    var directTel = VoiceService.DirectRoomTelemetry!;
+                    const double directFramingMs = 2.7;
+                    <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">@Loc["Direct LAN Audio Pipeline (Active)"]</MudText>
+                    <div class="d-flex flex-column gap-1 px-2 py-1 rounded" style="background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-success);">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                            <div class="d-flex align-center gap-2">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="py-0 px-2 ma-0" Style="height: 18px; font-size: 0.65rem;">
+                                    @string.Format(Loc["Direct LAN Active (~{0:0.0} ms)"].Value, directTel.EstimatedEndToEndMs)
+                                </MudChip>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @string.Format(Loc["LAN RTT: {0:F1} ms"].Value, directTel.MaxPeerRttMs)
+                                </MudText>
+                            </div>
+                            <div class="d-flex align-center gap-3">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @string.Format(Loc["Jitter Buffer: {0:F1} ms"].Value, directTel.JitterBufferMs)
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @string.Format(Loc["DSP Framing: {0:F1} ms"].Value, directFramingMs)
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
+                                    @string.Format(Loc["Cancelled: {0:F1} dB"].Value, directTel.AchievedBleedSuppressionDb)
+                                </MudText>
+                            </div>
+                        </div>
+                    </div>
+                }
+                @if (_roomDiagnosticSnapshot != null && _roomDiagnosticSnapshot.Participants.Count > 0)
+                {
+                    @* Per-Participant Gate States & Delay Telemetry *@
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;">
+                        @(isDirectLanCurrentlyActive ? Loc["Server Acoustic Calibration & Standby Pipeline"] : Loc["Active Room Microphones"])
+                    </MudText>
+                    <div class="d-flex flex-column gap-1">
+                        @foreach (var pDiag in _roomDiagnosticSnapshot.Participants)
+                        {
+                            var pEmp = ResolveVisibleEmployee?.Invoke(pDiag.UserId);
+                            var pDisplayName = pEmp?.FullName ?? Loc["Unknown Participant"].Value;
+                            var (badgeText, badgeColor) = GetGateBadgeInfo(pDiag.CurrentGateState);
+                            var pAudioTelemetry = !string.IsNullOrEmpty(VoiceService.CurrentChannelId)
+                                ? VoiceState.GetVoiceParticipantAudioTelemetry(VoiceService.CurrentChannelId, pDiag.UserId)
+                                : null;
+                            var serverDelayMs = pDiag.ServerToClientDelayMs > 0
+                                ? pDiag.ServerToClientDelayMs
+                                : (pAudioTelemetry?.ServerToClientDelayMs ?? 0.0);
+                            var clientProcDelayMs = pDiag.ClientProcessingDelayMs > 0
+                                ? pDiag.ClientProcessingDelayMs
+                                : (pAudioTelemetry?.EstimatedCaptureLatencyMs ?? 0.0);
+                            var totalProcDelayMs = clientProcDelayMs + pDiag.EffectiveLookaheadMs;
+
+                            <div class="d-flex flex-column gap-1 px-2 py-1 rounded" style="background: var(--mud-palette-surface);">
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                    <div class="d-flex align-center gap-2">
+                                        <EmployeeAvatar Employee="@pEmp" Size="Size.Small" ShowPresence="false" />
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@pDisplayName</MudText>
+                                        <MudChip T="string" Size="Size.Small" Color="@badgeColor" Variant="Variant.Filled" Class="py-0 px-2 ma-0" Style="height: 18px; font-size: 0.65rem;">
+                                            @badgeText
+                                        </MudChip>
+                                    </div>
+                                    <div class="d-flex align-center gap-3">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @(pDiag.RecentVocalRmsDbFs <= -99.5
+                                                ? Loc["Vocal: Idle"].Value
+                                                : string.Format(Loc["Vocal: {0:F1} dBFS"].Value, pDiag.RecentVocalRmsDbFs))
+                                        </MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @string.Format(Loc["Lookahead: {0} ms"].Value, pDiag.EffectiveLookaheadMs)
+                                        </MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 600;">
+                                            @string.Format(Loc["Cancelled: {0:F1} dB"].Value, pDiag.AchievedBleedSuppressionDb)
+                                        </MudText>
+                                    </div>
+                                </div>
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @string.Format(Loc["Server-to-Client Delay: {0:F1} ms"].Value, serverDelayMs)
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @string.Format(Loc["Audio Processing Delay: {0:F1} ms ({1:F1} ms device + {2} ms lookahead)"].Value, totalProcDelayMs, clientProcDelayMs, pDiag.EffectiveLookaheadMs)
+                                    </MudText>
+                                </div>
+                            </div>
+                        }
+                    </div>
+
+                    @* Delay & Distance Breakdown (Server, Audio Processing & Estimated Distance) *@
+                    @if (_roomDiagnosticSnapshot.Participants.Count >= 2)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;" Class="mt-1">@Loc["Delay & Distance Breakdown"]</MudText>
+                        @if (_roomDiagnosticSnapshot.Decompositions.Count > 0)
+                        {
+                            @foreach (var dec in _roomDiagnosticSnapshot.Decompositions)
+                            {
+                                var nameA = GetSafeVoiceDisplayName(dec.UserAId);
+                                var nameB = GetSafeVoiceDisplayName(dec.UserBId);
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2 px-2 py-1 rounded" style="background: var(--mud-palette-surface);">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @string.Format(Loc["Estimated Distance Delay ({0} - {1}): {2:F2} ms (~{3:F2} m)"].Value, nameA, nameB, dec.AirPropagationMs, dec.EstimatedDistanceMeters)
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @string.Format(Loc["Relative Audio Processing Offset: {0:+0.0;-0.0;0.0} ms"].Value, dec.RelativeDspOffsetMs)
+                                    </MudText>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            var pA = _roomDiagnosticSnapshot.Participants[0];
+                            var pB = _roomDiagnosticSnapshot.Participants[1];
+                            var nameA = GetSafeVoiceDisplayName(pA.UserId);
+                            var nameB = GetSafeVoiceDisplayName(pB.UserId);
+                            var estOffsetMs = pB.ClientProcessingDelayMs - pA.ClientProcessingDelayMs;
+                            <div class="d-flex align-center justify-space-between flex-wrap gap-2 px-2 py-1 rounded" style="background: var(--mud-palette-surface);">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @string.Format(Loc["Estimated Distance Delay ({0} - {1}): ~4.00 ms (~1.37 m prior, speak to calibrate)"].Value, nameA, nameB)
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @string.Format(Loc["Relative Audio Processing Offset: {0:+0.0;-0.0;0.0} ms (telemetry prior)"].Value, estOffsetMs)
+                                </MudText>
+                            </div>
+                        }
+                    }
+
+                    @* Pairwise Auto-Latency & Bleed Matrix *@
+                    @if (_roomDiagnosticSnapshot.Calibrations.Count > 0)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;" Class="mt-1">@Loc["Auto-Latency & Bleed Matrix"]</MudText>
+                        <div class="d-flex flex-column gap-1">
+                            @foreach (var cal in _roomDiagnosticSnapshot.Calibrations)
+                            {
+                                var srcName = GetSafeVoiceDisplayName(cal.SourceUserId);
+                                var tgtName = GetSafeVoiceDisplayName(cal.TargetUserId);
+                                var confPct = Math.Clamp(cal.Confidence * 100.0, 0.0, 100.0);
+
+                                <div class="d-flex flex-column px-2 py-1 rounded gap-1" style="background: var(--mud-palette-surface);">
+                                    <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                        <div class="d-flex align-center gap-2">
+                                            <MudText Typo="Typo.caption" Style="font-weight: 600;">@($"{srcName} → {tgtName}")</MudText>
+                                            @{
+                                                var (lockText, lockColor) = GetCalibrationBadgeInfo(cal);
+                                            }
+                                            <MudChip T="string" Size="Size.Small" Color="@lockColor" Variant="Variant.Outlined" Class="py-0 px-2 ma-0" Style="height: 18px; font-size: 0.65rem;">
+                                                @lockText
+                                            </MudChip>
+                                        </div>
+                                        <div class="d-flex align-center gap-3">
+                                            <MudText Typo="Typo.caption">
+                                                @string.Format(Loc["Latency: {0:+0.0;-0.0;0.0} ms"].Value, cal.DelayMs)
+                                            </MudText>
+                                            <MudText Typo="Typo.caption">
+                                                @string.Format(Loc["Bleed: {0:F1} dB"].Value, cal.BleedAttenuationDb)
+                                            </MudText>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                @string.Format(Loc["Conf: {0:F0}%"].Value, confPct)
+                                            </MudText>
+                                        </div>
+                                    </div>
+                                    <MudProgressLinear Value="@confPct" Color="@(confPct >= 45 ? Color.Success : Color.Warning)" Size="Size.Small" Rounded="true" />
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (_roomDiagnosticSnapshot.Warnings.Count > 0)
+                    {
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-1">
+                            @foreach (var warning in _roomDiagnosticSnapshot.Warnings)
+                            {
+                                <div>@FormatRoomWarning(warning)</div>
+                            }
+                        </MudAlert>
+                    }
+                }
+                else
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="font-italic">
+                        @Loc["Join a voice channel with at least 2 enrolled devices in this room to inspect live acoustic telemetry."]
+                    </MudText>
+                }
+            </div>
+        }
+    </MudCollapse>
+
+    @if (_showLiveRoomDiagnostics || !string.IsNullOrEmpty(_lastAgentDiagnosticLog))
+    {
+        @* Diagnostic Log Output & Copy Button *@
+        <div class="d-flex align-center justify-space-between flex-wrap gap-2 mt-1">
+            <div class="d-flex align-center gap-2">
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Secondary"
+                           StartIcon="@Icons.Material.Filled.ContentCopy"
+                           Disabled="@(!VoiceService.IsInVoiceCall && string.IsNullOrEmpty(_lastAgentDiagnosticLog))"
+                           OnClick="CopyAgentDiagnosticLogAsync">
+                    @Loc["Copy Diagnostic Log"]
+                </MudButton>
+                @if (!string.IsNullOrEmpty(_lastAgentDiagnosticLog))
+                {
+                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default"
+                               OnClick="() => _showAgentLogPreview = !_showAgentLogPreview">
+                        @(_showAgentLogPreview ? Loc["Hide Log"].Value : Loc["View Log"].Value)
+                    </MudButton>
+                }
+            </div>
+            @if (!string.IsNullOrEmpty(_lastAgentDiagnosticLog))
+            {
+                <MudText Typo="Typo.caption" Color="Color.Success" Style="font-weight: 500;">
+                    @Loc["Diagnostic report ready."]
+                </MudText>
+            }
+        </div>
+
+        @if (_showAgentLogPreview && !string.IsNullOrEmpty(_lastAgentDiagnosticLog))
+        {
+            <pre class="pa-2 rounded" style="background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); font-size: 0.70rem; max-height: 200px; overflow-y: auto; white-space: pre-wrap; margin: 0;">@_lastAgentDiagnosticLog</pre>
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public PhysicalVoiceRoom SelectedRoom { get; set; } = default!;
+    [Parameter] public Employee? CurrentUser { get; set; }
+    [Parameter] public bool MuteUsersInMyRoom { get; set; }
+    [Parameter] public Func<string?, Employee?>? ResolveVisibleEmployee { get; set; }
+
+    private const double RoomDiagnosticCaptureDurationSeconds = 30.0;
+    private bool _showLiveRoomDiagnostics = false;
+    private bool _isRecordingRoomDiagnostic = false;
+    private bool _showAgentLogPreview = false;
+    private PhysicalRoomDiagnosticSnapshot? _roomDiagnosticSnapshot;
+    private string _lastAgentDiagnosticLog = string.Empty;
+    private System.Timers.Timer? _roomDiagTimer;
+    private DateTime _roomDiagStartTime;
+    private string _roomDiagDurationText = "0:00 / 0:30";
+    private bool _isRefreshingRoomDiag;
+    private bool _isDisposed;
+    private string? _lastRoomId;
+
+    protected override void OnInitialized()
+    {
+        _lastRoomId = SelectedRoom?.Id;
+        RefreshRoomDiagnosticSnapshot();
+        VoiceService.OnChange += OnVoiceOrRoomStateChanged;
+        VoiceService.OnDiagnosticsOrSettingsChanged += OnVoiceOrRoomStateChanged;
+        VoiceState.PhysicalRoomsChanged += OnVoiceOrRoomStateChanged;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!string.Equals(_lastRoomId, SelectedRoom?.Id, StringComparison.Ordinal))
+        {
+            _lastRoomId = SelectedRoom?.Id;
+            _isRecordingRoomDiagnostic = false;
+            _lastAgentDiagnosticLog = string.Empty;
+            _showAgentLogPreview = false;
+        }
+
+        RefreshRoomDiagnosticSnapshot();
+        EnsureRoomDiagTimerState();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await RefreshRoomDiagnosticsWithDirectTelemetryAsync();
+            if (!_isDisposed)
+            {
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void OnVoiceOrRoomStateChanged()
+    {
+        if (_isDisposed) return;
+        InvokeAsync(() =>
+        {
+            if (_isDisposed) return;
+            RefreshRoomDiagnosticSnapshot();
+            EnsureRoomDiagTimerState();
+            StateHasChanged();
+        });
+    }
+
+    private void RefreshRoomDiagnosticSnapshot()
+    {
+        if (SelectedRoom != null && VoiceService.IsInVoiceCall && !string.IsNullOrEmpty(VoiceService.CurrentChannelId))
+        {
+            _roomDiagnosticSnapshot = PhysicalRoomService.GetRoomDiagnosticSnapshot(
+                VoiceService.CurrentChannelId,
+                SelectedRoom.Id,
+                actorUserId: CurrentUser?.Id);
+        }
+        else
+        {
+            _roomDiagnosticSnapshot = null;
+        }
+    }
+
+    private async Task RefreshRoomDiagnosticsWithDirectTelemetryAsync()
+    {
+        RefreshRoomDiagnosticSnapshot();
+        if (!_isDisposed &&
+            VoiceService.IsInVoiceCall &&
+            VoiceService.IsDesktopDirectRoomSupported &&
+            SelectedRoom is { AudioMode: not PhysicalRoomAudioMode.ServerCleanup } &&
+            !MuteUsersInMyRoom)
+        {
+            await VoiceService.RefreshDirectRoomTelemetryAsync();
+        }
+    }
+
+    private async Task ToggleLiveRoomDiagnostics()
+    {
+        _showLiveRoomDiagnostics = !_showLiveRoomDiagnostics;
+        if (_showLiveRoomDiagnostics)
+        {
+            await RefreshRoomDiagnosticsWithDirectTelemetryAsync();
+        }
+        else
+        {
+            RefreshRoomDiagnosticSnapshot();
+        }
+        EnsureRoomDiagTimerState();
+    }
+
+    private void EnsureRoomDiagTimerState()
+    {
+        bool shouldRunTimer = (_showLiveRoomDiagnostics || _isRecordingRoomDiagnostic) &&
+                              VoiceService.IsInVoiceCall &&
+                              SelectedRoom != null;
+
+        if (shouldRunTimer && _roomDiagTimer == null)
+        {
+            _roomDiagTimer = new System.Timers.Timer(500);
+            _roomDiagTimer.Elapsed += (s, e) =>
+            {
+                if (_isDisposed) return;
+                InvokeAsync(async () =>
+                {
+                    if (_isDisposed || _isRefreshingRoomDiag) return;
+                    _isRefreshingRoomDiag = true;
+                    try
+                    {
+                        await RefreshRoomDiagnosticsWithDirectTelemetryAsync();
+                        if (_isDisposed) return;
+                        if (_isRecordingRoomDiagnostic)
+                        {
+                            var diff = DateTime.Now - _roomDiagStartTime;
+                            var clampedSec = Math.Clamp((int)diff.TotalSeconds, 0, (int)RoomDiagnosticCaptureDurationSeconds);
+                            var targetSpan = TimeSpan.FromSeconds(RoomDiagnosticCaptureDurationSeconds);
+                            _roomDiagDurationText = $"{clampedSec / 60}:{clampedSec % 60:D2} / {(int)targetSpan.TotalMinutes}:{targetSpan.Seconds:D2}";
+                            if (diff.TotalSeconds >= RoomDiagnosticCaptureDurationSeconds)
+                            {
+                                await StopRoomDiagnosticTestAsync();
+                                return;
+                            }
+                        }
+                        StateHasChanged();
+                    }
+                    finally
+                    {
+                        _isRefreshingRoomDiag = false;
+                    }
+                });
+            };
+            _roomDiagTimer.Start();
+        }
+        else if (!shouldRunTimer && _roomDiagTimer != null)
+        {
+            _roomDiagTimer.Stop();
+            _roomDiagTimer.Dispose();
+            _roomDiagTimer = null;
+        }
+    }
+
+    private async Task StartRoomDiagnosticTestAsync()
+    {
+        if (SelectedRoom == null || !VoiceService.IsInVoiceCall || string.IsNullOrEmpty(VoiceService.CurrentChannelId) || CurrentUser?.IsSuspended == true)
+        {
+            return;
+        }
+
+        PhysicalRoomService.ResetRoomDiagnosticCounters(VoiceService.CurrentChannelId, SelectedRoom.Id, actorUserId: CurrentUser?.Id);
+        _isRecordingRoomDiagnostic = true;
+        _showLiveRoomDiagnostics = true;
+        _roomDiagStartTime = DateTime.Now;
+        var targetSpan = TimeSpan.FromSeconds(RoomDiagnosticCaptureDurationSeconds);
+        _roomDiagDurationText = $"0:00 / {(int)targetSpan.TotalMinutes}:{targetSpan.Seconds:D2}";
+        await RefreshRoomDiagnosticsWithDirectTelemetryAsync();
+        EnsureRoomDiagTimerState();
+        StateHasChanged();
+    }
+
+    private async Task StopRoomDiagnosticTestAsync()
+    {
+        _isRecordingRoomDiagnostic = false;
+        await RefreshRoomDiagnosticsWithDirectTelemetryAsync();
+        _lastAgentDiagnosticLog = BuildCurrentAgentDiagnosticLog();
+        _showAgentLogPreview = false;
+        EnsureRoomDiagTimerState();
+        StateHasChanged();
+    }
+
+    private string BuildCurrentAgentDiagnosticLog()
+    {
+        if (SelectedRoom == null) return string.Empty;
+        RefreshRoomDiagnosticSnapshot();
+        if (_roomDiagnosticSnapshot == null) return string.Empty;
+
+        var displayNames = new Dictionary<string, string>(StringComparer.Ordinal);
+        var deviceMeta = new Dictionary<string, (string DeviceName, string FilterType)>(StringComparer.Ordinal);
+
+        foreach (var p in _roomDiagnosticSnapshot.Participants)
+        {
+            displayNames[p.UserId] = GetSafeVoiceDisplayName(p.UserId);
+
+            string devName = "Active Device";
+            string? reportedFilter = null;
+            if (!string.IsNullOrEmpty(VoiceService.CurrentChannelId))
+            {
+                var dev = VoiceState.GetVoiceParticipantDevice(VoiceService.CurrentChannelId, p.UserId);
+                if (dev != null && !string.IsNullOrWhiteSpace(dev.Value.DeviceName))
+                {
+                    devName = dev.Value.DeviceName;
+                }
+                var audioTelemetry = VoiceState.GetVoiceParticipantAudioTelemetry(VoiceService.CurrentChannelId, p.UserId);
+                if (audioTelemetry != null && !string.IsNullOrWhiteSpace(audioTelemetry.Value.FilterType))
+                {
+                    reportedFilter = audioTelemetry.Value.FilterType;
+                }
+            }
+
+            string filter = !string.IsNullOrWhiteSpace(reportedFilter)
+                ? reportedFilter!
+                : (p.UserId == CurrentUser?.Id ? VoiceService.CurrentNoiseSuppression : "client-default");
+            deviceMeta[p.UserId] = (devName, filter);
+        }
+
+        var directStatus = MuteUsersInMyRoom
+            ? DirectRoomOperatingStatus.MutedRoommatesLocal
+            : VoiceService.GetPhysicalRoomDirectStatus(SelectedRoom.Id);
+
+        return AcousticRoomDiagnosticReportFormatter.FormatLiveRoomReport(
+            _roomDiagnosticSnapshot,
+            SelectedRoom.Name,
+            displayNames,
+            deviceMeta,
+            SelectedRoom.AudioMode,
+            directStatus,
+            VoiceService.DirectRoomTelemetry);
+    }
+
+    private async Task CopyAgentDiagnosticLogAsync()
+    {
+        if (string.IsNullOrEmpty(_lastAgentDiagnosticLog) || _isRecordingRoomDiagnostic)
+        {
+            await RefreshRoomDiagnosticsWithDirectTelemetryAsync();
+            _lastAgentDiagnosticLog = BuildCurrentAgentDiagnosticLog();
+        }
+
+        if (string.IsNullOrEmpty(_lastAgentDiagnosticLog))
+        {
+            Snackbar.Add(Loc["No diagnostic telemetry available to copy yet."].Value, Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _lastAgentDiagnosticLog);
+            Snackbar.Add(Loc["Diagnostic log copied to clipboard!"].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[VoiceSettings] Failed to copy diagnostic log to clipboard");
+            _showAgentLogPreview = true;
+            Snackbar.Add(Loc["Could not access clipboard directly. Log opened below for manual copy."].Value, Severity.Info);
+        }
+    }
+
+    private (string Text, Color Color) GetGateBadgeInfo(AcousticGateState state) => state switch
+    {
+        AcousticGateState.GatedBleed => (Loc["Bleed Gated"].Value, Color.Info),
+        AcousticGateState.DoubleTalkSubtraction => (Loc["Double-Talk Clean"].Value, Color.Warning),
+        _ => (Loc["Open"].Value, Color.Success)
+    };
+
+    private (string Text, Color Color) GetCalibrationBadgeInfo(PairwiseAcousticCalibration cal)
+    {
+        if (cal.Confidence < 0.20)
+        {
+            return (Loc["Uncalibrated"].Value, Color.Default);
+        }
+        if (cal.IsReciprocalPrior)
+        {
+            return (Loc["Reciprocal Prior"].Value, Color.Warning);
+        }
+        return (Loc["Direct Lock"].Value, Color.Success);
+    }
+
+    private string FormatRoomWarning(string warning)
+    {
+        if (string.IsNullOrWhiteSpace(warning) || _roomDiagnosticSnapshot == null)
+        {
+            return warning;
+        }
+
+        var displayNames = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var p in _roomDiagnosticSnapshot.Participants)
+        {
+            var empName = GetSafeVoiceDisplayName(p.UserId);
+            if (!string.IsNullOrWhiteSpace(empName))
+            {
+                displayNames[p.UserId] = empName;
+            }
+        }
+
+        return AcousticRoomDiagnosticReportFormatter.ReplaceUserIdsWithDisplayNames(warning, displayNames, includeRawId: false);
+    }
+
+    private string GetSafeVoiceDisplayName(string? targetEmployeeId, string? fallback = null)
+    {
+        var visible = ResolveVisibleEmployee?.Invoke(targetEmployeeId);
+        if (visible != null)
+        {
+            return visible.FullName;
+        }
+
+        return string.IsNullOrWhiteSpace(fallback)
+            ? Loc["Unknown Participant"].Value
+            : fallback;
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        VoiceService.OnChange -= OnVoiceOrRoomStateChanged;
+        VoiceService.OnDiagnosticsOrSettingsChanged -= OnVoiceOrRoomStateChanged;
+        VoiceState.PhysicalRoomsChanged -= OnVoiceOrRoomStateChanged;
+        _roomDiagTimer?.Stop();
+        _roomDiagTimer?.Dispose();
+        _roomDiagTimer = null;
+    }
+}

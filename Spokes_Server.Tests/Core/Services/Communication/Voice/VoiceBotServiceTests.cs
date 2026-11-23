@@ -33,7 +33,7 @@ public class VoiceBotServiceTests : IDisposable
 
         var configDict = new Dictionary<string, string?>
         {
-            ["DataPath"] = _testDataDir,
+            ["DataPath"] = _testDataDir, ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!",
             ["Spokes_Voice_Port"] = "7880"
         };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
@@ -166,20 +166,19 @@ public class VoiceBotServiceTests : IDisposable
     public async Task VoiceChannelService_JoinVoiceAsync_FirstUser_JoinsSilentlyAndPrewarmsBot()
     {
         var botMock = new Mock<IVoiceBotService>();
-        var chatState = new ChatStateService();
-        var realtimeGatewayMock = new Mock<IChatRealtimeGateway>();
+        var voiceState = new VoiceStateService();
         var companyRepo = new CompanyProfileRepository(_persistence, _config);
         var messagesRepo = new ChatMessageRepository(_persistence, _config, companyRepo);
         var notifRoutingMock = new Mock<INotificationRoutingService>();
-        var livekitService = new LiveKitService(new Mock<ILogger<LiveKitService>>().Object, _config);
+        var livekitService = new Mock<LiveKitService>(new Mock<ILogger<LiveKitService>>().Object, _config).Object;
         var employees = new EmployeeRepository(_persistence, _config);
         var channels = new ChatChannelRepository(_persistence, _config);
         var readStates = new ChatReadStateRepository(_persistence, _config, companyRepo);
         var logger = new Mock<ILogger<VoiceChannelService>>().Object;
 
         var voiceChannelService = new VoiceChannelService(
-            chatState,
-            realtimeGatewayMock.Object,
+            voiceState,
+            new ChatStateService(),
             messagesRepo,
             notifRoutingMock.Object,
             _systemConfigs,
@@ -202,22 +201,21 @@ public class VoiceBotServiceTests : IDisposable
     public async Task VoiceChannelService_JoinVoiceAsync_SubsequentUser_PlaysJoinChime()
     {
         var botMock = new Mock<IVoiceBotService>();
-        var chatState = new ChatStateService();
-        chatState.NotifyVoiceMemberJoined("ch100", "user1");
+        var voiceState = new VoiceStateService();
+        voiceState.NotifyVoiceMemberJoined("ch100", "user1");
 
-        var realtimeGatewayMock = new Mock<IChatRealtimeGateway>();
         var companyRepo = new CompanyProfileRepository(_persistence, _config);
         var messagesRepo = new ChatMessageRepository(_persistence, _config, companyRepo);
         var notifRoutingMock = new Mock<INotificationRoutingService>();
-        var livekitService = new LiveKitService(new Mock<ILogger<LiveKitService>>().Object, _config);
+        var livekitService = new Mock<LiveKitService>(new Mock<ILogger<LiveKitService>>().Object, _config).Object;
         var employees = new EmployeeRepository(_persistence, _config);
         var channels = new ChatChannelRepository(_persistence, _config);
         var readStates = new ChatReadStateRepository(_persistence, _config, companyRepo);
         var logger = new Mock<ILogger<VoiceChannelService>>().Object;
 
         var voiceChannelService = new VoiceChannelService(
-            chatState,
-            realtimeGatewayMock.Object,
+            voiceState,
+            new ChatStateService(),
             messagesRepo,
             notifRoutingMock.Object,
             _systemConfigs,
@@ -240,23 +238,22 @@ public class VoiceBotServiceTests : IDisposable
     public async Task VoiceChannelService_LeaveVoiceAsync_WithRemainingParticipants_PlaysLeaveChime()
     {
         var botMock = new Mock<IVoiceBotService>();
-        var chatState = new ChatStateService();
-        chatState.NotifyVoiceMemberJoined("ch100", "user1");
-        chatState.NotifyVoiceMemberJoined("ch100", "user2");
+        var voiceState = new VoiceStateService();
+        voiceState.NotifyVoiceMemberJoined("ch100", "user1");
+        voiceState.NotifyVoiceMemberJoined("ch100", "user2");
 
-        var realtimeGatewayMock = new Mock<IChatRealtimeGateway>();
         var companyRepo = new CompanyProfileRepository(_persistence, _config);
         var messagesRepo = new ChatMessageRepository(_persistence, _config, companyRepo);
         var notifRoutingMock = new Mock<INotificationRoutingService>();
-        var livekitService = new LiveKitService(new Mock<ILogger<LiveKitService>>().Object, _config);
+        var livekitService = new Mock<LiveKitService>(new Mock<ILogger<LiveKitService>>().Object, _config).Object;
         var employees = new EmployeeRepository(_persistence, _config);
         var channels = new ChatChannelRepository(_persistence, _config);
         var readStates = new ChatReadStateRepository(_persistence, _config, companyRepo);
         var logger = new Mock<ILogger<VoiceChannelService>>().Object;
 
         var voiceChannelService = new VoiceChannelService(
-            chatState,
-            realtimeGatewayMock.Object,
+            voiceState,
+            new ChatStateService(),
             messagesRepo,
             notifRoutingMock.Object,
             _systemConfigs,
@@ -278,22 +275,21 @@ public class VoiceBotServiceTests : IDisposable
     public async Task VoiceChannelService_LeaveVoiceAsync_WhenLastParticipantLeaves_SchedulesBotDeparture()
     {
         var botMock = new Mock<IVoiceBotService>();
-        var chatState = new ChatStateService();
-        chatState.NotifyVoiceMemberJoined("ch100", "user1");
+        var voiceState = new VoiceStateService();
+        voiceState.NotifyVoiceMemberJoined("ch100", "user1");
 
-        var realtimeGatewayMock = new Mock<IChatRealtimeGateway>();
         var companyRepo = new CompanyProfileRepository(_persistence, _config);
         var messagesRepo = new ChatMessageRepository(_persistence, _config, companyRepo);
         var notifRoutingMock = new Mock<INotificationRoutingService>();
-        var livekitService = new LiveKitService(new Mock<ILogger<LiveKitService>>().Object, _config);
+        var livekitService = new Mock<LiveKitService>(new Mock<ILogger<LiveKitService>>().Object, _config).Object;
         var employees = new EmployeeRepository(_persistence, _config);
         var channels = new ChatChannelRepository(_persistence, _config);
         var readStates = new ChatReadStateRepository(_persistence, _config, companyRepo);
         var logger = new Mock<ILogger<VoiceChannelService>>().Object;
 
         var voiceChannelService = new VoiceChannelService(
-            chatState,
-            realtimeGatewayMock.Object,
+            voiceState,
+            new ChatStateService(),
             messagesRepo,
             notifRoutingMock.Object,
             _systemConfigs,
@@ -315,22 +311,21 @@ public class VoiceBotServiceTests : IDisposable
     public async Task VoiceChannelService_JoinVoiceAsync_CalledTwice_PlaysJoinChimeOnlyOnce()
     {
         var botMock = new Mock<IVoiceBotService>();
-        var chatState = new ChatStateService();
-        chatState.NotifyVoiceMemberJoined("ch100", "user1");
+        var voiceState = new VoiceStateService();
+        voiceState.NotifyVoiceMemberJoined("ch100", "user1");
 
-        var realtimeGatewayMock = new Mock<IChatRealtimeGateway>();
         var companyRepo = new CompanyProfileRepository(_persistence, _config);
         var messagesRepo = new ChatMessageRepository(_persistence, _config, companyRepo);
         var notifRoutingMock = new Mock<INotificationRoutingService>();
-        var livekitService = new LiveKitService(new Mock<ILogger<LiveKitService>>().Object, _config);
+        var livekitService = new Mock<LiveKitService>(new Mock<ILogger<LiveKitService>>().Object, _config).Object;
         var employees = new EmployeeRepository(_persistence, _config);
         var channels = new ChatChannelRepository(_persistence, _config);
         var readStates = new ChatReadStateRepository(_persistence, _config, companyRepo);
         var logger = new Mock<ILogger<VoiceChannelService>>().Object;
 
         var voiceChannelService = new VoiceChannelService(
-            chatState,
-            realtimeGatewayMock.Object,
+            voiceState,
+            new ChatStateService(),
             messagesRepo,
             notifRoutingMock.Object,
             _systemConfigs,
@@ -354,23 +349,22 @@ public class VoiceBotServiceTests : IDisposable
     public async Task VoiceChannelService_LeaveVoiceAsync_CalledTwice_PlaysLeaveChimeOnlyOnce()
     {
         var botMock = new Mock<IVoiceBotService>();
-        var chatState = new ChatStateService();
-        chatState.NotifyVoiceMemberJoined("ch100", "user1");
-        chatState.NotifyVoiceMemberJoined("ch100", "user2");
+        var voiceState = new VoiceStateService();
+        voiceState.NotifyVoiceMemberJoined("ch100", "user1");
+        voiceState.NotifyVoiceMemberJoined("ch100", "user2");
 
-        var realtimeGatewayMock = new Mock<IChatRealtimeGateway>();
         var companyRepo = new CompanyProfileRepository(_persistence, _config);
         var messagesRepo = new ChatMessageRepository(_persistence, _config, companyRepo);
         var notifRoutingMock = new Mock<INotificationRoutingService>();
-        var livekitService = new LiveKitService(new Mock<ILogger<LiveKitService>>().Object, _config);
+        var livekitService = new Mock<LiveKitService>(new Mock<ILogger<LiveKitService>>().Object, _config).Object;
         var employees = new EmployeeRepository(_persistence, _config);
         var channels = new ChatChannelRepository(_persistence, _config);
         var readStates = new ChatReadStateRepository(_persistence, _config, companyRepo);
         var logger = new Mock<ILogger<VoiceChannelService>>().Object;
 
         var voiceChannelService = new VoiceChannelService(
-            chatState,
-            realtimeGatewayMock.Object,
+            voiceState,
+            new ChatStateService(),
             messagesRepo,
             notifRoutingMock.Object,
             _systemConfigs,
@@ -388,5 +382,129 @@ public class VoiceBotServiceTests : IDisposable
 
         // Leave chime must only play ONCE
         botMock.Verify(b => b.PlaySoundAsync("ch100", "channel_leave", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task VoiceChannelService_JoinVoiceAsync_DoesNotBlockCallerWaitingOnBotWebRtcConnection()
+    {
+        var slowBotMock = new Mock<IVoiceBotService>();
+        var releaseBot = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        slowBotMock
+            .Setup(b => b.EnsureBotJoinedAsync("ch-fast-join", It.IsAny<CancellationToken>()))
+            .Returns(releaseBot.Task);
+
+        var voiceState = new VoiceStateService();
+        voiceState.NotifyVoiceMemberJoined("ch-fast-join", "user1");
+
+        var companyRepo = new CompanyProfileRepository(_persistence, _config);
+        var messagesRepo = new ChatMessageRepository(_persistence, _config, companyRepo);
+        var notifRoutingMock = new Mock<INotificationRoutingService>();
+        var livekitService = new Mock<LiveKitService>(new Mock<ILogger<LiveKitService>>().Object, _config).Object;
+        var employees = new EmployeeRepository(_persistence, _config);
+        var channels = new ChatChannelRepository(_persistence, _config);
+        var readStates = new ChatReadStateRepository(_persistence, _config, companyRepo);
+        var logger = new Mock<ILogger<VoiceChannelService>>().Object;
+
+        var voiceChannelService = new VoiceChannelService(
+            voiceState,
+            new ChatStateService(),
+            messagesRepo,
+            notifRoutingMock.Object,
+            _systemConfigs,
+            livekitService,
+            logger,
+            employees,
+            channels,
+            readStates,
+            chatAuth: null,
+            voiceBotService: slowBotMock.Object);
+
+        await voiceChannelService.JoinVoiceAsync("ch-fast-join", "user2");
+        Assert.Contains("user2", voiceState.GetVoiceParticipants("ch-fast-join"));
+
+        releaseBot.SetResult();
+    }
+
+    [Fact]
+    public async Task VoiceChannelService_WebhookReconcileBeforeAuthoritativeJoin_PlaysSingleJoinChimeWhenAuthoritativeJoinArrives()
+    {
+        var botMock = new Mock<IVoiceBotService>();
+        var voiceState = new VoiceStateService();
+        voiceState.NotifyVoiceMemberJoined("ch-chime-order", "user1", "dev1", "PC1", "sess-1");
+
+        var companyRepo = new CompanyProfileRepository(_persistence, _config);
+        var messagesRepo = new ChatMessageRepository(_persistence, _config, companyRepo);
+        var notifRoutingMock = new Mock<INotificationRoutingService>();
+        var livekitService = new Mock<LiveKitService>(new Mock<ILogger<LiveKitService>>().Object, _config).Object;
+        var employees = new EmployeeRepository(_persistence, _config);
+        var channels = new ChatChannelRepository(_persistence, _config);
+        var readStates = new ChatReadStateRepository(_persistence, _config, companyRepo);
+        var logger = new Mock<ILogger<VoiceChannelService>>().Object;
+
+        var voiceChannelService = new VoiceChannelService(
+            voiceState,
+            new ChatStateService(),
+            messagesRepo,
+            notifRoutingMock.Object,
+            _systemConfigs,
+            livekitService,
+            logger,
+            employees,
+            channels,
+            readStates,
+            chatAuth: null,
+            voiceBotService: botMock.Object);
+
+        // 1. LiveKit participant_joined webhook arrives early while user2 is still loading audio/ICE:
+        // ReconcileMemberStateAsync registers user2 in C# state but MUST NOT play the join chime yet.
+        var meta2 = new VoiceParticipantMetadata { VoiceSessionId = "sess-2", DeviceId = "dev2", DeviceName = "PC2" };
+        await voiceChannelService.ReconcileMemberStateAsync("ch-chime-order", "user2", meta2, isMicMuted: false);
+        Assert.Contains("user2", voiceState.GetVoiceParticipants("ch-chime-order"));
+        botMock.Verify(b => b.PlaySoundAsync("ch-chime-order", "channel_join", It.IsAny<CancellationToken>()), Times.Never);
+
+        // 2. Client finishes ConnectToVoiceAsync and calls authoritative JoinVoiceAsync:
+        // Now the join chime plays exactly once!
+        await voiceChannelService.JoinVoiceAsync("ch-chime-order", "user2", "dev2", "PC2", "sess-2");
+        botMock.Verify(b => b.PlaySoundAsync("ch-chime-order", "channel_join", It.IsAny<CancellationToken>()), Times.Once);
+
+        // 3. Subsequent duplicate JoinVoiceAsync or ReconcileMemberStateAsync for the same session must not play another chime
+        await voiceChannelService.JoinVoiceAsync("ch-chime-order", "user2", "dev2", "PC2", "sess-2");
+        await voiceChannelService.ReconcileMemberStateAsync("ch-chime-order", "user2", meta2, isMicMuted: false);
+        botMock.Verify(b => b.PlaySoundAsync("ch-chime-order", "channel_join", It.IsAny<CancellationToken>()), Times.Once);
+
+        // 4. User2 disconnects and reconnects with a new session ID -> leave chime plays once, then new join chime plays once!
+        await voiceChannelService.TryLeaveVoiceAsync("ch-chime-order", "user2", "sess-2", evictFromLiveKit: false);
+        botMock.Verify(b => b.PlaySoundAsync("ch-chime-order", "channel_leave", It.IsAny<CancellationToken>()), Times.Once);
+
+        using var canceledRequestCts = new CancellationTokenSource();
+        canceledRequestCts.Cancel();
+        // Even if an HTTP request token is cancelled immediately after, PlaySoundAsync receives CancellationToken.None
+        var meta2Reconnect = new VoiceParticipantMetadata { VoiceSessionId = "sess-2-reconnected", DeviceId = "dev2", DeviceName = "PC2" };
+        await voiceChannelService.ReconcileMemberStateAsync("ch-chime-order", "user2", meta2Reconnect, isMicMuted: false);
+        await voiceChannelService.JoinVoiceAsync("ch-chime-order", "user2", "dev2", "PC2", "sess-2-reconnected", CancellationToken.None);
+        botMock.Verify(b => b.PlaySoundAsync("ch-chime-order", "channel_join", CancellationToken.None), Times.Exactly(2));
+    }
+
+    [Theory]
+    [InlineData("mixkit_marimba_ringtone_1359.wav", "mixkit_marimba_ringtone_1359")]
+    [InlineData("mixkit_marimba_ringtone_1359", "mixkit_marimba_ringtone_1359")]
+    [InlineData("/sounds/mixkit_vintage_telephone_ringtone_1356.wav", "mixkit_vintage_telephone_ringtone_1356")]
+    [InlineData("", "")]
+    public void NormalizeSoundId_StripsPathAndExtension(string input, string expected)
+    {
+        Assert.Equal(expected, VoiceBotService.NormalizeSoundId(input));
+    }
+
+    [Fact]
+    public async Task StartRingingAsync_And_StopRingingAsync_HandleMissingSoundAndCancellationGracefully()
+    {
+        var loggerMock = new Mock<ILogger<VoiceBotService>>();
+        await using var botService = new VoiceBotService(_systemConfigs, loggerMock.Object, null, _config);
+
+        var ex1 = await Record.ExceptionAsync(() => botService.StartRingingAsync("test-channel", "non_existent_ringtone"));
+        Assert.Null(ex1);
+
+        var ex2 = await Record.ExceptionAsync(() => botService.StopRingingAsync("test-channel"));
+        Assert.Null(ex2);
     }
 }

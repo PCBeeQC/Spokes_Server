@@ -28,12 +28,6 @@ public class SpokesOptions
     public string PushRelayKey { get; set; } = string.Empty;
 
     /// <summary>
-    /// Legacy Klipy GIF search API key. Prefer using the Spokes GIF relay or user-configured provider keys.
-    /// </summary>
-    [Obsolete("Prefer using the official Spokes GIF relay or user-configured provider keys.")]
-    public string DefaultKlipyApiKey { get; set; } = string.Empty;
-
-    /// <summary>
     /// Public key used for license and telemetry payload validation.
     /// </summary>
     public string LicensePublicKeyPem { get; set; } = SpokesConstants.LicensePublicKeyPem;

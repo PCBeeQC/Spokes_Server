@@ -23,7 +23,7 @@
                                     MaxHeight="200">
                                     <ActivatorContent>
                                         <MudIconButton Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
-                                            Style="@($"color: {GetColor(opt.Color)}")" />
+                                            Style="@($"color: {BoardUiHelper.GetOptionCssColor(opt.Color)}")" />
                                     </ActivatorContent>
                                     <ChildContent>
                                         @foreach (var c in _colors)
@@ -31,7 +31,7 @@
                                             <MudMenuItem OnClick="@(() => opt.Color = c)">
                                                 <div class="d-flex align-center gap-2">
                                                     <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
-                                                        Style="@($"color: {GetColor(c)}")" />
+                                                        Style="@($"color: {BoardUiHelper.GetOptionCssColor(c)}")" />
                                                     <MudText Typo="Typo.body2">@c</MudText>
                                                 </div>
                                             </MudMenuItem>
@@ -50,7 +50,7 @@
                                 MaxHeight="200">
                                 <ActivatorContent>
                                     <MudIconButton Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
-                                        Style="@($"color: {GetColor(_newOptionColor)}")" />
+                                        Style="@($"color: {BoardUiHelper.GetOptionCssColor(_newOptionColor)}")" />
                                 </ActivatorContent>
                                 <ChildContent>
                                     @foreach (var c in _colors)
@@ -58,7 +58,7 @@
                                         <MudMenuItem OnClick="@(() => _newOptionColor = c)">
                                             <div class="d-flex align-center gap-2">
                                                 <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small"
-                                                    Style="@($"color: {GetColor(c)}")" />
+                                                    Style="@($"color: {BoardUiHelper.GetOptionCssColor(c)}")" />
                                                 <MudText Typo="Typo.body2">@c</MudText>
                                             </div>
                                         </MudMenuItem>
@@ -140,22 +140,5 @@
     string GetRandomColor()
     {
         return _colors[new Random().Next(_colors.Length)];
-    }
-
-    string GetColor(string colorName)
-    {
-        return colorName switch
-        {
-            "gray" => "var(--mud-palette-grey)",
-            "brown" => "#795548",
-            "orange" => "var(--mud-palette-warning)",
-            "yellow" => "#FBC02D",
-            "green" => "var(--mud-palette-success)",
-            "blue" => "var(--mud-palette-info)",
-            "purple" => "#9C27B0",
-            "pink" => "#E91E63",
-            "red" => "var(--mud-palette-error)",
-            _ => "var(--mud-palette-text-primary)"
-        };
     }
 }

@@ -291,7 +291,7 @@
         }
 
         // 2. Invoices (Receivable)
-        var invoices = Db.Invoices.GetAll().Where(i => i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void).ToList();
+        var invoices = Db.Invoices.GetAll().Where(i => !InvoiceStatus.IsSettled(i.Status) && i.Status != InvoiceStatus.Void && i.BalanceDue > 0).ToList();
         foreach (var inv in invoices)
         {
             var d = DateOnly.FromDateTime(inv.DueDate);
@@ -309,7 +309,7 @@
         }
 
         // 3. Bills (Payable)
-        var bills = Db.Bills.GetAll().Where(b => b.Status != BillStatus.Paid && b.Status != BillStatus.Void).ToList();
+        var bills = Db.Bills.GetAll().Where(b => !BillStatus.IsSettled(b.Status) && b.Status != BillStatus.Void && b.BalanceDue > 0).ToList();
         foreach (var bill in bills)
         {
             var d = DateOnly.FromDateTime(bill.DueDate);

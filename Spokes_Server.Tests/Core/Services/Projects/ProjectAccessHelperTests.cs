@@ -25,6 +25,7 @@ public class ProjectAccessHelperTests : TestDataTestBase
     {
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         _config = mockConfig.Object;
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
@@ -355,11 +356,11 @@ public class ProjectAccessHelperTests : TestDataTestBase
     }
 
     [Fact]
-    public void CanAccess_SystemRendererWithProjectsView_ReturnsTrueForRestrictedProjects()
+    public void CanAccess_SystemRenderer_DoesNotBypassRestrictedProjects()
     {
         var renderer = new Employee
         {
-            Id = Spokes_Server.Core.Middleware.RenderTokenMiddleware.SystemRendererId,
+            Id = "system-renderer",
             IsActive = true,
             IsAdmin = false,
             IsSystem = true,
@@ -368,9 +369,24 @@ public class ProjectAccessHelperTests : TestDataTestBase
         var restrictedProject = CreateRestrictedProject("proj-restricted-pdf");
         _projectRepo.Save(restrictedProject);
 
-        Assert.True(ProjectAccessHelper.CanAccess(renderer, restrictedProject, _teamRepo));
-        Assert.True(ProjectAccessHelper.CanAccess(renderer, restrictedProject, Array.Empty<string>()));
-        Assert.True(ProjectAccessHelper.HasAccess(_projectRepo, _teamRepo, renderer, "proj-restricted-pdf"));
+        Assert.False(ProjectAccessHelper.CanAccess(renderer, restrictedProject, _teamRepo));
+        Assert.False(ProjectAccessHelper.CanAccess(renderer, restrictedProject, Array.Empty<string>()));
+        Assert.False(ProjectAccessHelper.HasAccess(_projectRepo, _teamRepo, renderer, "proj-restricted-pdf"));
+    }
+
+    [Fact]
+    public void CanAccess_DelegatedEmployeeWithProjectsView_EnforcesRestrictedMembership()
+    {
+        var nonMember = CreateStandardUser("emp-pdf-nonmember", hasViewPermission: true);
+        var member = CreateStandardUser("emp-pdf-member", hasViewPermission: true);
+        var restrictedProject = CreateRestrictedProject("proj-restricted-delegated");
+        restrictedProject.AllowedUserIds.Add(member.Id);
+        _projectRepo.Save(restrictedProject);
+
+        Assert.False(ProjectAccessHelper.CanAccess(nonMember, restrictedProject, _teamRepo));
+        Assert.False(ProjectAccessHelper.HasAccess(_projectRepo, _teamRepo, nonMember, "proj-restricted-delegated"));
+        Assert.True(ProjectAccessHelper.CanAccess(member, restrictedProject, _teamRepo));
+        Assert.True(ProjectAccessHelper.HasAccess(_projectRepo, _teamRepo, member, "proj-restricted-delegated"));
     }
 
     [Fact]
@@ -378,7 +394,7 @@ public class ProjectAccessHelperTests : TestDataTestBase
     {
         var renderer = new Employee
         {
-            Id = Spokes_Server.Core.Middleware.RenderTokenMiddleware.SystemRendererId,
+            Id = "system-renderer",
             IsActive = true,
             IsAdmin = false,
             IsSystem = true,
@@ -388,5 +404,65 @@ public class ProjectAccessHelperTests : TestDataTestBase
 
         Assert.False(ProjectAccessHelper.CanAccess(renderer, restrictedProject, _teamRepo));
         Assert.False(ProjectAccessHelper.CanAccess(renderer, restrictedProject, Array.Empty<string>()));
+    }
+
+    [Fact]
+    public void CanAccess_RestrictedProject_AllowAccountingFinancialRead_TrueAllowsFinance_FalseDeniesFinanceWithoutMembership()
+    {
+        var financeUser = new Employee
+        {
+            Id = "emp-finance-acl",
+            IsActive = true,
+            IsSuspended = false,
+            IsBanned = false,
+            IsAdmin = false,
+            Permissions = [AppPermissions.Finance.AccessAccounting]
+        };
+        var restrictedProject = CreateRestrictedProject("proj-rest-acct");
+        _projectRepo.Save(restrictedProject);
+
+        Assert.True(ProjectAccessHelper.CanAccess(financeUser, restrictedProject, _teamRepo, allowAccountingFinancialRead: true));
+        Assert.True(ProjectAccessHelper.HasAccess(_projectRepo, _teamRepo, financeUser, "proj-rest-acct", allowAccountingFinancialRead: true));
+
+        Assert.False(ProjectAccessHelper.CanAccess(financeUser, restrictedProject, _teamRepo, allowAccountingFinancialRead: false));
+        Assert.False(ProjectAccessHelper.HasAccess(_projectRepo, _teamRepo, financeUser, "proj-rest-acct", allowAccountingFinancialRead: false));
+        Assert.False(ProjectAccessHelper.CanContribute(financeUser, restrictedProject, _teamRepo));
+    }
+
+    [Fact]
+    public void CanAccessProjectForContribution_WithoutProjectsView_EnforcesMembershipTeamLeadershipAndSuspension()
+    {
+        var worker = new Employee
+        {
+            Id = "emp-worker-contrib",
+            IsActive = true,
+            IsSuspended = false,
+            IsBanned = false,
+            IsAdmin = false,
+            Permissions = [AppPermissions.Timesheets.AccessTimesheet]
+        };
+        var publicProj = new Project { Id = "proj-pub-contrib", AccessPolicy = ProjectAccessPolicy.Public };
+        var assignedRest = CreateRestrictedProject("proj-rest-assigned");
+        assignedRest.AllowedUserIds = [worker.Id];
+        var unassignedRest = CreateRestrictedProject("proj-rest-unassigned");
+        unassignedRest.AllowedUserIds = ["someone-else"];
+        var teamLedRest = CreateRestrictedProject("proj-rest-teamled");
+        teamLedRest.AllowedTeamIds = ["team-led"];
+
+        _teamRepo.Save(new Team { Id = "team-led", Name = "Led Team", LeaderId = worker.Id });
+
+        Assert.True(ProjectAccessHelper.CanAccessProjectForContribution(worker, publicProj, _teamRepo));
+        Assert.True(ProjectAccessHelper.CanLogTimeToProject(worker, publicProj, _teamRepo));
+        Assert.True(ProjectAccessHelper.CanAccessProjectForContribution(worker, assignedRest, _teamRepo));
+        Assert.True(ProjectAccessHelper.CanLogTimeToProject(worker, assignedRest, _teamRepo));
+        Assert.True(ProjectAccessHelper.CanAccessProjectForContribution(worker, teamLedRest, _teamRepo));
+        Assert.True(ProjectAccessHelper.CanLogTimeToProject(worker, teamLedRest, _teamRepo));
+        Assert.False(ProjectAccessHelper.CanAccessProjectForContribution(worker, unassignedRest, _teamRepo));
+        Assert.False(ProjectAccessHelper.CanLogTimeToProject(worker, unassignedRest, _teamRepo));
+
+        worker.IsSuspended = true;
+        Assert.False(ProjectAccessHelper.CanLogTimeToProject(worker, publicProj, _teamRepo));
+        Assert.False(ProjectAccessHelper.CanAccessProjectForContribution(worker, publicProj, _teamRepo, allowSuspended: false));
+        Assert.True(ProjectAccessHelper.CanAccessProjectForContribution(worker, publicProj, _teamRepo, allowSuspended: true));
     }
 }

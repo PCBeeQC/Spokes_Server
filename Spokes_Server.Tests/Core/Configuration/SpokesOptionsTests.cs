@@ -11,26 +11,13 @@ namespace Spokes_Server.Tests.Core.Configuration;
 public class SpokesOptionsTests
 {
     [Fact]
-    public void SpokesOptions_Defaults_MatchExpectedConstants()
-    {
-        var options = new SpokesOptions();
-
-        Assert.Equal(SpokesConstants.PushRelayUrl, options.PushRelayUrl);
-        Assert.Equal(SpokesConstants.TelemetryRelayUrl, options.TelemetryRelayUrl);
-        Assert.Equal(string.Empty, options.PushRelayKey);
-        Assert.Equal(string.Empty, options.DefaultKlipyApiKey);
-        Assert.Equal(SpokesConstants.LicensePublicKeyPem, options.LicensePublicKeyPem);
-    }
-
-    [Fact]
     public void SpokesOptions_BindsFromConfigurationSection()
     {
         var inMemory = new Dictionary<string, string?>
         {
             ["Spokes:PushRelayUrl"] = "https://custom.relay/api",
             ["Spokes:TelemetryRelayUrl"] = "https://custom.relay/api/telemetry",
-            ["Spokes:PushRelayKey"] = "custom-relay-key",
-            ["Spokes:DefaultKlipyApiKey"] = "custom-klipy-key"
+            ["Spokes:PushRelayKey"] = "custom-relay-key"
         };
 
         var configuration = new ConfigurationBuilder()
@@ -47,7 +34,6 @@ public class SpokesOptionsTests
         Assert.Equal("https://custom.relay/api", options.PushRelayUrl);
         Assert.Equal("https://custom.relay/api/telemetry", options.TelemetryRelayUrl);
         Assert.Equal("custom-relay-key", options.PushRelayKey);
-        Assert.Equal("custom-klipy-key", options.DefaultKlipyApiKey);
     }
 
     [Fact]
@@ -55,8 +41,7 @@ public class SpokesOptionsTests
     {
         var inMemory = new Dictionary<string, string?>
         {
-            ["SPOKES_RELAY_KEY"] = "env-relay-key",
-            ["SPOKES_KLIPY_KEY"] = "env-klipy-key"
+            ["SPOKES_RELAY_KEY"] = "env-relay-key"
         };
 
         var configuration = new ConfigurationBuilder()
@@ -70,6 +55,5 @@ public class SpokesOptionsTests
         var options = sp.GetRequiredService<IOptions<SpokesOptions>>().Value;
 
         Assert.Equal("env-relay-key", options.PushRelayKey);
-        Assert.Equal("env-klipy-key", options.DefaultKlipyApiKey);
     }
 }

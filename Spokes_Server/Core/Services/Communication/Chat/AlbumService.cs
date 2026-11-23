@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Helpers;
@@ -20,10 +21,10 @@ public class AlbumService
     private readonly ICryptoService _crypto;
     private readonly ServerEscrowService _escrowService;
     private readonly EmployeeRepository _employees;
-    private readonly IChatChannelAccessService? _chatAccess;
-    private readonly IChatAuthorizationService? _chatAuth;
+    private readonly IChatAuthorizationService _chatAuth;
     private readonly FileTokenService? _fileTokenService;
     private readonly IFileService? _fileService;
+    private readonly ChatMessageRepository? _chatMessages;
     private readonly ILogger<AlbumService>? _logger;
     private readonly ConcurrentDictionary<string, object> _albumLocks = new();
 
@@ -37,29 +38,50 @@ public class AlbumService
         ICryptoService crypto,
         ServerEscrowService escrowService,
         EmployeeRepository employees,
+        IChatAuthorizationService chatAuth,
         ILogger<AlbumService>? logger = null,
-        IChatChannelAccessService? chatAccess = null,
-        IChatAuthorizationService? chatAuth = null,
         FileTokenService? fileTokenService = null,
-        IFileService? fileService = null)
+        IFileService? fileService = null,
+        ChatMessageRepository? chatMessages = null)
     {
         ArgumentNullException.ThrowIfNull(albums);
         ArgumentNullException.ThrowIfNull(channels);
         ArgumentNullException.ThrowIfNull(crypto);
         ArgumentNullException.ThrowIfNull(escrowService);
         ArgumentNullException.ThrowIfNull(employees);
+        ArgumentNullException.ThrowIfNull(chatAuth);
 
         _albums = albums;
         _channels = channels;
         _crypto = crypto;
         _escrowService = escrowService;
         _employees = employees;
-        _logger = logger;
-        _chatAccess = chatAccess;
         _chatAuth = chatAuth;
+        _logger = logger;
         _fileTokenService = fileTokenService;
         _fileService = fileService;
+        _chatMessages = chatMessages;
     }
+
+    private static bool IsWritableAlbumUser(Employee? employee) =>
+        employee != null
+        && !string.IsNullOrWhiteSpace(employee.Id)
+        && employee.IsActive
+        && !employee.IsSuspended
+        && !employee.IsBanned
+        && employee.HasPermission(AppPermissions.Albums.View);
+
+    private static bool IsAlbumOwner(Album album, string userId) =>
+        string.Equals(album.OwnerId, userId, StringComparison.Ordinal);
+
+    private static bool IsAlbumContributor(Album album, string userId) =>
+        album.ContributorUserIds != null && album.ContributorUserIds.Contains(userId);
+
+    private static bool CanDeleteMediaCore(Album album, AlbumMedia media, Employee caller) =>
+        IsAlbumOwner(album, caller.Id)
+        || (IsAlbumContributor(album, caller.Id)
+            && !string.IsNullOrEmpty(media.AddedByUserId)
+            && string.Equals(media.AddedByUserId, caller.Id, StringComparison.Ordinal));
 
     private bool IsCallerWriteBlocked(string? userId)
     {
@@ -68,9 +90,19 @@ public class AlbumService
             return true;
         }
 
-        var employee = _employees.GetById(userId);
-        return employee != null && (!employee.IsActive || employee.IsSuspended || employee.IsBanned);
+        return !IsWritableAlbumUser(_employees.GetById(userId));
     }
+
+    public virtual bool CanUserDeleteMedia(Album? album, AlbumMedia? media, Employee? user) =>
+        album != null
+        && media != null
+        && IsWritableAlbumUser(user)
+        && CanDeleteMediaCore(album, media, user!);
+
+    public virtual bool CanUserDeleteAnyMedia(Album? album, Employee? user) =>
+        album?.Media is { Count: > 0 }
+        && IsWritableAlbumUser(user)
+        && album.Media.Any(m => CanDeleteMediaCore(album, m, user!));
 
     private bool CanUserReadSharedChannel(ChatChannel channel, string userId, Employee? user)
     {
@@ -79,42 +111,8 @@ public class AlbumService
             return false;
         }
 
-        if (_chatAuth != null)
-        {
-            return user != null
-                ? _chatAuth.CanUserAccessChannel(channel, user)
-                : _chatAuth.CanUserAccessChannel(channel.Id, userId);
-        }
-
-        if (_chatAccess != null)
-        {
-            return _chatAccess.GetUsersForChannel(channel.Id).Contains(userId);
-        }
-
-        if (channel.IsPublicChannel)
-        {
-            return true;
-        }
-
-        if (channel.ParticipantIds != null && channel.ParticipantIds.Contains(userId))
-        {
-            return true;
-        }
-
-        if (user != null)
-        {
-            if (user.IsAdmin)
-            {
-                return true;
-            }
-
-            if (!string.IsNullOrEmpty(user.TeamId) && channel.AllowedTeamIds != null && channel.AllowedTeamIds.Contains(user.TeamId))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        var resolvedUser = user ?? _employees.GetById(userId);
+        return resolvedUser != null && _chatAuth.CanUserAccessChannel(channel, resolvedUser);
     }
 
     private bool CanUserPostToSharedChannel(ChatChannel channel, string userId, Employee? user)
@@ -125,27 +123,9 @@ public class AlbumService
         }
 
         var resolvedUser = user ?? _employees.GetById(userId);
-        if (_chatAuth != null)
-        {
-            return resolvedUser != null
-                && _chatAuth.CanUserAccessChannel(channel, resolvedUser)
-                && _chatAuth.CanUserPostToChannel(channel, resolvedUser);
-        }
-
-        if (!CanUserReadSharedChannel(channel, userId, user))
-        {
-            return false;
-        }
-
-        if (!channel.IsAnnouncementOnly)
-        {
-            return true;
-        }
-
-        return (user?.IsAdmin == true) ||
-               (channel.AllowedPostUserIds != null && channel.AllowedPostUserIds.Contains(userId)) ||
-               (user != null && !string.IsNullOrEmpty(user.TeamId) && channel.AllowedPostTeamIds != null && channel.AllowedPostTeamIds.Contains(user.TeamId)) ||
-               (channel.ChannelType == ChatChannelType.Group && channel.CreatedById == userId);
+        return resolvedUser != null
+            && _chatAuth.CanUserAccessChannel(channel, resolvedUser)
+            && _chatAuth.CanUserPostToChannel(channel, resolvedUser);
     }
 
     public virtual bool CanUserDecryptAlbum(Album? album, Employee? user)
@@ -186,8 +166,8 @@ public class AlbumService
                     continue;
                 }
 
-                if (channel.EncryptedChannelKeys.ContainsKey(user.Id) ||
-                    (!userHasVault && channel.EncryptedChannelKeys.ContainsKey("ServerMaster")))
+                if (channel.HasAnyEpochKey(user.Id) ||
+                    (!userHasVault && channel.HasAnyEpochKey("ServerMaster")))
                 {
                     return true;
                 }
@@ -219,41 +199,34 @@ public class AlbumService
             return false;
         }
 
+        var user = _employees.GetById(userId);
+        if (user == null ||
+            !user.IsActive ||
+            user.IsBanned ||
+            !user.HasEffectivePermission(AppPermissions.Albums.View, allowSuspended: true))
+        {
+            return false;
+        }
+
         if (string.Equals(album.OwnerId, userId, StringComparison.OrdinalIgnoreCase) ||
             (album.ContributorUserIds != null && album.ContributorUserIds.Contains(userId)))
         {
             return true;
         }
 
+        if (!user.HasEffectivePermission(AppPermissions.Chat.Use, allowSuspended: true))
+        {
+            return false;
+        }
+
         if (album.SharedWithChannelIds != null)
         {
             foreach (var channelId in album.SharedWithChannelIds)
             {
-                if (_chatAccess != null)
+                var channel = _channels.GetById(channelId);
+                if (channel != null && CanUserReadSharedChannel(channel, userId, user))
                 {
-                    var channelUsers = _chatAccess.GetUsersForChannel(channelId);
-                    if (channelUsers.Contains(userId))
-                    {
-                        return true;
-                    }
-                }
-                else
-                {
-                    var channel = _channels.GetById(channelId);
-                    if (channel == null) continue;
-                    if (channel.IsPublicChannel)
-                    {
-                        return true;
-                    }
-                    if (channel.ParticipantIds != null && channel.ParticipantIds.Contains(userId))
-                    {
-                        return true;
-                    }
-                    var user = _employees.GetById(userId);
-                    if (user != null && !string.IsNullOrEmpty(user.TeamId) && channel.AllowedTeamIds != null && channel.AllowedTeamIds.Contains(user.TeamId))
-                    {
-                        return true;
-                    }
+                    return true;
                 }
             }
         }
@@ -261,7 +234,7 @@ public class AlbumService
         return false;
     }
 
-    public SpokesResult<Album> CreateAlbum(Album album, string ownerId, string? ownerPrivateKey)
+    public SpokesResult<Album> CreateAlbum(Album album, string ownerId)
     {
         if (album == null)
         {
@@ -278,6 +251,7 @@ public class AlbumService
 
         album.OwnerId = ownerId;
         album.IsEncrypted = true;
+        album.Media = [];
 
         var plainAlbumKey = _crypto.GenerateAesKeyBase64();
         SyncAlbumEncryptionKeys(album, plainAlbumKey);
@@ -338,10 +312,14 @@ public class AlbumService
 
         var owner = !string.IsNullOrEmpty(album.OwnerId) ? _employees.GetById(album.OwnerId) : null;
         bool ownerHasPublicKey = owner != null && !string.IsNullOrEmpty(owner.PublicKey);
+        bool ownerCanReceiveKeys = ownerHasPublicKey &&
+            owner!.IsActiveUnsuspended &&
+            !owner.IsBanned &&
+            owner.HasPermission(AppPermissions.Albums.View);
 
         if (!string.IsNullOrEmpty(plainAlbumKey))
         {
-            if (ownerHasPublicKey && !album.EncryptedAlbumKeys.ContainsKey(album.OwnerId))
+            if (ownerCanReceiveKeys && !album.EncryptedAlbumKeys.ContainsKey(album.OwnerId))
             {
                 try
                 {
@@ -362,7 +340,11 @@ public class AlbumService
                 }
 
                 var contributor = _employees.GetById(contributorId);
-                if (contributor != null && !string.IsNullOrEmpty(contributor.PublicKey))
+                if (contributor != null &&
+                    contributor.IsActiveUnsuspended &&
+                    !contributor.IsBanned &&
+                    contributor.HasPermission(AppPermissions.Albums.View) &&
+                    !string.IsNullOrEmpty(contributor.PublicKey))
                 {
                     try
                     {
@@ -411,7 +393,7 @@ public class AlbumService
 
     public void ClaimEscrowedAlbumsForUser(string userId)
     {
-        if (string.IsNullOrEmpty(userId))
+        if (string.IsNullOrEmpty(userId) || IsCallerWriteBlocked(userId))
         {
             return;
         }
@@ -429,6 +411,44 @@ public class AlbumService
                 {
                     _albums.Save(currentAlbum);
                     OnAlbumUpdated?.Invoke(currentAlbum.Id);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Startup / maintenance pass that migrates any legacy private albums still holding a server Escrow key
+    /// once their owner has a vault public key. Keeps read-only key resolution (<see cref="GetPlainAlbumKey"/>)
+    /// completely side-effect-free while preserving non-breaking upgrades from older server releases.
+    /// </summary>
+    public void UpgradeLegacyEscrowedAlbums()
+    {
+        if (!_escrowService.IsEscrowAvailable)
+        {
+            return;
+        }
+
+        var legacyCandidates = _albums.GetAll()
+            .Where(a => a.IsEncrypted &&
+                        !string.IsNullOrEmpty(a.Id) &&
+                        a.EncryptedAlbumKeys.ContainsKey("Escrow") &&
+                        !HasUnencryptedSharedChannel(a))
+            .ToList();
+
+        foreach (var album in legacyCandidates)
+        {
+            var owner = !string.IsNullOrEmpty(album.OwnerId) ? _employees.GetById(album.OwnerId) : null;
+            if (owner == null || string.IsNullOrEmpty(owner.PublicKey))
+            {
+                continue;
+            }
+
+            lock (GetAlbumLock(album.Id))
+            {
+                var currentAlbum = _albums.GetById(album.Id) ?? album;
+                if (SyncAlbumEncryptionKeys(currentAlbum))
+                {
+                    _albums.Save(currentAlbum);
                 }
             }
         }
@@ -464,50 +484,19 @@ public class AlbumService
             return null;
         }
 
-        // Eagerly migrate any escrowed private album to owner-only encryption as soon as the owner has a public key
-        if (!string.IsNullOrEmpty(album.Id) && album.EncryptedAlbumKeys.ContainsKey("Escrow"))
-        {
-            lock (GetAlbumLock(album.Id))
-            {
-                var persisted = _albums.GetById(album.Id);
-                var target = persisted ?? album;
-                if (SyncAlbumEncryptionKeys(target))
-                {
-                    if (persisted != null)
-                    {
-                        _albums.Save(persisted);
-                    }
-                    if (!ReferenceEquals(target, album))
-                    {
-                        album.EncryptedAlbumKeys = new Dictionary<string, string>(target.EncryptedAlbumKeys);
-                    }
-                }
-            }
-        }
-
         if (!string.IsNullOrEmpty(currentPrivateKey) && album.EncryptedAlbumKeys.TryGetValue(currentUserId, out var cipherUserKey))
         {
             try
             {
-                var plainKey = _crypto.DecryptRsa(cipherUserKey, currentPrivateKey);
-                if (!string.IsNullOrEmpty(album.Id) && SyncAlbumEncryptionKeys(album, plainKey))
-                {
-                    lock (GetAlbumLock(album.Id))
-                    {
-                        var persisted = _albums.GetById(album.Id);
-                        if (persisted != null && SyncAlbumEncryptionKeys(persisted, plainKey))
-                        {
-                            _albums.Save(persisted);
-                        }
-                    }
-                }
-                return plainKey;
+                return _crypto.DecryptRsa(cipherUserKey, currentPrivateKey);
             }
             catch (Exception ex)
             {
                 _logger?.LogDebug(ex, "Failed to decrypt album key directly for user {UserId} on album {AlbumId}", currentUserId, album.Id);
             }
         }
+
+        var currentUser = !string.IsNullOrEmpty(currentUserId) ? _employees.GetById(currentUserId) : null;
 
         if (!string.IsNullOrEmpty(currentPrivateKey))
         {
@@ -516,16 +505,19 @@ public class AlbumService
                 if (album.EncryptedAlbumKeys.TryGetValue($"Channel_{channelId}", out var cipherAlbumKey))
                 {
                     var channel = _channels.GetById(channelId);
-                    if (channel != null && channel.EncryptedChannelKeys.TryGetValue(currentUserId, out var cipherChannelKey))
+                    if (channel != null && CanUserReadSharedChannel(channel, currentUserId, currentUser))
                     {
-                        try
+                        foreach (var cipherChannelKey in channel.GetAllEncryptedKeysForOwner(currentUserId))
                         {
-                            var channelKey = _crypto.DecryptRsa(cipherChannelKey, currentPrivateKey);
-                            return _crypto.DecryptAes(cipherAlbumKey, channelKey);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger?.LogDebug(ex, "Failed to decrypt album key via channel {ChannelId} for user {UserId} on album {AlbumId}", channelId, currentUserId, album.Id);
+                            try
+                            {
+                                var channelKey = _crypto.DecryptRsa(cipherChannelKey, currentPrivateKey);
+                                return _crypto.DecryptAes(cipherAlbumKey, channelKey);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger?.LogDebug(ex, "Failed to decrypt album key via channel {ChannelId} for user {UserId} on album {AlbumId}", channelId, currentUserId, album.Id);
+                            }
                         }
                     }
                 }
@@ -533,7 +525,6 @@ public class AlbumService
         }
         else
         {
-            var currentUser = !string.IsNullOrEmpty(currentUserId) ? _employees.GetById(currentUserId) : null;
             bool userHasVault = currentUser != null && (!string.IsNullOrEmpty(currentUser.PublicKey) || currentUser.HasVaultPassword);
             if (!userHasVault && _escrowService.IsEscrowAvailable && !string.IsNullOrEmpty(_escrowService.DecryptedEscrowPrivateKey))
             {
@@ -542,16 +533,19 @@ public class AlbumService
                     if (album.EncryptedAlbumKeys.TryGetValue($"Channel_{channelId}", out var cipherAlbumKey))
                     {
                         var channel = _channels.GetById(channelId);
-                        if (channel != null && channel.EncryptedChannelKeys.TryGetValue("ServerMaster", out var serverMasterKey))
+                        if (channel != null && CanUserReadSharedChannel(channel, currentUserId, currentUser))
                         {
-                            try
+                            foreach (var serverMasterKey in channel.GetAllEncryptedKeysForOwner("ServerMaster"))
                             {
-                                var channelKey = _crypto.DecryptRsa(serverMasterKey, _escrowService.DecryptedEscrowPrivateKey!);
-                                return _crypto.DecryptAes(cipherAlbumKey, channelKey);
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger?.LogDebug(ex, "Failed to decrypt album key via ServerMaster for channel {ChannelId} on album {AlbumId}", channelId, album.Id);
+                                try
+                                {
+                                    var channelKey = _crypto.DecryptRsa(serverMasterKey, _escrowService.DecryptedEscrowPrivateKey!);
+                                    return _crypto.DecryptAes(cipherAlbumKey, channelKey);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger?.LogDebug(ex, "Failed to decrypt album key via ServerMaster for channel {ChannelId} on album {AlbumId}", channelId, album.Id);
+                                }
                             }
                         }
                     }
@@ -643,7 +637,7 @@ public class AlbumService
                         return SpokesResult.Failure($"Cannot share album {albumId} with encrypted channel {channelId}: caller cannot decrypt album key.", "ENCRYPTION_ERROR");
                     }
 
-                    if (string.IsNullOrEmpty(currentPrivateKey) || !channel.EncryptedChannelKeys.TryGetValue(currentUserId, out var cipherChannelKey))
+                    if (string.IsNullOrEmpty(currentPrivateKey) || !channel.TryGetEncryptedKeyForEpoch(channel.CurrentKeyEpoch, currentUserId, out var cipherChannelKey))
                     {
                         _logger?.LogError("Failed to share album {AlbumId} with encrypted channel {ChannelId}: user {UserId} has no channel key or private key is missing", albumId, channelId, currentUserId);
                         return SpokesResult.Failure($"Cannot share album {albumId} with encrypted channel {channelId}: channel key unavailable for user {currentUserId}.", "ENCRYPTION_ERROR");
@@ -713,10 +707,36 @@ public class AlbumService
             return SpokesResult.Failure($"User '{currentUserId}' is not authorized to unshare album '{albumId}'.", "FORBIDDEN");
         }
 
+        return RemoveChannelShareCore(albumId, channelId, currentUserId, album);
+    }
+
+    public virtual SpokesResult RemoveChannelShareForScrubbedMentions(string albumId, string channelId)
+    {
+        if (string.IsNullOrEmpty(albumId) || string.IsNullOrEmpty(channelId))
+        {
+            return SpokesResult.Failure("Album ID and channel ID are required.", "INVALID_INPUT");
+        }
+
+        var album = _albums.GetById(albumId);
+        if (album == null)
+        {
+            return SpokesResult.Failure($"Album '{albumId}' not found.", "NOT_FOUND");
+        }
+
+        return RemoveChannelShareCore(albumId, channelId, excludeTokenInvalidationUserId: null, album);
+    }
+
+    private SpokesResult RemoveChannelShareCore(string albumId, string channelId, string? excludeTokenInvalidationUserId, Album? existingAlbum = null)
+    {
         bool removed = false;
         lock (GetAlbumLock(albumId))
         {
-            album = _albums.GetById(albumId) ?? album;
+            var album = _albums.GetById(albumId) ?? existingAlbum;
+            if (album == null)
+            {
+                return SpokesResult.Failure($"Album '{albumId}' not found.", "NOT_FOUND");
+            }
+
             var updatedSharedChannels = new HashSet<string>(album.SharedWithChannelIds);
             if (updatedSharedChannels.Remove(channelId))
             {
@@ -743,14 +763,15 @@ public class AlbumService
         if (removed && _fileTokenService != null)
         {
             _fileTokenService.InvalidateContextTokens("albums", albumId);
-            var affectedUsers = _chatAccess?.GetUsersForChannel(channelId);
+            var affectedUsers = _chatAuth.GetUsersForChannel(channelId);
             if (affectedUsers != null)
             {
                 foreach (var userId in affectedUsers)
                 {
-                    if (!string.Equals(userId, currentUserId, StringComparison.Ordinal))
+                    if (string.IsNullOrEmpty(excludeTokenInvalidationUserId) ||
+                        !string.Equals(userId, excludeTokenInvalidationUserId, StringComparison.Ordinal))
                     {
-                        _fileTokenService.InvalidateUserTokens(userId);
+                        _fileTokenService.InvalidateUserEncryptedTokens(userId);
                     }
                 }
             }
@@ -759,44 +780,43 @@ public class AlbumService
         return SpokesResult.Success();
     }
 
-    public void ReEvaluateAlbumEncryptionForChannel(string channelId, string newChannelAesKey, string? requestingUserId = null, string? requestingUserPrivateKey = null)
-    {
-        var albumsInChannel = _albums.GetAll().Where(a => a.SharedWithChannelIds.Contains(channelId)).ToList();
-
-        foreach (var album in albumsInChannel)
+    public void ReEvaluateAlbumEncryptionForChannel(string channelId, string newChannelAesKey, string? requestingUserId = null, string? requestingUserPrivateKey = null) =>
+        UpdateAlbumsForChannel(channelId, "encryption", currentAlbum =>
         {
-            lock (GetAlbumLock(album.Id))
+            string? plainAlbumKey = null;
+            if (_escrowService.IsEscrowAvailable && currentAlbum.EncryptedAlbumKeys.TryGetValue("Escrow", out var escrowCipherKey))
             {
-                var currentAlbum = _albums.GetById(album.Id) ?? album;
-                try
-                {
-                    string? plainAlbumKey = null;
-                    if (_escrowService.IsEscrowAvailable && currentAlbum.EncryptedAlbumKeys.TryGetValue("Escrow", out var escrowCipherKey))
-                    {
-                        plainAlbumKey = _crypto.DecryptRsa(escrowCipherKey, _escrowService.DecryptedEscrowPrivateKey!);
-                    }
-                    else if (!string.IsNullOrEmpty(requestingUserId) && !string.IsNullOrEmpty(requestingUserPrivateKey))
-                    {
-                        plainAlbumKey = GetPlainAlbumKey(currentAlbum, requestingUserId, requestingUserPrivateKey);
-                    }
-
-                    if (!string.IsNullOrEmpty(plainAlbumKey))
-                    {
-                        currentAlbum.EncryptedAlbumKeys[$"Channel_{channelId}"] = _crypto.EncryptAes(plainAlbumKey, newChannelAesKey);
-                        SyncAlbumEncryptionKeys(currentAlbum, plainAlbumKey);
-                        _albums.Save(currentAlbum);
-                        OnAlbumUpdated?.Invoke(currentAlbum.Id);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogError(ex, "Failed to re-evaluate album encryption for channel {ChannelId} on album {AlbumId}", channelId, album.Id);
-                }
+                plainAlbumKey = _crypto.DecryptRsa(escrowCipherKey, _escrowService.DecryptedEscrowPrivateKey!);
             }
-        }
-    }
+            else if (!string.IsNullOrEmpty(requestingUserId) && !string.IsNullOrEmpty(requestingUserPrivateKey))
+            {
+                plainAlbumKey = GetPlainAlbumKey(currentAlbum, requestingUserId, requestingUserPrivateKey);
+            }
 
-    public void ReEvaluateAlbumDecryptionForChannel(string channelId, string oldChannelAesKey)
+            if (string.IsNullOrEmpty(plainAlbumKey))
+            {
+                return false;
+            }
+
+            currentAlbum.EncryptedAlbumKeys[$"Channel_{channelId}"] = _crypto.EncryptAes(plainAlbumKey, newChannelAesKey);
+            SyncAlbumEncryptionKeys(currentAlbum, plainAlbumKey);
+            return true;
+        });
+
+    public void ReEvaluateAlbumDecryptionForChannel(string channelId, string oldChannelAesKey) =>
+        UpdateAlbumsForChannel(channelId, "decryption", currentAlbum =>
+        {
+            string? plainAlbumKey = null;
+            if (currentAlbum.EncryptedAlbumKeys.TryGetValue($"Channel_{channelId}", out var cipherAlbumKey))
+            {
+                plainAlbumKey = _crypto.DecryptAes(cipherAlbumKey, oldChannelAesKey);
+                currentAlbum.EncryptedAlbumKeys.Remove($"Channel_{channelId}");
+            }
+
+            return SyncAlbumEncryptionKeys(currentAlbum, plainAlbumKey) || plainAlbumKey != null;
+        });
+
+    private void UpdateAlbumsForChannel(string channelId, string operationName, Func<Album, bool> updateAlbum)
     {
         var albumsInChannel = _albums.GetAll().Where(a => a.SharedWithChannelIds.Contains(channelId)).ToList();
 
@@ -807,14 +827,7 @@ public class AlbumService
                 var currentAlbum = _albums.GetById(album.Id) ?? album;
                 try
                 {
-                    string? plainAlbumKey = null;
-                    if (currentAlbum.EncryptedAlbumKeys.TryGetValue($"Channel_{channelId}", out var cipherAlbumKey))
-                    {
-                        plainAlbumKey = _crypto.DecryptAes(cipherAlbumKey, oldChannelAesKey);
-                        currentAlbum.EncryptedAlbumKeys.Remove($"Channel_{channelId}");
-                    }
-
-                    if (SyncAlbumEncryptionKeys(currentAlbum, plainAlbumKey) || plainAlbumKey != null)
+                    if (updateAlbum(currentAlbum))
                     {
                         _albums.Save(currentAlbum);
                         OnAlbumUpdated?.Invoke(currentAlbum.Id);
@@ -822,7 +835,7 @@ public class AlbumService
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogError(ex, "Failed to re-evaluate album decryption for channel {ChannelId} on album {AlbumId}", channelId, album.Id);
+                    _logger?.LogError(ex, "Failed to re-evaluate album {Operation} for channel {ChannelId} on album {AlbumId}", operationName, channelId, album.Id);
                 }
             }
         }
@@ -911,7 +924,7 @@ public class AlbumService
             _fileTokenService.InvalidateContextTokens("albums", albumId);
             foreach (var removedId in removedContributors)
             {
-                _fileTokenService.InvalidateUserTokens(removedId);
+                _fileTokenService.InvalidateUserEncryptedTokens(removedId);
             }
         }
 
@@ -940,8 +953,64 @@ public class AlbumService
         lock (GetAlbumLock(albumId))
         {
             album = _albums.GetById(albumId) ?? album;
+            if (album.OwnerId != currentUserId && !album.ContributorUserIds.Contains(currentUserId))
+            {
+                return SpokesResult.Failure($"User '{currentUserId}' is not authorized to add media to album '{albumId}'.", "FORBIDDEN");
+            }
+
+            var incoming = (mediaItems ?? Enumerable.Empty<AlbumMedia>()).Where(m => m != null).ToList();
+            var existingPaths = new HashSet<string>(
+                album.Media.Select(m => (m.FilePath ?? string.Empty).Split('?', '#')[0].Trim()),
+                StringComparer.OrdinalIgnoreCase);
+
+            var expectedPrefix = $"/spokesapi/files/albums/{album.Id}/";
+            foreach (var item in incoming)
+            {
+                if (string.IsNullOrWhiteSpace(item.FilePath))
+                {
+                    return SpokesResult.Failure("Invalid album media path.", "INVALID_MEDIA");
+                }
+
+                string safeName;
+                if (_fileService != null)
+                {
+                    if (!_fileService.TryResolveScopedFileName(item.FilePath, "albums", album.Id, out safeName))
+                    {
+                        return SpokesResult.Failure("Media file path must reference a verified file in this album.", "INVALID_MEDIA");
+                    }
+                }
+                else
+                {
+                    var clean = item.FilePath.Split('?', '#')[0].Trim();
+                    if (!clean.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return SpokesResult.Failure("Media file path must belong to this album.", "INVALID_MEDIA");
+                    }
+
+                    safeName = clean[expectedPrefix.Length..];
+                    if (string.IsNullOrWhiteSpace(safeName) ||
+                        safeName.Contains('/', StringComparison.Ordinal) ||
+                        safeName.Contains('\\', StringComparison.Ordinal) ||
+                        safeName.Contains("..", StringComparison.Ordinal) ||
+                        safeName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+                        !string.Equals(safeName, Path.GetFileName(safeName), StringComparison.Ordinal))
+                    {
+                        return SpokesResult.Failure("Media file path is not a valid single segment.", "INVALID_MEDIA");
+                    }
+                }
+
+                var canonicalPath = $"/spokesapi/files/albums/{album.Id}/{safeName}";
+                if (!existingPaths.Add(canonicalPath))
+                {
+                    return SpokesResult.Failure("Duplicate media file path in album.", "INVALID_MEDIA");
+                }
+
+                item.FilePath = canonicalPath;
+                item.AddedByUserId = currentUserId;
+            }
+
             var updatedMedia = album.Media.ToList();
-            updatedMedia.AddRange(mediaItems);
+            updatedMedia.AddRange(incoming);
             album.Media = updatedMedia;
             _albums.Save(album);
             OnAlbumUpdated?.Invoke(albumId);
@@ -950,101 +1019,174 @@ public class AlbumService
         return SpokesResult.Success();
     }
 
-    public SpokesResult RemoveMedia(string albumId, string currentUserId, AlbumMedia mediaItem)
+    private async Task DeleteAlbumMediaFilesAsync(string albumId, IEnumerable<AlbumMedia>? mediaItems, string operation)
     {
-        if (IsCallerWriteBlocked(currentUserId))
+        if (_fileService == null || mediaItems == null || string.IsNullOrWhiteSpace(albumId))
         {
-            return SpokesResult.Failure("User account is suspended or inactive.", "FORBIDDEN");
+            return;
         }
 
-        var album = _albums.GetById(albumId);
-        if (album == null)
+        var expectedPrefix = $"/spokesapi/files/albums/{albumId}/";
+        foreach (var media in mediaItems)
         {
-            _logger?.LogWarning("RemoveMedia failed: album {AlbumId} not found", albumId);
-            return SpokesResult.Failure($"Album '{albumId}' not found.", "NOT_FOUND");
-        }
-
-        bool isOwner = album.OwnerId == currentUserId;
-        bool isContributor = album.ContributorUserIds.Contains(currentUserId);
-
-        lock (GetAlbumLock(albumId))
-        {
-            album = _albums.GetById(albumId) ?? album;
-            var updatedMedia = album.Media.ToList();
-            var itemToRemove = updatedMedia.FirstOrDefault(m => m.Id == mediaItem.Id);
-            if (itemToRemove != null)
+            if (string.IsNullOrWhiteSpace(media?.FilePath))
             {
-                if (!isOwner && !(isContributor && itemToRemove.AddedByUserId == currentUserId))
-                {
-                    _logger?.LogWarning("RemoveMedia failed: user {UserId} not authorized to remove media {MediaId}", currentUserId, mediaItem.Id);
-                    return SpokesResult.Failure($"User '{currentUserId}' is not authorized to remove media '{mediaItem.Id}'.", "FORBIDDEN");
-                }
+                continue;
+            }
 
-                updatedMedia.Remove(itemToRemove);
-                album.Media = updatedMedia;
-                _albums.Save(album);
-                OnAlbumUpdated?.Invoke(albumId);
+            var cleanPath = media.FilePath.Split('?', '#')[0].Trim();
+            if (!cleanPath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase) ||
+                cleanPath.Contains("..", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            try
+            {
+                await _fileService.DeleteAsync(cleanPath).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to delete media file {FilePath} during {Operation} for album {AlbumId}", cleanPath, operation, albumId);
             }
         }
-
-        return SpokesResult.Success();
     }
 
-    public SpokesResult<List<AlbumMedia>> RemoveMediaBulk(string albumId, string currentUserId, IEnumerable<string> mediaIds)
+    private SpokesResult<List<AlbumMedia>> RemoveMediaCore(
+        string albumId,
+        string currentUserId,
+        IReadOnlyList<string> requestedIds,
+        bool requireAllFound)
     {
-        if (IsCallerWriteBlocked(currentUserId))
+        var caller = !string.IsNullOrEmpty(currentUserId) ? _employees.GetById(currentUserId) : null;
+        if (!IsWritableAlbumUser(caller))
         {
             return SpokesResult<List<AlbumMedia>>.Failure("User account is suspended or inactive.", "FORBIDDEN");
         }
 
-        var album = _albums.GetById(albumId);
-        if (album == null)
-        {
-            _logger?.LogWarning("RemoveMediaBulk failed: album {AlbumId} not found", albumId);
-            return SpokesResult<List<AlbumMedia>>.Failure($"Album '{albumId}' not found.", "NOT_FOUND");
-        }
-
-        bool isOwner = album.OwnerId == currentUserId;
-        bool isContributor = album.ContributorUserIds.Contains(currentUserId);
-        if (!isOwner && !isContributor)
-        {
-            _logger?.LogWarning("RemoveMediaBulk failed: user {UserId} not authorized on album {AlbumId}", currentUserId, albumId);
-            return SpokesResult<List<AlbumMedia>>.Failure($"User '{currentUserId}' is not authorized to remove media from album '{albumId}'.", "FORBIDDEN");
-        }
-
         List<AlbumMedia> removedItems = [];
+        bool hadUnauthorizedItem = false;
+        string? firstUnauthorizedId = null;
+
         lock (GetAlbumLock(albumId))
         {
-            album = _albums.GetById(albumId) ?? album;
-            var updatedMedia = album.Media.ToList();
-            bool changed = false;
-
-            foreach (var mediaId in mediaIds)
+            var album = _albums.GetById(albumId);
+            if (album == null)
             {
-                var itemToRemove = updatedMedia.FirstOrDefault(m => m.Id == mediaId);
-                if (itemToRemove != null)
+                _logger?.LogWarning("RemoveMedia failed: album {AlbumId} not found", albumId);
+                return SpokesResult<List<AlbumMedia>>.Failure($"Album '{albumId}' not found.", "NOT_FOUND");
+            }
+
+            if (!IsAlbumOwner(album, currentUserId) && !IsAlbumContributor(album, currentUserId))
+            {
+                _logger?.LogWarning("RemoveMedia failed: user {UserId} not authorized on album {AlbumId}", currentUserId, albumId);
+                return SpokesResult<List<AlbumMedia>>.Failure($"User '{currentUserId}' is not authorized to remove media from album '{albumId}'.", "FORBIDDEN");
+            }
+
+            var updatedMedia = album.Media?.ToList() ?? [];
+            foreach (var mediaId in requestedIds)
+            {
+                var itemToRemove = updatedMedia.FirstOrDefault(m => string.Equals(m.Id, mediaId, StringComparison.Ordinal));
+                if (itemToRemove == null)
                 {
-                    if (isOwner || (isContributor && itemToRemove.AddedByUserId == currentUserId))
+                    if (requireAllFound)
                     {
-                        updatedMedia.Remove(itemToRemove);
-                        removedItems.Add(itemToRemove);
-                        changed = true;
+                        _logger?.LogWarning("RemoveMedia failed: media {MediaId} not found in album {AlbumId}", mediaId, albumId);
+                        return SpokesResult<List<AlbumMedia>>.Failure($"Media '{mediaId}' not found in album '{albumId}'.", "NOT_FOUND");
                     }
+                    continue;
+                }
+
+                if (CanDeleteMediaCore(album, itemToRemove, caller!))
+                {
+                    updatedMedia.Remove(itemToRemove);
+                    removedItems.Add(itemToRemove);
+                }
+                else
+                {
+                    hadUnauthorizedItem = true;
+                    firstUnauthorizedId ??= mediaId;
                 }
             }
 
-            if (changed)
+            if (removedItems.Count > 0)
             {
                 album.Media = updatedMedia;
                 _albums.Save(album);
-                OnAlbumUpdated?.Invoke(albumId);
             }
+        }
+
+        if (removedItems.Count == 0 && hadUnauthorizedItem)
+        {
+            _logger?.LogWarning("RemoveMedia failed: user {UserId} not authorized to remove media {MediaId} from album {AlbumId}", currentUserId, firstUnauthorizedId, albumId);
+            return SpokesResult<List<AlbumMedia>>.Failure(
+                requireAllFound && firstUnauthorizedId != null
+                    ? $"User '{currentUserId}' is not authorized to remove media '{firstUnauthorizedId}'."
+                    : $"User '{currentUserId}' is not authorized to remove the selected media.",
+                "FORBIDDEN");
         }
 
         return SpokesResult<List<AlbumMedia>>.Success(removedItems);
     }
 
-    public SpokesResult DeleteAlbum(string albumId, string currentUserId)
+    public virtual async Task<SpokesResult<AlbumMedia>> RemoveMediaAsync(string albumId, string currentUserId, string mediaId)
+    {
+        if (string.IsNullOrWhiteSpace(albumId))
+        {
+            return SpokesResult<AlbumMedia>.Failure("Album ID is required.", "INVALID_ARGUMENT");
+        }
+
+        if (string.IsNullOrWhiteSpace(mediaId))
+        {
+            return SpokesResult<AlbumMedia>.Failure("Media ID is required.", "INVALID_ARGUMENT");
+        }
+
+        var result = RemoveMediaCore(albumId, currentUserId, [mediaId], requireAllFound: true);
+        if (!result.IsSuccess || result.Value == null || result.Value.Count == 0)
+        {
+            return SpokesResult<AlbumMedia>.Failure(result.ErrorMessage ?? "Failed to remove media.", result.Code);
+        }
+
+        var removedItem = result.Value[0];
+        await DeleteAlbumMediaFilesAsync(albumId, result.Value, "media removal").ConfigureAwait(false);
+        OnAlbumUpdated?.Invoke(albumId);
+        return SpokesResult<AlbumMedia>.Success(removedItem);
+    }
+
+    public virtual async Task<SpokesResult<List<AlbumMedia>>> RemoveMediaBulkAsync(string albumId, string currentUserId, IEnumerable<string> mediaIds)
+    {
+        if (string.IsNullOrWhiteSpace(albumId))
+        {
+            return SpokesResult<List<AlbumMedia>>.Failure("Album ID is required.", "INVALID_ARGUMENT");
+        }
+
+        if (mediaIds == null)
+        {
+            return SpokesResult<List<AlbumMedia>>.Failure("Media IDs are required.", "INVALID_ARGUMENT");
+        }
+
+        var requestedIds = mediaIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var result = RemoveMediaCore(albumId, currentUserId, requestedIds, requireAllFound: false);
+        if (!result.IsSuccess)
+        {
+            return result;
+        }
+
+        var removedItems = result.Value ?? [];
+        if (removedItems.Count > 0)
+        {
+            await DeleteAlbumMediaFilesAsync(albumId, removedItems, "bulk media removal").ConfigureAwait(false);
+            OnAlbumUpdated?.Invoke(albumId);
+        }
+
+        return SpokesResult<List<AlbumMedia>>.Success(removedItems);
+    }
+
+    public virtual async Task<SpokesResult> DeleteAlbumAsync(string albumId, string currentUserId)
     {
         if (IsCallerWriteBlocked(currentUserId))
         {
@@ -1063,10 +1205,57 @@ public class AlbumService
             return SpokesResult.Failure($"User '{currentUserId}' is not authorized to delete album '{albumId}'.", "FORBIDDEN");
         }
 
+        _fileTokenService?.InvalidateContextTokens("albums", albumId);
+
+        await DeleteAlbumMediaFilesAsync(albumId, album.Media?.ToList(), "album deletion").ConfigureAwait(false);
+
         _albums.Delete(albumId);
         _albumLocks.TryRemove(albumId, out _);
         OnAlbumUpdated?.Invoke(albumId);
         return SpokesResult.Success();
+    }
+
+    public virtual void RemoveDeletedChannelShares(string channelId)
+    {
+        if (string.IsNullOrWhiteSpace(channelId))
+        {
+            return;
+        }
+
+        var channelKeyName = $"Channel_{channelId}";
+        var affectedAlbumIds = _albums.GetAll()
+            .Where(a => a.SharedWithChannelIds.Contains(channelId) || a.EncryptedAlbumKeys.ContainsKey(channelKeyName))
+            .Select(a => a.Id)
+            .ToList();
+
+        foreach (var albumId in affectedAlbumIds)
+        {
+            lock (GetAlbumLock(albumId))
+            {
+                var persisted = _albums.GetById(albumId);
+                if (persisted == null)
+                {
+                    continue;
+                }
+
+                bool modified = persisted.SharedWithChannelIds.RemoveAll(id => string.Equals(id, channelId, StringComparison.Ordinal)) > 0;
+                if (persisted.EncryptedAlbumKeys.Remove(channelKeyName))
+                {
+                    modified = true;
+                }
+
+                if (SyncAlbumEncryptionKeys(persisted))
+                {
+                    modified = true;
+                }
+
+                if (modified)
+                {
+                    _albums.Save(persisted);
+                    OnAlbumUpdated?.Invoke(albumId);
+                }
+            }
+        }
     }
 
     public SpokesResult RenameAlbum(string albumId, string currentUserId, string newTitle)
@@ -1171,6 +1360,13 @@ public class AlbumService
             return [];
         }
 
+        var caller = _employees.GetById(userId);
+        var channel = _channels?.GetById(channelId);
+        if (channel == null || channel.IsArchived || !CanUserPostToSharedChannel(channel, userId, caller))
+        {
+            return [];
+        }
+
         return _albums.GetAll()
             .Where(a =>
                 (string.Equals(a.OwnerId, userId, StringComparison.OrdinalIgnoreCase) ||
@@ -1188,7 +1384,8 @@ public class AlbumService
         string? newAlbumTitle,
         string? currentPrivateKey = null,
         string? plainChannelKey = null,
-        bool deleteSourceFiles = true)
+        bool deleteSourceFiles = true,
+        string? sourceMessageId = null)
     {
         if (IsCallerWriteBlocked(currentUserId))
         {
@@ -1231,7 +1428,9 @@ public class AlbumService
                     return SpokesResult<Album>.Failure("Vault is locked. Cannot decrypt channel attachments.", "VAULT_LOCKED");
                 }
 
-                if (!channel.EncryptedChannelKeys.TryGetValue(currentUserId, out var cipherChannelKey))
+                var fallbackEpoch = imageAttachments.FirstOrDefault()?.KeyEpoch ?? channel.CurrentKeyEpoch;
+                if (!channel.TryGetEncryptedKeyForEpoch(fallbackEpoch, currentUserId, out var cipherChannelKey) &&
+                    !channel.TryGetEncryptedKeyForEpoch(channel.CurrentKeyEpoch, currentUserId, out cipherChannelKey))
                 {
                     return SpokesResult<Album>.Failure("Channel key not found for current user.", "KEY_NOT_FOUND");
                 }
@@ -1273,7 +1472,7 @@ public class AlbumService
                 return SpokesResult<Album>.Failure("Album title is required when creating a new album.", "INVALID_ARGUMENT");
             }
 
-            var createResult = CreateAlbum(new Album { Title = newAlbumTitle.Trim() }, currentUserId, currentPrivateKey);
+            var createResult = CreateAlbum(new Album { Title = newAlbumTitle.Trim() }, currentUserId);
             if (!createResult.IsSuccess || createResult.Value == null)
             {
                 return createResult;
@@ -1311,6 +1510,7 @@ public class AlbumService
         var expectedChannelPrefix = $"/spokesapi/files/chat/{channelId}/";
         var importedMedia = new List<AlbumMedia>();
         var migratedSourcePaths = new List<string>();
+        var resolvedEpochKeys = new Dictionary<int, string?>();
 
         foreach (var att in imageAttachments)
         {
@@ -1336,9 +1536,34 @@ public class AlbumService
                 continue;
             }
 
+            string? attDecryptKey = plainChannelKey;
+            if (channel.IsEncrypted && !string.IsNullOrEmpty(currentPrivateKey))
+            {
+                if (!resolvedEpochKeys.TryGetValue(att.KeyEpoch, out var cachedEpochKey))
+                {
+                    if (channel.TryGetEncryptedKeyForEpoch(att.KeyEpoch, currentUserId, out var epochCipher))
+                    {
+                        try
+                        {
+                            cachedEpochKey = _crypto.DecryptRsa(epochCipher, currentPrivateKey);
+                        }
+                        catch
+                        {
+                            cachedEpochKey = null;
+                        }
+                    }
+                    resolvedEpochKeys[att.KeyEpoch] = cachedEpochKey;
+                }
+
+                if (!string.IsNullOrEmpty(resolvedEpochKeys[att.KeyEpoch]))
+                {
+                    attDecryptKey = resolvedEpochKeys[att.KeyEpoch];
+                }
+            }
+
             try
             {
-                using var sourceStream = _fileService.OpenRead("chat", channelId, safeName, channel.IsEncrypted ? plainChannelKey : null);
+                using var sourceStream = _fileService.OpenRead("chat", channelId, safeName, channel.IsEncrypted ? attDecryptKey : null);
                 if (sourceStream == null)
                 {
                     _logger?.LogWarning("Source chat attachment not found on disk: {FilePath}", normalizedPath);
@@ -1352,11 +1577,18 @@ public class AlbumService
                 if (att.HasServerThumbnail)
                 {
                     var sourceThumbName = FileService.GetThumbnailFileName(safeName);
-                    using var thumbStream = _fileService.OpenRead("chat", channelId, sourceThumbName, channel.IsEncrypted ? plainChannelKey : null);
+                    using var thumbStream = _fileService.OpenRead("chat", channelId, sourceThumbName, channel.IsEncrypted ? attDecryptKey : null);
                     if (thumbStream != null)
                     {
                         await _fileService.UploadThumbnailAsync("albums", album.Id, thumbStream, targetSafeName, plainAlbumKey);
                         hasThumb = true;
+                    }
+
+                    var sourceSmallThumbName = FileService.GetThumbnailFileName(safeName, small: true);
+                    using var smallThumbStream = _fileService.OpenRead("chat", channelId, sourceSmallThumbName, channel.IsEncrypted ? attDecryptKey : null);
+                    if (smallThumbStream != null)
+                    {
+                        await _fileService.UploadThumbnailAsync("albums", album.Id, smallThumbStream, targetSafeName, plainAlbumKey, small: true);
                     }
                 }
 
@@ -1399,11 +1631,47 @@ public class AlbumService
 
         if (deleteSourceFiles)
         {
+            var referencedElsewhere = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (_chatMessages != null)
+            {
+                foreach (var msg in _chatMessages.GetByChannel(channelId))
+                {
+                    if (msg.IsDeleted || msg.Attachments == null)
+                    {
+                        continue;
+                    }
+
+                    bool isSameCallerMessage = !string.IsNullOrWhiteSpace(sourceMessageId) &&
+                        string.Equals(msg.Id, sourceMessageId, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(msg.SenderId, currentUserId, StringComparison.Ordinal);
+                    if (isSameCallerMessage)
+                    {
+                        continue;
+                    }
+
+                    foreach (var att in msg.Attachments)
+                    {
+                        if (!string.IsNullOrWhiteSpace(att.FilePath))
+                        {
+                            referencedElsewhere.Add(att.FilePath.Split('?', '#')[0].Trim());
+                        }
+                    }
+                }
+            }
+
             foreach (var sourcePath in migratedSourcePaths)
             {
+                var cleanSourcePath = sourcePath.Split('?', '#')[0].Trim();
+                if (!cleanSourcePath.StartsWith(expectedChannelPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    cleanSourcePath.Contains("..", StringComparison.Ordinal) ||
+                    referencedElsewhere.Contains(cleanSourcePath))
+                {
+                    continue;
+                }
+
                 try
                 {
-                    await _fileService.DeleteAsync(sourcePath);
+                    await _fileService.DeleteAsync(cleanSourcePath);
                 }
                 catch (Exception ex)
                 {

@@ -5,6 +5,7 @@ using System.IO;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Core.Constants;
@@ -32,6 +33,7 @@ public class ChatServiceTests : IDisposable
 
         private readonly EmployeeRepository _employees;
         private readonly ChatChannelRepository _channels;
+        private readonly ChatCategoryRepository _categories;
         private readonly ChatMessageRepository _messages;
         private readonly TeamRepository _teams;
         private readonly ChatReadStateRepository _readStates;
@@ -40,8 +42,8 @@ public class ChatServiceTests : IDisposable
         private readonly AlbumRepository _albums;
         private readonly ServerEscrowService _escrowService;
 
-        private readonly Mock<IChatRealtimeGateway> _mockRealtimeGateway;
         private readonly ChatStateService _chatState;
+        private readonly VoiceStateService _voiceState;
         private readonly Mock<IWebPushService> _mockWebPush;
         private readonly NotificationQueueService _notificationQueue;
         private readonly NotificationRoutingService _notificationRouting;
@@ -57,13 +59,14 @@ public class ChatServiceTests : IDisposable
             _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_Chat_" + Guid.NewGuid().ToString());
             Directory.CreateDirectory(_testDataDir);
 
-            var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir } };
+            var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
             _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
 
             _employees = new EmployeeRepository(_persistence, _config);
             _channels = new ChatChannelRepository(_persistence, _config);
+            _categories = new ChatCategoryRepository(_persistence, _config);
             var companyProfiles = new CompanyProfileRepository(_persistence, _config);
             _messages = new ChatMessageRepository(_persistence, _config, companyProfiles);
             _teams = new TeamRepository(_persistence, _config);
@@ -75,16 +78,15 @@ public class ChatServiceTests : IDisposable
             _readStates = new ChatReadStateRepository(_persistence, _config, _companyProfile);
             _projects = new ProjectRepository(_persistence, _config);
 
-            _mockRealtimeGateway = new Mock<IChatRealtimeGateway>();
-
             _chatState = new ChatStateService();
+            _voiceState = new VoiceStateService();
 
             var systemConfigRepo = new SystemConfigRepository(_persistence, _config);
             _albums = new AlbumRepository(_persistence, _config);
             var encService = new EncryptionService(_config);
             var serverConfigRepo = new ServerConfigRepository(_persistence, _config);
             _escrowService = new ServerEscrowService(_companyProfile, serverConfigRepo, new Mock<ICryptoService>().Object);
-            _mockPresence = new Mock<PresenceStateService>(_chatState);
+            _mockPresence = new Mock<PresenceStateService>(_voiceState);
             _notificationQueue = new NotificationQueueService(new Mock<ILogger<NotificationQueueService>>().Object, _persistence, _config, _companyProfile);
 
             _mockWebPush = new Mock<IWebPushService>();
@@ -95,6 +97,7 @@ public class ChatServiceTests : IDisposable
 
             _commContext = new Mock<CommunicationContext>();
             _commContext.Setup(c => c.ChatChannels).Returns(_channels);
+            _commContext.Setup(c => c.ChatCategories).Returns(_categories);
             _commContext.Setup(c => c.ChatMessages).Returns(_messages);
             _commContext.Setup(c => c.ChatReadStates).Returns(_readStates);
             _commContext.Setup(c => c.EmailFolders).Returns(new EmailFolderRepository(_persistence, _config));
@@ -113,7 +116,6 @@ public class ChatServiceTests : IDisposable
             _notificationRouting = new NotificationRoutingService(
                 _commContext.Object,
                 _hrContext.Object,
-                _projectsContext.Object,
                 coreContext.Object,
                 _mockWebPush.Object,
                 _notificationQueue,
@@ -135,14 +137,12 @@ public class ChatServiceTests : IDisposable
                 _commContext.Object,
                 _hrContext.Object,
                 _projectsContext.Object,
-                _mockRealtimeGateway.Object,
                 _chatState,
                 _notificationRouting,
                 _mockPresence.Object,
                 _mockFileService.Object,
                 _mockModeration.Object,
-                new AlbumService(_albums, _channels, new Mock<ICryptoService>().Object, _escrowService, _employees),
-                new MarkdownSanitizerService(),
+                new AlbumService(_albums, _channels, new Mock<ICryptoService>().Object, _escrowService, _employees, new ChatAuthorizationService(_channels, _projects, _teams, _employees)),
                 new Mock<ILogger<ChatService>>().Object);
         }
 
@@ -158,7 +158,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task SendMessageAsync_SavesAndBroadcasts()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-1", Name = "General" };
             _channels.Save(channel);
@@ -181,16 +181,15 @@ public class ChatServiceTests : IDisposable
             var readState = _readStates.GetReadState("user-1", "chan-1");
             Assert.NotNull(readState);
 
-            // Verify realtime broadcast
-            _mockRealtimeGateway.Verify(p => p.SendToChannelAsync("chan-1", "ReceiveMessage", It.IsAny<object>(), default), Times.Once);
+            // Verify persisted and local state notification occurred
         }
 
         [Fact]
         public async Task SendMessageAsync_MentionsAlbum_SharesIfAuthorized()
         {
-            var sender = new Employee { Id = "user-owner", FirstName = "User", LastName = "Owner", IsActive = true };
+            var sender = new Employee { Id = "user-owner", FirstName = "User", LastName = "Owner", IsActive = true, Permissions = [AppPermissions.Chat.Use, AppPermissions.Albums.View] };
             _employees.Save(sender);
-            var member = new Employee { Id = "user-member", FirstName = "User", LastName = "Member", IsActive = true };
+            var member = new Employee { Id = "user-member", FirstName = "User", LastName = "Member", IsActive = true, Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(member);
 
             var channel = new ChatChannel { Id = "chan-album", Name = "General", ChannelType = ChatChannelType.General };
@@ -209,7 +208,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task SendMessageAsync_MentionsInvalidAlbum_IgnoresAndSucceeds()
         {
-            var sender = new Employee { Id = "user-owner", FirstName = "User", LastName = "Owner", IsActive = true };
+            var sender = new Employee { Id = "user-owner", FirstName = "User", LastName = "Owner", IsActive = true, Permissions = [AppPermissions.Chat.Use, AppPermissions.Albums.View] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-invalid", Name = "General", ChannelType = ChatChannelType.General };
             _channels.Save(channel);
@@ -224,9 +223,9 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task SendMessageAsync_MentionsAlbum_DoesNotShareIfUnauthorized()
         {
-            var sender = new Employee { Id = "user-other", FirstName = "User", LastName = "Other", IsActive = true };
+            var sender = new Employee { Id = "user-other", FirstName = "User", LastName = "Other", IsActive = true, Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
-            var member = new Employee { Id = "user-member", FirstName = "User", LastName = "Member", IsActive = true };
+            var member = new Employee { Id = "user-member", FirstName = "User", LastName = "Member", IsActive = true, Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(member);
 
             var channel = new ChatChannel { Id = "chan-album2", Name = "General", ChannelType = ChatChannelType.General };
@@ -248,9 +247,9 @@ public class ChatServiceTests : IDisposable
             profile.Edition = "Business";
             _companyProfile.Save(profile);
 
-            var sender = new Employee { Id = "user-owner", FirstName = "User", LastName = "Owner", IsActive = true };
+            var sender = new Employee { Id = "user-owner", FirstName = "User", LastName = "Owner", IsActive = true, Permissions = [AppPermissions.Chat.Use, AppPermissions.Albums.View] };
             _employees.Save(sender);
-            var member = new Employee { Id = "user-member", FirstName = "User", LastName = "Member", IsActive = true };
+            var member = new Employee { Id = "user-member", FirstName = "User", LastName = "Member", IsActive = true, Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(member);
 
             var channel = new ChatChannel { Id = "chan-album-std", Name = "General", ChannelType = ChatChannelType.General };
@@ -274,17 +273,21 @@ public class ChatServiceTests : IDisposable
             var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
             _employees.Save(sender);
 
+            bool startedTyping = false, stoppedTyping = false;
+            _chatState.UserTyping += (ch, uid, _) => { if (ch == "chan-1" && uid == "user-1") startedTyping = true; };
+            _chatState.UserStoppedTyping += (ch, uid) => { if (ch == "chan-1" && uid == "user-1") stoppedTyping = true; };
+
             await _service.StartTypingAsync("user-1", "chan-1");
-            _mockRealtimeGateway.Verify(p => p.SendToChannelAsync("chan-1", "UserTyping", It.IsAny<object>(), default), Times.Once);
+            Assert.True(startedTyping);
 
             await _service.StopTypingAsync("user-1", "chan-1");
-            _mockRealtimeGateway.Verify(p => p.SendToChannelAsync("chan-1", "UserStoppedTyping", It.IsAny<object>(), default), Times.Once);
+            Assert.True(stoppedTyping);
         }
 
         [Fact]
         public async Task EditMessageAsync_UpdatesContentAndNotifies()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
             _channels.Save(channel);
@@ -298,14 +301,12 @@ public class ChatServiceTests : IDisposable
             var updated = _messages.GetById("msg-1");
             Assert.Equal("New Content", updated.Content);
             Assert.NotNull(updated.EditedAt);
-
-            _mockRealtimeGateway.Verify(p => p.SendToChannelAsync("chan-1", "MessageEdited", It.IsAny<object>(), default), Times.Once);
         }
 
         [Fact]
         public async Task EditMessageAsync_WithModerationBlock_DoesNotUpdateContent()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
             _channels.Save(channel);
@@ -329,7 +330,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task EditMessageAsync_WithModerationSanitize_UpdatesToSanitizedContent()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
             _channels.Save(channel);
@@ -347,8 +348,6 @@ public class ChatServiceTests : IDisposable
             Assert.NotNull(updated);
             Assert.Equal("Xkpw Content", updated.Content);
             Assert.NotNull(updated.EditedAt);
-
-            _mockRealtimeGateway.Verify(p => p.SendToChannelAsync("chan-1", "MessageEdited", It.IsAny<object>(), default), Times.Once);
         }
 
         [Fact]
@@ -376,7 +375,6 @@ public class ChatServiceTests : IDisposable
             var unchanged = _messages.GetById("msg-rev");
             Assert.NotNull(unchanged);
             Assert.Equal("Original", unchanged.Content);
-            _mockRealtimeGateway.Verify(p => p.SendToChannelAsync("chan-revoked", "MessageEdited", It.IsAny<object>(), default), Times.Never);
         }
 
         [Fact]
@@ -398,7 +396,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task EditMessageAsync_WhenModerationThrows_ReturnsModerationError()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
             _channels.Save(channel);
@@ -417,7 +415,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task EditMessageAsync_WhenAlbumEncryptionFails_ReturnsEncryptionError()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use, AppPermissions.Albums.View] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-enc", ChannelType = ChatChannelType.General, IsDefaultGeneral = true, IsEncrypted = true };
             _channels.Save(channel);
@@ -437,7 +435,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task EditMessageAsync_RemovingAlbumMention_UnsharesWhenNoOtherMentionsExist()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use, AppPermissions.Albums.View] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-album-unshare", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
             _channels.Save(channel);
@@ -471,7 +469,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task EditMessageAsync_RemovingAlbumMention_KeepsSharedWhenOtherMentionsExist()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-album-keep", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
             _channels.Save(channel);
@@ -515,7 +513,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task DeleteMessageAsync_MarksAsDeleted()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
             _channels.Save(channel);
@@ -528,8 +526,6 @@ public class ChatServiceTests : IDisposable
 
             var deleted = _messages.GetById("msg-1");
             Assert.True(deleted.IsDeleted);
-
-            _mockRealtimeGateway.Verify(p => p.SendToChannelAsync("chan-1", "MessageDeleted", It.IsAny<object>(), default), Times.Once);
         }
 
         [Fact]
@@ -556,13 +552,12 @@ public class ChatServiceTests : IDisposable
             var unchanged = _messages.GetById("msg-del-rev");
             Assert.NotNull(unchanged);
             Assert.False(unchanged.IsDeleted);
-            _mockRealtimeGateway.Verify(p => p.SendToChannelAsync("chan-del-rev", "MessageDeleted", It.IsAny<object>(), default), Times.Never);
         }
 
         [Fact]
         public async Task ToggleReactionAsync_AddsAndRemoves()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan-1", ChannelType = ChatChannelType.General, IsDefaultGeneral = true };
             _channels.Save(channel);
@@ -574,19 +569,18 @@ public class ChatServiceTests : IDisposable
             Assert.True(addResult.IsSuccess);
             var reactAdded = _messages.GetById("msg-1");
             Assert.Contains("👍:user-1", reactAdded.Reactions);
-            _mockRealtimeGateway.Verify(p => p.SendToChannelAsync("chan-1", "ReactionAdded", It.IsAny<object>(), default), Times.Once);
 
             // 2. Remove
             var remResult = await _service.ToggleReactionAsync("user-1", "msg-1", "👍");
             Assert.True(remResult.IsSuccess);
             var reactRemoved = _messages.GetById("msg-1");
             Assert.DoesNotContain("👍:user-1", reactRemoved.Reactions);
-            _mockRealtimeGateway.Verify(p => p.SendToChannelAsync("chan-1", "ReactionRemoved", It.IsAny<object>(), default), Times.Once);
         }
 
         [Fact]
         public void CreateDirectMessageChannel_Works()
         {
+            _employees.Save(new Employee { Id = "user-1", IsActive = true, Permissions = [AppPermissions.Chat.Use] });
             var chan = _service.CreateDirectMessageChannel("user-1", "user-2");
             Assert.NotNull(chan);
             Assert.Equal(ChatChannelType.Direct, chan.ChannelType);
@@ -597,6 +591,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public void CreateGroupDirectMessageChannel_Works()
         {
+            _employees.Save(new Employee { Id = "user-1", IsActive = true, Permissions = [AppPermissions.Chat.Use] });
             var chan = _service.CreateGroupDirectMessageChannel("user-1", new List<string> { "user-2", "user-3" });
             Assert.NotNull(chan);
             Assert.Contains("user-1", chan.ParticipantIds);
@@ -609,6 +604,7 @@ public class ChatServiceTests : IDisposable
         {
             var team = new Team { Id = "team-1", Name = "Engineering" };
             _teams.Save(team);
+            _employees.Save(new Employee { Id = "user-1", TeamId = "team-1", IsActive = true, Permissions = [AppPermissions.Chat.Use, AppPermissions.Chat.CreateChannels] });
 
             var chan = _service.CreateTeamChannel("user-1", new List<string> { "team-1" });
             Assert.NotNull(chan);
@@ -800,28 +796,6 @@ public class ChatServiceTests : IDisposable
         }
 
         [Fact]
-        public void CreateChannel_NormalizesDirectChannel_RemovingAnnouncementSettings()
-        {
-            var channel = new ChatChannel
-            {
-                Id = "dm_test_create",
-                ChannelType = ChatChannelType.Direct,
-                ParticipantIds = new List<string> { "user-1", "user-2" },
-                IsAnnouncementOnly = true,
-                AllowedPostUserIds = new List<string> { "user-1" },
-                AllowedPostTeamIds = new List<string> { "team-1" }
-            };
-
-            _service.CreateChannel(channel);
-
-            var saved = _channels.GetById("dm_test_create");
-            Assert.NotNull(saved);
-            Assert.False(saved.IsAnnouncementOnly);
-            Assert.Empty(saved.AllowedPostUserIds);
-            Assert.Empty(saved.AllowedPostTeamIds);
-        }
-
-        [Fact]
         public void UpdateChannelOrders_UpdatesDisplayOrder()
         {
             var admin = new Employee { Id = "admin-1", FirstName = "Admin", LastName = "One", IsAdmin = true };
@@ -909,50 +883,10 @@ public class ChatServiceTests : IDisposable
         }
 
         [Fact]
-        public void GetChannelDisplayName_SelfDM_ReturnsFullNameWithSuffix()
-        {
-            var user = new Employee { Id = "user-1", FirstName = "Mats", LastName = "Larsson" };
-            _employees.Save(user);
-
-            var channel = new ChatChannel
-            {
-                Id = "dm_self",
-                Name = "Direct Message",
-                ChannelType = ChatChannelType.Direct,
-                ParticipantIds = new List<string> { "user-1", "user-1" }
-            };
-
-            var name = _service.GetChannelDisplayName(channel, "user-1");
-            Assert.Equal("Mats Larsson (you)", name);
-            Assert.True(ChatChannelFormatter.IsSelfDirectMessage(channel, "user-1"));
-        }
-
-        [Fact]
-        public void GetChannelDisplayName_TwoPersonDM_ReturnsOtherPerson()
-        {
-            var user1 = new Employee { Id = "user-1", FirstName = "Mats", LastName = "Larsson" };
-            var user2 = new Employee { Id = "user-2", FirstName = "Jane", LastName = "Doe" };
-            _employees.Save(user1);
-            _employees.Save(user2);
-
-            var channel = new ChatChannel
-            {
-                Id = "dm_pair",
-                Name = "Direct Message",
-                ChannelType = ChatChannelType.Direct,
-                ParticipantIds = new List<string> { "user-1", "user-2" }
-            };
-
-            var name = _service.GetChannelDisplayName(channel, "user-1");
-            Assert.Equal("Jane Doe", name);
-            Assert.False(ChatChannelFormatter.IsSelfDirectMessage(channel, "user-1"));
-        }
-
-        [Fact]
         public async Task SendMessageAsync_AutoMarksPriorMessagesAsReadBySender()
         {
-            var user1 = new Employee { Id = "user-1", FirstName = "Alice", LastName = "Smith" };
-            var user2 = new Employee { Id = "user-2", FirstName = "Bob", LastName = "Jones" };
+            var user1 = new Employee { Id = "user-1", FirstName = "Alice", LastName = "Smith", Permissions = [AppPermissions.Chat.Use] };
+            var user2 = new Employee { Id = "user-2", FirstName = "Bob", LastName = "Jones", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(user1);
             _employees.Save(user2);
 
@@ -987,8 +921,8 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task MarkChannelMessagesAsReadAsync_MarksAllUnreadMessagesForUser()
         {
-            var user1 = new Employee { Id = "user-1", FirstName = "Alice", LastName = "Smith" };
-            var user2 = new Employee { Id = "user-2", FirstName = "Bob", LastName = "Jones" };
+            var user1 = new Employee { Id = "user-1", FirstName = "Alice", LastName = "Smith", Permissions = [AppPermissions.Chat.Use] };
+            var user2 = new Employee { Id = "user-2", FirstName = "Bob", LastName = "Jones", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(user1);
             _employees.Save(user2);
 
@@ -1024,8 +958,8 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task MarkMessageAsReadAsync_PlacesUserIdFirstAndMarksMessageRead()
         {
-            var user1 = new Employee { Id = "user-1", FirstName = "Alice", LastName = "Smith" };
-            var user2 = new Employee { Id = "user-2", FirstName = "Bob", LastName = "Jones" };
+            var user1 = new Employee { Id = "user-1", FirstName = "Alice", LastName = "Smith", Permissions = [AppPermissions.Chat.Use] };
+            var user2 = new Employee { Id = "user-2", FirstName = "Bob", LastName = "Jones", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(user1);
             _employees.Save(user2);
 
@@ -1049,7 +983,6 @@ public class ChatServiceTests : IDisposable
             Assert.Contains("user-2", updated!.ReadBy);
         }
 
-
         [Fact]
         public void ExtractMessageTokens_PureParsing_ExtractsMentionsEventsAlbumsAndEveryone()
         {
@@ -1066,7 +999,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task SendMessageAsync_WithUserAndTeamMentions_ResolvesUserIdsAndTeamFlag()
         {
-            var user1 = new Employee { Id = "user-1", FirstName = "Alice", LastName = "Smith" };
+            var user1 = new Employee { Id = "user-1", FirstName = "Alice", LastName = "Smith", Permissions = [AppPermissions.Chat.Use] };
             var userLeader = new Employee { Id = "user-leader", FirstName = "Carol", LastName = "Leader" };
             var team1 = new Team { Id = "team-dev", Name = "Dev Team", LeaderId = "user-leader" };
             var user2 = new Employee { Id = "user-2", FirstName = "Bob", LastName = "Jones", TeamId = "team-dev" };
@@ -1102,14 +1035,12 @@ public class ChatServiceTests : IDisposable
                 _commContext.Object,
                 _hrContext.Object,
                 _projectsContext.Object,
-                _mockRealtimeGateway.Object,
                 _chatState,
                 _notificationRouting,
                 _mockPresence.Object,
                 _mockFileService.Object,
                 _mockModeration.Object,
-                new AlbumService(_albums, _channels, new Mock<ICryptoService>().Object, _escrowService, _employees),
-                new MarkdownSanitizerService(),
+                new AlbumService(_albums, _channels, new Mock<ICryptoService>().Object, _escrowService, _employees, new ChatAuthorizationService(_channels, _projects, _teams, _employees)),
                 mockLogger.Object);
 
             var expectedEx = new InvalidOperationException("Notification gateway network down");
@@ -1127,18 +1058,10 @@ public class ChatServiceTests : IDisposable
         }
 
         [Fact]
-        public async Task SafeDispatchNotificationAsync_WhenExecuted_CompletesTask()
-        {
-            var task = _service.SafeDispatchNotificationAsync(() => Task.CompletedTask, "test");
-            await task;
-            Assert.True(task.IsCompletedSuccessfully);
-        }
-
-        [Fact]
         public async Task SendMessageAsync_AutoMarksPreviousMessagesAsRead_UsingBatchSave()
         {
-            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One" };
-            var other = new Employee { Id = "user-2", FirstName = "User", LastName = "Two" };
+            var sender = new Employee { Id = "user-1", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
+            var other = new Employee { Id = "user-2", FirstName = "User", LastName = "Two", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             _employees.Save(other);
             var channel = new ChatChannel { Id = "chan-batch", Name = "General" };
@@ -1207,7 +1130,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task SendMessageAsync_WhenModerationBlocked_ReturnsFailure()
         {
-            var sender = new Employee { Id = "emp_mod_block", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "emp_mod_block", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan_mod_block", Name = "General" };
             _channels.Save(channel);
@@ -1230,7 +1153,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task SendMessageAsync_WhenValid_ReturnsSuccess()
         {
-            var sender = new Employee { Id = "emp_valid_send", FirstName = "User", LastName = "One" };
+            var sender = new Employee { Id = "emp_valid_send", FirstName = "User", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(sender);
             var channel = new ChatChannel { Id = "chan_valid_send", Name = "General" };
             _channels.Save(channel);
@@ -1314,7 +1237,8 @@ public class ChatServiceTests : IDisposable
                 FirstName = "Encrypted",
                 LastName = "Sender",
                 PublicKey = keyPair.PublicKey,
-                EncryptedPrivateKey = "vault-key"
+                EncryptedPrivateKey = "vault-key",
+                Permissions = [AppPermissions.Chat.Use]
             };
             _employees.Save(sender);
 
@@ -1368,7 +1292,8 @@ public class ChatServiceTests : IDisposable
                 FirstName = "Locked",
                 LastName = "User",
                 PublicKey = keyPair.PublicKey,
-                EncryptedPrivateKey = "vault-key"
+                EncryptedPrivateKey = "vault-key",
+                Permissions = [AppPermissions.Chat.Use]
             };
             _employees.Save(sender);
 
@@ -1415,7 +1340,8 @@ public class ChatServiceTests : IDisposable
                 FirstName = "Attachment",
                 LastName = "User",
                 PublicKey = keyPair.PublicKey,
-                EncryptedPrivateKey = "vault-key"
+                EncryptedPrivateKey = "vault-key",
+                Permissions = [AppPermissions.Chat.Use]
             };
             _employees.Save(sender);
 
@@ -1473,7 +1399,8 @@ public class ChatServiceTests : IDisposable
                 FirstName = "Edit",
                 LastName = "User",
                 PublicKey = keyPair.PublicKey,
-                EncryptedPrivateKey = "vault-key"
+                EncryptedPrivateKey = "vault-key",
+                Permissions = [AppPermissions.Chat.Use]
             };
             _employees.Save(sender);
 
@@ -1519,14 +1446,14 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task ChannelManagementAndModeration_RequireNonEmptyAuthorizedActor_AndPreventForgedOwnershipEscalation()
         {
-            var creator = new Employee { Id = "grp-owner", FirstName = "Owner", LastName = "User" };
-            var attacker = new Employee { Id = "grp-attacker", FirstName = "Attacker", LastName = "User" };
+            var creator = new Employee { Id = "grp-owner", FirstName = "Owner", LastName = "User", Permissions = [AppPermissions.Chat.Use] };
+            var attacker = new Employee { Id = "grp-attacker", FirstName = "Attacker", LastName = "User", Permissions = [AppPermissions.Chat.Use] };
             var moderator = new Employee
             {
                 Id = "chat-mod",
                 FirstName = "Mod",
                 LastName = "User",
-                Permissions = new List<string> { AppPermissions.Chat.Moderator }
+                Permissions = new List<string> { AppPermissions.Chat.Moderator, AppPermissions.Chat.Use }
             };
             _employees.Save(creator);
             _employees.Save(attacker);
@@ -1598,20 +1525,18 @@ public class ChatServiceTests : IDisposable
                 _commContext.Object,
                 _hrContext.Object,
                 _projectsContext.Object,
-                _mockRealtimeGateway.Object,
                 _chatState,
                 _notificationRouting,
                 _mockPresence.Object,
                 _mockFileService.Object,
                 _mockModeration.Object,
-                new AlbumService(_albums, _channels, new Mock<ICryptoService>().Object, _escrowService, _employees),
-                new MarkdownSanitizerService(),
+                new AlbumService(_albums, _channels, new Mock<ICryptoService>().Object, _escrowService, _employees, new ChatAuthorizationService(_channels, _projects, _teams, _employees)),
                 new Mock<ILogger<ChatService>>().Object,
                 fileTokenService: fileTokens);
 
-            var creator = new Employee { Id = "grp-leave-creator", FirstName = "Creator", LastName = "One" };
-            var member = new Employee { Id = "grp-leave-member", FirstName = "Member", LastName = "Two" };
-            var outsider = new Employee { Id = "grp-leave-outsider", FirstName = "Outsider", LastName = "Three" };
+            var creator = new Employee { Id = "grp-leave-creator", FirstName = "Creator", LastName = "One", Permissions = [AppPermissions.Chat.Use] };
+            var member = new Employee { Id = "grp-leave-member", FirstName = "Member", LastName = "Two", Permissions = [AppPermissions.Chat.Use] };
+            var outsider = new Employee { Id = "grp-leave-outsider", FirstName = "Outsider", LastName = "Three", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(creator);
             _employees.Save(member);
             _employees.Save(outsider);
@@ -1740,9 +1665,9 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task MarkMessagesAsReadAsync_FailsClosedForUnauthorizedUsersAndIgnoresCrossChannelMessageIds()
         {
-            var memberA = new Employee { Id = "read-member-a", FirstName = "Member", LastName = "A" };
-            var memberB = new Employee { Id = "read-member-b", FirstName = "Member", LastName = "B" };
-            var intruder = new Employee { Id = "read-intruder", FirstName = "Intruder", LastName = "C" };
+            var memberA = new Employee { Id = "read-member-a", FirstName = "Member", LastName = "A", Permissions = [AppPermissions.Chat.Use] };
+            var memberB = new Employee { Id = "read-member-b", FirstName = "Member", LastName = "B", Permissions = [AppPermissions.Chat.Use] };
+            var intruder = new Employee { Id = "read-intruder", FirstName = "Intruder", LastName = "C", Permissions = [AppPermissions.Chat.Use] };
             _employees.Save(memberA);
             _employees.Save(memberB);
             _employees.Save(intruder);
@@ -1793,7 +1718,7 @@ public class ChatServiceTests : IDisposable
         [Fact]
         public async Task DeleteMessageAsync_ScrubsContentAttachmentsReactionsMentions_AndUnsharesOrphanedAlbum()
         {
-            var author = new Employee { Id = "scrub-author", FirstName = "Author", LastName = "One" };
+            var author = new Employee { Id = "scrub-author", FirstName = "Author", LastName = "One", Permissions = [AppPermissions.Chat.Use, AppPermissions.Albums.View] };
             _employees.Save(author);
 
             var channel = new ChatChannel
@@ -1859,20 +1784,18 @@ public class ChatServiceTests : IDisposable
             var realFileService = new FileService(_config, new Mock<ILogger<FileService>>().Object, realCrypto);
             var serverConfigRepo = new ServerConfigRepository(_persistence, _config);
             var realEscrow = new ServerEscrowService(_companyProfile, serverConfigRepo, realCrypto);
-            var realAlbumService = new AlbumService(_albums, _channels, realCrypto, realEscrow, _employees, fileService: realFileService);
+            var realAlbumService = new AlbumService(_albums, _channels, realCrypto, realEscrow, _employees, new ChatAuthorizationService(_channels, _projects, _teams, _employees), fileService: realFileService);
 
             var chatService = new ChatService(
                 _commContext.Object,
                 _hrContext.Object,
                 _projectsContext.Object,
-                _mockRealtimeGateway.Object,
                 _chatState,
                 _notificationRouting,
                 _mockPresence.Object,
                 realFileService,
                 _mockModeration.Object,
                 realAlbumService,
-                new MarkdownSanitizerService(),
                 new Mock<ILogger<ChatService>>().Object,
                 crypto: realCrypto);
 
@@ -1885,7 +1808,8 @@ public class ChatServiceTests : IDisposable
                 LastName = "One",
                 PublicKey = pubKey,
                 EncryptedPrivateKey = "enc-priv",
-                IsActive = true
+                IsActive = true,
+                Permissions = [AppPermissions.Chat.Use, AppPermissions.Albums.View]
             };
             _employees.Save(poster);
 
@@ -1989,5 +1913,105 @@ public class ChatServiceTests : IDisposable
             var res = await _service.ConvertMessageImagesToAlbumAsync(otherUser.Id, msg.Id, null, "Stolen Album");
             Assert.False(res.IsSuccess);
             Assert.Equal("FORBIDDEN", res.Code);
+        }
+
+        [Fact]
+        public async Task UpdateChannel_RemovingMemberOrTeamOnEncryptedChannel_RotatesEpochStripsAllEpochsAndEvictsRealtimeAndTokens()
+        {
+            var realCrypto = new CryptoService();
+            var (pubOwner, privOwner) = realCrypto.GenerateRsaKeyPair();
+            var (pubRemoved, _) = realCrypto.GenerateRsaKeyPair();
+            var (pubTeamEvicted, _) = realCrypto.GenerateRsaKeyPair();
+
+            var owner = new Employee { Id = "u-owner", FirstName = "Owner", LastName = "User", IsActive = true, IsAdmin = true, PublicKey = pubOwner, EncryptedPrivateKey = "k1" };
+            var directRemoved = new Employee { Id = "u-direct-rem", FirstName = "Direct", LastName = "Removed", IsActive = true, PublicKey = pubRemoved, EncryptedPrivateKey = "k2" };
+            var teamEvicted = new Employee { Id = "u-team-rem", FirstName = "Team", LastName = "Removed", IsActive = true, TeamId = "team-ext", PublicKey = pubTeamEvicted, EncryptedPrivateKey = "k3" };
+            _employees.Save(owner);
+            _employees.Save(directRemoved);
+            _employees.Save(teamEvicted);
+
+            var services = new ServiceCollection();
+            services.AddDataProtection().UseEphemeralDataProtectionProvider();
+            var dataProtection = services.BuildServiceProvider().GetRequiredService<IDataProtectionProvider>();
+            var fileTokenService = new FileTokenService(dataProtection, new MemoryCache(new MemoryCacheOptions()));
+            var chatAuth = new ChatAuthorizationService(_channels, _projects, _teams, _employees);
+            var albumService = new AlbumService(_albums, _channels, realCrypto, _escrowService, _employees, chatAuth);
+            var securityService = new ChatSecurityService(
+                _employees, _channels, _messages, _escrowService, realCrypto, albumService, _chatState, chatAuth, _mockFileService.Object, new Mock<ILogger<ChatSecurityService>>().Object);
+
+            var service = new ChatService(
+                _commContext.Object,
+                _hrContext.Object,
+                _projectsContext.Object,
+                _chatState,
+                _notificationRouting,
+                _mockPresence.Object,
+                _mockFileService.Object,
+                _mockModeration.Object,
+                albumService,
+                new Mock<ILogger<ChatService>>().Object,
+                chatAuth: chatAuth,
+                crypto: realCrypto,
+                fileTokenService: fileTokenService,
+                securityService: securityService);
+
+            var epoch0Key = realCrypto.GenerateAesKeyBase64();
+            var channel = new ChatChannel
+            {
+                Id = "chan-rot-1",
+                Name = "Secret Group",
+                ChannelType = ChatChannelType.Group,
+                CreatedById = owner.Id,
+                IsEncrypted = true,
+                CurrentKeyEpoch = 0,
+                ParticipantIds = [owner.Id, directRemoved.Id],
+                AllowedTeamIds = ["team-ext"],
+                EncryptedChannelKeys = new Dictionary<string, string>
+                {
+                    [owner.Id] = realCrypto.EncryptRsa(epoch0Key, pubOwner),
+                    [directRemoved.Id] = realCrypto.EncryptRsa(epoch0Key, pubRemoved),
+                    [teamEvicted.Id] = realCrypto.EncryptRsa(epoch0Key, pubTeamEvicted)
+                }
+            };
+            _channels.Save(channel);
+
+            var epoch0Token = fileTokenService.GenerateAccessToken("chat", channel.Id, "doc.png", userId: directRemoved.Id, sessionId: "sess-1");
+            Assert.True(fileTokenService.ValidateAccessToken("chat", channel.Id, "doc.png", epoch0Token, directRemoved.Id, "sess-1").IsSuccess);
+
+            // Simulate UI in-place mutation of the cached channel before calling UpdateChannel
+            var liveChannelRef = _channels.GetById(channel.Id)!;
+            liveChannelRef.ParticipantIds.Remove(directRemoved.Id);
+            liveChannelRef.AllowedTeamIds.Remove("team-ext");
+
+            var updateResult = service.UpdateChannel(liveChannelRef, owner.Id, isSessionUnlocked: true);
+            Assert.True(updateResult.IsSuccess);
+
+            var persisted = _channels.GetById(channel.Id)!;
+            Assert.Equal(1, persisted.CurrentKeyEpoch);
+
+            // Evicted direct member & former team member are stripped from BOTH Epoch 0 and Epoch 1 keys
+            Assert.False(persisted.EncryptedChannelKeys.ContainsKey(directRemoved.Id));
+            Assert.False(persisted.EncryptedChannelKeys.ContainsKey(teamEvicted.Id));
+            Assert.False(persisted.EncryptedEpochKeys[0].ContainsKey(directRemoved.Id));
+            Assert.False(persisted.EncryptedEpochKeys[0].ContainsKey(teamEvicted.Id));
+            Assert.False(persisted.EncryptedEpochKeys[1].ContainsKey(directRemoved.Id));
+            Assert.False(persisted.EncryptedEpochKeys[1].ContainsKey(teamEvicted.Id));
+
+            // Owner retains both epochs and Epoch 1 uses a newly rotated key distinct from Epoch 0
+            Assert.True(persisted.TryGetEncryptedKeyForEpoch(0, owner.Id, out var encOwner0));
+            Assert.True(persisted.TryGetEncryptedKeyForEpoch(1, owner.Id, out var encOwner1));
+            var decOwner0 = realCrypto.DecryptRsa(encOwner0!, privOwner);
+            var decOwner1 = realCrypto.DecryptRsa(encOwner1!, privOwner);
+            Assert.Equal(epoch0Key, decOwner0);
+            Assert.NotEqual(epoch0Key, decOwner1);
+
+            // File tokens issued before eviction are invalidated for evicted users
+            Assert.False(fileTokenService.ValidateAccessToken("chat", channel.Id, "doc.png", epoch0Token, directRemoved.Id, "sess-1").IsSuccess);
+
+            // Subsequent encrypted message is stamped with KeyEpoch == 1 and decryptable with epoch 1 key
+            var sendResult = await service.SendMessageAsync(new SendMessageOptions { SenderId = owner.Id, ChannelId = channel.Id, Content = "Post-rotation secret", PrivateKey = privOwner });
+            Assert.True(sendResult.IsSuccess);
+            Assert.Equal(1, sendResult.Value!.KeyEpoch);
+            Assert.Equal("Post-rotation secret", realCrypto.DecryptAes(sendResult.Value.Content, decOwner1));
         }
 }

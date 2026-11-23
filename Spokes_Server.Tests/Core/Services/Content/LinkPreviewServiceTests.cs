@@ -96,63 +96,44 @@ public class LinkPreviewServiceTests : IDisposable
         }
 
         [Fact]
-        public void GetPreview_ReturnsNull_WhenNotCached()
+        public void TryGetCachedPreview_DistinguishesCachedFailedFromUncachedAndExpired()
         {
-            var result = _service.GetPreview("https://never-seen-this.com");
-            Assert.Null(result);
-        }
+            // 1. Uncached URL -> returns false
+            Assert.False(_service.TryGetCachedPreview("https://spokes.app/uncached", out var uncachedPreview));
+            Assert.Null(uncachedPreview);
 
-        [Fact]
-        public void GetPreview_WhenCachedAndNotExpired_ReturnsCached()
-        {
-            var preview = new LinkPreview
+            // 2. Cached failed URL -> returns true with null preview (so MessageBubble skips skeleton & re-fetch)
+            _service.Cache["https://spokes.app/cached-failed"] = new LinkPreview
             {
-                Url = "https://spokes.app/doc",
-                Title = "Spokes Documentation",
-                FetchedAt = DateTime.UtcNow,
-                Failed = false
-            };
-            _service.Cache["https://spokes.app/doc"] = preview;
-
-            var result = _service.GetPreview("https://spokes.app/doc");
-
-            Assert.NotNull(result);
-            Assert.Same(preview, result);
-            Assert.Equal("Spokes Documentation", result.Title);
-        }
-
-        [Fact]
-        public void GetPreview_WhenCachedAndExpired_RemovesFromCacheAndReturnsNull()
-        {
-            var expiredPreview = new LinkPreview
-            {
-                Url = "https://spokes.app/expired",
-                Title = "Expired Documentation",
-                FetchedAt = DateTime.UtcNow.AddHours(-25),
-                Failed = false
-            };
-            _service.Cache["https://spokes.app/expired"] = expiredPreview;
-
-            var result = _service.GetPreview("https://spokes.app/expired");
-
-            Assert.Null(result);
-            Assert.False(_service.Cache.ContainsKey("https://spokes.app/expired"));
-        }
-
-        [Fact]
-        public void GetPreview_WhenCachedFailed_ReturnsNull()
-        {
-            var failedPreview = new LinkPreview
-            {
-                Url = "https://spokes.app/failed",
+                Url = "https://spokes.app/cached-failed",
                 FetchedAt = DateTime.UtcNow,
                 Failed = true
             };
-            _service.Cache["https://spokes.app/failed"] = failedPreview;
+            Assert.True(_service.TryGetCachedPreview("https://spokes.app/cached-failed", out var failedPreview));
+            Assert.Null(failedPreview);
 
-            var result = _service.GetPreview("https://spokes.app/failed");
+            // 3. Cached succeeded URL -> returns true with preview
+            var validEntry = new LinkPreview
+            {
+                Url = "https://spokes.app/cached-ok",
+                Title = "Spokes OK",
+                FetchedAt = DateTime.UtcNow,
+                Failed = false
+            };
+            _service.Cache["https://spokes.app/cached-ok"] = validEntry;
+            Assert.True(_service.TryGetCachedPreview("https://spokes.app/cached-ok", out var okPreview));
+            Assert.Same(validEntry, okPreview);
 
-            Assert.Null(result);
+            // 4. Expired failed URL -> evicts and returns false
+            _service.Cache["https://spokes.app/expired-failed"] = new LinkPreview
+            {
+                Url = "https://spokes.app/expired-failed",
+                FetchedAt = DateTime.UtcNow.AddHours(-25),
+                Failed = true
+            };
+            Assert.False(_service.TryGetCachedPreview("https://spokes.app/expired-failed", out var expiredPreview));
+            Assert.Null(expiredPreview);
+            Assert.False(_service.Cache.ContainsKey("https://spokes.app/expired-failed"));
         }
 
         private class FailingHttpMessageHandler : HttpMessageHandler

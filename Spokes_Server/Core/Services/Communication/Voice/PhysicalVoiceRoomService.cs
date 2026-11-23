@@ -10,7 +10,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Communication;
@@ -18,6 +17,7 @@ using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Communication.Voice.Dsp;
 using Spokes_Server.Core.Services.Communication.Voice.Pipeline;
+using Spokes_Server.Core.Services.Identity;
 using Spokes_Server.Core.Services.Security;
 
 /// <summary>
@@ -31,70 +31,71 @@ public class PhysicalVoiceRoomService
     public const int MaxRoomNameLength = 80;
 
     private readonly PhysicalVoiceRoomRepository _rooms;
-    private readonly ChatStateService _chatState;
+    private readonly VoiceStateService _voiceState;
     private readonly EmployeeRepository? _employees;
-    private readonly CompanyProfileRepository? _companyProfiles;
     private readonly IVoiceBotService? _voiceBotService;
     private readonly IServiceProvider? _serviceProvider;
-    private readonly IChatRealtimeGateway? _realtimeGateway;
     private readonly IUserPrivacyService? _userPrivacy;
+    private readonly ChatChannelRepository? _channels;
+    private readonly IChatAuthorizationService? _chatAuth;
     private readonly ILogger<PhysicalVoiceRoomService> _logger;
     private readonly object _lock = new();
 
     protected PhysicalVoiceRoomService()
     {
         _rooms = null!;
-        _chatState = null!;
+        _voiceState = null!;
         _logger = NullLogger<PhysicalVoiceRoomService>.Instance;
     }
 
     public PhysicalVoiceRoomService(
         PhysicalVoiceRoomRepository rooms,
-        ChatStateService chatState,
+        VoiceStateService voiceState,
         ILogger<PhysicalVoiceRoomService>? logger = null,
         EmployeeRepository? employees = null,
-        CompanyProfileRepository? companyProfiles = null,
-        IChatRealtimeGateway? realtimeGateway = null,
         IServiceProvider? serviceProvider = null,
-        IUserPrivacyService? userPrivacy = null)
+        IUserPrivacyService? userPrivacy = null,
+        ChatChannelRepository? channels = null,
+        IChatAuthorizationService? chatAuth = null)
     {
         _rooms = rooms ?? throw new ArgumentNullException(nameof(rooms));
-        _chatState = chatState ?? throw new ArgumentNullException(nameof(chatState));
+        _voiceState = voiceState ?? throw new ArgumentNullException(nameof(voiceState));
         _logger = logger ?? NullLogger<PhysicalVoiceRoomService>.Instance;
         _employees = employees;
-        _companyProfiles = companyProfiles;
-        _realtimeGateway = realtimeGateway;
         _serviceProvider = serviceProvider;
         _userPrivacy = userPrivacy;
+        _channels = channels;
+        _chatAuth = chatAuth;
     }
 
     internal PhysicalVoiceRoomService(
         PhysicalVoiceRoomRepository rooms,
-        ChatStateService chatState,
+        VoiceStateService voiceState,
         ILogger<PhysicalVoiceRoomService>? logger,
         EmployeeRepository? employees,
-        CompanyProfileRepository? companyProfiles,
         IVoiceBotService? voiceBotService,
-        IChatRealtimeGateway? realtimeGateway = null,
-        IUserPrivacyService? userPrivacy = null)
+        IUserPrivacyService? userPrivacy = null,
+        ChatChannelRepository? channels = null,
+        IChatAuthorizationService? chatAuth = null)
     {
         _rooms = rooms ?? throw new ArgumentNullException(nameof(rooms));
-        _chatState = chatState ?? throw new ArgumentNullException(nameof(chatState));
+        _voiceState = voiceState ?? throw new ArgumentNullException(nameof(voiceState));
         _logger = logger ?? NullLogger<PhysicalVoiceRoomService>.Instance;
         _employees = employees;
-        _companyProfiles = companyProfiles;
         _voiceBotService = voiceBotService;
-        _realtimeGateway = realtimeGateway;
         _userPrivacy = userPrivacy;
+        _channels = channels;
+        _chatAuth = chatAuth;
     }
 
     public virtual List<PhysicalVoiceRoom> GetAllRooms() =>
         _rooms.GetAll().OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase).ToList();
 
     /// <summary>
-    /// Returns all physical rooms selectable by <paramref name="actorUserId"/>, keeping room IDs and names
-    /// available for one-click PIN-free device enrollment while redacting <see cref="PhysicalVoiceRoom.EnrolledDevices"/>
-    /// and <see cref="PhysicalVoiceRoom.SavedCalibrations"/> on rooms where the caller is neither enrolled nor an editor,
+    /// Returns physical rooms discoverable by <paramref name="actorUserId"/>, keeping room IDs and names
+    /// available for one-click PIN-free device enrollment within the caller's discoverability silo
+    /// while redacting <see cref="PhysicalVoiceRoom.EnrolledDevices"/> and
+    /// <see cref="PhysicalVoiceRoom.SavedCalibrations"/> on rooms where the caller is neither enrolled nor an editor,
     /// and filtering enrolled roommate records through <see cref="IUserPrivacyService.CanDiscoverUser"/>.
     /// </summary>
     public virtual List<PhysicalVoiceRoom> GetRoomsForUser(string? actorUserId)
@@ -108,16 +109,12 @@ public class PhysicalVoiceRoomService
         if (_employees != null)
         {
             caller = _employees.GetById(actorUserId);
-            if (caller == null || !caller.IsActive || caller.IsBanned)
+            if (caller == null || !caller.IsActive || caller.IsSuspended || caller.IsBanned)
             {
                 return [];
             }
 
-            bool hasChatAccess = caller.IsAdmin ||
-                                 caller.HasPermission(AppPermissions.Chat.Use) ||
-                                 (caller.IsSuspended && (caller.Permissions.Contains(AppPermissions.Chat.Use) ||
-                                     caller.PermissionGroups.Any(g => g != null && g.Permissions.Contains(AppPermissions.Chat.Use))));
-            if (!hasChatAccess)
+            if (!caller.IsAdmin && !caller.HasPermission(AppPermissions.Chat.Use))
             {
                 return [];
             }
@@ -128,6 +125,11 @@ public class PhysicalVoiceRoomService
 
         foreach (var room in rooms)
         {
+            if (_employees != null && !CanUserDiscoverPhysicalRoom(room, caller))
+            {
+                continue;
+            }
+
             bool isEnrolledInRoom = room.EnrolledDevices != null &&
                 room.EnrolledDevices.Any(d => string.Equals(d.EmployeeId, actorUserId, StringComparison.Ordinal));
             bool canInspectDevices = isEnrolledInRoom || CanUserEditPhysicalRoom(room, actorUserId);
@@ -184,6 +186,7 @@ public class PhysicalVoiceRoomService
                 Name = room.Name,
                 CreatedByUserId = room.CreatedByUserId,
                 CreatedAt = room.CreatedAt,
+                AudioMode = room.AudioMode,
                 EnrolledDevices = visibleDevices,
                 SavedCalibrations = visibleCalibrations
             });
@@ -210,11 +213,16 @@ public class PhysicalVoiceRoomService
         string? initialDeviceId = null,
         string? initialDeviceName = null,
         bool muteUsersInMyRoom = false,
+        PhysicalRoomAudioMode audioMode = PhysicalRoomAudioMode.LowLatencyCleaned,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
             return SpokesResult<PhysicalVoiceRoom>.Failure("Room name cannot be empty.", "VALIDATION_ERROR");
+        }
+        if (!Enum.IsDefined(typeof(PhysicalRoomAudioMode), audioMode))
+        {
+            return SpokesResult<PhysicalVoiceRoom>.Failure("Invalid physical room audio mode.", "VALIDATION_ERROR");
         }
         if (!TryValidateActiveChatActor(creatorUserId, out _, out var actorErr, out var actorCode))
         {
@@ -245,6 +253,7 @@ public class PhysicalVoiceRoomService
                 Name = trimmedName,
                 CreatedByUserId = creatorUserId,
                 CreatedAt = DateTime.UtcNow,
+                AudioMode = audioMode,
                 EnrolledDevices = []
             };
 
@@ -264,6 +273,60 @@ public class PhysicalVoiceRoomService
         }
 
         await BroadcastRoomChangesAsync(cancellationToken);
+        return SpokesResult<PhysicalVoiceRoom>.Success(room);
+    }
+
+    /// <summary>
+    /// Updates the <see cref="PhysicalVoiceRoom.AudioMode"/> for the specified physical room.
+    /// Restricted to the room creator or an administrator with physical room management permissions.
+    /// </summary>
+    public virtual async Task<SpokesResult<PhysicalVoiceRoom>> SetRoomAudioModeAsync(
+        string roomId,
+        PhysicalRoomAudioMode audioMode,
+        string actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(roomId))
+        {
+            return SpokesResult<PhysicalVoiceRoom>.Failure("Room ID is required.", "VALIDATION_ERROR");
+        }
+        if (!Enum.IsDefined(typeof(PhysicalRoomAudioMode), audioMode))
+        {
+            return SpokesResult<PhysicalVoiceRoom>.Failure("Invalid physical room audio mode.", "VALIDATION_ERROR");
+        }
+        if (!TryValidateActiveChatActor(actorUserId, out _, out var actorErr, out var actorCode))
+        {
+            return SpokesResult<PhysicalVoiceRoom>.Failure(actorErr, actorCode);
+        }
+
+        PhysicalVoiceRoom? room;
+        bool changed = false;
+        lock (_lock)
+        {
+            room = _rooms.GetById(roomId);
+            if (room == null)
+            {
+                return SpokesResult<PhysicalVoiceRoom>.Failure("Physical room not found.", "NOT_FOUND");
+            }
+
+            if (!CanUserEditPhysicalRoom(room, actorUserId))
+            {
+                return SpokesResult<PhysicalVoiceRoom>.Failure("Only the room creator or an administrator can change this physical room's audio mode.", "FORBIDDEN");
+            }
+
+            if (room.AudioMode != audioMode)
+            {
+                room.AudioMode = audioMode;
+                _rooms.Save(room);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            await BroadcastRoomChangesAsync(cancellationToken);
+        }
+
         return SpokesResult<PhysicalVoiceRoom>.Success(room);
     }
 
@@ -362,13 +425,13 @@ public class PhysicalVoiceRoomService
             return SpokesResult<PhysicalVoiceRoom>.Failure("RoomId, EmployeeId, and DeviceId are required.", "VALIDATION_ERROR");
         }
 
-        if (!TryValidateActiveChatActor(actorUserId, out _, out var actorErr, out var actorCode))
+        if (!TryValidateActiveChatActor(actorUserId, out var actor, out var actorErr, out var actorCode))
         {
             return SpokesResult<PhysicalVoiceRoom>.Failure(actorErr, actorCode);
         }
 
-        if (!string.Equals(actorUserId, employeeId, StringComparison.Ordinal) &&
-            !CanUserManagePhysicalRooms(actorUserId))
+        bool isSelfEnroll = string.Equals(actorUserId, employeeId, StringComparison.Ordinal);
+        if (!isSelfEnroll && !CanUserManagePhysicalRooms(actorUserId))
         {
             return SpokesResult<PhysicalVoiceRoom>.Failure("You do not have permission to enroll another user's device.", "FORBIDDEN");
         }
@@ -376,12 +439,40 @@ public class PhysicalVoiceRoomService
         if (_employees != null)
         {
             var targetEmployee = _employees.GetById(employeeId);
-            if (targetEmployee == null || !targetEmployee.IsActive || targetEmployee.IsBanned)
+            if (targetEmployee == null ||
+                !targetEmployee.IsActive ||
+                targetEmployee.IsSuspended ||
+                targetEmployee.IsBanned ||
+                (!targetEmployee.IsAdmin && !targetEmployee.HasPermission(AppPermissions.Chat.Use)))
             {
                 return SpokesResult<PhysicalVoiceRoom>.Failure("Target user is not eligible for physical room enrollment.", "FORBIDDEN");
             }
+
+            if (!isSelfEnroll && targetEmployee.IsAdmin && (actor == null || !actor.IsAdmin))
+            {
+                return SpokesResult<PhysicalVoiceRoom>.Failure("Only an administrator can change an administrator's physical room enrollment.", "FORBIDDEN");
+            }
         }
 
+        return await EnrollDeviceCoreAsync(
+            roomId,
+            employeeId,
+            deviceId,
+            deviceName,
+            muteUsersInMyRoom,
+            requireDiscoverableActor: isSelfEnroll ? actor : null,
+            cancellationToken);
+    }
+
+    private async Task<SpokesResult<PhysicalVoiceRoom>> EnrollDeviceCoreAsync(
+        string roomId,
+        string employeeId,
+        string deviceId,
+        string deviceName,
+        bool? muteUsersInMyRoom,
+        Employee? requireDiscoverableActor,
+        CancellationToken cancellationToken)
+    {
         string normalizedDeviceId = NormalizeAndClampDeviceId(deviceId);
         string normalizedDeviceName = NormalizeAndClampDeviceName(deviceName, "Device");
 
@@ -392,6 +483,11 @@ public class PhysicalVoiceRoomService
             if (targetRoom == null)
             {
                 return SpokesResult<PhysicalVoiceRoom>.Failure("Physical room not found.", "NOT_FOUND");
+            }
+
+            if (requireDiscoverableActor != null && !CanUserDiscoverPhysicalRoom(targetRoom, requireDiscoverableActor))
+            {
+                return SpokesResult<PhysicalVoiceRoom>.Failure("You do not have permission to join this physical room.", "FORBIDDEN");
             }
 
             // Preserve previous MuteUsersInMyRoom setting if not explicitly overridden
@@ -437,6 +533,23 @@ public class PhysicalVoiceRoomService
             return SpokesResult<bool>.Failure(actorErr, actorCode);
         }
 
+        return await RemoveDeviceCoreAsync(
+            employeeId,
+            deviceId,
+            actorUserId!,
+            allowCallScopedBypass: false,
+            requireDiscoverableActor: null,
+            cancellationToken);
+    }
+
+    private async Task<SpokesResult<bool>> RemoveDeviceCoreAsync(
+        string employeeId,
+        string deviceId,
+        string actorUserId,
+        bool allowCallScopedBypass,
+        Employee? requireDiscoverableActor,
+        CancellationToken cancellationToken)
+    {
         string normalizedDeviceId = NormalizeAndClampDeviceId(deviceId);
 
         bool removed;
@@ -445,13 +558,16 @@ public class PhysicalVoiceRoomService
             if (!string.Equals(actorUserId, employeeId, StringComparison.Ordinal))
             {
                 var currentRoom = _rooms.GetRoomForUserDevice(employeeId, normalizedDeviceId);
-                if (currentRoom != null && !CanUserEditPhysicalRoom(currentRoom, actorUserId))
+                if (allowCallScopedBypass)
                 {
-                    return SpokesResult<bool>.Failure("You do not have permission to remove this device from the physical room.", "FORBIDDEN");
+                    if (currentRoom != null && requireDiscoverableActor != null && !CanUserDiscoverPhysicalRoom(currentRoom, requireDiscoverableActor))
+                    {
+                        return SpokesResult<bool>.Failure("You do not have permission to remove this device from the physical room.", "FORBIDDEN");
+                    }
                 }
-                if (currentRoom == null && !CanUserManagePhysicalRooms(actorUserId))
+                else if (!TryAuthorizeDeviceRemoval(currentRoom, employeeId, actorUserId, out var authErr, out var authCode))
                 {
-                    return SpokesResult<bool>.Failure("You do not have permission to remove this device.", "FORBIDDEN");
+                    return SpokesResult<bool>.Failure(authErr, authCode);
                 }
             }
 
@@ -522,8 +638,77 @@ public class PhysicalVoiceRoomService
     }
 
     /// <summary>
-    /// Allows a Chat Admin (or user with channel management permissions) to assign or remove
-    /// another participant's active device to/from a Physical Room.
+    /// Refreshes the stored <see cref="PhysicalRoomDeviceEnrollment.DeviceName"/> for an already-enrolled
+    /// <c>(employeeId, deviceId)</c> pair when the client's live auto-detected device label changes
+    /// (for example, healing an Electron client previously saved as "Windows PC (Chrome)" to
+    /// "Windows PC (Spokes Desktop)"). Preserves room membership, mute settings, and saved calibrations.
+    /// </summary>
+    public virtual Task<bool> SyncEnrolledDeviceNameAsync(
+        string employeeId,
+        string deviceId,
+        string deviceName,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(employeeId) ||
+            string.IsNullOrWhiteSpace(deviceId) ||
+            IsGenericFallbackDeviceName(deviceName))
+        {
+            return Task.FromResult(false);
+        }
+
+        if (!TryValidateActiveChatActor(employeeId, out _, out _, out _))
+        {
+            return Task.FromResult(false);
+        }
+
+        string normalizedDeviceId = NormalizeAndClampDeviceId(deviceId);
+        string normalizedDeviceName = NormalizeAndClampDeviceName(deviceName, "Device");
+        bool updated = false;
+
+        lock (_lock)
+        {
+            var room = _rooms.GetRoomForUserDevice(employeeId, normalizedDeviceId);
+            var enrollment = room?.EnrolledDevices.FirstOrDefault(d =>
+                string.Equals(d.EmployeeId, employeeId, StringComparison.Ordinal) &&
+                string.Equals(d.DeviceId, normalizedDeviceId, StringComparison.Ordinal));
+
+            if (room != null && enrollment != null &&
+                !string.Equals(enrollment.DeviceName, normalizedDeviceName, StringComparison.Ordinal))
+            {
+                enrollment.DeviceName = normalizedDeviceName;
+                _rooms.Save(room);
+                updated = true;
+            }
+        }
+
+        if (updated)
+        {
+            _voiceState.NotifyPhysicalRoomsChanged();
+        }
+
+        return Task.FromResult(updated);
+    }
+
+    private static bool IsGenericFallbackDeviceName(string? deviceName)
+    {
+        if (string.IsNullOrWhiteSpace(deviceName))
+        {
+            return true;
+        }
+
+        string trimmed = deviceName.Trim();
+        return string.Equals(trimmed, "This Device", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, "Active Call Device", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, "Desktop Browser", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, "Device", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, "Desktop PC", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Allows a global physical-room manager (<c>IsAdmin</c> / <c>Admin.ManageSettings</c>) or an active
+    /// call-scoped <c>Chat.Moderator</c> (when both actor and target share an accessible non-DM voice call
+    /// and respect privilege hierarchy and privacy discoverability) to assign or remove a participant's
+    /// active device to/from a Physical Room.
     /// </summary>
     public virtual async Task<SpokesResult<bool>> AdminAssignParticipantDeviceToRoomAsync(
         string adminUserId,
@@ -531,16 +716,12 @@ public class PhysicalVoiceRoomService
         string targetDeviceId,
         string targetDeviceName,
         string? targetRoomId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? channelId = null)
     {
-        if (!TryValidateActiveChatActor(adminUserId, out _, out var actorErr, out var actorCode))
+        if (!TryValidateActiveChatActor(adminUserId, out var actor, out var actorErr, out var actorCode))
         {
             return SpokesResult<bool>.Failure(actorErr, actorCode);
-        }
-
-        if (!CanUserManagePhysicalRooms(adminUserId))
-        {
-            return SpokesResult<bool>.Failure("You do not have permission to assign other users to physical rooms.", "FORBIDDEN");
         }
 
         if (string.IsNullOrWhiteSpace(targetEmployeeId) || string.IsNullOrWhiteSpace(targetDeviceId))
@@ -548,15 +729,214 @@ public class PhysicalVoiceRoomService
             return SpokesResult<bool>.Failure("Target user and device ID are required.", "VALIDATION_ERROR");
         }
 
-        if (string.IsNullOrWhiteSpace(targetRoomId))
+        Employee? targetEmployee = _employees?.GetById(targetEmployeeId);
+        if (_employees != null && targetEmployee != null && targetEmployee.IsAdmin && (actor == null || !actor.IsAdmin))
         {
-            return await RemoveUserDeviceAsync(targetEmployeeId, targetDeviceId, cancellationToken, actorUserId: adminUserId);
+            return SpokesResult<bool>.Failure("Only an administrator can change an administrator's physical room assignment.", "FORBIDDEN");
         }
 
-        var res = await EnrollUserDeviceAsync(targetRoomId, targetEmployeeId, targetDeviceId, targetDeviceName, null, cancellationToken, actorUserId: adminUserId);
+        bool isAssigning = !string.IsNullOrWhiteSpace(targetRoomId);
+        bool hasGlobalManage = CanUserManagePhysicalRooms(adminUserId);
+
+        if (hasGlobalManage)
+        {
+            if (isAssigning && _employees != null &&
+                (targetEmployee == null ||
+                 !targetEmployee.IsActive ||
+                 targetEmployee.IsSuspended ||
+                 targetEmployee.IsBanned ||
+                 (!targetEmployee.IsAdmin && !targetEmployee.HasPermission(AppPermissions.Chat.Use))))
+            {
+                return SpokesResult<bool>.Failure("Target user is not eligible for physical room enrollment.", "FORBIDDEN");
+            }
+        }
+        else
+        {
+            if (_employees == null ||
+                actor == null ||
+                !actor.HasPermission(AppPermissions.Chat.Moderator) ||
+                targetEmployee == null ||
+                !targetEmployee.IsActive ||
+                targetEmployee.IsSuspended ||
+                targetEmployee.IsBanned ||
+                (!targetEmployee.IsAdmin && !targetEmployee.HasPermission(AppPermissions.Chat.Use)))
+            {
+                return SpokesResult<bool>.Failure("You do not have permission to assign other users to physical rooms.", "FORBIDDEN");
+            }
+
+            if (!string.Equals(adminUserId, targetEmployeeId, StringComparison.Ordinal))
+            {
+                if (!UserService.CanModerateUserTarget(actor, targetEmployee) ||
+                    (_userPrivacy != null && !_userPrivacy.CanDiscoverUser(actor, targetEmployee)))
+                {
+                    return SpokesResult<bool>.Failure("You do not have permission to assign this participant's physical room.", "FORBIDDEN");
+                }
+            }
+
+            var candidateChannels = !string.IsNullOrWhiteSpace(channelId)
+                ? new List<string> { channelId.Trim() }
+                : _voiceState.GetAllActiveVoiceChannels();
+            var channelsRepo = _channels ?? _serviceProvider?.GetService<ChatChannelRepository>();
+            var chatAuth = _chatAuth ?? _serviceProvider?.GetService<IChatAuthorizationService>();
+
+            bool sharesAccessibleVoiceCall = false;
+            foreach (var cid in candidateChannels)
+            {
+                var participants = _voiceState.GetVoiceParticipants(cid);
+                if (!participants.Contains(adminUserId, StringComparer.Ordinal) ||
+                    !participants.Contains(targetEmployeeId, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
+                if (channelsRepo != null)
+                {
+                    var channel = channelsRepo.GetById(cid);
+                    if (channel == null ||
+                        channel.ChannelType == ChatChannelType.Direct ||
+                        channel.ChannelType == ChatChannelType.Group ||
+                        (chatAuth != null && !chatAuth.CanUserAccessChannel(channel, actor)))
+                    {
+                        continue;
+                    }
+                }
+
+                sharesAccessibleVoiceCall = true;
+                break;
+            }
+
+            if (!sharesAccessibleVoiceCall)
+            {
+                return SpokesResult<bool>.Failure("Moderators may only assign participants sharing an active non-DM voice channel.", "FORBIDDEN");
+            }
+
+            if (isAssigning)
+            {
+                var requestedRoom = _rooms.GetById(targetRoomId!);
+                if (requestedRoom == null)
+                {
+                    return SpokesResult<bool>.Failure("Physical room not found.", "NOT_FOUND");
+                }
+
+                if (!CanUserDiscoverPhysicalRoom(requestedRoom, actor))
+                {
+                    return SpokesResult<bool>.Failure("You do not have permission to assign participants to this physical room.", "FORBIDDEN");
+                }
+            }
+            else
+            {
+                string normDev = NormalizeAndClampDeviceId(targetDeviceId);
+                var currentRoom = _rooms.GetRoomForUserDevice(targetEmployeeId, normDev);
+                if (currentRoom != null && !CanUserDiscoverPhysicalRoom(currentRoom, actor))
+                {
+                    return SpokesResult<bool>.Failure("You do not have permission to remove this device from its physical room.", "FORBIDDEN");
+                }
+            }
+        }
+
+        if (!isAssigning)
+        {
+            return await RemoveDeviceCoreAsync(
+                targetEmployeeId,
+                targetDeviceId,
+                adminUserId,
+                allowCallScopedBypass: !hasGlobalManage,
+                requireDiscoverableActor: hasGlobalManage ? null : actor,
+                cancellationToken);
+        }
+
+        var res = await EnrollDeviceCoreAsync(
+            targetRoomId!,
+            targetEmployeeId,
+            targetDeviceId,
+            targetDeviceName,
+            muteUsersInMyRoom: null,
+            requireDiscoverableActor: hasGlobalManage ? null : actor,
+            cancellationToken);
         return res.IsSuccess
             ? SpokesResult<bool>.Success(true)
             : SpokesResult<bool>.Failure(res.ErrorMessage ?? "Failed to assign room.", res.Code ?? "ERROR");
+    }
+
+    public virtual bool CanUserDiscoverPhysicalRoom(PhysicalVoiceRoom? room, string? actorUserId)
+    {
+        if (room == null || string.IsNullOrWhiteSpace(actorUserId))
+        {
+            return false;
+        }
+
+        if (_employees == null)
+        {
+            return true;
+        }
+
+        return CanUserDiscoverPhysicalRoom(room, _employees.GetById(actorUserId));
+    }
+
+    public virtual bool CanUserDiscoverPhysicalRoom(PhysicalVoiceRoom? room, Employee? actor)
+    {
+        if (room == null || actor == null || !actor.IsActive || actor.IsSuspended || actor.IsBanned)
+        {
+            return false;
+        }
+
+        if (!actor.IsAdmin && !actor.HasPermission(AppPermissions.Chat.Use))
+        {
+            return false;
+        }
+
+        if (actor.IsAdmin || CanUserEditPhysicalRoom(room, actor.Id))
+        {
+            return true;
+        }
+
+        bool isEnrolledInRoom = room.EnrolledDevices != null &&
+            room.EnrolledDevices.Any(d => string.Equals(d.EmployeeId, actor.Id, StringComparison.Ordinal));
+        if (isEnrolledInRoom)
+        {
+            return true;
+        }
+
+        if (_userPrivacy == null || _employees == null)
+        {
+            return true;
+        }
+
+        if (room.EnrolledDevices != null)
+        {
+            foreach (var enrolled in room.EnrolledDevices)
+            {
+                if (string.IsNullOrWhiteSpace(enrolled.EmployeeId))
+                {
+                    continue;
+                }
+
+                var member = _employees.GetById(enrolled.EmployeeId);
+                if (member != null && _userPrivacy.CanDiscoverUser(actor, member))
+                {
+                    return true;
+                }
+            }
+        }
+
+        var creator = !string.IsNullOrWhiteSpace(room.CreatedByUserId)
+            ? _employees.GetById(room.CreatedByUserId)
+            : null;
+        if (creator != null)
+        {
+            bool adminCreatedRoomOccupiedByOthers =
+                creator.IsAdmin &&
+                room.EnrolledDevices != null &&
+                room.EnrolledDevices.Count > 0 &&
+                !room.EnrolledDevices.Any(d => string.Equals(d.EmployeeId, creator.Id, StringComparison.Ordinal));
+
+            if (!adminCreatedRoomOccupiedByOthers && _userPrivacy.CanDiscoverUser(actor, creator))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public virtual bool CanUserEditPhysicalRoom(PhysicalVoiceRoom? room, string? userId)
@@ -589,10 +969,71 @@ public class PhysicalVoiceRoomService
         if (emp == null || !emp.IsActive || emp.IsSuspended || emp.IsBanned) return false;
         if (emp.IsAdmin) return true;
 
-        return emp.HasPermission(AppPermissions.Admin.ManageSettings) ||
-               emp.HasPermission(AppPermissions.Chat.Moderator) ||
-               emp.HasPermission(AppPermissions.Chat.EditAllPublicChannels) ||
-               emp.HasPermission(AppPermissions.Chat.CreateChannels);
+        return emp.HasPermission(AppPermissions.Admin.ManageSettings);
+    }
+
+    /// <summary>
+    /// Canonical authorization check for whether <paramref name="actorUserId"/> may remove
+    /// <paramref name="targetEmployeeId"/>'s enrolled device from <paramref name="room"/>.
+    /// Mirrors <see cref="RemoveUserDeviceAsync"/> so UI controls and server enforcement never diverge.
+    /// </summary>
+    public virtual bool CanUserRemoveDeviceEnrollment(PhysicalVoiceRoom? room, string? targetEmployeeId, string? actorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(targetEmployeeId) || string.IsNullOrWhiteSpace(actorUserId))
+        {
+            return false;
+        }
+
+        return TryAuthorizeDeviceRemoval(room, targetEmployeeId, actorUserId, out _, out _);
+    }
+
+    private bool TryAuthorizeDeviceRemoval(
+        PhysicalVoiceRoom? room,
+        string targetEmployeeId,
+        string? actorUserId,
+        out string errorMessage,
+        out string errorCode)
+    {
+        if (!TryValidateActiveChatActor(actorUserId, out var actor, out errorMessage, out errorCode))
+        {
+            return false;
+        }
+
+        if (string.Equals(actorUserId, targetEmployeeId, StringComparison.Ordinal))
+        {
+            errorMessage = string.Empty;
+            errorCode = string.Empty;
+            return true;
+        }
+
+        if (_employees != null)
+        {
+            var targetEmployee = _employees.GetById(targetEmployeeId);
+            if (targetEmployee != null && targetEmployee.IsAdmin && (actor == null || !actor.IsAdmin))
+            {
+                errorMessage = "You do not have permission to remove an administrator's device.";
+                errorCode = "FORBIDDEN";
+                return false;
+            }
+        }
+
+        if (room != null && !CanUserEditPhysicalRoom(room, actorUserId))
+        {
+            errorMessage = "You do not have permission to remove this device from the physical room.";
+            errorCode = "FORBIDDEN";
+            return false;
+        }
+
+        if (room == null && !CanUserManagePhysicalRooms(actorUserId))
+        {
+            errorMessage = "You do not have permission to remove this device.";
+            errorCode = "FORBIDDEN";
+            return false;
+        }
+
+        errorMessage = string.Empty;
+        errorCode = string.Empty;
+        return true;
     }
 
     /// <summary>
@@ -604,12 +1045,12 @@ public class PhysicalVoiceRoomService
         var result = new Dictionary<string, (PhysicalVoiceRoom Room, PhysicalRoomDeviceEnrollment Enrollment)>(StringComparer.Ordinal);
         if (string.IsNullOrWhiteSpace(channelId)) return result;
 
-        var participants = _chatState.GetVoiceParticipants(channelId);
+        var participants = _voiceState.GetVoiceParticipants(channelId);
         if (participants.Count == 0) return result;
 
         foreach (var userId in participants)
         {
-            var devInfo = _chatState.GetVoiceParticipantDevice(channelId, userId);
+            var devInfo = _voiceState.GetVoiceParticipantDevice(channelId, userId);
             if (devInfo == null || string.IsNullOrWhiteSpace(devInfo.Value.DeviceId)) continue;
 
             string normalizedDeviceId = NormalizeAndClampDeviceId(devInfo.Value.DeviceId);
@@ -634,7 +1075,7 @@ public class PhysicalVoiceRoomService
         var result = new Dictionary<string, (PhysicalVoiceRoom Room, List<string> ActiveUserIds)>(StringComparer.Ordinal);
         if (string.IsNullOrWhiteSpace(channelId)) return result;
 
-        var participants = _chatState.GetVoiceParticipants(channelId);
+        var participants = _voiceState.GetVoiceParticipants(channelId);
         if (participants.Count == 0) return result;
 
         var allRooms = _rooms.GetAll();
@@ -642,7 +1083,7 @@ public class PhysicalVoiceRoomService
 
         foreach (var userId in participants)
         {
-            var devInfo = _chatState.GetVoiceParticipantDevice(channelId, userId);
+            var devInfo = _voiceState.GetVoiceParticipantDevice(channelId, userId);
             if (devInfo == null || string.IsNullOrWhiteSpace(devInfo.Value.DeviceId)) continue;
 
             string normalizedDeviceId = NormalizeAndClampDeviceId(devInfo.Value.DeviceId);
@@ -687,7 +1128,7 @@ public class PhysicalVoiceRoomService
     {
         if (string.IsNullOrWhiteSpace(channelId) || string.IsNullOrWhiteSpace(userId)) return [];
 
-        string? resolvedDeviceId = deviceId ?? _chatState.GetVoiceParticipantDevice(channelId, userId)?.DeviceId;
+        string? resolvedDeviceId = deviceId ?? _voiceState.GetVoiceParticipantDevice(channelId, userId)?.DeviceId;
         if (string.IsNullOrWhiteSpace(resolvedDeviceId)) return [];
 
         string normalizedDeviceId = NormalizeAndClampDeviceId(resolvedDeviceId);
@@ -708,6 +1149,58 @@ public class PhysicalVoiceRoomService
     /// If the server-side pipeline processor is active, returns live DSP telemetry; otherwise synthesizes an idle snapshot
     /// for the connected participants in the room so diagnostic UI and agent logs always have full context.
     /// </summary>
+    public virtual (string[] CoLocatedUserIds, string[] MutedRoommateUserIds) PreviewClientPhysicalRoomStateForJoin(
+        string channelId,
+        string joiningUserId,
+        string? joiningDeviceId)
+    {
+        if (string.IsNullOrWhiteSpace(channelId) || string.IsNullOrWhiteSpace(joiningUserId))
+        {
+            return (Array.Empty<string>(), Array.Empty<string>());
+        }
+
+        var groups = GetChannelRoomEnrollments(channelId);
+        PhysicalVoiceRoom? myRoom = null;
+        PhysicalRoomDeviceEnrollment? myEnrollment = null;
+
+        if (!string.IsNullOrWhiteSpace(joiningDeviceId))
+        {
+            string normalizedDeviceId = NormalizeAndClampDeviceId(joiningDeviceId);
+            myRoom = _rooms.GetRoomForUserDevice(joiningUserId, normalizedDeviceId);
+            myEnrollment = _rooms.GetEnrollment(joiningUserId, normalizedDeviceId);
+            if (myRoom != null)
+            {
+                if (!groups.TryGetValue(myRoom.Id, out var entry))
+                {
+                    entry = (myRoom, []);
+                    groups[myRoom.Id] = entry;
+                }
+                if (!entry.ActiveUserIds.Contains(joiningUserId, StringComparer.Ordinal))
+                {
+                    entry.ActiveUserIds.Add(joiningUserId);
+                }
+            }
+        }
+
+        var coLocatedUserIds = groups.Values
+            .Where(g => g.ActiveUserIds.Count >= 2)
+            .SelectMany(g => g.ActiveUserIds)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        string[] mutedRoommates = Array.Empty<string>();
+        if (myRoom != null && myEnrollment?.MuteUsersInMyRoom == true &&
+            groups.TryGetValue(myRoom.Id, out var myGroup) &&
+            myGroup.ActiveUserIds.Count >= 2)
+        {
+            mutedRoommates = myGroup.ActiveUserIds
+                .Where(id => !string.Equals(id, joiningUserId, StringComparison.Ordinal))
+                .ToArray();
+        }
+
+        return (coLocatedUserIds, mutedRoommates);
+    }
+
     public virtual PhysicalRoomDiagnosticSnapshot GetRoomDiagnosticSnapshot(string channelId, string physicalRoomId, string? actorUserId = null)
     {
         if (!TryAuthorizeRoomDiagnostics(physicalRoomId, actorUserId, requireNotSuspended: false, out var caller))
@@ -893,7 +1386,7 @@ public class PhysicalVoiceRoomService
 
     private async Task BroadcastRoomChangesAsync(CancellationToken cancellationToken)
     {
-        _chatState.NotifyPhysicalRoomsChanged();
+        _voiceState.NotifyPhysicalRoomsChanged();
 
         var voiceBotService = _voiceBotService ?? _serviceProvider?.GetService<IVoiceBotService>();
         if (voiceBotService != null)
@@ -907,21 +1400,9 @@ public class PhysicalVoiceRoomService
                 _logger.LogWarning(ex, "[PhysicalVoiceRoomService] Error notifying VoiceBotService of room configuration change");
             }
         }
-
-        if (_realtimeGateway != null)
-        {
-            foreach (var activeChannelId in _chatState.GetAllActiveVoiceChannels())
-            {
-                try
-                {
-                    await _realtimeGateway.SendToChannelAsync(activeChannelId, "VoicePhysicalRoomsChanged", activeChannelId, cancellationToken);
-                }
-                catch { }
-            }
-        }
     }
 
-    private static string NormalizeAndClampDeviceId(string deviceId)
+    internal static string NormalizeAndClampDeviceId(string deviceId)
     {
         string trimmed = deviceId.Trim();
         return trimmed.Length > MaxDeviceIdLength ? trimmed[..MaxDeviceIdLength] : trimmed;
@@ -972,30 +1453,33 @@ public class PhysicalVoiceRoomService
         return true;
     }
 
-    private bool IsUserVisibleToActor(Employee? caller, string actorUserId, string targetUserId)
+    private bool IsUserVisibleToActor(Employee? caller, string actorUserId, string targetUserId) =>
+        IsUserVisibleToActor(caller, actorUserId, targetUserId, _employees, _userPrivacy);
+
+    internal static bool IsUserVisibleToActor(
+        Employee? caller,
+        string actorUserId,
+        string targetUserId,
+        EmployeeRepository? employees,
+        IUserPrivacyService? userPrivacy)
     {
         if (string.Equals(actorUserId, targetUserId, StringComparison.Ordinal))
         {
             return true;
         }
 
-        if (caller?.IsAdmin == true)
+        if (caller?.IsEffectiveAdmin == true || userPrivacy == null || employees == null)
         {
             return true;
         }
 
-        if (_userPrivacy == null || _employees == null)
-        {
-            return true;
-        }
-
-        var target = _employees.GetById(targetUserId);
+        var target = employees.GetById(targetUserId);
         if (target == null)
         {
             return false;
         }
 
-        return _userPrivacy.CanDiscoverUser(caller, target);
+        return userPrivacy.CanDiscoverUser(caller, target);
     }
 
     private bool TryAuthorizeRoomDiagnostics(string physicalRoomId, string? actorUserId, bool requireNotSuspended, out Employee? caller)

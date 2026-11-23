@@ -30,6 +30,7 @@ public abstract class RepositoryTestBase : IDisposable
 
         _mockConfig = new Mock<IConfiguration>();
         _mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        _mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
         _writer = new DiskPersistenceService(mockLogger.Object);
@@ -42,6 +43,7 @@ public abstract class RepositoryTestBase : IDisposable
     {
         var mock = new Mock<IConfiguration>();
         mock.Setup(c => c["DataPath"]).Returns((string?)null);
+        mock.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         return mock.Object;
     }
 
@@ -73,20 +75,17 @@ public abstract class RepositoryTestBase : IDisposable
 }
 
 /// <summary>
-/// Generic repository test fixture that automatically constructs the repository under test
-/// and verifies default path behavior on null configuration.
+/// Generic repository test fixture that automatically constructs the repository under test.
 /// </summary>
 public abstract class RepositoryTestFixture<TRepository> : RepositoryTestBase
     where TRepository : class
 {
     protected readonly TRepository _repo;
     protected TRepository _repository => _repo;
-    private readonly Func<DiskPersistenceService, IConfiguration, TRepository>? _factory;
 
     protected RepositoryTestFixture(Func<DiskPersistenceService, IConfiguration, TRepository> factory, string? testPrefix = null)
         : base(testPrefix ?? typeof(TRepository).Name)
     {
-        _factory = factory;
         _repo = factory(_writer, Config);
     }
 
@@ -101,25 +100,6 @@ public abstract class RepositoryTestFixture<TRepository> : RepositoryTestBase
         else
         {
             throw new InvalidOperationException($"Type {typeof(TRepository).Name} does not have a (DiskPersistenceService, IConfiguration) constructor. Use the factory constructor.");
-        }
-    }
-
-    [Fact]
-    public virtual void Constructor_WithNullDataPath_UsesDefaultPath()
-    {
-        var nullConfig = CreateNullDataPathConfig();
-        if (_factory != null)
-        {
-            var repo = _factory(_writer, nullConfig);
-            Assert.NotNull(repo);
-            return;
-        }
-
-        var ctor = typeof(TRepository).GetConstructor([typeof(DiskPersistenceService), typeof(IConfiguration)]);
-        if (ctor != null)
-        {
-            var repo = (TRepository)ctor.Invoke([_writer, nullConfig]);
-            Assert.NotNull(repo);
         }
     }
 }

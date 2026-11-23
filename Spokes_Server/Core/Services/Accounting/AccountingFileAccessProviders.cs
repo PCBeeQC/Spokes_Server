@@ -21,14 +21,17 @@ public class ExpenseFileAccessProvider : IFileAccessProvider
     {
         if (!FileAccessPermissionHelper.IsReadableUser(user)) return false;
 
-        // Finance admins can see all expenses
-        if (user.IsAdmin || FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Finance.AccessAccounting))
-            return true;
-
         var report = _expenseReports.GetById(contextId);
         if (report == null) return false;
 
-        return report.EmployeeId == user.Id;
+        if (report.EmployeeId == user.Id)
+            return true;
+
+        if (string.Equals(report.Status, ExpenseReportStatus.Draft, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // Finance admins can see all non-draft expenses (active, non-suspended only)
+        return user.IsEffectiveAdmin || user.HasPermission(AppPermissions.Finance.AccessAccounting);
     }
 
     public bool CanUpload(Employee user, string contextId)
@@ -49,11 +52,10 @@ public class ExpenseFileAccessProvider : IFileAccessProvider
     }
 }
 
-public class BillFileAccessProvider : IFileAccessProvider
+public abstract class BillsPermissionFileAccessProviderBase : IFileAccessProvider
 {
-    public string Category => "bills";
+    public abstract string Category { get; }
 
-    // Bills are accessible to finance/admin and purchase managers/reviewers
     public bool CanAccess(Employee user, string contextId)
     {
         if (!FileAccessPermissionHelper.IsReadableUser(user)) return false;
@@ -62,8 +64,7 @@ public class BillFileAccessProvider : IFileAccessProvider
             || FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Finance.AccessAccounting)
             || FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Purchases.ViewBills)
             || FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Purchases.ManageBills)
-            || FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Purchases.ApproveBills)
-            || FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Purchases.ViewPOs);
+            || FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Purchases.ApproveBills);
     }
 
     public bool CanUpload(Employee user, string contextId)
@@ -76,11 +77,39 @@ public class BillFileAccessProvider : IFileAccessProvider
     }
 }
 
-public class RecurringCostFileAccessProvider : IFileAccessProvider
+public class BillFileAccessProvider : BillsPermissionFileAccessProviderBase
 {
-    public string Category => "recurringcosts";
+    public override string Category => "bills";
+}
 
-    // Recurring costs/one-time expenses are finance-only
+public class RecurringCostFileAccessProvider : BillsPermissionFileAccessProviderBase
+{
+    public override string Category => "recurringcosts";
+}
+
+public class BankStatementFileAccessProvider : IFileAccessProvider
+{
+    public string Category => "bankstatements";
+
+    public bool CanAccess(Employee user, string contextId)
+    {
+        if (!FileAccessPermissionHelper.IsReadableUser(user)) return false;
+
+        return user.IsAdmin || FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Finance.AccessAccounting);
+    }
+
+    public bool CanUpload(Employee user, string contextId)
+    {
+        if (!FileAccessPermissionHelper.IsWritableUser(user)) return false;
+
+        return user.IsAdmin || user.HasPermission(AppPermissions.Finance.AccessAccounting);
+    }
+}
+
+public class DirectTransactionFileAccessProvider : IFileAccessProvider
+{
+    public string Category => "directtransactions";
+
     public bool CanAccess(Employee user, string contextId)
     {
         if (!FileAccessPermissionHelper.IsReadableUser(user)) return false;

@@ -90,19 +90,19 @@ public static class ContextTagRegistry
             ("@Client.ContactTitle", client?.ContactPersonTitle ?? ""),
             ("@Client.ContactEmail", client?.ContactPersonEmail ?? ""),
             ("@Client.ContactPhone", client?.ContactPersonPhone ?? ""),
-            ("@Client.AddressMultiLine", client != null ? FormatClientAddressMultiLine(client) : ""),
-            ("@Client.Address", client != null ? FormatClientAddressInline(client) : ""),
+            ("@Client.AddressMultiLine", client != null ? FormatAddress(client.BusinessAddressNumber, client.BusinessAddressStreet, client.BusinessAddressCity, client.BusinessAddressState, client.BusinessAddressZip, client.BusinessAddressCountry, multiLine: true) : ""),
+            ("@Client.Address", client != null ? FormatAddress(client.BusinessAddressNumber, client.BusinessAddressStreet, client.BusinessAddressCity, client.BusinessAddressState, client.BusinessAddressZip, client.BusinessAddressCountry, multiLine: false) : ""),
 
             // Company
             ("@Company.Name", profile?.CompanyName ?? ""),
-            ("@Company.AddressMultiLine", profile != null ? FormatCompanyAddressMultiLine(profile) : ""),
-            ("@Company.Address", profile != null ? FormatCompanyAddress(profile) : ""),
+            ("@Company.AddressMultiLine", profile != null ? FormatAddress(null, profile.AddressStreet, profile.AddressCity, profile.AddressState, profile.AddressZip, profile.AddressCountry, multiLine: true) : ""),
+            ("@Company.Address", profile != null ? FormatAddress(null, profile.AddressStreet, profile.AddressCity, profile.AddressState, profile.AddressZip, profile.AddressCountry, multiLine: false) : ""),
             ("@Company.Phone", profile?.PhoneNumber ?? ""),
             ("@Company.Website", profile?.Website ?? ""),
 
             // Project Manager
             ("@ProjectManager.Name", projectManager?.FullName ?? ""),
-            ("@ProjectManager.Email", projectManager?.Email ?? ""),
+            ("@ProjectManager.Email", projectManager?.IsEmailPublic == true ? projectManager.Email : ""),
             ("@ProjectManager.Position", projectManager?.Position ?? ""),
 
             // Date
@@ -113,97 +113,40 @@ public static class ContextTagRegistry
         return replacements;
     }
 
-    private static string FormatClientAddressMultiLine(ClientInfo client)
+    private static string FormatAddress(
+        string? number,
+        string? street,
+        string? city,
+        string? state,
+        string? zip,
+        string? country,
+        bool multiLine)
     {
-        List<string> parts = [];
-
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressNumber))
-            parts.Add(client.BusinessAddressNumber);
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressStreet))
-            parts.Add(client.BusinessAddressStreet);
-
-        var line1 = string.Join(" ", parts);
-
-        List<string> cityState = [];
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressCity))
-            cityState.Add(client.BusinessAddressCity);
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressState))
-            cityState.Add(client.BusinessAddressState);
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressZip))
-            cityState.Add(client.BusinessAddressZip);
-
-        var line2 = string.Join(", ", cityState);
-
-        List<string> lines = [];
-        if (!string.IsNullOrEmpty(line1)) lines.Add(line1);
-        if (!string.IsNullOrEmpty(line2)) lines.Add(line2);
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressCountry))
-            lines.Add(client.BusinessAddressCountry);
-
-        return string.Join("\n", lines);
-    }
-
-    private static string FormatCompanyAddress(CompanyProfile profile)
-    {
-        List<string> parts = [];
-        if (!string.IsNullOrWhiteSpace(profile.AddressStreet))
-            parts.Add(profile.AddressStreet);
-        if (!string.IsNullOrWhiteSpace(profile.AddressCity))
-            parts.Add(profile.AddressCity);
-        if (!string.IsNullOrWhiteSpace(profile.AddressState))
-            parts.Add(profile.AddressState);
-        if (!string.IsNullOrWhiteSpace(profile.AddressZip))
-            parts.Add(profile.AddressZip);
-        if (!string.IsNullOrWhiteSpace(profile.AddressCountry))
-            parts.Add(profile.AddressCountry);
-
-        return string.Join(", ", parts);
-    }
-
-    private static string FormatClientAddressInline(ClientInfo client)
-    {
-        List<string> parts = [];
-
         List<string> streetParts = [];
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressNumber))
-            streetParts.Add(client.BusinessAddressNumber);
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressStreet))
-            streetParts.Add(client.BusinessAddressStreet);
-        var street = string.Join(" ", streetParts);
-        if (!string.IsNullOrEmpty(street)) parts.Add(street);
-
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressCity))
-            parts.Add(client.BusinessAddressCity);
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressState))
-            parts.Add(client.BusinessAddressState);
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressZip))
-            parts.Add(client.BusinessAddressZip);
-        if (!string.IsNullOrWhiteSpace(client.BusinessAddressCountry))
-            parts.Add(client.BusinessAddressCountry);
-
-        return string.Join(", ", parts);
-    }
-
-    private static string FormatCompanyAddressMultiLine(CompanyProfile profile)
-    {
-        List<string> lines = [];
-        if (!string.IsNullOrWhiteSpace(profile.AddressStreet))
-            lines.Add(profile.AddressStreet);
+        if (!string.IsNullOrWhiteSpace(number)) streetParts.Add(number);
+        if (!string.IsNullOrWhiteSpace(street)) streetParts.Add(street);
+        var line1 = string.Join(" ", streetParts);
 
         List<string> cityState = [];
-        if (!string.IsNullOrWhiteSpace(profile.AddressCity))
-            cityState.Add(profile.AddressCity);
-        if (!string.IsNullOrWhiteSpace(profile.AddressState))
-            cityState.Add(profile.AddressState);
-        if (!string.IsNullOrWhiteSpace(profile.AddressZip))
-            cityState.Add(profile.AddressZip);
-        var line2 = string.Join(", ", cityState);
-        if (!string.IsNullOrEmpty(line2)) lines.Add(line2);
+        if (!string.IsNullOrWhiteSpace(city)) cityState.Add(city);
+        if (!string.IsNullOrWhiteSpace(state)) cityState.Add(state);
+        if (!string.IsNullOrWhiteSpace(zip)) cityState.Add(zip);
 
-        if (!string.IsNullOrWhiteSpace(profile.AddressCountry))
-            lines.Add(profile.AddressCountry);
+        if (multiLine)
+        {
+            List<string> lines = [];
+            if (!string.IsNullOrEmpty(line1)) lines.Add(line1);
+            var line2 = string.Join(", ", cityState);
+            if (!string.IsNullOrEmpty(line2)) lines.Add(line2);
+            if (!string.IsNullOrWhiteSpace(country)) lines.Add(country);
+            return string.Join("\n", lines);
+        }
 
-        return string.Join("\n", lines);
+        List<string> parts = [];
+        if (!string.IsNullOrEmpty(line1)) parts.Add(line1);
+        parts.AddRange(cityState);
+        if (!string.IsNullOrWhiteSpace(country)) parts.Add(country);
+        return string.Join(", ", parts);
     }
 }
 

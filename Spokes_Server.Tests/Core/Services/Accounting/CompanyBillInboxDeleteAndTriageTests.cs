@@ -13,6 +13,7 @@ using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Accounting;
 using Spokes_Server.Core.Services.Accounting.InvoiceExtraction;
 using Spokes_Server.Core.Services.Communication.Email;
@@ -28,12 +29,14 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
     private readonly Mock<IFileService> _mockFileService;
     private readonly Mock<IEmailCacheMaintenanceService> _mockCacheMaintenance;
     private readonly CompanyBillInboxService _inboxService;
+    private static readonly Employee AdminActor = new() { Id = "admin-test", FirstName = "Admin", LastName = "Test", IsAdmin = true, IsActive = true };
 
     public CompanyBillInboxDeleteAndTriageTests()
     {
         var services = new ServiceCollection();
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
         services.AddLogging(b => b.AddConsole());
         services.AddSingleton<EncryptionService>();
@@ -98,7 +101,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.Bills.Save(draft2);
 
         // Act
-        var result = await _inboxService.DeleteEmailAsync(msg.Id, "test-user", deleteLinkedDrafts: true);
+        var result = await _inboxService.DeleteEmailAsync(msg.Id, deleteLinkedDrafts: true, actor: AdminActor);
 
         // Assert
         Assert.True(result.Success);
@@ -147,7 +150,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.Bills.Save(draftBill);
 
         // Act
-        var result = await _inboxService.DeleteEmailAsync(msg.Id, "test-user", deleteLinkedDrafts: true);
+        var result = await _inboxService.DeleteEmailAsync(msg.Id, deleteLinkedDrafts: true, actor: AdminActor);
 
         // Assert
         Assert.True(result.Success);
@@ -176,7 +179,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.EmailMessages.Save(msg);
 
         // Act
-        var result = await _inboxService.BlockSenderDomainAsync("spammer@junk-invoices.com", msg.Id, "test-user");
+        var result = await _inboxService.BlockSenderDomainAsync("spammer@junk-invoices.com", msg.Id, actor: AdminActor);
 
         // Assert
         Assert.True(result.Success);
@@ -237,7 +240,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.Bills.Save(draft);
 
         // Act
-        _inboxService.ApproveBillFromEmail(msg.Id, draft.Id, "test-user");
+        _inboxService.ApproveBillFromEmail(msg.Id, draft.Id, "test-user", actor: AdminActor);
 
         // Assert
         var updatedBill = _db.Bills.GetById(draft.Id);
@@ -290,7 +293,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.Bills.Save(draft2);
 
         // Act 1: Approve first draft
-        _inboxService.ApproveBillFromEmail(msg.Id, draft1.Id, "test-user");
+        _inboxService.ApproveBillFromEmail(msg.Id, draft1.Id, "test-user", actor: AdminActor);
 
         // Assert 1: Email still AutoDrafted, pointing to draft2
         var emailAfterFirst = _db.EmailMessages.GetById(msg.Id);
@@ -301,7 +304,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         Assert.Equal(BillStatus.AwaitingApproval, _db.Bills.GetById(draft2.Id)!.Status);
 
         // Act 2: Approve second draft
-        _inboxService.ApproveBillFromEmail(msg.Id, draft2.Id, "test-user");
+        _inboxService.ApproveBillFromEmail(msg.Id, draft2.Id, "test-user", actor: AdminActor);
 
         // Assert 2: All approved, email marked Approved
         var emailAfterSecond = _db.EmailMessages.GetById(msg.Id);
@@ -345,7 +348,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
             IsDuplicate = false,
             RejectionReason = "Marketing brochure, not an invoice"
         };
-        _inboxService.RejectDraftBillFromEmail(msg.Id, draft.Id, "reviewer-1", options);
+        _inboxService.RejectDraftBillFromEmail(msg.Id, draft.Id, "reviewer-1", options, actor: AdminActor);
 
         // Assert
         Assert.Null(_db.Bills.GetById(draft.Id));
@@ -398,7 +401,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.Bills.Save(draft2);
 
         // Act: Reject draft 1
-        _inboxService.RejectDraftBillFromEmail(msg.Id, draft1.Id, "reviewer-1");
+        _inboxService.RejectDraftBillFromEmail(msg.Id, draft1.Id, "reviewer-1", actor: AdminActor);
 
         // Assert: draft 1 deleted, draft 2 remains, email still AutoDrafted pointing to draft 2
         Assert.Null(_db.Bills.GetById(draft1.Id));
@@ -459,7 +462,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
             IsDuplicate = true,
             DuplicateOfBillId = existingBill.Id
         };
-        _inboxService.RejectDraftBillFromEmail(msg.Id, draftBill.Id, "reviewer-1", options);
+        _inboxService.RejectDraftBillFromEmail(msg.Id, draftBill.Id, "reviewer-1", options, actor: AdminActor);
 
         // Assert
         Assert.Null(_db.Bills.GetById(draftBill.Id));
@@ -524,7 +527,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.Bills.Save(draftBill);
 
         // Act
-        _inboxService.RejectDraftBillFromEmail(msg.Id, draftBill.Id, "reviewer-1");
+        _inboxService.RejectDraftBillFromEmail(msg.Id, draftBill.Id, "reviewer-1", actor: AdminActor);
 
         // Assert
         Assert.Null(_db.Bills.GetById(draftBill.Id));
@@ -558,7 +561,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
 
         // Act & Assert
         Assert.Throws<InvalidOperationException>(() =>
-            _inboxService.RejectDraftBillFromEmail(msg.Id, approvedBill.Id, "reviewer-1"));
+            _inboxService.RejectDraftBillFromEmail(msg.Id, approvedBill.Id, "reviewer-1", actor: AdminActor));
     }
 
     [Fact]
@@ -594,7 +597,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _mockFileService.Setup(f => f.FileExists("bills", "upload-1", "invoice.pdf")).Returns(true);
 
         // Act
-        var bill = await _inboxService.PrepareBillFromEmailAsync(msg.Id);
+        var bill = await _inboxService.PrepareBillFromEmailAsync(msg.Id, actor: AdminActor);
 
         // Assert
         Assert.NotNull(bill);
@@ -641,7 +644,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.EmailMessages.Save(msg);
 
         // Create cached attachment file on disk
-        var cachedDir = Path.Combine(_testDataPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Attachments", msg.Id);
+        var cachedDir = Path.Combine(_testDataPath, CompanyBillInboxConstants.SystemEmployeeId, "Attachments", msg.Id);
         Directory.CreateDirectory(cachedDir);
         var cachedFile = Path.Combine(cachedDir, attId);
         await File.WriteAllBytesAsync(cachedFile, [0x25, 0x50, 0x44, 0x46]); // "%PDF"
@@ -651,7 +654,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
             .ReturnsAsync("/spokesapi/files/bills/recovered-ctx/receipt.pdf");
 
         // Act
-        var bill = await _inboxService.PrepareBillFromEmailAsync(msg.Id);
+        var bill = await _inboxService.PrepareBillFromEmailAsync(msg.Id, actor: AdminActor);
 
         // Assert
         Assert.NotNull(bill);
@@ -686,7 +689,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.EmailMessages.Save(msg);
 
         // Act
-        var bill = await _inboxService.PrepareBillFromEmailAsync(msg.Id);
+        var bill = await _inboxService.PrepareBillFromEmailAsync(msg.Id, actor: AdminActor);
 
         // Assert
         Assert.NotNull(bill);
@@ -711,7 +714,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.EmailMessages.Save(msg);
 
         // Act
-        _inboxService.UpdateEmailBillingStatus(msg.Id, CompanyBillInboxConstants.BillingStatus.Approved, "user-42", "bill-abc-123");
+        _inboxService.UpdateEmailBillingStatus(msg.Id, CompanyBillInboxConstants.BillingStatus.Approved, "user-42", "bill-abc-123", actor: AdminActor);
 
         // Assert
         var reloaded = _db.EmailMessages.GetById(msg.Id);
@@ -736,7 +739,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.EmailMessages.Save(msg);
 
         // Act
-        _inboxService.ConfirmStatement(msg.Id, "user-finance-1", "bill-stmt-ref");
+        _inboxService.ConfirmStatement(msg.Id, "user-finance-1", "bill-stmt-ref", actor: AdminActor);
 
         // Assert
         var reloaded = _db.EmailMessages.GetById(msg.Id);
@@ -770,7 +773,7 @@ public class CompanyBillInboxDeleteAndTriageTests : TestDataTestBase
         _db.EmailMessages.Save(msg);
 
         // Act
-        _inboxService.ConfirmReceipt(msg.Id, "user-finance-2");
+        _inboxService.ConfirmReceipt(msg.Id, "user-finance-2", actor: AdminActor);
 
         // Assert
         var reloaded = _db.EmailMessages.GetById(msg.Id);

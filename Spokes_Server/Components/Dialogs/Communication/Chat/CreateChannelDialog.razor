@@ -359,7 +359,7 @@
         if (_effectiveUser == null)
         {
             var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-            _effectiveUser = UserService.GetCurrentUser(authState.User);
+            _effectiveUser = UserService.GetEmployee(authState.User);
         }
 
         LoadCategories();
@@ -447,8 +447,9 @@
 
     private async Task OpenManageCategories()
     {
-        if (IsChannelLocked) return;
-        var dialog = await DialogService.ShowAsync<ManageCategoriesDialog>(Loc["Manage Categories"].Value);
+        if (IsChannelLocked || !CanManageCategories || _effectiveUser == null) return;
+        var parameters = new DialogParameters { ["CurrentUserId"] = _effectiveUser.Id };
+        var dialog = await DialogService.ShowAsync<ManageCategoriesDialog>(Loc["Manage Categories"].Value, parameters);
         await dialog.Result;
         LoadCategories();
     }

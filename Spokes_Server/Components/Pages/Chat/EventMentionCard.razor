@@ -5,26 +5,27 @@
 @inject CalendarService CalendarService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject IUserPrivacyService PrivacyService
 @implements IDisposable
 
 @if (_event == null)
 {
-    <MudCard Class="pa-3" Style="width: 100%; max-width: 350px; border-radius: 8px; border: 1px dashed var(--mud-palette-divider); box-shadow: none; background: transparent;">
+    <MudCard Class="pa-3 chat-card-unavailable">
         <div class="d-flex align-center gap-3">
             <MudIcon Icon="@Icons.Material.Filled.EventBusy" Color="Color.Secondary" />
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Style="font-style: italic;">@Loc["This event is no longer available."]</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="chat-card-italic">@Loc["This event is no longer available."]</MudText>
         </div>
     </MudCard>
 }
 else
 {
-    <MudCard Class="pa-3" Style="width: 100%; max-width: 380px; border-radius: 8px; border: 1px solid var(--mud-palette-divider); box-shadow: none;">
-        <div class="d-flex align-center gap-3 mb-2" style="cursor: pointer;" @onclick="OpenEventDetailsDialog" title="@Loc["Click to view event details"]">
-            <MudAvatar Size="Size.Medium" Style="background: color-mix(in srgb, var(--mud-palette-info) 15%, transparent); color: var(--mud-palette-info);">
+    <MudCard Class="pa-3 chat-event-card">
+        <div class="d-flex align-center gap-3 mb-2 cursor-pointer" @onclick="OpenEventDetailsDialog" title="@Loc["Click to view event details"]">
+            <MudAvatar Size="Size.Medium" Class="chat-event-avatar">
                 <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
             </MudAvatar>
-            <div style="overflow: hidden;">
-                <MudText Typo="Typo.subtitle2" Style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@_event.Title</MudText>
+            <div class="chat-overflow-hidden">
+                <MudText Typo="Typo.subtitle2" Class="chat-event-title">@_event.Title</MudText>
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
                     @(_event.IsAllDay ? _event.Start.ToString("MMMM d, yyyy") : $"{_event.Start.ToString("MMM d, h:mm tt")} - {_event.End.ToString("h:mm tt")}")
                 </MudText>
@@ -38,35 +39,48 @@ else
         }
         @if (!string.IsNullOrWhiteSpace(_event.Description))
         {
-            <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;">
+            <MudText Typo="Typo.body2" Class="mb-3 chat-event-desc">
                 @_event.Description
             </MudText>
         }
-        <div class="d-flex justify-space-between align-center gap-2 w-100 mb-n1" style="min-height: 36px;">
-            <div class="d-flex align-center gap-1 attendee-row" @onclick="OpenAttendeesDialog" title="@Loc["Click to view all attendees"]" style="cursor: pointer; padding: 2px 4px; border-radius: 4px; transition: background-color 0.2s;">
+        <div class="d-flex justify-space-between align-center gap-2 w-100 mb-n1 chat-event-footer">
+            <div class="d-flex align-center gap-1 attendee-row chat-event-attendee-row" @onclick="OpenAttendeesDialog" title="@Loc["Click to view all attendees"]">
                 @if (_event.Attendees != null && _event.Attendees.Any())
                 {
-                    <div class="d-flex align-center gap-1">
-                        @foreach (var attendeeId in _event.Attendees.Take(5))
-                        {
-                            var emp = Employees.FirstOrDefault(e => e.Id == attendeeId);
-                            if (emp != null)
-                            {
-                                <MudTooltip Text="@emp.FullName" Placement="Placement.Top" RootStyle="display: inline-flex; align-items: center;">
-                                    <EmployeeAvatar Employee="emp" Size="Size.Small" ShowPresence="false" Style="width: 16px; height: 16px; min-width: 16px; min-height: 16px; font-size: 0.55rem;" />
-                                </MudTooltip>
-                            }
-                        }
-                    </div>
-                    @if (_event.Attendees.Count > 5)
+                    @if (!ShouldHideAttendeeIdentities())
                     {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.72rem; font-weight: 600;" Class="ml-1">
-                            +@(_event.Attendees.Count - 5)
-                        </MudText>
+                        <div class="d-flex align-center gap-1">
+                            @foreach (var attendeeId in _event.Attendees.Take(5))
+                            {
+                                var emp = Employees.FirstOrDefault(e => e.Id == attendeeId);
+                                if (emp != null && CanDiscoverEmployee(emp))
+                                {
+                                    <span title="@emp.FullName" class="chat-mini-avatar-wrap">
+                                        <EmployeeAvatar Employee="emp" Size="Size.Small" ShowPresence="false" Class="chat-mini-avatar-16" />
+                                    </span>
+                                }
+                                else
+                                {
+                                    <EmployeeAvatar Employee="@null" Size="Size.Small" ShowPresence="false" Class="chat-mini-avatar-16" />
+                                }
+                            }
+                        </div>
+                        @if (_event.Attendees.Count > 5)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-1 chat-event-count">
+                                +@(_event.Attendees.Count - 5)
+                            </MudText>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-1 chat-event-count">
+                                (@_event.Attendees.Count)
+                            </MudText>
+                        }
                     }
                     else
                     {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-size: 0.72rem; font-weight: 600;" Class="ml-1">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-1 chat-event-count">
                             (@_event.Attendees.Count)
                         </MudText>
                     }
@@ -97,24 +111,83 @@ else
     [Parameter]
     public string? CurrentUserId { get; set; }
 
+    [Parameter]
+    public string? ChannelId { get; set; }
+
     [Parameter, EditorRequired]
     public List<Employee> Employees { get; set; } = [];
 
     private CalendarEvent? _event;
+    private int _lastRenderFingerprint;
+    private bool _hasRenderedOnce;
+
+    private int ComputeEventRenderFingerprint()
+    {
+        var hash = new HashCode();
+        hash.Add(EventId, StringComparer.Ordinal);
+        hash.Add(CurrentUserId, StringComparer.Ordinal);
+        hash.Add(ChannelId, StringComparer.Ordinal);
+        hash.Add(_event != null);
+        if (_event != null)
+        {
+            hash.Add(_event.Title, StringComparer.Ordinal);
+            hash.Add(_event.Start.Ticks);
+            hash.Add(_event.End.Ticks);
+            hash.Add(_event.IsAllDay);
+            hash.Add(_event.Location, StringComparer.Ordinal);
+            hash.Add(_event.Description, StringComparer.Ordinal);
+            hash.Add(_event.Attendees?.Count ?? 0);
+            if (_event.Attendees != null)
+            {
+                foreach (var a in _event.Attendees)
+                {
+                    hash.Add(a, StringComparer.Ordinal);
+                }
+            }
+        }
+        return hash.ToHashCode();
+    }
+
+    protected override bool ShouldRender()
+    {
+        var fp = ComputeEventRenderFingerprint();
+        if (!_hasRenderedOnce || fp != _lastRenderFingerprint)
+        {
+            _hasRenderedOnce = true;
+            _lastRenderFingerprint = fp;
+            return true;
+        }
+        return false;
+    }
+
+    [Inject] private Database Db { get; set; } = default!;
+
+    private Employee? ResolveLiveCurrentUser()
+    {
+        if (string.IsNullOrEmpty(CurrentUserId)) return null;
+        return Db.Employees.GetById(CurrentUserId) ?? Employees.FirstOrDefault(e => e.Id == CurrentUserId);
+    }
 
     private bool IsCurrentUserSuspended =>
-        Employees.FirstOrDefault(e => e.Id == CurrentUserId)?.IsSuspended == true;
+        ResolveLiveCurrentUser()?.IsSuspended == true;
+
+    private bool CanDiscoverEmployee(Employee? target)
+        => target != null && PrivacyService.CanDiscoverUser(ResolveLiveCurrentUser(), target);
+
+    private bool ShouldHideAttendeeIdentities()
+    {
+        if (string.IsNullOrEmpty(ChannelId)) return false;
+        var channel = Db.ChatChannels.GetById(ChannelId);
+        return channel != null && PrivacyService.ShouldHideMemberList(channel, ResolveLiveCurrentUser());
+    }
 
     private CalendarEvent? ResolveAuthorizedEvent(CalendarEvent? evt)
     {
         if (evt == null) return null;
-        if (!string.IsNullOrEmpty(CurrentUserId))
+        var currentEmp = ResolveLiveCurrentUser();
+        if (currentEmp == null || !CalendarService.CanUserViewEvent(evt, currentEmp))
         {
-            var currentEmp = Employees.FirstOrDefault(e => e.Id == CurrentUserId);
-            if (currentEmp != null && !CalendarService.CanUserViewEvent(evt, currentEmp))
-            {
-                return null;
-            }
+            return null;
         }
         return evt;
     }
@@ -145,10 +218,17 @@ else
     private void Rsvp()
     {
         if (string.IsNullOrEmpty(CurrentUserId)) return;
+        var currentEmp = ResolveLiveCurrentUser();
+        if (currentEmp == null || (!CalendarService.CanCreateOrParticipateInCalendar(currentEmp) && !CalendarService.HasCalendarAdminOverride(currentEmp)))
+        {
+            Snackbar.Add(Loc["You do not have permission to RSVP to calendar events."].Value, Severity.Warning);
+            return;
+        }
+
         var result = CalendarService.RsvpToEvent(EventId, CurrentUserId);
         if (result.IsSuccess)
         {
-            _event = CalendarService.GetEventById(EventId);
+            _event = ResolveAuthorizedEvent(CalendarService.GetEventById(EventId));
             Snackbar.Add(Loc["You're in! Event added to your calendar."].Value, Severity.Success);
             StateHasChanged();
         }
@@ -164,7 +244,7 @@ else
         var result = CalendarService.CancelRsvpEvent(EventId, CurrentUserId);
         if (result.IsSuccess)
         {
-            _event = CalendarService.GetEventById(EventId);
+            _event = ResolveAuthorizedEvent(CalendarService.GetEventById(EventId));
             Snackbar.Add(Loc["Attendance cancelled."].Value, Severity.Info);
             StateHasChanged();
         }
@@ -177,11 +257,35 @@ else
     private async Task OpenAttendeesDialog()
     {
         if (_event?.Attendees == null || !_event.Attendees.Any()) return;
+        bool anonymize = ShouldHideAttendeeIdentities();
+        var safeAttendeeIds = new List<string>(_event.Attendees.Count);
+        var discoverableEmployees = new List<Employee>();
+        var addedEmployeeIds = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < _event.Attendees.Count; i++)
+        {
+            var attendeeId = _event.Attendees[i];
+            var emp = Employees.FirstOrDefault(e => e.Id == attendeeId);
+            if (!anonymize && emp != null && CanDiscoverEmployee(emp))
+            {
+                safeAttendeeIds.Add(attendeeId);
+                if (addedEmployeeIds.Add(emp.Id))
+                {
+                    discoverableEmployees.Add(emp);
+                }
+            }
+            else
+            {
+                var anonId = $"__anon_{i}";
+                safeAttendeeIds.Add(anonId);
+                discoverableEmployees.Add(new Employee { Id = anonId, FirstName = Loc["Unknown User"].Value, LastName = string.Empty });
+            }
+        }
         var parameters = new DialogParameters<MessageReactionsDialog>
         {
             { x => x.IsAttendeesMode, true },
-            { x => x.AttendeeUserIds, _event.Attendees },
-            { x => x.Employees, Employees },
+            { x => x.AttendeeUserIds, safeAttendeeIds },
+            { x => x.Employees, discoverableEmployees },
+            { x => x.AnonymizeUsers, anonymize },
             { x => x.CustomTitle, string.Format(Loc["{0} Attendees"].Value, _event.Title) }
         };
         var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
@@ -190,8 +294,16 @@ else
 
     private async Task OpenEventDetailsDialog()
     {
-        if (_event == null) return;
-        var parameters = new DialogParameters { ["Event"] = _event, ["IsNew"] = false };
+        var currentEmp = ResolveLiveCurrentUser();
+        var latestEvent = CalendarService.GetEventById(EventId) ?? _event;
+        var authorized = ResolveAuthorizedEvent(latestEvent);
+        if (authorized == null || currentEmp == null)
+        {
+            Snackbar.Add(Loc["You do not have permission to view this calendar event."].Value, Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters { ["Event"] = authorized, ["IsNew"] = false };
         var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
         await DialogService.ShowAsync<CalendarEventDialog>(Loc["Event Details"].Value, parameters, options);
     }

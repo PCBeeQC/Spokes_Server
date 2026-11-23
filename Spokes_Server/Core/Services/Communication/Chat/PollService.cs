@@ -1,4 +1,7 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Constants;
@@ -19,11 +22,14 @@ public class PollService
     private readonly ChatChannelRepository _channels;
     private readonly EmployeeRepository _employees;
     private readonly IChatAuthorizationService _chatAuth;
-    private readonly IChatRealtimeGateway? _realtimeGateway;
     private readonly ChatStateService _chatState;
     private readonly ICryptoService _crypto;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<PollService>? _logger;
+    private readonly IDataProtectionProvider? _dataProtectionProvider;
+    private readonly CoreContext? _coreContext;
+    private readonly object _ballotSecretLock = new();
+    private byte[]? _ballotSecret;
     private readonly ConcurrentDictionary<string, object> _pollLocks = new();
 
     private object GetPollLock(string pollId) => _pollLocks.GetOrAdd(pollId, _ => new object());
@@ -33,11 +39,12 @@ public class PollService
         HrContext hrContext,
         ProjectsContext? projectsContext = null,
         IChatAuthorizationService? chatAuth = null,
-        IChatRealtimeGateway? realtimeGateway = null,
         ChatStateService? chatState = null,
         ICryptoService? crypto = null,
         TimeProvider? timeProvider = null,
-        ILogger<PollService>? logger = null)
+        ILogger<PollService>? logger = null,
+        IDataProtectionProvider? dataProtectionProvider = null,
+        CoreContext? coreContext = null)
     {
         ArgumentNullException.ThrowIfNull(communicationContext);
         ArgumentNullException.ThrowIfNull(hrContext);
@@ -51,11 +58,111 @@ public class PollService
             projectsContext?.Projects!,
             hrContext.Teams,
             _employees);
-        _realtimeGateway = realtimeGateway;
         _chatState = chatState ?? new ChatStateService();
         _crypto = crypto ?? new CryptoService();
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger;
+        _dataProtectionProvider = dataProtectionProvider;
+        _coreContext = coreContext;
+    }
+
+    private byte[] GetOrCreateAnonymousBallotSecret()
+    {
+        var cached = Volatile.Read(ref _ballotSecret);
+        if (cached != null)
+        {
+            return cached;
+        }
+
+        lock (_ballotSecretLock)
+        {
+            if (_ballotSecret != null)
+            {
+                return _ballotSecret;
+            }
+
+            const string protectorPurpose = "Spokes.AnonymousPollBallotKey.v1";
+            if (_coreContext?.ServerConfigs != null && _dataProtectionProvider != null)
+            {
+                var protector = _dataProtectionProvider.CreateProtector(protectorPurpose);
+                var config = _coreContext.ServerConfigs.GetOrCreateGlobalConfig();
+                if (!string.IsNullOrWhiteSpace(config.AnonymousPollBallotSecretProtected))
+                {
+                    try
+                    {
+                        var unprotected = protector.Unprotect(config.AnonymousPollBallotSecretProtected);
+                        var parsed = Convert.FromBase64String(unprotected);
+                        if (parsed.Length == 32)
+                        {
+                            Volatile.Write(ref _ballotSecret, parsed);
+                            return parsed;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "Failed to unprotect AnonymousPollBallotSecretProtected; regenerating ballot HMAC key");
+                    }
+                }
+
+                var generated = RandomNumberGenerator.GetBytes(32);
+                config.AnonymousPollBallotSecretProtected = protector.Protect(Convert.ToBase64String(generated));
+                _coreContext.ServerConfigs.Save(config);
+                Volatile.Write(ref _ballotSecret, generated);
+                return generated;
+            }
+
+            var fallback = RandomNumberGenerator.GetBytes(32);
+            Volatile.Write(ref _ballotSecret, fallback);
+            return fallback;
+        }
+    }
+
+    private string ComputeAnonymousBallotToken(string pollId, string optionId, string userId)
+    {
+        var secret = GetOrCreateAnonymousBallotSecret();
+        var payload = Encoding.UTF8.GetBytes($"spokes-poll-ballot:v1:{pollId}:{optionId}:{userId}");
+        var mac = HMACSHA256.HashData(secret, payload);
+        return Convert.ToHexString(mac).ToLowerInvariant();
+    }
+
+    public HashSet<string> GetUserVotedOptionIds(string pollId, string requestingUserId)
+    {
+        var votedIds = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(pollId) || string.IsNullOrWhiteSpace(requestingUserId))
+        {
+            return votedIds;
+        }
+
+        var poll = _polls.GetById(pollId);
+        if (poll == null)
+        {
+            return votedIds;
+        }
+
+        var employee = _employees.GetById(requestingUserId);
+        var channel = _channels.GetById(poll.ChannelId);
+        if (employee == null || channel == null || !_chatAuth.CanUserAccessChannel(channel, employee))
+        {
+            return votedIds;
+        }
+
+        foreach (var opt in poll.Options)
+        {
+            if (poll.IsAnonymous)
+            {
+                if (opt.AnonymousVoterTokens is { Count: > 0 } &&
+                    opt.AnonymousVoterTokens.Contains(ComputeAnonymousBallotToken(poll.Id, opt.Id, requestingUserId)))
+                {
+                    votedIds.Add(opt.Id);
+                }
+            }
+            else if (opt.VoterIds.Contains(requestingUserId))
+            {
+                votedIds.Add(opt.Id);
+            }
+        }
+
+        return votedIds;
     }
 
     public ChatPoll? GetPollById(string pollId, string requestingUserId, string? expectedChannelId = null)
@@ -134,10 +241,8 @@ public class PollService
             return false;
         }
 
-        var keys = channel.EncryptedChannelKeys;
-        bool hasKeyAccess = keys != null &&
-            (keys.ContainsKey(actor.Id) ||
-             (!actor.HasVaultPassword && keys.ContainsKey("ServerMaster")));
+        bool hasKeyAccess = channel.TryGetEncryptedKeyForEpoch(channel.CurrentKeyEpoch, actor.Id, out _) ||
+                            (!actor.HasVaultPassword && channel.TryGetEncryptedKeyForEpoch(channel.CurrentKeyEpoch, "ServerMaster", out _));
 
         if (!hasKeyAccess)
         {
@@ -239,7 +344,8 @@ public class PollService
                 Emoji = string.IsNullOrWhiteSpace(o.Emoji) ? null : o.Emoji.Trim(),
                 AddedByUserId = poll.IsAnonymous ? null : creatorId,
                 AnonymousVoteCount = 0,
-                VoterIds = []
+                VoterIds = [],
+                AnonymousVoterTokens = []
             })
             .ToList();
 
@@ -276,7 +382,7 @@ public class PollService
         _polls.Save(poll);
         BroadcastPollUpdated(poll);
 
-        return SpokesResult<ChatPoll>.Success(poll);
+        return SpokesResult<ChatPoll>.Success(ClonePoll(poll));
     }
 
     public SpokesResult<ChatPoll> UpdatePoll(ChatPoll updatedPoll, string userId, string? plainChannelKey = null)
@@ -363,13 +469,29 @@ public class PollService
 
                     if (isAnonymous)
                     {
+                        var prevTokens = previousOpt?.AnonymousVoterTokens?
+                            .Where(t => !string.IsNullOrWhiteSpace(t))
+                            .Distinct(StringComparer.Ordinal)
+                            .ToList() ?? [];
+                        if (prevTokens.Count == 0 && !existing.IsAnonymous && previousOpt?.VoterIds is { Count: > 0 })
+                        {
+                            prevTokens = previousOpt.VoterIds
+                                .Where(v => !string.IsNullOrWhiteSpace(v))
+                                .Select(v => ComputeAnonymousBallotToken(existing.Id, optId, v))
+                                .Distinct(StringComparer.Ordinal)
+                                .ToList();
+                        }
+
                         mergedOptions.Add(new ChatPollOption
                         {
                             Id = optId,
                             Text = optText,
                             Emoji = string.IsNullOrWhiteSpace(incoming.Emoji) ? null : incoming.Emoji.Trim(),
                             AddedByUserId = null,
-                            AnonymousVoteCount = previousOpt != null ? Math.Max(0, previousOpt.VoteCount) : 0,
+                            AnonymousVoterTokens = prevTokens,
+                            AnonymousVoteCount = previousOpt != null
+                                ? Math.Max(0, Math.Max(previousOpt.VoteCount, prevTokens.Count))
+                                : 0,
                             VoterIds = []
                         });
                     }
@@ -384,6 +506,7 @@ public class PollService
                                 ? (string.IsNullOrWhiteSpace(previousOpt.AddedByUserId) ? existing.CreatorId : previousOpt.AddedByUserId)
                                 : userId,
                             AnonymousVoteCount = 0,
+                            AnonymousVoterTokens = [],
                             VoterIds = previousOpt != null
                                 ? previousOpt.VoterIds.Distinct().ToList()
                                 : []
@@ -427,7 +550,7 @@ public class PollService
 
             _polls.Save(existing);
             BroadcastPollUpdated(existing);
-            return SpokesResult<ChatPoll>.Success(existing);
+            return SpokesResult<ChatPoll>.Success(ClonePoll(existing));
         }
     }
 
@@ -478,12 +601,22 @@ public class PollService
 
             if (poll.IsAnonymous)
             {
-                // Anonymous polls never record who voted for what in RAM or on disk.
-                foreach (var opt in poll.Options)
+                // Anonymous polls never record plaintext voter IDs in RAM or on disk.
+                // Option-scoped keyed HMAC tokens prevent duplicate votes / ballot stuffing
+                // without storing plaintext user IDs or cross-option correlation.
+                NormalizeAnonymousPollOptions(poll);
+
+                var targetToken = ComputeAnonymousBallotToken(poll.Id, targetOption.Id, userId);
+                if (targetOption.AnonymousVoterTokens.Remove(targetToken))
                 {
-                    opt.VoterIds.Clear();
+                    targetOption.AnonymousVoteCount = Math.Max(0, Math.Max(targetOption.AnonymousVoteCount - 1, targetOption.AnonymousVoterTokens.Count));
                 }
-                targetOption.AnonymousVoteCount++;
+                else
+                {
+                    ClearSingleChoiceVotesForUser(poll, userId, excludeOptionId: targetOption.Id);
+                    targetOption.AnonymousVoterTokens.Add(targetToken);
+                    targetOption.AnonymousVoteCount = Math.Max(targetOption.AnonymousVoteCount + 1, targetOption.AnonymousVoterTokens.Count);
+                }
             }
             else if (targetOption.VoterIds.Contains(userId))
             {
@@ -491,19 +624,13 @@ public class PollService
             }
             else
             {
-                if (!poll.AllowMultipleAnswers)
-                {
-                    foreach (var opt in poll.Options)
-                    {
-                        opt.VoterIds.Remove(userId);
-                    }
-                }
+                ClearSingleChoiceVotesForUser(poll, userId);
                 targetOption.VoterIds.Add(userId);
             }
 
             _polls.Save(poll);
             BroadcastPollUpdated(poll);
-            return SpokesResult<ChatPoll>.Success(poll);
+            return SpokesResult<ChatPoll>.Success(ClonePoll(poll));
         }
     }
 
@@ -582,28 +709,30 @@ public class PollService
                 }
             }
 
-            if (!poll.IsAnonymous && !poll.AllowMultipleAnswers)
+            var newOptionId = Guid.NewGuid().ToString();
+            if (poll.IsAnonymous)
             {
-                foreach (var opt in poll.Options)
-                {
-                    opt.VoterIds.Remove(userId);
-                }
+                NormalizeAnonymousPollOptions(poll);
             }
+            ClearSingleChoiceVotesForUser(poll, userId);
 
             var newOption = new ChatPollOption
             {
-                Id = Guid.NewGuid().ToString(),
+                Id = newOptionId,
                 Text = storedText,
                 Emoji = string.IsNullOrWhiteSpace(emoji) ? null : emoji.Trim(),
                 AddedByUserId = poll.IsAnonymous ? null : userId,
                 AnonymousVoteCount = poll.IsAnonymous ? 1 : 0,
-                VoterIds = poll.IsAnonymous ? [] : [userId]
+                VoterIds = poll.IsAnonymous ? [] : [userId],
+                AnonymousVoterTokens = poll.IsAnonymous
+                    ? [ComputeAnonymousBallotToken(poll.Id, newOptionId, userId)]
+                    : []
             };
 
             poll.Options.Add(newOption);
             _polls.Save(poll);
             BroadcastPollUpdated(poll);
-            return SpokesResult<ChatPoll>.Success(poll);
+            return SpokesResult<ChatPoll>.Success(ClonePoll(poll));
         }
     }
 
@@ -636,7 +765,7 @@ public class PollService
             }
             _polls.Save(poll);
             BroadcastPollUpdated(poll);
-            return SpokesResult<ChatPoll>.Success(poll);
+            return SpokesResult<ChatPoll>.Success(ClonePoll(poll));
         }
     }
 
@@ -659,19 +788,9 @@ public class PollService
             return SpokesResult.Failure("User is not authorized to delete this poll.", "FORBIDDEN");
         }
 
-        var channelId = poll.ChannelId;
         _polls.Delete(pollId);
         _pollLocks.TryRemove(pollId, out _);
         _chatState.NotifyPollDeleted(pollId);
-
-        if (_realtimeGateway != null && !string.IsNullOrEmpty(channelId))
-        {
-            _ = _realtimeGateway.SendToChannelAsync(channelId, "PollDeleted", new
-            {
-                PollId = pollId,
-                ChannelId = channelId
-            });
-        }
 
         return SpokesResult.Success();
     }
@@ -697,20 +816,48 @@ public class PollService
                 Text = o.Text,
                 Emoji = o.Emoji,
                 AddedByUserId = poll.IsAnonymous ? null : o.AddedByUserId,
-                AnonymousVoteCount = o.AnonymousVoteCount,
-                VoterIds = poll.IsAnonymous ? [] : o.VoterIds.ToList()
+                AnonymousVoteCount = poll.IsAnonymous ? o.VoteCount : 0,
+                VoterIds = poll.IsAnonymous ? [] : o.VoterIds.ToList(),
+                AnonymousVoterTokens = []
             }).ToList()
         };
+    }
+
+    private static void NormalizeAnonymousPollOptions(ChatPoll poll)
+    {
+        foreach (var opt in poll.Options)
+        {
+            opt.VoterIds.Clear();
+            opt.AnonymousVoterTokens ??= [];
+        }
+    }
+
+    private void ClearSingleChoiceVotesForUser(ChatPoll poll, string userId, string? excludeOptionId = null)
+    {
+        if (poll.AllowMultipleAnswers) return;
+
+        foreach (var opt in poll.Options)
+        {
+            if (excludeOptionId != null && opt.Id == excludeOptionId) continue;
+
+            if (poll.IsAnonymous)
+            {
+                var otherToken = ComputeAnonymousBallotToken(poll.Id, opt.Id, userId);
+                if (opt.AnonymousVoterTokens.Remove(otherToken))
+                {
+                    opt.AnonymousVoteCount = Math.Max(0, Math.Max(opt.AnonymousVoteCount - 1, opt.AnonymousVoterTokens.Count));
+                }
+            }
+            else
+            {
+                opt.VoterIds.Remove(userId);
+            }
+        }
     }
 
     private void BroadcastPollUpdated(ChatPoll poll)
     {
         var snapshot = ClonePoll(poll);
         _chatState.NotifyPollUpdated(snapshot);
-
-        if (_realtimeGateway != null && !string.IsNullOrEmpty(snapshot.ChannelId))
-        {
-            _ = _realtimeGateway.SendToChannelAsync(snapshot.ChannelId, "PollUpdated", snapshot);
-        }
     }
 }

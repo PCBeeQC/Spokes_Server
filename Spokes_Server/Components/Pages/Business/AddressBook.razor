@@ -177,6 +177,16 @@
         RefreshLists();
     }
 
+    private async Task<bool> AuthorizeManageAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        CanManage = emp?.HasPermission(AppPermissions.AddressBook.Manage) ?? false;
+        if (CanManage) return true;
+        Snackbar.Add("You do not have permission to manage the address book.", Severity.Warning);
+        StateHasChanged();
+        return false;
+    }
+
     private void RefreshLists()
     {
         Suppliers = Db.Suppliers.GetAll().OrderBy(s => s.ContactInfo.BusinessName).ToList();
@@ -207,6 +217,7 @@
 
     private async Task AddSupplier()
     {
+        if (!await AuthorizeManageAsync()) return;
         var newSupplier = new Supplier();
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
         var dialog = await DialogService.ShowAsync<SupplierDialog>("Create New Company", new DialogParameters
@@ -217,6 +228,7 @@
 
         if (result is { Canceled: false, Data: Supplier created })
         {
+            if (!await AuthorizeManageAsync()) return;
             Db.Suppliers.Save(created);
             RefreshLists();
             Snackbar.Add("Company created", Severity.Success);
@@ -225,15 +237,18 @@
 
     private async Task EditSupplier(Supplier supplier)
     {
+        if (!await AuthorizeManageAsync()) return;
+        var clone = supplier.DeepClone();
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
         var dialog = await DialogService.ShowAsync<SupplierDialog>("Edit Company", new DialogParameters
             {
-                ["Supplier"] = supplier
+                ["Supplier"] = clone
             }, options);
         var result = await dialog.Result;
 
         if (result is { Canceled: false, Data: Supplier updated })
         {
+            if (!await AuthorizeManageAsync()) return;
             Db.Suppliers.Save(updated);
             RefreshLists();
             Snackbar.Add("Company updated", Severity.Success);
@@ -242,6 +257,7 @@
 
     private async Task DeleteSupplier(Supplier supplier)
     {
+        if (!await AuthorizeManageAsync()) return;
         bool? result = await DialogService.ShowMessageBoxAsync(
         "Warning",
         $"Deleting a company cannot be undone. Are you sure you want to delete '{supplier.ContactInfo.BusinessName}'?",
@@ -249,6 +265,7 @@
 
         if (result == true)
         {
+            if (!await AuthorizeManageAsync()) return;
             Db.Suppliers.Delete(supplier.Id);
             RefreshLists();
             Snackbar.Add("Company deleted", Severity.Success);
@@ -258,6 +275,7 @@
     // Public Contacts Actions
     private async Task AddPublicContact()
     {
+        if (!await AuthorizeManageAsync()) return;
         var newContact = new ContactPerson();
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
         
@@ -270,6 +288,7 @@
 
         if (result is { Canceled: false, Data: ContactPerson created })
         {
+            if (!await AuthorizeManageAsync()) return;
             Db.PublicContacts.Save(created);
             RefreshLists();
             Snackbar.Add("Public contact created", Severity.Success);
@@ -278,15 +297,18 @@
 
     private async Task EditPublicContact(ContactPerson contact)
     {
+        if (!await AuthorizeManageAsync()) return;
+        var clone = contact.DeepClone();
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
         var dialog = await DialogService.ShowAsync<ContactPersonDialog>("Edit Public Contact", new DialogParameters
         {
-            ["Contact"] = contact
+            ["Contact"] = clone
         }, options);
         var result = await dialog.Result;
 
         if (result is { Canceled: false, Data: ContactPerson updated })
         {
+            if (!await AuthorizeManageAsync()) return;
             Db.PublicContacts.Save(updated);
             RefreshLists();
             Snackbar.Add("Public contact updated", Severity.Success);
@@ -295,6 +317,7 @@
 
     private async Task DeletePublicContact(ContactPerson contact)
     {
+        if (!await AuthorizeManageAsync()) return;
         bool? result = await DialogService.ShowMessageBoxAsync(
         "Warning",
         $"Deleting a contact cannot be undone. Are you sure you want to delete '{contact.Name}'?",
@@ -302,6 +325,7 @@
 
         if (result == true)
         {
+            if (!await AuthorizeManageAsync()) return;
             Db.PublicContacts.Delete(contact.Id);
             RefreshLists();
             Snackbar.Add("Contact deleted", Severity.Success);
@@ -310,6 +334,7 @@
 
     private async Task ImportContacts(IBrowserFile file)
     {
+        if (!await AuthorizeManageAsync()) return;
         try
         {
             if (file == null) return;

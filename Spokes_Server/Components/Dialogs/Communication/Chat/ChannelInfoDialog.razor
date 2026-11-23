@@ -6,7 +6,8 @@
             <ChannelInfoPanel Channel="Channel" DisplayName="@DisplayName" Employees="Employees"
                 CurrentUserId="@CurrentUserId" OnClose="Close" OnPinnedMessageClicked="OnPinnedMessageClicked"
                 OnChannelUpdated="OnChannelUpdatedCb" OnLeaveGroup="OnLeaveGroupCb"
-                OnArchiveChannel="OnArchiveChannelCb" OnDeleteChannel="OnDeleteChannelCb" OnRemoveMember="OnRemoveMemberCb" />
+                OnArchiveChannel="OnArchiveChannelCb" OnDeleteChannel="OnDeleteChannelCb" OnRemoveMember="OnRemoveMemberCb"
+                NotificationLevel="@_notificationLevel" OnNotificationLevelChanged="OnNotificationLevelChanged" />
         </div>
     </DialogContent>
 </MudDialog>
@@ -18,12 +19,27 @@
     [Parameter] public string DisplayName { get; set; } = "";
     [Parameter] public List<Employee> Employees { get; set; } = new();
     [Parameter] public string? CurrentUserId { get; set; }
+    [Parameter] public string? NotificationLevel { get; set; }
+    [Parameter] public EventCallback<string> OnNotificationLevelChangedCallback { get; set; }
     [Parameter] public EventCallback<string> OnPinnedMessageClickedCb { get; set; }
     [Parameter] public EventCallback OnChannelUpdatedCallback { get; set; }
     [Parameter] public EventCallback OnLeaveGroupCallback { get; set; }
     [Parameter] public EventCallback OnArchiveChannelCallback { get; set; }
     [Parameter] public EventCallback OnDeleteChannelCallback { get; set; }
     [Parameter] public EventCallback<string> OnRemoveMemberCallback { get; set; }
+
+    private string? _notificationLevel;
+
+    protected override void OnInitialized()
+    {
+        _notificationLevel = NotificationLevel;
+    }
+
+    private async Task OnNotificationLevelChanged(string level)
+    {
+        _notificationLevel = level;
+        await OnNotificationLevelChangedCallback.InvokeAsync(level);
+    }
 
     private void Close() => MudDialog.Close(DialogResult.Ok(true));
 

@@ -47,18 +47,6 @@ public class ChatReadStateRepositoryTests : RepositoryTestFixture<ChatReadStateR
     }
 
     [Fact]
-    public void GetReadStatesForUser_ReturnsOnlyUsersStates()
-    {
-        _repo.MarkAsRead("user3", "channelA");
-        _repo.MarkAsRead("user3", "channelB");
-        _repo.MarkAsRead("user4", "channelA"); // Different user
-
-        var states = _repo.GetReadStatesForUser("user3");
-        Assert.Equal(2, states.Count);
-        Assert.All(states, s => Assert.Equal("user3", s.UserId));
-    }
-
-    [Fact]
     public void GetLastReadAt_ReturnsMinValueIfNotFound()
     {
         var time = _repo.GetLastReadAt("user5", "unknown_channel");

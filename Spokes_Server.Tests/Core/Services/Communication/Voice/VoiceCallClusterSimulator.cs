@@ -9,16 +9,23 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.JSInterop;
 using Microsoft.JSInterop.Infrastructure;
+using Livekit.Server.Sdk.Dotnet;
 using Moq;
 using MudBlazor;
 using Spokes_Server.Components.UI;
+using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Communication.Voice;
 using Spokes_Server.Core.Services.UI;
+using Xunit;
 
 namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
 
@@ -86,12 +93,31 @@ public sealed record RtpEncodingSnapshot(
     int Width,
     int Height);
 
+public sealed record NativeVideoSlotSnapshot(
+    string Key,
+    string Source,
+    string Identity,
+    int X,
+    int Y,
+    int Width,
+    int Height,
+    bool Mirror,
+    bool Cover,
+    bool Visible,
+    int ZOrder);
+
+public sealed record NativeVideoSlotsPayloadSnapshot(
+    bool Underlaid,
+    bool Suppressed,
+    IReadOnlyList<NativeVideoSlotSnapshot> Slots);
+
 public sealed record ClientHardwareSnapshot(
     int LiveLocalTrackCount,
     IReadOnlyList<string> LockedDeviceIds,
     bool NativeIosCompanionConnected,
     RtpEncodingSnapshot? CameraEncoding,
-    RtpEncodingSnapshot? ScreenEncoding);
+    RtpEncodingSnapshot? ScreenEncoding,
+    bool UsingNativeMobileVoice = false);
 
 public sealed record ClientVisualSnapshot(
     string ClientId,
@@ -100,20 +126,37 @@ public sealed record ClientVisualSnapshot(
     string? FocusedParticipantId,
     IReadOnlyDictionary<string, ParticipantTileVisualState> Tiles,
     InAppPipVisualState InAppPip,
-    ClientHardwareSnapshot Hardware);
+    ClientHardwareSnapshot Hardware,
+    NativeVideoSlotsPayloadSnapshot? NativeVideoSlots = null);
+
+public sealed record RemoteUserAudioRoutingState(
+    string UserId,
+    bool RawMicSubscribed,
+    bool RawMicAttached,
+    bool ProcessedMicPublished,
+    bool ProcessedMicHasTrack,
+    bool ProcessedMicSubscribed,
+    bool ProcessedMicAttached);
+
+public sealed record ClientAudioRoutingSnapshot(
+    string ClientId,
+    string UserId,
+    bool StationaryRoomMode,
+    bool LocalMicHardwareMuted,
+    bool LocalMicEnabled,
+    IReadOnlyList<string> DirectLanPeerUserIds,
+    IReadOnlyDictionary<string, RemoteUserAudioRoutingState> RemoteUsers);
 
 /// <summary>
 /// Multi-client real-world Voice &amp; Video Call Cluster Simulator.
 /// Bridges real C# services (<see cref="GlobalVoiceService"/>, <see cref="VoiceDeviceService"/>,
-/// <see cref="VoiceUiStateService"/>, <see cref="VoiceChannelService"/>, <see cref="ChatStateService"/>)
+/// <see cref="VoiceUiStateService"/>, <see cref="VoiceChannelService"/>, <see cref="VoiceStateService"/>)
 /// bidirectionally with real <c>voiceInterop.js</c> and <c>voicePip.js</c> instances running inside a
 /// multi-sandbox Node.js WebRTC / LiveKit SFU / OS Hardware / DOM engine.
 /// </summary>
 public sealed class VoiceCallClusterSimulator : IAsyncDisposable
 {
     private readonly string _tempDir;
-    private readonly string _voiceInteropOriginalSrc;
-    private readonly string _voicePipOriginalSrc;
     private readonly Process _nodeProcess;
     private readonly SemaphoreSlim _stdinLock = new(1, 1);
     private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
@@ -122,24 +165,61 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
     private readonly Task _stdoutReaderTask;
     private readonly Task _stderrReaderTask;
     private readonly StringBuilder _stderrLog = new();
+    private readonly DiskPersistenceService _persistence;
+    private readonly ServiceProvider _watchdogServices;
     private int _nextReqId;
 
+    public VoiceStateService VoiceState { get; }
     public ChatStateService ChatState { get; }
+    public SimulatedClusterLiveKitService LiveKitService { get; }
     public SimulatedClusterVoiceChannelService VoiceChannelService { get; }
+    public VoiceStateSyncService VoiceStateSyncService { get; }
+    public PhysicalVoiceRoomRepository PhysicalRoomRepository { get; }
+    public PhysicalVoiceRoomService PhysicalRoomService { get; }
+    public PhysicalRoomDirectSessionService DirectSessionService { get; }
 
     private VoiceCallClusterSimulator(
         string tempDir,
-        string voiceInteropSrc,
-        string voicePipSrc,
         Process nodeProcess)
     {
         _tempDir = tempDir;
-        _voiceInteropOriginalSrc = voiceInteropSrc;
-        _voicePipOriginalSrc = voicePipSrc;
         _nodeProcess = nodeProcess;
 
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = tempDir,
+                ["Spokes_Voice_ApiKey"] = "test-livekit-key",
+                ["Spokes_Voice_ApiSecret"] = "test-livekit-secret-0123456789abcdef"
+            })
+            .Build();
+        _persistence = new DiskPersistenceService(NullLogger<DiskPersistenceService>.Instance);
+
+        VoiceState = new VoiceStateService();
         ChatState = new ChatStateService();
-        VoiceChannelService = new SimulatedClusterVoiceChannelService(this, ChatState);
+        LiveKitService = new SimulatedClusterLiveKitService(this, config);
+        var systemConfigRepo = new SystemConfigRepository(_persistence, config);
+        var sysCfg = systemConfigRepo.Get();
+        sysCfg.LiveKitApiKey = "test-livekit-key";
+        sysCfg.LiveKitApiSecret = "test-livekit-secret-0123456789abcdef";
+        systemConfigRepo.Save(sysCfg);
+
+        VoiceChannelService = new SimulatedClusterVoiceChannelService(this, VoiceState, ChatState, _persistence, config, LiveKitService, systemConfigRepo);
+        PhysicalRoomRepository = new PhysicalVoiceRoomRepository(_persistence, config);
+        PhysicalRoomService = new PhysicalVoiceRoomService(PhysicalRoomRepository, VoiceState, NullLogger<PhysicalVoiceRoomService>.Instance);
+        DirectSessionService = new PhysicalRoomDirectSessionService(PhysicalRoomService, VoiceState);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(VoiceState);
+        services.AddSingleton(ChatState);
+        services.AddSingleton<LiveKitService>(LiveKitService);
+        services.AddSingleton<VoiceChannelService>(VoiceChannelService);
+        services.AddSingleton(systemConfigRepo);
+        _watchdogServices = services.BuildServiceProvider();
+        VoiceStateSyncService = new VoiceStateSyncService(
+            _watchdogServices,
+            NullLogger<VoiceStateSyncService>.Instance,
+            config);
 
         _stdoutReaderTask = Task.Run(ReadStdoutLoopAsync);
         _stderrReaderTask = Task.Run(ReadStderrLoopAsync);
@@ -147,29 +227,10 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
 
     public static async Task<VoiceCallClusterSimulator> CreateAsync()
     {
-        var baseDir = AppContext.BaseDirectory;
-        var repoRoot = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", ".."));
-        var voiceInteropPath = Path.Combine(repoRoot, "Spokes_Server", "wwwroot", "js", "voiceInterop.js");
-        var voicePipPath = Path.Combine(repoRoot, "Spokes_Server", "wwwroot", "js", "voicePip.js");
-
-        if (!File.Exists(voiceInteropPath))
-            throw new FileNotFoundException($"voiceInterop.js not found at {voiceInteropPath}");
-        if (!File.Exists(voicePipPath))
-            throw new FileNotFoundException($"voicePip.js not found at {voicePipPath}");
-
-        var voiceInteropSrc = await File.ReadAllTextAsync(voiceInteropPath);
-        var voicePipSrc = await File.ReadAllTextAsync(voicePipPath);
-
         var tempDir = Path.Combine(Path.GetTempPath(), $"spokes_voice_cluster_{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
 
         await File.WriteAllTextAsync(Path.Combine(tempDir, "package.json"), """{"type":"module"}""", Encoding.UTF8);
-        await File.WriteAllTextAsync(Path.Combine(tempDir, "noiseSuppressionManager.mjs"), """
-            export class NoiseSuppressionManager {
-                async getProcessor() { return null; }
-            }
-            """, Encoding.UTF8);
-
         await File.WriteAllTextAsync(Path.Combine(tempDir, "cluster_host.mjs"), GetClusterNodeHostScript(), Encoding.UTF8);
 
         var psi = new ProcessStartInfo
@@ -188,7 +249,7 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
         };
 
         var proc = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start node process for VoiceCallClusterSimulator.");
-        var sim = new VoiceCallClusterSimulator(tempDir, voiceInteropSrc, voicePipSrc, proc);
+        var sim = new VoiceCallClusterSimulator(tempDir, proc);
 
         // Wait for Node engine ready ping
         await sim.SendNodeCommandAsync("ping", new { });
@@ -201,46 +262,7 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
         VoiceClientPlatform platform,
         string? sharedHardwareGroupWithClientId = null)
     {
-        // Write per-client isolated ES module copies of voicePip.js and voiceInterop.js
-        // that lexically bind browser globals (window, document, navigator, localStorage, etc.)
-        // to globalThis.__spokesClientEnvs[clientId].
-        var envPreamble = $$"""
-            const {
-                window,
-                document,
-                navigator,
-                localStorage,
-                MediaStream,
-                CustomEvent,
-                MutationObserver,
-                Audio,
-                RTCRtpSender,
-                requestAnimationFrame,
-                cancelAnimationFrame
-            } = globalThis.__spokesClientEnvs['{{clientId}}'];
-            """;
-
-        var pipFileName = $"voicePip_{clientId}.mjs";
-        var interopFileName = $"voiceInterop_{clientId}.mjs";
-
-        await File.WriteAllTextAsync(
-            Path.Combine(_tempDir, pipFileName),
-            envPreamble + "\n" + _voicePipOriginalSrc,
-            Encoding.UTF8);
-
-        var patchedInterop = System.Text.RegularExpressions.Regex.Replace(
-            _voiceInteropOriginalSrc,
-            @"\./noiseSuppressionManager\.js(\?[^'""]+)?",
-            "./noiseSuppressionManager.mjs");
-        patchedInterop = System.Text.RegularExpressions.Regex.Replace(
-            patchedInterop,
-            @"\./voicePip\.js(\?[^'""]+)?",
-            $"./{pipFileName}");
-
-        await File.WriteAllTextAsync(
-            Path.Combine(_tempDir, interopFileName),
-            envPreamble + "\n" + patchedInterop,
-            Encoding.UTF8);
+        var interopSpecifier = await VoiceJsTestModuleLoader.StageIsolatedClientAsync(_tempDir, clientId);
 
         string platformStr = platform switch
         {
@@ -255,7 +277,7 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
             clientId,
             userId,
             platform = platformStr,
-            interopFile = $"./{interopFileName}",
+            interopFile = interopSpecifier,
             sharedHardwareClientId = sharedHardwareGroupWithClientId ?? clientId
         });
 
@@ -281,6 +303,9 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
             id,
             action,
             payload
+        }, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         });
 
         await WriteStdinLineAsync(json);
@@ -431,7 +456,7 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
     /// Wait for any in-flight asynchronous SFU track subscriptions, DOM MutationObservers,
     /// and JS -> C# callbacks across all clients in the cluster to settle.
     /// </summary>
-    public async Task SettleAsync(int delayMs = 80)
+    public async Task SettleAsync(int delayMs = 20)
     {
         await Task.Delay(delayMs);
         await SendNodeCommandAsync("flush", new { });
@@ -439,7 +464,244 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
         {
             await client.SyncStageAndPipDomAsync();
         }
-        await Task.Delay(40);
+        await Task.Delay(10);
+    }
+
+    public async Task SimulateRemotePeerJoinedWithoutMicAsync(string channelId, string peerUserId, string? metadata = null)
+    {
+        var parsedMeta = VoiceParticipantMetadata.Parse(metadata);
+        VoiceState.SetVoiceParticipantSessionContext(
+            channelId,
+            peerUserId,
+            parsedMeta.DeviceId,
+            parsedMeta.DeviceName,
+            "webrtc",
+            25.0,
+            string.IsNullOrWhiteSpace(parsedMeta.Platform) ? "web" : parsedMeta.Platform,
+            isMuted: false,
+            string.IsNullOrWhiteSpace(parsedMeta.VoiceSessionId) ? null : parsedMeta.VoiceSessionId);
+
+        await SendNodeCommandAsync("simulateRemotePeerJoinedWithoutMic", new
+        {
+            roomName = $"channel-{channelId}",
+            peerUserId,
+            metadata = metadata ?? ""
+        });
+    }
+
+    public async Task SimulateActiveSpeakersChangedAsync(string channelId, params string[] speakerUserIds)
+    {
+        await SendNodeCommandAsync("simulateActiveSpeakersChanged", new
+        {
+            roomName = $"channel-{channelId}",
+            speakerUserIds
+        });
+    }
+
+    public async Task PublishBotProcessedAudioTrackAsync(string channelId, string targetUserId, bool subscribeReady = true)
+    {
+        await SendNodeCommandAsync("publishBotProcessedAudioTrack", new
+        {
+            roomName = $"channel-{channelId}",
+            targetUserId,
+            subscribeReady
+        });
+    }
+
+    public async Task CompleteBotProcessedAudioSubscriptionAsync(string channelId, string targetUserId)
+    {
+        await SendNodeCommandAsync("completeBotProcessedAudioSubscription", new
+        {
+            roomName = $"channel-{channelId}",
+            targetUserId
+        });
+    }
+
+    public async Task UnpublishBotProcessedAudioTrackAsync(string channelId, string targetUserId)
+    {
+        await SendNodeCommandAsync("unpublishBotProcessedAudioTrack", new
+        {
+            roomName = $"channel-{channelId}",
+            targetUserId
+        });
+    }
+
+    /// <summary>
+    /// Runs a single authoritative LiveKit watchdog poll against the live simulated SFU rooms.
+    /// </summary>
+    public async Task RunVoiceStateSyncOnceAsync(CancellationToken cancellationToken = default)
+    {
+        await VoiceStateSyncService.SyncActiveChannelsOnceAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Dispatches a real LiveKit <see cref="WebhookEvent"/> into <see cref="VoiceChannelService.IngestWebhookEventAsync"/>.
+    /// </summary>
+    public async Task DispatchLiveKitWebhookAsync(
+        string eventType,
+        string channelId,
+        string participantIdentity,
+        string? participantSid = null,
+        string? metadata = null,
+        TrackSource? trackSource = null,
+        TrackType? trackType = null,
+        bool trackMuted = false)
+    {
+        var participantInfo = new ParticipantInfo
+        {
+            Identity = participantIdentity,
+            Sid = participantSid ?? $"PA_{participantIdentity}",
+            Metadata = metadata ?? string.Empty,
+            State = eventType == "participant_left"
+                ? ParticipantInfo.Types.State.Disconnected
+                : ParticipantInfo.Types.State.Active
+        };
+
+        TrackInfo? trackInfo = null;
+        if (trackSource.HasValue || trackType.HasValue)
+        {
+            var resolvedType = trackType ?? (trackSource == TrackSource.Camera || trackSource == TrackSource.ScreenShare
+                ? TrackType.Video
+                : TrackType.Audio);
+            trackInfo = new TrackInfo
+            {
+                Sid = $"TR_{participantIdentity}_{trackSource}",
+                Type = resolvedType,
+                Source = trackSource ?? TrackSource.Microphone,
+                Muted = trackMuted
+            };
+            participantInfo.Tracks.Add(trackInfo);
+        }
+
+        var webhook = new WebhookEvent
+        {
+            Event = eventType,
+            Room = new Room { Name = Spokes_Server.Core.Services.Communication.Voice.LiveKitService.GetRoomName(channelId) },
+            Participant = participantInfo,
+            Track = trackInfo
+        };
+
+        await VoiceChannelService.IngestWebhookEventAsync(webhook);
+    }
+
+    /// <summary>
+    /// Simulates a LiveKit full signal reconnect on <paramref name="clientId"/>:
+    /// enters <c>signalReconnecting</c>, fires synthetic <c>TrackUnsubscribed</c>/<c>ParticipantDisconnected</c>
+    /// (which must not wipe C# participant/video state), optionally rotates participant SID (<c>PA_old -&gt; PA_new</c>)
+    /// and dispatches out-of-order <c>participant_left(PA_old)</c> / <c>participant_joined(PA_new)</c> webhooks,
+    /// then completes <c>Reconnected</c> and reconciles via watchdog poll.
+    /// </summary>
+    public async Task SimulateSfuSignalReconnectAsync(string clientId, bool dispatchSidRotationWebhooks = true)
+    {
+        if (!_clients.TryGetValue(clientId, out var client))
+            throw new InvalidOperationException($"Unknown client '{clientId}'.");
+
+        var channelId = client.VoiceService.CurrentChannelId;
+        var res = await SendNodeCommandAsync("simulateSfuSignalReconnect", new { clientId });
+        string oldSid = res.TryGetProperty("oldSid", out var o) ? (o.GetString() ?? "") : "";
+        string newSid = res.TryGetProperty("newSid", out var n) ? (n.GetString() ?? "") : "";
+        string metadata = res.TryGetProperty("metadata", out var m) ? (m.GetString() ?? "") : "";
+
+        if (dispatchSidRotationWebhooks && !string.IsNullOrWhiteSpace(channelId))
+        {
+            // Simulate out-of-order/reconnected webhooks: PA_new joins, then stale PA_old leaves
+            await DispatchLiveKitWebhookAsync("participant_joined", channelId, client.UserId, newSid, metadata);
+            await DispatchLiveKitWebhookAsync("participant_left", channelId, client.UserId, oldSid, metadata);
+            await RunVoiceStateSyncOnceAsync();
+        }
+    }
+
+    /// <summary>
+    /// Simulates a mid-call Blazor Server SignalR circuit drop on <paramref name="clientId"/> while keeping
+    /// the LiveKit WebRTC/native media connection alive, executes <paramref name="whileDisconnected"/>,
+    /// and then restores the circuit and verifies snapshot convergence.
+    /// </summary>
+    public async Task SimulateBlazorCircuitDropAndRestoreAsync(string clientId, Func<Task> whileDisconnected)
+    {
+        if (!_clients.TryGetValue(clientId, out var client))
+            throw new InvalidOperationException($"Unknown client '{clientId}'.");
+
+        var handler = new VoiceCircuitHandler(client.VoiceService);
+        await SendNodeCommandAsync("setBlazorCircuitDisconnected", new { clientId, disconnected = true });
+        await handler.OnConnectionDownAsync(null!, CancellationToken.None);
+
+        await whileDisconnected();
+
+        await SendNodeCommandAsync("setBlazorCircuitDisconnected", new { clientId, disconnected = false });
+        await handler.OnConnectionUpAsync(null!, CancellationToken.None);
+        await client.VoiceService.VerifyServerStateIntegrityAsync();
+        await SettleAsync();
+    }
+
+    /// <summary>
+    /// Asserts full cluster state coherence across <see cref="VoiceStateService"/>, every connected client's
+    /// <see cref="GlobalVoiceService"/>, <c>voicePip.js</c> metadata hygiene, and native mobile video slots.
+    /// </summary>
+    public async Task AssertClusterInvariantsAsync(string channelId)
+    {
+        var connectedClients = _clients.Values
+            .Where(c => c.VoiceService.IsInVoiceCall && string.Equals(c.VoiceService.CurrentChannelId, channelId, StringComparison.Ordinal))
+            .ToList();
+
+        var expectedUsers = connectedClients
+            .Select(c => c.UserId)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToList();
+
+        var serverUsers = VoiceState.GetVoiceParticipants(channelId)
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(expectedUsers, serverUsers);
+
+        foreach (var client in connectedClients)
+        {
+            var clientUsers = client.VoiceService.CallParticipants
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .ToList();
+            Assert.Equal(expectedUsers, clientUsers);
+
+            foreach (var peer in connectedClients)
+            {
+                bool expectedMuted = peer.VoiceService.IsMuted;
+                Assert.Equal(expectedMuted, VoiceState.IsUserMuted(channelId, peer.UserId));
+
+                if (peer.UserId != client.UserId)
+                {
+                    Assert.Equal(expectedMuted, client.VoiceService.MutedParticipants.Contains(peer.UserId));
+                }
+
+                var serverMedia = VoiceState.GetVoiceParticipantMediaState(channelId, peer.UserId);
+                Assert.Equal(peer.VoiceService.IsVideoOn, serverMedia.IsCameraOn);
+                Assert.Equal(peer.VoiceService.IsScreenSharing, serverMedia.IsScreenSharing);
+                Assert.Equal(peer.VoiceService.IsVideoOn, client.VoiceService.ActiveCameraParticipants.Contains(peer.UserId));
+                Assert.Equal(peer.VoiceService.IsScreenSharing, client.VoiceService.ActiveScreenShareParticipants.Contains(peer.UserId));
+            }
+
+            // Verify PiP metadata never contains raw channel-<guid> room names
+            var pipMeta = await SendNodeCommandAsync("inspectPipMeta", new { clientId = client.ClientId });
+            var pipChannelName = pipMeta.TryGetProperty("channelName", out var chProp) ? (chProp.GetString() ?? "") : "";
+            Assert.DoesNotContain($"channel-{channelId}", pipChannelName, StringComparison.OrdinalIgnoreCase);
+
+            // Verify native mobile clients emit valid native video slot layers
+            if (client.Platform is VoiceClientPlatform.AndroidNative or VoiceClientPlatform.IosNative)
+            {
+                var snap = await client.GetStageSnapshotAsync();
+                Assert.True(snap.Hardware.UsingNativeMobileVoice, $"Client '{client.ClientId}' on {client.Platform} must run on SpokesNativeVoice.");
+                if (snap.NativeVideoSlots != null && snap.NativeVideoSlots.Slots.Count > 0 && !snap.NativeVideoSlots.Suppressed)
+                {
+                    if (client.UiState.IsCallStageVisible)
+                    {
+                        Assert.True(snap.NativeVideoSlots.Underlaid, $"Stage native video slots on '{client.ClientId}' must be underlaid=true.");
+                    }
+                    else if (!client.UiState.IsNativeMobilePipMode && !client.UiState.IsOsPipActive)
+                    {
+                        Assert.False(snap.NativeVideoSlots.Underlaid, $"Floating In-App PiP slots on '{client.ClientId}' must use overlay (underlaid=false).");
+                        Assert.All(snap.NativeVideoSlots.Slots, s => Assert.StartsWith("pip:", s.Key, StringComparison.Ordinal));
+                    }
+                }
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -449,6 +711,9 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
         {
             await client.DisposeAsync();
         }
+        DirectSessionService.Dispose();
+        _watchdogServices.Dispose();
+        _persistence.Dispose();
         try
         {
             if (!_nodeProcess.HasExited)
@@ -509,6 +774,8 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
         const RoomEvent = {
             TrackSubscribed: 'trackSubscribed',
             TrackUnsubscribed: 'trackUnsubscribed',
+            TrackPublished: 'trackPublished',
+            TrackUnpublished: 'trackUnpublished',
             ActiveSpeakersChanged: 'activeSpeakersChanged',
             Disconnected: 'disconnected',
             LocalTrackPublished: 'localTrackPublished',
@@ -516,8 +783,21 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
             ParticipantConnected: 'participantConnected',
             ParticipantDisconnected: 'participantDisconnected',
             TrackMuted: 'trackMuted',
-            TrackUnmuted: 'trackUnmuted'
+            TrackUnmuted: 'trackUnmuted',
+            Reconnecting: 'reconnecting',
+            SignalReconnecting: 'signalReconnecting',
+            Reconnected: 'reconnected'
         };
+
+        const ConnectionState = {
+            Connected: 'connected',
+            Connecting: 'connecting',
+            Reconnecting: 'reconnecting',
+            SignalReconnecting: 'signalReconnecting',
+            Disconnected: 'disconnected'
+        };
+
+        let globalSidCounter = 1;
 
         class SimulatedSfuRoom {
             constructor(name) {
@@ -567,13 +847,54 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 }, 5);
             }
 
-            publishTrack(session, pub) {
+            publishTrack(session, pub, deferRemoteTrack = false) {
+                pub.deferRemoteTrack = Boolean(deferRemoteTrack);
                 session.publishedTracks.set(pub.trackSid, pub);
                 for (const [otherId, otherSession] of this.participants.entries()) {
                     if (otherId === session.identity) continue;
                     const remoteView = otherSession.getOrCreateRemoteParticipantView(session);
                     const remotePub = remoteView.attachPublication(pub);
-                    otherSession.roomInstance?.emit(RoomEvent.TrackSubscribed, remotePub.track, remotePub, remoteView);
+                    otherSession.roomInstance?.emit(RoomEvent.TrackPublished, remotePub, remoteView);
+                    if (!deferRemoteTrack && remotePub.track) {
+                        otherSession.roomInstance?.emit(RoomEvent.TrackSubscribed, remotePub.track, remotePub, remoteView);
+                    }
+                }
+            }
+
+            completeDeferredTrackSubscription(session, trackSid) {
+                const pub = session.publishedTracks.get(trackSid);
+                if (!pub) return;
+                pub.deferRemoteTrack = false;
+                for (const [otherId, otherSession] of this.participants.entries()) {
+                    if (otherId === session.identity) continue;
+                    const remoteView = otherSession.remoteParticipants.get(session.identity);
+                    if (!remoteView) continue;
+                    const remotePub = remoteView.getPublication(trackSid);
+                    if (remotePub && remotePub._pendingClonedTrack) {
+                        remotePub.track = remotePub._pendingClonedTrack;
+                        remotePub.audioTrack = remotePub.kind === 'audio' ? remotePub._pendingClonedTrack : undefined;
+                        remotePub.videoTrack = remotePub.kind === 'video' ? remotePub._pendingClonedTrack : undefined;
+                        remotePub._pendingClonedTrack = null;
+                        otherSession.roomInstance?.emit(RoomEvent.TrackSubscribed, remotePub.track, remotePub, remoteView);
+                    }
+                }
+            }
+
+            notifyTrackMuteChanged(session, pub, isMuted) {
+                pub.isMuted = Boolean(isMuted);
+                for (const [otherId, otherSession] of this.participants.entries()) {
+                    if (otherId === session.identity) continue;
+                    const remoteView = otherSession.remoteParticipants.get(session.identity);
+                    if (!remoteView) continue;
+                    const remotePub = remoteView.getPublication(pub.trackSid);
+                    if (remotePub) {
+                        remotePub.isMuted = Boolean(isMuted);
+                        otherSession.roomInstance?.emit(
+                            isMuted ? RoomEvent.TrackMuted : RoomEvent.TrackUnmuted,
+                            remotePub,
+                            remoteView
+                        );
+                    }
                 }
             }
 
@@ -588,7 +909,10 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                     if (!remoteView) continue;
                     const remotePub = remoteView.removePublication(trackSid);
                     if (remotePub) {
-                        otherSession.roomInstance?.emit(RoomEvent.TrackUnsubscribed, remotePub.track, remotePub, remoteView);
+                        if (remotePub.track) {
+                            otherSession.roomInstance?.emit(RoomEvent.TrackUnsubscribed, remotePub.track, remotePub, remoteView);
+                        }
+                        otherSession.roomInstance?.emit(RoomEvent.TrackUnpublished, remotePub, remoteView);
                     }
                 }
             }
@@ -896,6 +1220,13 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 stop() {
                     this.mediaStreamTrack.stop();
                 },
+                setAudioContext() {},
+                async setProcessor(proc) {
+                    this.processor = proc;
+                    if (proc) {
+                        proc.originalTrack = this.mediaStreamTrack;
+                    }
+                },
                 async setDegradationPreference(pref) {
                     this.degradationPreference = pref;
                 },
@@ -1053,6 +1384,21 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                         return child;
                     },
                     getBoundingClientRect() {
+                        if (this.id === 'voice-video-container' || this.classList.contains('voice-video-area')) {
+                            return { left: 0, top: 60, width: 1280, height: 680, right: 1280, bottom: 740 };
+                        }
+                        if (this.id?.startsWith('participant-rect-')) {
+                            return { left: 20, top: 80, width: 600, height: 340, right: 620, bottom: 420 };
+                        }
+                        if (this.id === 'spokes-pip-primary-video') {
+                            return { left: 960, top: 534, width: 240, height: 118, right: 1200, bottom: 652 };
+                        }
+                        if (this.id === 'spokes-pip-presenter-cam-video') {
+                            return { left: 1120, top: 580, width: 70, height: 50, right: 1190, bottom: 630 };
+                        }
+                        if (this.id === 'spokes-pip-self-video') {
+                            return { left: 968, top: 540, width: 70, height: 50, right: 1038, bottom: 590 };
+                        }
                         return { left: 800, top: 500, width: 240, height: 150, right: 1040, bottom: 650 };
                     },
                     closest(selector) {
@@ -1138,10 +1484,15 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
             documentBody.appendChild(pipOverlay);
 
             function mountCallStage(participantIds) {
+                let videoArea = domById.get('voice-video-area');
+                if (!videoArea) {
+                    videoArea = createDomElement('DIV', 'voice-video-area', ['voice-video-area']);
+                    documentBody.appendChild(videoArea);
+                }
                 let stageContainer = domById.get('voice-video-container');
                 if (!stageContainer) {
                     stageContainer = createDomElement('DIV', 'voice-video-container');
-                    documentBody.appendChild(stageContainer);
+                    videoArea.appendChild(stageContainer);
                 }
                 for (const pid of participantIds) {
                     ensureParticipantSlotMounted(pid);
@@ -1150,11 +1501,13 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
             }
 
             function ensureParticipantSlotMounted(pid) {
-                if (!domById.has('voice-video-container')) return;
+                const stageContainer = domById.get('voice-video-container');
+                if (!stageContainer) return;
                 const rectId = `participant-rect-${pid}`;
                 let rectEl = domById.get(rectId);
                 if (!rectEl) {
                     rectEl = createDomElement('DIV', rectId, ['participant-rect']);
+                    stageContainer.appendChild(rectEl);
                 }
                 const screenId = `participant-screen-${pid}`;
                 if (!domById.has(screenId)) {
@@ -1173,7 +1526,8 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
 
             function unmountCallStage() {
                 for (const key of Array.from(domById.keys())) {
-                    if (key === 'voice-video-container'
+                    if (key === 'voice-video-area'
+                        || key === 'voice-video-container'
                         || key.startsWith('participant-video-')
                         || key.startsWith('participant-screen-')
                         || key.startsWith('participant-rect-')) {
@@ -1182,6 +1536,7 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                         domById.delete(key);
                     }
                 }
+                notifyMutationObservers();
             }
 
             // Start with stage mounted by default
@@ -1204,6 +1559,15 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 disconnect() { mutationObservers.delete(this); }
             }
 
+            class SimulatedResizeObserver {
+                constructor(callback) {
+                    this._callback = callback;
+                }
+                observe() {}
+                unobserve() {}
+                disconnect() {}
+            }
+
             const documentObj = {
                 visibilityState: 'visible',
                 pictureInPictureEnabled: true,
@@ -1215,6 +1579,15 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 removeEventListener() {},
                 getElementById(id) { return domById.get(id) || null; },
                 createElement(tag) { return createDomElement(tag); },
+                querySelector(sel) {
+                    if (sel === '.voice-video-area') {
+                        return domById.get('voice-video-area') || null;
+                    }
+                    if (sel === '#spokes-voice-pip-overlay') {
+                        return domById.get('spokes-voice-pip-overlay') || null;
+                    }
+                    return null;
+                },
                 querySelectorAll(sel) {
                     if (sel === 'video.has-stream') {
                         return Array.from(domById.values()).filter(
@@ -1222,6 +1595,16 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                                 && el.id !== 'spokes-pip-primary-video'
                                 && el.id !== 'spokes-pip-self-video'
                                 && el.classList.contains('has-stream')
+                        );
+                    }
+                    if (sel === '.participant-rect') {
+                        return Array.from(domById.values()).filter(
+                            el => el.id?.startsWith('participant-rect-')
+                        );
+                    }
+                    if (sel === '.participant-rect.native-video-active') {
+                        return Array.from(domById.values()).filter(
+                            el => el.id?.startsWith('participant-rect-') && el.classList.contains('native-video-active')
                         );
                     }
                     if (sel === '.participant-rect.is-speaking') {
@@ -1307,6 +1690,7 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 constructor(sourceSession) {
                     this._sourceSession = sourceSession;
                     this.identity = sourceSession.identity;
+                    this.metadata = sourceSession.metadata || '';
                     this.videoTrackPublications = new Map();
                     this.audioTrackPublications = new Map();
                     this.trackPublications = new Map();
@@ -1322,18 +1706,26 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                         (tag) => createDomElement(tag)
                     );
                     clonedTrack.sid = sourcePub.trackSid;
+                    clonedTrack.name = sourcePub.trackName || sourcePub.track?.name || '';
+                    const isDeferred = Boolean(sourcePub.deferRemoteTrack);
                     const remotePub = {
                         trackSid: sourcePub.trackSid,
                         kind: sourcePub.kind,
                         source: sourcePub.source,
                         trackName: sourcePub.trackName || '',
+                        isMuted: Boolean(sourcePub.isMuted),
                         isSubscribed: true,
-                        track: clonedTrack,
-                        videoTrack: sourcePub.kind === 'video' ? clonedTrack : undefined,
-                        audioTrack: sourcePub.kind === 'audio' ? clonedTrack : undefined,
+                        isDesired: true,
+                        track: isDeferred ? null : clonedTrack,
+                        _pendingClonedTrack: isDeferred ? clonedTrack : null,
+                        videoTrack: (!isDeferred && sourcePub.kind === 'video') ? clonedTrack : undefined,
+                        audioTrack: (!isDeferred && sourcePub.kind === 'audio') ? clonedTrack : undefined,
                         videoDimensions: s.width > 0 ? { width: s.width, height: s.height } : undefined,
                         dimensions: s.width > 0 ? { width: s.width, height: s.height } : undefined,
-                        setSubscribed(sub) { this.isSubscribed = Boolean(sub); },
+                        setSubscribed(sub) {
+                            this.isSubscribed = Boolean(sub);
+                            this.isDesired = Boolean(sub);
+                        },
                         setEnabled() {},
                         setVideoQuality() {},
                         setVideoDimensions() {}
@@ -1363,8 +1755,10 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
             }
 
             class SfuParticipantSession {
-                constructor(identity, roomInstance) {
+                constructor(identity, roomInstance, metadata = '') {
+                    this.sid = `PA_${globalSidCounter++}`;
                     this.identity = identity;
+                    this.metadata = metadata || '';
                     this.roomInstance = roomInstance;
                     this.publishedTracks = new Map();
                     this.remoteParticipants = new Map();
@@ -1373,6 +1767,9 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 getOrCreateRemoteParticipantView(otherSession) {
                     if (!this.remoteParticipants.has(otherSession.identity)) {
                         this.remoteParticipants.set(otherSession.identity, new RemoteParticipantView(otherSession));
+                    } else {
+                        const existing = this.remoteParticipants.get(otherSession.identity);
+                        existing.metadata = otherSession.metadata || existing.metadata || '';
                     }
                     return this.remoteParticipants.get(otherSession.identity);
                 }
@@ -1384,6 +1781,8 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 constructor(roomOpts = {}) {
                     this.options = roomOpts;
                     this.name = '';
+                    this.state = ConnectionState.Connected;
+                    this.engine = { attemptingReconnect: false, fullReconnectOnNext: false };
                     this.handlers = new Map();
                     this.remoteParticipants = new Map();
                     this._sfuRoom = null;
@@ -1402,14 +1801,24 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                                 trackSid: track.sid,
                                 kind: track.kind,
                                 source: track.source,
+                                trackName: publishOpts.name || track.name || '',
+                                isMuted: false,
                                 track,
                                 videoTrack: track.kind === 'video' ? track : undefined,
                                 audioTrack: track.kind === 'audio' ? track : undefined,
                                 async mute() {
+                                    this.isMuted = true;
                                     if (track.mediaStreamTrack) track.mediaStreamTrack.enabled = false;
+                                    if (roomSelf._sfuRoom && roomSelf._session) {
+                                        roomSelf._sfuRoom.notifyTrackMuteChanged(roomSelf._session, this, true);
+                                    }
                                 },
                                 async unmute() {
+                                    this.isMuted = false;
                                     if (track.mediaStreamTrack) track.mediaStreamTrack.enabled = true;
+                                    if (roomSelf._sfuRoom && roomSelf._session) {
+                                        roomSelf._sfuRoom.notifyTrackMuteChanged(roomSelf._session, this, false);
+                                    }
                                 }
                             };
                             this.trackPublications.set(pub.trackSid, pub);
@@ -1466,7 +1875,7 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 }
 
                 async connect(url, token) {
-                    let parsed = { room: 'channel-default', identity: userId };
+                    let parsed = { room: 'channel-default', identity: userId, metadata: '' };
                     try {
                         if (token && token.startsWith('{')) {
                             parsed = JSON.parse(token);
@@ -1475,8 +1884,9 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
 
                     this.name = parsed.room || 'channel-default';
                     this.localParticipant.identity = parsed.identity || userId;
+                    this.localParticipant.metadata = parsed.metadata || '';
                     this._sfuRoom = getOrCreateSfuRoom(this.name);
-                    this._session = new SfuParticipantSession(this.localParticipant.identity, this);
+                    this._session = new SfuParticipantSession(this.localParticipant.identity, this, this.localParticipant.metadata);
                     this.remoteParticipants = this._session.remoteParticipants;
                     this._sfuRoom.join(this._session);
                 }
@@ -1538,15 +1948,6 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 }
             }
 
-            // ================================================================
-            // Native iOS Companion Camera Simulator (SpokesIosPipController)
-            // ================================================================
-            let iosCompanionSession = null;
-            let iosCompanionSfuRoom = null;
-            let iosCompanionTrack = null;
-            let iosCompanionPub = null;
-            let iosCompanionConfig = { url: '', token: '', localUserId: userId };
-
             const spokesAudioSessionPlugin = {
                 async configureVoiceChat({ enabled }) {
                     return {
@@ -1576,133 +1977,6 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                     return {
                         cameras: hwTable.devices.filter(d => d.kind === 'videoinput').map(d => ({ ...d }))
                     };
-                },
-                async configureCompanionSession(creds) {
-                    iosCompanionConfig = { ...iosCompanionConfig, ...creds };
-                },
-                async startNativeCamera(payload = {}) {
-                    const token = payload.token || iosCompanionConfig.token;
-                    let parsed = { room: activeClientRoom?.name || 'channel-default', identity: `${userId}:cam` };
-                    try {
-                        if (token && token.startsWith('{')) parsed = JSON.parse(token);
-                    } catch (e) {}
-
-                    const videoDevs = hwTable.devices.filter(d => d.kind === 'videoinput');
-                    const targetDev = videoDevs.find(d => d.deviceId === payload.deviceId)
-                        || videoDevs.find(d => d.facingMode === (payload.facingMode || 'user'))
-                        || videoDevs[0];
-                    const maxCapW = targetDev?.maxWidth || 1920;
-                    const maxCapH = targetDev?.maxHeight || 1080;
-
-                    let resStr = String(payload.resolution || 'Auto').toLowerCase();
-                    if ((resStr === '2160p' || resStr === '4k') && Math.max(maxCapW, maxCapH) < 3840) {
-                        resStr = Math.max(maxCapW, maxCapH) >= 1920 ? '1080p' : 'auto';
-                    } else if (resStr === '1080p' && Math.max(maxCapW, maxCapH) < 1920) {
-                        resStr = 'auto';
-                    }
-
-                    const fps = payload.fps && payload.fps >= 60 ? 60 : 30;
-                    const width = (resStr === '2160p' || resStr === '4k') ? 3840 : 1920;
-                    const height = (resStr === '2160p' || resStr === '4k') ? 2160 : 1080;
-                    const maxBitrate = (resStr === '2160p' || resStr === '4k')
-                        ? (fps >= 60 ? 12000000 : 8000000)
-                        : (resStr === '1080p' ? (fps >= 60 ? 4500000 : 3000000) : 3000000);
-                    const degradationPreference = (resStr === 'auto' || !resStr) ? 'balanced' : 'maintain-resolution';
-
-                    if (!iosCompanionSfuRoom || !iosCompanionSession) {
-                        iosCompanionSfuRoom = getOrCreateSfuRoom(parsed.room);
-                        iosCompanionSession = new SfuParticipantSession(parsed.identity, null);
-                        iosCompanionSfuRoom.join(iosCompanionSession);
-                    }
-
-                    // In-place update if companion track already exists (matching SpokesIosPipController.swift!)
-                    if (iosCompanionTrack && iosCompanionPub && iosCompanionTrack.mediaStreamTrack?.readyState === 'live') {
-                        const mst = iosCompanionTrack.mediaStreamTrack;
-                        mst.stop();
-                        const updatedMst = acquireHardwareTrack(hwTable, clientId, 'video', {
-                            deviceId: payload.deviceId,
-                            facingMode: payload.facingMode || 'user',
-                            width,
-                            height,
-                            frameRate: fps
-                        });
-                        updatedMst._hwTable = hwTable;
-                        createdMediaStreamTracks.push(updatedMst);
-                        iosCompanionTrack.mediaStreamTrack = updatedMst;
-                        iosCompanionTrack._mediaStreamTrack = updatedMst;
-                        iosCompanionTrack.dimensions = { width, height };
-                        iosCompanionTrack.degradationPreference = degradationPreference;
-                        iosCompanionTrack.publishOptionsUsed = {
-                            videoCodec: 'h264',
-                            simulcast: false,
-                            degradationPreference,
-                            videoEncoding: { maxBitrate, maxFramerate: fps }
-                        };
-                        await iosCompanionTrack.sender.setParameters({
-                            encodings: [{ maxBitrate, maxFramerate: fps, scaleResolutionDownBy: 1.0 }]
-                        });
-                        iosCompanionSfuRoom.notifyTrackDimensionChange(iosCompanionSession, iosCompanionPub);
-                        return {
-                            success: true,
-                            facingMode: updatedMst.facingMode,
-                            deviceId: updatedMst.deviceId
-                        };
-                    }
-
-                    const mst = acquireHardwareTrack(hwTable, clientId, 'video', {
-                        deviceId: payload.deviceId,
-                        facingMode: payload.facingMode || 'user',
-                        width,
-                        height,
-                        frameRate: fps
-                    });
-                    mst._hwTable = hwTable;
-                    createdMediaStreamTracks.push(mst);
-
-                    iosCompanionTrack = createLivekitTrackFromMediaStreamTrack(mst, Track.Source.Camera, (tag) => createDomElement(tag));
-                    iosCompanionTrack.degradationPreference = degradationPreference;
-                    iosCompanionTrack.publishOptionsUsed = {
-                        videoCodec: 'h264',
-                        simulcast: false,
-                        degradationPreference,
-                        videoEncoding: { maxBitrate, maxFramerate: fps }
-                    };
-                    await iosCompanionTrack.sender.setParameters({
-                        encodings: [{ maxBitrate, maxFramerate: fps, scaleResolutionDownBy: 1.0 }]
-                    });
-
-                    iosCompanionPub = {
-                        trackSid: iosCompanionTrack.sid,
-                        kind: 'video',
-                        source: Track.Source.Camera,
-                        track: iosCompanionTrack,
-                        videoTrack: iosCompanionTrack
-                    };
-                    iosCompanionSfuRoom.publishTrack(iosCompanionSession, iosCompanionPub);
-
-                    return {
-                        success: true,
-                        facingMode: mst.facingMode,
-                        deviceId: mst.deviceId
-                    };
-                },
-                async switchNativeCamera(payload = {}) {
-                    return await this.startNativeCamera(payload);
-                },
-                async stopNativeCamera() {
-                    if (iosCompanionSfuRoom && iosCompanionSession && iosCompanionPub) {
-                        iosCompanionSfuRoom.unpublishTrack(iosCompanionSession, iosCompanionPub.trackSid);
-                    }
-                    if (iosCompanionTrack) {
-                        iosCompanionTrack.stop();
-                    }
-                    if (iosCompanionSfuRoom && iosCompanionSession) {
-                        iosCompanionSfuRoom.leave(iosCompanionSession.identity, iosCompanionSession);
-                    }
-                    iosCompanionPub = null;
-                    iosCompanionTrack = null;
-                    iosCompanionSession = null;
-                    iosCompanionSfuRoom = null;
                 }
             };
 
@@ -1727,18 +2001,565 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 }
             };
 
+            const directRoomAudioBridge = {
+                _statusListeners: new Set(),
+                _lastConfig: null,
+                _lastStatus: null,
+                activePeerUserIds: [],
+                async isSupported() { return true; },
+                async prepareEndpoints() {
+                    return { endpoints: ['192.168.1.50:49152'] };
+                },
+                async configureSession(cfg) {
+                    this._lastConfig = cfg;
+                    const peers = Array.isArray(cfg?.peers) ? cfg.peers : [];
+                    this.activePeerUserIds = peers.map(p => String(p.userId || '')).filter(Boolean);
+                    const peerTokens = peers.map(p => Number(p.peerToken));
+                    this._lastStatus = {
+                        running: true,
+                        activePeerTokens: peerTokens,
+                        estimatedEndToEndMs: 11.5,
+                        maxPeerRttMs: 0.8,
+                        jitterBufferMs: 4.0,
+                        achievedSuppressionDb: 21.5,
+                        txPacketCount: 10,
+                        rxAudioPacketCount: 10,
+                        peerRmsLevels: {}
+                    };
+                    return { ...this._lastStatus };
+                },
+                async getStatus() {
+                    return this._lastStatus ? { ...this._lastStatus } : { running: false, activePeerTokens: [], peerRmsLevels: {} };
+                },
+                emitStatusUpdate(overrides = {}) {
+                    if (!this._lastStatus) return;
+                    this._lastStatus = Object.assign({}, this._lastStatus, overrides);
+                    for (const cb of Array.from(this._statusListeners)) {
+                        try { cb({ ...this._lastStatus }); } catch (e) {}
+                    }
+                },
+                async updateControls(ctrl) {
+                    if (this._lastConfig && ctrl) {
+                        Object.assign(this._lastConfig, ctrl);
+                    }
+                },
+                async stop() {
+                    this._lastConfig = null;
+                    this._lastStatus = null;
+                    this.activePeerUserIds = [];
+                },
+                onStatusChanged(cb) {
+                    this._statusListeners.add(cb);
+                    return () => this._statusListeners.delete(cb);
+                }
+            };
+
+            // Real Native Mobile LiveKit Engine Simulation (SpokesNativeVoice on Android & iOS)
+            const nativeVoiceState = {
+                isConnected: false,
+                sfuRoom: null,
+                session: null,
+                localIdentity: '',
+                localMicPub: null,
+                localCamPub: null,
+                localMicMuted: false,
+                cameraFacing: 'user',
+                cameraDeviceId: '',
+                effectiveFilter: platform === 'android' ? 'rnnoise' : 'webrtc',
+                deafened: false,
+                masterVolume: 1.0,
+                participantVolumes: new Map(),
+                routedUsers: new Set(),
+                mutedRoommates: new Set(),
+                mutedScreenAudio: new Set(),
+                suppressedAudioPubSids: new Set(),
+                listeners: new Map(),
+                lastVideoSlotsPayload: null
+            };
+
+            const emitNativeVoice = (evt, data) => {
+                const set = nativeVoiceState.listeners.get(evt);
+                if (!set) return;
+                for (const fn of Array.from(set)) {
+                    try { fn(data); } catch (e) {}
+                }
+            };
+
+            const getNativeRemoteMicMutedState = (remoteView) => {
+                if (!remoteView || !remoteView.audioTrackPublications) return null;
+                const micPubs = [];
+                for (const pub of remoteView.audioTrackPublications.values()) {
+                    if (!pub) continue;
+                    if (pub.source === Track.Source.ScreenShareAudio) continue;
+                    const tName = pub.trackName || pub.track?.name || '';
+                    if (tName.startsWith('processed-mic:')) continue;
+                    micPubs.push(pub);
+                }
+                if (micPubs.length === 0) return null;
+                return micPubs.every(p => Boolean(p.isMuted));
+            };
+
+            const mapNativeTrackSource = (pub) => {
+                const src = pub?.source || pub?.track?.source;
+                if (src === Track.Source.ScreenShare) return 'screen';
+                if (src === Track.Source.ScreenShareAudio) return 'screen_audio';
+                if (src === Track.Source.Camera) return 'camera';
+                return 'mic';
+            };
+
+            const reconcileNativeRemoteAudio = () => {
+                const session = nativeVoiceState.session;
+                if (!session) return;
+                for (const remoteView of session.remoteParticipants.values()) {
+                    const pId = remoteView.identity || '';
+                    for (const pub of remoteView.audioTrackPublications.values()) {
+                        const tName = pub.trackName || pub.track?.name || '';
+                        const isProc = pId.startsWith('bot:') && tName.startsWith('processed-mic:');
+                        const isScreenAudio = pub.source === Track.Source.ScreenShareAudio;
+                        if (isProc) {
+                            const targetId = tName.substring('processed-mic:'.length);
+                            const shouldSub = nativeVoiceState.routedUsers.has(targetId) && !nativeVoiceState.mutedRoommates.has(targetId);
+                            if (shouldSub) {
+                                nativeVoiceState.suppressedAudioPubSids.delete(pub.trackSid);
+                                pub.setSubscribed(true);
+                            } else {
+                                nativeVoiceState.suppressedAudioPubSids.add(pub.trackSid);
+                                pub.setSubscribed(false);
+                            }
+                        } else if (!isScreenAudio && !pId.startsWith('bot:')) {
+                            let hasSubscribedProcessed = false;
+                            for (const botView of session.remoteParticipants.values()) {
+                                if (!botView.identity?.startsWith('bot:')) continue;
+                                for (const bp of botView.audioTrackPublications.values()) {
+                                    if ((bp.trackName || '') === `processed-mic:${pId}` && bp.isSubscribed && bp.track && !bp.isMuted) {
+                                        hasSubscribedProcessed = true;
+                                    }
+                                }
+                            }
+                            const suppress = nativeVoiceState.mutedRoommates.has(pId)
+                                || (nativeVoiceState.routedUsers.has(pId) && hasSubscribedProcessed);
+                            if (suppress) {
+                                nativeVoiceState.suppressedAudioPubSids.add(pub.trackSid);
+                                pub.setSubscribed(false);
+                            } else {
+                                nativeVoiceState.suppressedAudioPubSids.delete(pub.trackSid);
+                                pub.setSubscribed(true);
+                            }
+                        }
+                    }
+                }
+            };
+
+            const buildNativeConnectedSnapshot = () => {
+                const remoteParticipants = [];
+                const remoteParticipantStates = [];
+                const remoteMutedParticipants = [];
+                const remoteScreenAudioParticipants = [];
+                const remoteVideoTracks = [];
+                const session = nativeVoiceState.session;
+                if (session) {
+                    for (const remoteView of session.remoteParticipants.values()) {
+                        const rpId = remoteView.identity || '';
+                        if (!rpId) continue;
+                        if (!rpId.startsWith('bot:')) {
+                            remoteParticipants.push(rpId);
+                            const micMutedState = getNativeRemoteMicMutedState(remoteView);
+                            if (micMutedState === true) remoteMutedParticipants.push(rpId);
+                            remoteParticipantStates.push({
+                                userId: rpId,
+                                isMuted: micMutedState === true,
+                                isMicMuted: micMutedState,
+                                metadata: remoteView.metadata || ''
+                            });
+                            for (const pub of remoteView.audioTrackPublications.values()) {
+                                if (pub.source === Track.Source.ScreenShareAudio && !pub.isMuted) {
+                                    remoteScreenAudioParticipants.push(rpId);
+                                }
+                            }
+                        }
+                        for (const pub of remoteView.videoTrackPublications.values()) {
+                            if (pub.track && !pub.isMuted) {
+                                const dims = pub.videoDimensions || pub.dimensions || pub.track.dimensions || { width: 0, height: 0 };
+                                remoteVideoTracks.push({
+                                    identity: rpId,
+                                    source: pub.source === Track.Source.ScreenShare ? 'screen' : 'camera',
+                                    muted: false,
+                                    width: dims.width || 0,
+                                    height: dims.height || 0
+                                });
+                            }
+                        }
+                    }
+                }
+                return {
+                    connected: true,
+                    localIdentity: nativeVoiceState.localIdentity,
+                    effectiveFilter: nativeVoiceState.effectiveFilter,
+                    remoteParticipants,
+                    remoteParticipantStates,
+                    remoteMutedParticipants,
+                    remoteScreenAudioParticipants,
+                    remoteVideoTracks
+                };
+            };
+
+            const nativeRoomEventBridge = {
+                emit(evt, ...args) {
+                    if (!nativeVoiceState.isConnected) return;
+                    if (evt === RoomEvent.ParticipantConnected) {
+                        const rv = args[0];
+                        if (rv?.identity && !rv.identity.startsWith('bot:')) {
+                            reconcileNativeRemoteAudio();
+                            emitNativeVoice('onParticipantConnected', { identity: rv.identity, metadata: rv.metadata || '' });
+                        }
+                    } else if (evt === RoomEvent.ParticipantDisconnected) {
+                        const rv = args[0];
+                        if (rv?.identity && !rv.identity.startsWith('bot:')) {
+                            reconcileNativeRemoteAudio();
+                            emitNativeVoice('onParticipantDisconnected', { identity: rv.identity });
+                        }
+                    } else if (evt === RoomEvent.TrackSubscribed) {
+                        const [track, pub, rv] = args;
+                        reconcileNativeRemoteAudio();
+                        const dims = pub?.videoDimensions || pub?.dimensions || track?.dimensions || { width: 0, height: 0 };
+                        emitNativeVoice('onTrackSubscribed', {
+                            identity: rv?.identity || '',
+                            kind: track?.kind || pub?.kind || 'audio',
+                            source: mapNativeTrackSource(pub),
+                            trackName: pub?.trackName || track?.name || '',
+                            muted: Boolean(pub?.isMuted),
+                            participantMicMuted: getNativeRemoteMicMutedState(rv),
+                            width: dims.width || 0,
+                            height: dims.height || 0
+                        });
+                    } else if (evt === RoomEvent.TrackUnsubscribed) {
+                        const [track, pub, rv] = args;
+                        reconcileNativeRemoteAudio();
+                        if ((track?.kind === 'audio' || pub?.kind === 'audio') && nativeVoiceState.suppressedAudioPubSids.has(pub?.trackSid)) {
+                            return;
+                        }
+                        emitNativeVoice('onTrackUnsubscribed', {
+                            identity: rv?.identity || '',
+                            kind: track?.kind || pub?.kind || 'audio',
+                            source: mapNativeTrackSource(pub),
+                            trackName: pub?.trackName || track?.name || '',
+                            participantMicMuted: getNativeRemoteMicMutedState(rv)
+                        });
+                    } else if (evt === RoomEvent.TrackMuted || evt === RoomEvent.TrackUnmuted) {
+                        const [pub, rv] = args;
+                        reconcileNativeRemoteAudio();
+                        const isMuted = evt === RoomEvent.TrackMuted;
+                        const dims = pub?.videoDimensions || pub?.dimensions || pub?.track?.dimensions || { width: 0, height: 0 };
+                        emitNativeVoice(isMuted ? 'onTrackMuted' : 'onTrackUnmuted', {
+                            identity: rv?.identity || '',
+                            kind: pub?.kind || pub?.track?.kind || 'audio',
+                            source: mapNativeTrackSource(pub),
+                            trackName: pub?.trackName || pub?.track?.name || '',
+                            muted: isMuted,
+                            participantMicMuted: getNativeRemoteMicMutedState(rv),
+                            width: dims.width || 0,
+                            height: dims.height || 0
+                        });
+                    } else if (evt === RoomEvent.Reconnected) {
+                        reconcileNativeRemoteAudio();
+                        emitNativeVoice('onReconnected', buildNativeConnectedSnapshot());
+                    } else if (evt === RoomEvent.Disconnected) {
+                        const reason = args[0] || 'UNKNOWN';
+                        nativeVoiceState.isConnected = false;
+                        emitNativeVoice('onDisconnected', { reason });
+                    }
+                }
+            };
+
+            const spokesNativeVoicePlugin = {
+                async isAvailable() {
+                    return { available: true, rnnoiseNative: platform === 'android' };
+                },
+                async addListener(evt, fn) {
+                    if (!nativeVoiceState.listeners.has(evt)) nativeVoiceState.listeners.set(evt, new Set());
+                    nativeVoiceState.listeners.get(evt).add(fn);
+                    return {
+                        remove: async () => {
+                            nativeVoiceState.listeners.get(evt)?.delete(fn);
+                        }
+                    };
+                },
+                async connect(opts = {}) {
+                    await this.disconnect();
+                    let parsed = { room: 'channel-default', identity: userId, metadata: '' };
+                    try {
+                        if (opts.token && opts.token.startsWith('{')) parsed = JSON.parse(opts.token);
+                    } catch (e) {}
+                    const roomName = parsed.room || 'channel-default';
+                    nativeVoiceState.localIdentity = parsed.identity || userId;
+                    nativeVoiceState.localMicMuted = opts.microphoneEnabled === false;
+                    nativeVoiceState.deafened = Boolean(opts.deafened);
+                    nativeVoiceState.cameraFacing = opts.facingMode || 'user';
+                    nativeVoiceState.effectiveFilter = (platform === 'ios')
+                        ? (opts.noiseFilter === 'none' ? 'none' : 'webrtc')
+                        : (opts.noiseFilter === 'none' ? 'none' : (opts.noiseFilter === 'webrtc' ? 'webrtc' : 'rnnoise'));
+
+                    const sfuRoom = getOrCreateSfuRoom(roomName);
+                    const session = new SfuParticipantSession(nativeVoiceState.localIdentity, nativeRoomEventBridge, parsed.metadata || '');
+                    nativeVoiceState.sfuRoom = sfuRoom;
+                    nativeVoiceState.session = session;
+                    nativeVoiceState.isConnected = true;
+                    sfuRoom.join(session);
+
+                    // Publish local microphone track on native LiveKit room (muted flag matches initialMuted)
+                    const micMst = acquireHardwareTrack(hwTable, clientId, 'audio', {});
+                    micMst._hwTable = hwTable;
+                    micMst.enabled = !nativeVoiceState.localMicMuted;
+                    createdMediaStreamTracks.push(micMst);
+                    const micTrack = createLivekitTrackFromMediaStreamTrack(micMst, Track.Source.Microphone, (tag) => createDomElement(tag));
+                    const micPub = {
+                        trackSid: micTrack.sid,
+                        kind: 'audio',
+                        source: Track.Source.Microphone,
+                        trackName: 'microphone',
+                        isMuted: nativeVoiceState.localMicMuted,
+                        track: micTrack,
+                        audioTrack: micTrack
+                    };
+                    nativeVoiceState.localMicPub = micPub;
+                    sfuRoom.publishTrack(session, micPub);
+                    reconcileNativeRemoteAudio();
+                    return buildNativeConnectedSnapshot();
+                },
+                async disconnect() {
+                    if (nativeVoiceState.localCamPub?.track) {
+                        if (nativeVoiceState.sfuRoom && nativeVoiceState.session) {
+                            nativeVoiceState.sfuRoom.unpublishTrack(nativeVoiceState.session, nativeVoiceState.localCamPub.trackSid);
+                        }
+                        nativeVoiceState.localCamPub.track.stop();
+                        nativeVoiceState.localCamPub = null;
+                    }
+                    if (nativeVoiceState.localMicPub?.track) {
+                        if (nativeVoiceState.sfuRoom && nativeVoiceState.session) {
+                            nativeVoiceState.sfuRoom.unpublishTrack(nativeVoiceState.session, nativeVoiceState.localMicPub.trackSid);
+                        }
+                        nativeVoiceState.localMicPub.track.stop();
+                        nativeVoiceState.localMicPub = null;
+                    }
+                    if (nativeVoiceState.sfuRoom && nativeVoiceState.session) {
+                        nativeVoiceState.sfuRoom.leave(nativeVoiceState.session.identity, nativeVoiceState.session);
+                    }
+                    const wasConnected = nativeVoiceState.isConnected;
+                    nativeVoiceState.isConnected = false;
+                    nativeVoiceState.sfuRoom = null;
+                    nativeVoiceState.session = null;
+                    nativeVoiceState.lastVideoSlotsPayload = null;
+                    nativeVoiceState.suppressedAudioPubSids.clear();
+                    if (wasConnected) {
+                        emitNativeVoice('onLocalSpeakingChanged', { isSpeaking: false });
+                    }
+                    return { disconnected: true };
+                },
+                async setMicrophoneEnabled({ enabled } = {}) {
+                    nativeVoiceState.localMicMuted = !enabled;
+                    if (nativeVoiceState.localMicMuted) {
+                        emitNativeVoice('onLocalSpeakingChanged', { isSpeaking: false });
+                    }
+                    if (nativeVoiceState.localMicPub) {
+                        nativeVoiceState.localMicPub.isMuted = nativeVoiceState.localMicMuted;
+                        if (nativeVoiceState.localMicPub.track?.mediaStreamTrack) {
+                            nativeVoiceState.localMicPub.track.mediaStreamTrack.enabled = Boolean(enabled);
+                        }
+                        if (nativeVoiceState.sfuRoom && nativeVoiceState.session) {
+                            nativeVoiceState.sfuRoom.notifyTrackMuteChanged(
+                                nativeVoiceState.session,
+                                nativeVoiceState.localMicPub,
+                                nativeVoiceState.localMicMuted
+                            );
+                        }
+                    }
+                    return { enabled: Boolean(enabled) };
+                },
+                async setCameraEnabled(opts = {}) {
+                    if (!opts.enabled) {
+                        if (nativeVoiceState.localCamPub) {
+                            if (nativeVoiceState.sfuRoom && nativeVoiceState.session) {
+                                nativeVoiceState.sfuRoom.unpublishTrack(nativeVoiceState.session, nativeVoiceState.localCamPub.trackSid);
+                            }
+                            nativeVoiceState.localCamPub.track?.stop();
+                            nativeVoiceState.localCamPub = null;
+                        }
+                        return { enabled: false, facingMode: nativeVoiceState.cameraFacing };
+                    }
+                    const facing = opts.facingMode || nativeVoiceState.cameraFacing || 'user';
+                    const width = opts.videoWidth || 1920;
+                    const height = opts.videoHeight || 1080;
+                    const fps = opts.videoFps || 30;
+                    const maxBitrate = opts.videoMaxBitrate || 8000000;
+                    const quality = opts.quality || 'Auto';
+                    const isAutoQuality = !quality || String(quality).toLowerCase() === 'auto';
+                    const degradationPref = isAutoQuality ? 'balanced' : 'maintain-resolution';
+                    const useSimulcast = false;
+                    nativeVoiceState.cameraFacing = facing;
+                    if (opts.deviceId) nativeVoiceState.cameraDeviceId = opts.deviceId;
+
+                    const prevPubOpts = nativeVoiceState.localCamPub?.track?.publishOptionsUsed;
+                    const prevWidth = nativeVoiceState.localCamPub?.track?.dimensions?.width || 0;
+                    const iosEncodingChanged = (platform === 'ios') && Boolean(nativeVoiceState.localCamPub?.track) && (
+                        prevWidth !== width
+                        || prevPubOpts?.videoEncoding?.maxBitrate !== maxBitrate
+                        || prevPubOpts?.videoEncoding?.maxFramerate !== fps
+                        || prevPubOpts?.degradationPreference !== degradationPref
+                    );
+
+                    if (iosEncodingChanged && nativeVoiceState.localCamPub) {
+                        if (nativeVoiceState.sfuRoom && nativeVoiceState.session) {
+                            nativeVoiceState.sfuRoom.unpublishTrack(nativeVoiceState.session, nativeVoiceState.localCamPub.trackSid);
+                        }
+                        nativeVoiceState.localCamPub.track?.stop();
+                        nativeVoiceState.localCamPub = null;
+                    }
+
+                    if (nativeVoiceState.localCamPub?.track) {
+                        await nativeVoiceState.localCamPub.track.restartTrack({
+                            deviceId: opts.deviceId || undefined,
+                            facingMode: facing,
+                            resolution: { width, height, maxFramerate: fps }
+                        });
+                        const trk = nativeVoiceState.localCamPub.track;
+                        trk.degradationPreference = degradationPref;
+                        trk.mediaStreamTrack.contentHint = isAutoQuality ? '' : 'detail';
+                        trk.publishOptionsUsed = {
+                            source: Track.Source.Camera,
+                            videoCodec: 'h264',
+                            simulcast: useSimulcast,
+                            degradationPreference: degradationPref,
+                            videoEncoding: { maxBitrate, maxFramerate: fps }
+                        };
+                        const params = trk.sender.getParameters();
+                        params.encodings[0].maxBitrate = maxBitrate;
+                        params.encodings[0].maxFramerate = fps;
+                        await trk.sender.setParameters(params);
+                        if (nativeVoiceState.sfuRoom && nativeVoiceState.session) {
+                            nativeVoiceState.sfuRoom.notifyTrackDimensionChange(nativeVoiceState.session, nativeVoiceState.localCamPub);
+                        }
+                    } else {
+                        const camMst = acquireHardwareTrack(hwTable, clientId, 'video', {
+                            deviceId: opts.deviceId || undefined,
+                            facingMode: facing,
+                            width,
+                            height,
+                            frameRate: fps
+                        });
+                        camMst._hwTable = hwTable;
+                        camMst.contentHint = isAutoQuality ? '' : 'detail';
+                        createdMediaStreamTracks.push(camMst);
+                        const camTrack = createLivekitTrackFromMediaStreamTrack(camMst, Track.Source.Camera, (tag) => createDomElement(tag));
+                        camTrack.degradationPreference = degradationPref;
+                        camTrack.publishOptionsUsed = {
+                            source: Track.Source.Camera,
+                            videoCodec: 'h264',
+                            simulcast: useSimulcast,
+                            degradationPreference: degradationPref,
+                            videoEncoding: { maxBitrate, maxFramerate: fps }
+                        };
+                        const params = camTrack.sender.getParameters();
+                        params.encodings[0].maxBitrate = maxBitrate;
+                        params.encodings[0].maxFramerate = fps;
+                        await camTrack.sender.setParameters(params);
+                        const camPub = {
+                            trackSid: camTrack.sid,
+                            kind: 'video',
+                            source: Track.Source.Camera,
+                            trackName: 'camera',
+                            isMuted: false,
+                            track: camTrack,
+                            videoTrack: camTrack
+                        };
+                        nativeVoiceState.localCamPub = camPub;
+                        if (nativeVoiceState.sfuRoom && nativeVoiceState.session) {
+                            nativeVoiceState.sfuRoom.publishTrack(nativeVoiceState.session, camPub);
+                        }
+                    }
+                    return {
+                        enabled: true,
+                        facingMode: nativeVoiceState.cameraFacing,
+                        deviceId: nativeVoiceState.localCamPub?.track?.mediaStreamTrack?.deviceId || nativeVoiceState.cameraDeviceId,
+                        width,
+                        height,
+                        fps
+                    };
+                },
+                async switchCamera(opts = {}) {
+                    return await this.setCameraEnabled({ ...opts, enabled: Boolean(nativeVoiceState.localCamPub) });
+                },
+                async setNoiseFilter({ noiseFilter } = {}) {
+                    nativeVoiceState.effectiveFilter = (platform === 'ios')
+                        ? (noiseFilter === 'none' ? 'none' : 'webrtc')
+                        : (noiseFilter === 'none' ? 'none' : (noiseFilter === 'webrtc' ? 'webrtc' : 'rnnoise'));
+                    return { effectiveFilter: nativeVoiceState.effectiveFilter };
+                },
+                async setVoiceSensitivity({ sensitivity } = {}) {
+                    nativeVoiceState.voiceSensitivity = Math.max(0, Math.min(100, Number(sensitivity) || 50));
+                    return { sensitivity: nativeVoiceState.voiceSensitivity };
+                },
+                async setDeafened({ deafened } = {}) {
+                    nativeVoiceState.deafened = Boolean(deafened);
+                    reconcileNativeRemoteAudio();
+                    return { deafened: nativeVoiceState.deafened };
+                },
+                async setMasterVolume({ volume } = {}) {
+                    nativeVoiceState.masterVolume = Math.max(0, Math.min(2, Number(volume) || 0));
+                    reconcileNativeRemoteAudio();
+                    return { volume: nativeVoiceState.masterVolume };
+                },
+                async setParticipantVolume({ identity, volume } = {}) {
+                    if (identity) nativeVoiceState.participantVolumes.set(identity, Math.max(0, Math.min(2, Number(volume) || 0)));
+                    reconcileNativeRemoteAudio();
+                    return { identity, volume };
+                },
+                async setPhysicalRoomRouting({ routedUserIds = [], mutedUserIds = [] } = {}) {
+                    nativeVoiceState.routedUsers = new Set(routedUserIds);
+                    nativeVoiceState.mutedRoommates = new Set(mutedUserIds);
+                    reconcileNativeRemoteAudio();
+                    return { routedCount: nativeVoiceState.routedUsers.size, mutedCount: nativeVoiceState.mutedRoommates.size };
+                },
+                async setRemoteScreenAudioMuted({ identity, muted } = {}) {
+                    if (identity) {
+                        if (muted) nativeVoiceState.mutedScreenAudio.add(identity);
+                        else nativeVoiceState.mutedScreenAudio.delete(identity);
+                    }
+                    return { identity, muted: Boolean(muted) };
+                },
+                async setRemoteVideoQuality() { return { ok: true }; },
+                async updateVideoSlots(payload) {
+                    nativeVoiceState.lastVideoSlotsPayload = payload || null;
+                    return { ok: true };
+                }
+            };
+
+            const windowEventListeners = new Map();
+            const getComputedStyleFn = (el) => ({
+                display: el?.style?.display || 'block',
+                borderLeftWidth: '0px',
+                borderTopWidth: '0px',
+                borderRightWidth: '0px',
+                borderBottomWidth: '0px',
+                borderTopLeftRadius: '8px',
+                getPropertyValue: (prop) => el?.style?.getPropertyValue?.(prop) || ''
+            });
+
             const windowObj = {
-                location: { origin: 'https://spokes.test' },
+                location: { origin: 'https://spokes.test', host: 'spokes.test', href: 'https://spokes.test/' },
                 innerWidth: 1280,
                 innerHeight: 800,
                 devicePixelRatio: 1,
                 screen: { width: 2560, height: 1440, availWidth: 2560, availHeight: 1400 },
                 isSpokesDesktop: platform === 'desktop',
-                SpokesBridge: platform === 'desktop' ? { isDesktop: true, platform: 'desktop', setVoiceCallState() {} } : undefined,
+                SpokesBridge: platform === 'desktop'
+                    ? { isDesktop: true, platform: 'desktop', setVoiceCallState() {}, directRoomAudio: directRoomAudioBridge }
+                    : undefined,
                 SpokesNative: (platform === 'ios' || platform === 'android')
                     ? {
                         setVoiceCallState() {},
-                        updateCallMetadata() {},
+                        updateCallMetadata(meta) {
+                            nativeVoiceState.lastCallMetadata = meta || null;
+                        },
                         enterPictureInPicture() {
                             if (typeof windowObj.spokesSetNativePipMode === 'function') {
                                 windowObj.spokesSetNativePipMode(true);
@@ -1754,16 +2575,25 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                         Plugins: {
                             KeepAwake: { async keepAwake() {}, async allowSleep() {} },
                             SpokesAudioSessionPlugin: platform === 'ios' ? spokesAudioSessionPlugin : undefined,
-                            TelecomConnectionPlugin: platform === 'android' ? telecomConnectionPlugin : undefined
+                            TelecomConnectionPlugin: platform === 'android' ? telecomConnectionPlugin : undefined,
+                            SpokesNativeVoice: spokesNativeVoicePlugin
                         }
                     }
                     : { isNativePlatform: () => false, getPlatform: () => 'web', Plugins: {} },
-                addEventListener() {},
-                removeEventListener() {},
-                dispatchEvent() {},
-                getComputedStyle() {
-                    return { getPropertyValue: () => '' };
+                addEventListener(evt, fn) {
+                    if (!windowEventListeners.has(evt)) windowEventListeners.set(evt, new Set());
+                    windowEventListeners.get(evt).add(fn);
                 },
+                removeEventListener(evt, fn) {
+                    windowEventListeners.get(evt)?.delete(fn);
+                },
+                dispatchEvent(evt) {
+                    const name = typeof evt === 'string' ? evt : evt?.type;
+                    for (const fn of Array.from(windowEventListeners.get(name) || [])) {
+                        try { fn(evt); } catch (e) {}
+                    }
+                },
+                getComputedStyle: getComputedStyleFn,
                 AudioContext: class MockAudioContext {
                     constructor() {
                         this.state = 'running';
@@ -1775,23 +2605,47 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                     createGain() {
                         return { gain: { value: 1.0 }, connect() {}, disconnect() {} };
                     }
-                    createMediaStreamSource() {
-                        return { connect() {}, disconnect() {} };
+                    createMediaStreamSource(stream) {
+                        const mst = stream?._tracks?.[0] || stream?.getTracks?.()?.[0] || null;
+                        return {
+                            _mst: mst,
+                            connect(dest) { if (dest) dest._mst = mst; },
+                            disconnect() {}
+                        };
                     }
                     createAnalyser() {
                         return {
+                            _mst: null,
                             fftSize: 256,
                             frequencyBinCount: 128,
                             smoothingTimeConstant: 0.2,
-                            getByteFrequencyData(arr) { arr.fill(0); }
+                            getByteFrequencyData(arr) {
+                                const speakingSet = globalThis.__spokesSimulatedSpeakingUsers;
+                                if (speakingSet && speakingSet.size > 0 && this._mst && this._mst.enabled !== false && !this._mst.muted) {
+                                    let ownerUid = null;
+                                    for (const e of Object.values(globalThis.__spokesClientEnvs)) {
+                                        if (e.clientId === this._mst.ownerClientId) {
+                                            ownerUid = e.userId;
+                                            break;
+                                        }
+                                    }
+                                    if (ownerUid && speakingSet.has(ownerUid)) {
+                                        arr.fill(180);
+                                        arr[0] = 10;
+                                        return;
+                                    }
+                                }
+                                arr.fill(0);
+                            }
                         };
                     }
                 },
                 LivekitClient: {
                     Room: ClientRoom,
                     RoomEvent,
+                    ConnectionState,
                     Track,
-                    VideoQuality: { HIGH: 'high' },
+                    VideoQuality: { LOW: 'low', MEDIUM: 'medium', HIGH: 'high' },
                     VideoPresets: {
                         h360: { width: 640, height: 360, maxBitrate: 400000 },
                         h720: { width: 1280, height: 720, maxBitrate: 1500000 },
@@ -1852,6 +2706,8 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
             windowObj.localStorage = localStorageObj;
             windowObj.MediaStream = SimulatedMediaStream;
             windowObj.MutationObserver = SimulatedMutationObserver;
+            windowObj.ResizeObserver = SimulatedResizeObserver;
+            windowObj.getComputedStyle = getComputedStyleFn;
             windowObj.CustomEvent = class CustomEvent {
                 constructor(type, opts) { this.type = type; this.detail = opts?.detail; }
             };
@@ -1874,17 +2730,19 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 mountCallStage,
                 ensureParticipantSlotMounted,
                 unmountCallStage,
+                notifyMutationObservers,
+                nativeVoiceState,
+                emitNativeVoice,
+                spokesNativeVoicePlugin,
                 getActiveClientRoom: () => activeClientRoom,
-                getIosCompanionState: () => ({
-                    connected: Boolean(iosCompanionSession && iosCompanionSfuRoom),
-                    track: iosCompanionTrack
-                }),
                 window: windowObj,
                 document: documentObj,
                 navigator: navigatorObj,
                 localStorage: localStorageObj,
                 MediaStream: SimulatedMediaStream,
                 MutationObserver: SimulatedMutationObserver,
+                ResizeObserver: SimulatedResizeObserver,
+                getComputedStyle: getComputedStyleFn,
                 CustomEvent: windowObj.CustomEvent,
                 Audio: windowObj.Audio,
                 RTCRtpSender: windowObj.RTCRtpSender,
@@ -1971,14 +2829,21 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 }
 
                 case 'syncStageDom': {
-                    const { clientId, stageVisible, participantIds } = payload;
+                    const { clientId, stageVisible, participantIds, pipOverlayClasses } = payload;
                     const env = globalThis.__spokesClientEnvs[clientId];
                     if (!env) return null;
+                    if (Array.isArray(pipOverlayClasses)) {
+                        const pipOverlay = env.domById.get('spokes-voice-pip-overlay');
+                        if (pipOverlay) {
+                            pipOverlay.className = pipOverlayClasses.join(' ');
+                        }
+                    }
                     if (stageVisible) {
                         env.mountCallStage(participantIds || []);
                     } else {
                         env.unmountCallStage();
                     }
+                    env.notifyMutationObservers();
                     return { ok: true };
                 }
 
@@ -2000,6 +2865,11 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                 case 'simulateUnexpectedSfuDisconnect': {
                     const { clientId } = payload;
                     const env = globalThis.__spokesClientEnvs[clientId];
+                    if (env?.nativeVoiceState?.isConnected) {
+                        await env.spokesNativeVoicePlugin.disconnect();
+                        env.emitNativeVoice('onDisconnected', { reason: 'SERVER_SHUTDOWN' });
+                        return { ok: true };
+                    }
                     const room = env?.getActiveClientRoom();
                     if (room) {
                         await room.disconnect();
@@ -2007,12 +2877,102 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                     return { ok: true };
                 }
 
+                case 'simulateSfuSignalReconnect': {
+                    const { clientId } = payload;
+                    const env = globalThis.__spokesClientEnvs[clientId];
+                    if (!env) throw new Error(`Unknown client '${clientId}'`);
+                    if (env.nativeVoiceState?.isConnected && env.nativeVoiceState.session) {
+                        const sess = env.nativeVoiceState.session;
+                        const oldSid = sess.sid;
+                        sess.sid = `PA_${globalSidCounter++}`;
+                        env.emitNativeVoice('onReconnecting', {});
+                        env.nativeVoiceState.session.roomInstance.emit(RoomEvent.Reconnected);
+                        return { oldSid, newSid: sess.sid, metadata: sess.metadata || '' };
+                    }
+                    const room = env.getActiveClientRoom();
+                    if (!room || !room._session) throw new Error(`No active room on client '${clientId}'`);
+                    const oldSid = room._session.sid;
+                    room._session.sid = `PA_${globalSidCounter++}`;
+                    room.state = ConnectionState.SignalReconnecting;
+                    room.engine = { attemptingReconnect: true, fullReconnectOnNext: true };
+                    room.emit(RoomEvent.SignalReconnecting);
+                    for (const rv of room.remoteParticipants.values()) {
+                        for (const pub of rv.allPublications.values()) {
+                            room.emit(RoomEvent.TrackUnsubscribed, pub.track, pub, rv);
+                        }
+                        room.emit(RoomEvent.ParticipantDisconnected, rv);
+                    }
+                    room.state = ConnectionState.Connected;
+                    room.engine = { attemptingReconnect: false, fullReconnectOnNext: false };
+                    room.emit(RoomEvent.Reconnected);
+                    return { oldSid, newSid: room._session.sid, metadata: room._session.metadata || '' };
+                }
+
+                case 'setBlazorCircuitDisconnected': {
+                    const { clientId, disconnected } = payload;
+                    const env = globalThis.__spokesClientEnvs[clientId];
+                    if (!env) throw new Error(`Unknown client '${clientId}'`);
+                    env.window._blazorDisconnected = Boolean(disconnected);
+                    if (!disconnected) {
+                        env.window.dispatchEvent(new env.CustomEvent('spokes:blazor-connected'));
+                    }
+                    return { ok: true };
+                }
+
+                case 'listSfuRooms': {
+                    const rooms = [];
+                    for (const [roomName, sfuRoom] of sfuRooms.entries()) {
+                        if (sfuRoom.participants.size > 0) {
+                            rooms.push(roomName);
+                        }
+                    }
+                    return rooms;
+                }
+
+                case 'listSfuParticipants': {
+                    const { roomName } = payload;
+                    const sfuRoom = sfuRooms.get(roomName);
+                    if (!sfuRoom) return [];
+                    const out = [];
+                    for (const session of sfuRoom.participants.values()) {
+                        if (!session || !session.identity) continue;
+                        const pubs = Array.from(session.publishedTracks.values());
+                        const micPubs = pubs.filter(p =>
+                            p.kind === 'audio' &&
+                            p.source !== Track.Source.ScreenShareAudio &&
+                            !(p.trackName || '').startsWith('processed-mic:'));
+                        const isMicMuted = micPubs.length === 0 ? null : micPubs.every(p => Boolean(p.isMuted));
+                        const isCameraOn = pubs.some(p => p.kind === 'video' && p.source === Track.Source.Camera && !p.isMuted);
+                        const isScreenSharing = pubs.some(p => p.kind === 'video' && p.source === Track.Source.ScreenShare && !p.isMuted);
+                        const hasScreenAudio = pubs.some(p => p.kind === 'audio' && p.source === Track.Source.ScreenShareAudio && !p.isMuted);
+                        out.push({
+                            sid: session.sid || `PA_${session.identity}`,
+                            identity: session.identity,
+                            metadata: session.metadata || '',
+                            isMicMuted,
+                            isCameraOn,
+                            isScreenSharing,
+                            hasScreenAudio
+                        });
+                    }
+                    return out;
+                }
+
+                case 'inspectPipMeta': {
+                    const { clientId } = payload;
+                    const env = globalThis.__spokesClientEnvs[clientId];
+                    if (!env) return { channelName: '' };
+                    const nativeMeta = env.nativeVoiceState?.lastCallMetadata;
+                    return {
+                        channelName: nativeMeta?.channelName || ''
+                    };
+                }
+
                 case 'evictParticipantFromRoom': {
                     const { roomName, userId } = payload;
                     const sfuRoom = sfuRooms.get(roomName);
                     if (sfuRoom) {
                         sfuRoom.leave(userId);
-                        sfuRoom.leave(`${userId}:cam`);
                     }
                     return { ok: true };
                 }
@@ -2021,6 +2981,15 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                     const { clientId, participantId, source, width, height } = payload;
                     const env = globalThis.__spokesClientEnvs[clientId];
                     if (!env) return { ok: false };
+                    if (env.nativeVoiceState?.isConnected) {
+                        env.emitNativeVoice('onVideoDimensionsChanged', {
+                            identity: participantId,
+                            source: source === 'screenshare' ? 'screen' : 'camera',
+                            width,
+                            height
+                        });
+                        return { ok: true };
+                    }
                     const domId = source === 'screenshare'
                         ? `participant-screen-${participantId}`
                         : `participant-video-${participantId}`;
@@ -2047,10 +3016,30 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                     return { ok: false };
                 }
 
+                case 'emitSimulatedDirectRoomStatus': {
+                    const { clientId, estimatedEndToEndMs, txPacketCount } = payload;
+                    const env = globalThis.__spokesClientEnvs[clientId];
+                    if (!env) throw new Error(`Unknown client '${clientId}'`);
+                    const bridge = env.window?.SpokesBridge?.directRoomAudio;
+                    if (bridge && typeof bridge.emitStatusUpdate === 'function') {
+                        bridge.emitStatusUpdate({ estimatedEndToEndMs, txPacketCount });
+                    }
+                    return { ok: true };
+                }
+
                 case 'inspectClientState': {
                     const { clientId, participantIds } = payload;
                     const env = globalThis.__spokesClientEnvs[clientId];
                     if (!env) throw new Error(`Unknown client '${clientId}'`);
+
+                    const isNativeMobile = Boolean(env.nativeVoiceState?.isConnected);
+                    if (isNativeMobile) {
+                        await new Promise(r => setTimeout(r, 10));
+                    }
+                    const nativePayload = env.nativeVoiceState?.lastVideoSlotsPayload || null;
+                    const activeNativeSlots = (nativePayload && !nativePayload.suppressed && Array.isArray(nativePayload.slots))
+                        ? nativePayload.slots
+                        : [];
 
                     const tiles = {};
                     for (const pid of (participantIds || [])) {
@@ -2058,28 +3047,55 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                         const screenEl = env.domById.get(`participant-screen-${pid}`);
                         const rectEl = env.domById.get(`participant-rect-${pid}`);
 
-                        const camTrack = camEl?.srcObject?.getVideoTracks?.()?.[0] || null;
-                        const screenTrack = screenEl?.srcObject?.getVideoTracks?.()?.[0] || null;
+                        if (isNativeMobile) {
+                            const camSlot = nativePayload?.underlaid
+                                ? activeNativeSlots.find(s => s.identity === pid && s.source === 'camera' && s.visible)
+                                : null;
+                            const screenSlot = nativePayload?.underlaid
+                                ? activeNativeSlots.find(s => s.identity === pid && s.source === 'screen' && s.visible)
+                                : null;
+                            const hasCam = Boolean(camSlot);
+                            const hasScreen = Boolean(screenSlot);
+                            tiles[pid] = {
+                                ParticipantId: pid,
+                                IsLargeAvatarVisible: !hasCam && !hasScreen,
+                                IsSmallOverlayVisible: hasCam || hasScreen,
+                                HasCameraStream: hasCam,
+                                CameraVideoPaused: !hasCam,
+                                CameraTrackReadyState: hasCam ? 'live' : 'none',
+                                HasScreenShareStream: hasScreen,
+                                ScreenVideoPaused: !hasScreen,
+                                ScreenTrackReadyState: hasScreen ? 'live' : 'none',
+                                IsCameraInCornerPipMode: hasScreen && hasCam,
+                                IsCameraFullTileMode: hasCam && !hasScreen,
+                                IsCameraMirrored: Boolean(camSlot?.mirror),
+                                CamAspectCssVar: rectEl?.style.getPropertyValue('--tile-video-aspect') || '',
+                                TileVideoAspectCssVar: rectEl?.style.getPropertyValue('--tile-video-aspect') || ''
+                            };
+                        } else {
+                            const camTrack = camEl?.srcObject?.getVideoTracks?.()?.[0] || null;
+                            const screenTrack = screenEl?.srcObject?.getVideoTracks?.()?.[0] || null;
 
-                        const hasCam = Boolean(camEl && camEl.classList.contains('has-stream') && camEl.style.opacity === '1' && camTrack && camTrack.readyState === 'live');
-                        const hasScreen = Boolean(screenEl && screenEl.classList.contains('has-stream') && screenEl.style.opacity === '1' && screenTrack && screenTrack.readyState === 'live');
+                            const hasCam = Boolean(camEl && camEl.classList.contains('has-stream') && camEl.style.opacity === '1' && camTrack && camTrack.readyState === 'live');
+                            const hasScreen = Boolean(screenEl && screenEl.classList.contains('has-stream') && screenEl.style.opacity === '1' && screenTrack && screenTrack.readyState === 'live');
 
-                        tiles[pid] = {
-                            ParticipantId: pid,
-                            IsLargeAvatarVisible: !hasCam && !hasScreen,
-                            IsSmallOverlayVisible: hasCam || hasScreen,
-                            HasCameraStream: hasCam,
-                            CameraVideoPaused: camEl ? Boolean(camEl.paused) : true,
-                            CameraTrackReadyState: camTrack?.readyState || 'none',
-                            HasScreenShareStream: hasScreen,
-                            ScreenVideoPaused: screenEl ? Boolean(screenEl.paused) : true,
-                            ScreenTrackReadyState: screenTrack?.readyState || 'none',
-                            IsCameraInCornerPipMode: hasScreen && hasCam,
-                            IsCameraFullTileMode: hasCam && !hasScreen,
-                            IsCameraMirrored: Boolean(camEl && camEl.style.transform.includes('scaleX(-1)')),
-                            CamAspectCssVar: camEl?.style.getPropertyValue('--cam-aspect') || '',
-                            TileVideoAspectCssVar: rectEl?.style.getPropertyValue('--tile-video-aspect') || ''
-                        };
+                            tiles[pid] = {
+                                ParticipantId: pid,
+                                IsLargeAvatarVisible: !hasCam && !hasScreen,
+                                IsSmallOverlayVisible: hasCam || hasScreen,
+                                HasCameraStream: hasCam,
+                                CameraVideoPaused: camEl ? Boolean(camEl.paused) : true,
+                                CameraTrackReadyState: camTrack?.readyState || 'none',
+                                HasScreenShareStream: hasScreen,
+                                ScreenVideoPaused: screenEl ? Boolean(screenEl.paused) : true,
+                                ScreenTrackReadyState: screenTrack?.readyState || 'none',
+                                IsCameraInCornerPipMode: hasScreen && hasCam,
+                                IsCameraFullTileMode: hasCam && !hasScreen,
+                                IsCameraMirrored: Boolean(camEl && camEl.style.transform.includes('scaleX(-1)')),
+                                CamAspectCssVar: camEl?.style.getPropertyValue('--cam-aspect') || '',
+                                TileVideoAspectCssVar: rectEl?.style.getPropertyValue('--tile-video-aspect') || ''
+                            };
+                        }
                     }
 
                     const pipOverlay = env.domById.get('spokes-voice-pip-overlay');
@@ -2112,33 +3128,81 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                         .map(c => c.dataset?.participantId)
                         .filter(Boolean);
 
-                    const inAppPip = {
-                        IsOverlayVisible: Boolean(pipOverlay && !pipOverlay.classList.contains('is-stage-hidden')),
-                        Mode: pipOverlay?.classList.contains('mode-grid')
-                            ? 'grid'
-                            : (pipOverlay?.classList.contains('mode-video') ? 'video' : 'avatar'),
-                        LayoutMode: pipOverlay?.classList.contains('mode-grid') ? 'grid' : 'focus',
-                        PrimaryVideoHasStream: Boolean(pipPrimary && pipPrimary.classList.contains('has-stream') && pipPrimaryTrack && pipPrimaryTrack.readyState === 'live'),
-                        PrimaryVideoPaused: pipPrimary ? Boolean(pipPrimary.paused) : true,
-                        PrimaryVideoTrackReadyState: pipPrimaryTrack?.readyState || 'none',
-                        PrimaryVideoWidth: pipPrimaryTrack?.width || pipPrimary?.videoWidth || 0,
-                        PrimaryVideoHeight: pipPrimaryTrack?.height || pipPrimary?.videoHeight || 0,
-                        PrimaryTrackParticipantId: resolveOwnerUserId(pipPrimaryTrack),
-                        PrimaryTrackSource: resolveTrackSource(pipPrimaryTrack),
-                        PresenterCamVideoHasStream: Boolean(pipPresenterCam && pipPresenterCam.classList.contains('has-stream') && pipPresenterCamTrack && pipPresenterCamTrack.readyState === 'live'),
-                        PresenterCamParticipantId: resolveOwnerUserId(pipPresenterCamTrack),
-                        SelfVideoHasStream: Boolean(pipSelf && pipSelf.classList.contains('has-stream') && pipSelfTrack && pipSelfTrack.readyState === 'live'),
-                        SelfVideoPaused: pipSelf ? Boolean(pipSelf.paused) : true,
-                        SelfVideoTrackReadyState: pipSelfTrack?.readyState || 'none',
-                        SelfVideoMirrored: Boolean(pipSelf && pipSelf.classList.contains('spokes-pip-mirror')),
-                        SelfAspectCssVar: pipSelf?.style.getPropertyValue('--self-aspect') || '',
-                        GridTileParticipantIds: gridIds,
-                        FilmstripTileParticipantIds: filmstripIds
-                    };
+                    let inAppPip;
+                    if (isNativeMobile) {
+                        const primaryId = pipPrimary?.dataset?.nativeIdentity || null;
+                        const primarySrc = pipPrimary?.dataset?.nativeSource || null;
+                        const primaryNativeSrc = primarySrc === 'screenshare' ? 'screen' : 'camera';
+                        const primarySlot = primaryId
+                            ? activeNativeSlots.find(s => s.key === `pip:${primaryId}:${primaryNativeSrc}` && s.visible)
+                            : null;
+                        const hasPrimary = Boolean(pipPrimary?.classList?.contains('has-stream') && primarySlot);
+
+                        const presId = pipPresenterCam?.dataset?.nativeIdentity || null;
+                        const presSlot = presId
+                            ? activeNativeSlots.find(s => s.key === `pip:${presId}:camera` && s.visible)
+                            : null;
+                        const hasPres = Boolean(pipPresenterCam?.classList?.contains('has-stream') && presSlot);
+
+                        const selfId = pipSelf?.dataset?.nativeIdentity || null;
+                        const selfSlot = selfId
+                            ? activeNativeSlots.find(s => s.key === `pip:${selfId}:camera` && s.visible)
+                            : null;
+                        const hasSelf = Boolean(pipSelf?.classList?.contains('has-stream') && selfSlot);
+
+                        inAppPip = {
+                            IsOverlayVisible: Boolean(pipOverlay && !pipOverlay.classList.contains('is-stage-hidden')),
+                            Mode: pipOverlay?.classList.contains('mode-grid')
+                                ? 'grid'
+                                : (pipOverlay?.classList.contains('mode-video') ? 'video' : 'avatar'),
+                            LayoutMode: pipOverlay?.classList.contains('mode-grid') ? 'grid' : 'focus',
+                            PrimaryVideoHasStream: hasPrimary,
+                            PrimaryVideoPaused: !hasPrimary,
+                            PrimaryVideoTrackReadyState: hasPrimary ? 'live' : 'none',
+                            PrimaryVideoWidth: primarySlot?.width || 0,
+                            PrimaryVideoHeight: primarySlot?.height || 0,
+                            PrimaryTrackParticipantId: hasPrimary ? primaryId : null,
+                            PrimaryTrackSource: hasPrimary ? primarySrc : null,
+                            PresenterCamVideoHasStream: hasPres,
+                            PresenterCamParticipantId: hasPres ? presId : null,
+                            SelfVideoHasStream: hasSelf,
+                            SelfVideoPaused: !hasSelf,
+                            SelfVideoTrackReadyState: hasSelf ? 'live' : 'none',
+                            SelfVideoMirrored: Boolean(selfSlot?.mirror),
+                            SelfAspectCssVar: pipSelf?.style.getPropertyValue('--self-aspect') || '',
+                            GridTileParticipantIds: gridIds,
+                            FilmstripTileParticipantIds: filmstripIds
+                        };
+                    } else {
+                        inAppPip = {
+                            IsOverlayVisible: Boolean(pipOverlay && !pipOverlay.classList.contains('is-stage-hidden')),
+                            Mode: pipOverlay?.classList.contains('mode-grid')
+                                ? 'grid'
+                                : (pipOverlay?.classList.contains('mode-video') ? 'video' : 'avatar'),
+                            LayoutMode: pipOverlay?.classList.contains('mode-grid') ? 'grid' : 'focus',
+                            PrimaryVideoHasStream: Boolean(pipPrimary && pipPrimary.classList.contains('has-stream') && pipPrimaryTrack && pipPrimaryTrack.readyState === 'live'),
+                            PrimaryVideoPaused: pipPrimary ? Boolean(pipPrimary.paused) : true,
+                            PrimaryVideoTrackReadyState: pipPrimaryTrack?.readyState || 'none',
+                            PrimaryVideoWidth: pipPrimaryTrack?.width || pipPrimary?.videoWidth || 0,
+                            PrimaryVideoHeight: pipPrimaryTrack?.height || pipPrimary?.videoHeight || 0,
+                            PrimaryTrackParticipantId: resolveOwnerUserId(pipPrimaryTrack),
+                            PrimaryTrackSource: resolveTrackSource(pipPrimaryTrack),
+                            PresenterCamVideoHasStream: Boolean(pipPresenterCam && pipPresenterCam.classList.contains('has-stream') && pipPresenterCamTrack && pipPresenterCamTrack.readyState === 'live'),
+                            PresenterCamParticipantId: resolveOwnerUserId(pipPresenterCamTrack),
+                            SelfVideoHasStream: Boolean(pipSelf && pipSelf.classList.contains('has-stream') && pipSelfTrack && pipSelfTrack.readyState === 'live'),
+                            SelfVideoPaused: pipSelf ? Boolean(pipSelf.paused) : true,
+                            SelfVideoTrackReadyState: pipSelfTrack?.readyState || 'none',
+                            SelfVideoMirrored: Boolean(pipSelf && pipSelf.classList.contains('spokes-pip-mirror')),
+                            SelfAspectCssVar: pipSelf?.style.getPropertyValue('--self-aspect') || '',
+                            GridTileParticipantIds: gridIds,
+                            FilmstripTileParticipantIds: filmstripIds
+                        };
+                    }
 
                     const room = env.getActiveClientRoom();
-                    const iosComp = env.getIosCompanionState();
-                    const camPub = room ? Array.from(room.localParticipant.videoTrackPublications.values()).find(p => p.source === Track.Source.Camera) : null;
+                    const camPub = isNativeMobile
+                        ? env.nativeVoiceState.localCamPub
+                        : (room ? Array.from(room.localParticipant.videoTrackPublications.values()).find(p => p.source === Track.Source.Camera) : null);
                     const screenPub = room ? Array.from(room.localParticipant.videoTrackPublications.values()).find(p => p.source === Track.Source.ScreenShare) : null;
 
                     const liveLocalTracks = env.createdMediaStreamTracks.filter(t => t.readyState === 'live');
@@ -2152,12 +3216,224 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
                     const hardware = {
                         LiveLocalTrackCount: liveLocalTracks.length,
                         LockedDeviceIds: lockedDevices,
-                        NativeIosCompanionConnected: iosComp.connected,
-                        CameraEncoding: buildEncodingSnapshot(camPub?.track || iosComp.track),
-                        ScreenEncoding: buildEncodingSnapshot(screenPub?.track)
+                        NativeIosCompanionConnected: false,
+                        CameraEncoding: buildEncodingSnapshot(camPub?.track),
+                        ScreenEncoding: buildEncodingSnapshot(screenPub?.track),
+                        UsingNativeMobileVoice: isNativeMobile
                     };
 
-                    return { tiles, inAppPip, hardware };
+                    const nativeVideoSlots = nativePayload
+                        ? {
+                            Underlaid: Boolean(nativePayload.underlaid),
+                            Suppressed: Boolean(nativePayload.suppressed),
+                            Slots: (nativePayload.slots || []).map(s => ({
+                                Key: s.key || '',
+                                Source: s.source || '',
+                                Identity: s.identity || '',
+                                X: s.x || 0,
+                                Y: s.y || 0,
+                                Width: s.width || 0,
+                                Height: s.height || 0,
+                                Mirror: Boolean(s.mirror),
+                                Cover: Boolean(s.cover),
+                                Visible: Boolean(s.visible),
+                                ZOrder: s.zOrder || 0
+                            }))
+                        }
+                        : null;
+
+                    return { tiles, inAppPip, hardware, nativeVideoSlots };
+                }
+
+                case 'simulateHardwareMicMute': {
+                    const { clientId, isMuted } = payload;
+                    const env = globalThis.__spokesClientEnvs[clientId];
+                    const room = env?.getActiveClientRoom();
+                    if (!room) throw new Error(`No active room on client '${clientId}'`);
+                    const micPub = Array.from(room.localParticipant.audioTrackPublications.values())
+                        .find(p => p.source === Track.Source.Microphone);
+                    const mst = micPub?.track?.processor?.originalTrack
+                        || micPub?.track?._mediaStreamTrack
+                        || micPub?.track?.mediaStreamTrack;
+                    if (!mst) throw new Error(`No active Microphone MediaStreamTrack on client '${clientId}'`);
+                    mst.muted = Boolean(isMuted);
+                    mst.dispatchEvent(isMuted ? 'mute' : 'unmute');
+                    return { ok: true };
+                }
+
+                case 'simulateActiveSpeakersChanged': {
+                    const { roomName, speakerUserIds } = payload;
+                    const list = speakerUserIds || [];
+                    const speakerSet = new Set(list);
+                    const prevSet = globalThis.__spokesSimulatedSpeakingUsers || new Set();
+                    let anyStopped = false;
+                    for (const prev of prevSet) {
+                        if (!speakerSet.has(prev)) {
+                            anyStopped = true;
+                            break;
+                        }
+                    }
+                    globalThis.__spokesSimulatedSpeakingUsers = speakerSet;
+                    const sfuRoom = sfuRooms.get(roomName);
+                    if (!sfuRoom) return { ok: false };
+                    for (const env of Object.values(globalThis.__spokesClientEnvs)) {
+                        if (env?.nativeVoiceState?.isConnected && env.nativeVoiceState.sfuRoom === sfuRoom) {
+                            const isSpeaking = speakerSet.has(env.nativeVoiceState.localIdentity) && !env.nativeVoiceState.localMicMuted;
+                            env.emitNativeVoice('onLocalSpeakingChanged', { isSpeaking });
+                        }
+                    }
+                    await new Promise(r => setTimeout(r, (anyStopped || list.length === 0) ? 350 : 110));
+                    return { ok: true };
+                }
+
+                case 'simulateRemotePeerJoinedWithoutMic': {
+                    const { roomName, peerUserId, metadata } = payload;
+                    const sfuRoom = getOrCreateSfuRoom(roomName);
+                    const bareSession = {
+                        identity: peerUserId,
+                        metadata: metadata || '',
+                        roomInstance: null,
+                        publishedTracks: new Map(),
+                        remoteParticipants: new Map(),
+                        getOrCreateRemoteParticipantView() {
+                            return { attachPublication() {}, removePublication() {}, getPublication() { return null; }, allPublications: new Map() };
+                        }
+                    };
+                    sfuRoom.join(bareSession);
+                    return { ok: true };
+                }
+
+                case 'publishBotProcessedAudioTrack': {
+                    const { roomName, targetUserId, subscribeReady } = payload;
+                    const sfuRoom = getOrCreateSfuRoom(roomName);
+                    let botSession = sfuRoom.participants.get('bot:spokes-voice');
+                    if (!botSession) {
+                        botSession = {
+                            identity: 'bot:spokes-voice',
+                            metadata: '',
+                            roomInstance: null,
+                            publishedTracks: new Map(),
+                            remoteParticipants: new Map(),
+                            getOrCreateRemoteParticipantView() {
+                                return { attachPublication() {}, removePublication() {}, getPublication() { return null; }, allPublications: new Map() };
+                            }
+                        };
+                        sfuRoom.join(botSession);
+                    }
+                    const trackSid = `TR_BOT_${targetUserId}`;
+                    const trackName = `processed-mic:${targetUserId}`;
+                    const botMst = {
+                        id: `mst_bot_${targetUserId}`,
+                        ownerClientId: 'bot:spokes-voice',
+                        kind: 'audio',
+                        deviceId: 'bot-dsp-mic',
+                        enabled: true,
+                        muted: false,
+                        readyState: 'live',
+                        stop() { this.readyState = 'ended'; },
+                        getSettings() { return { deviceId: 'bot-dsp-mic', latency: 0.01 }; },
+                        addEventListener() {},
+                        removeEventListener() {},
+                        dispatchEvent() {}
+                    };
+                    const botTrack = createLivekitTrackFromMediaStreamTrack(botMst, Track.Source.Microphone, () => ({ tagName: 'AUDIO', srcObject: null, style: {}, remove() {} }));
+                    botTrack.sid = trackSid;
+                    botTrack.name = trackName;
+                    const pub = {
+                        trackSid,
+                        kind: 'audio',
+                        source: Track.Source.Microphone,
+                        trackName,
+                        isMuted: false,
+                        track: botTrack,
+                        audioTrack: botTrack
+                    };
+                    sfuRoom.publishTrack(botSession, pub, !subscribeReady);
+                    return { ok: true };
+                }
+
+                case 'completeBotProcessedAudioSubscription': {
+                    const { roomName, targetUserId } = payload;
+                    const sfuRoom = sfuRooms.get(roomName);
+                    const botSession = sfuRoom?.participants.get('bot:spokes-voice');
+                    if (sfuRoom && botSession) {
+                        sfuRoom.completeDeferredTrackSubscription(botSession, `TR_BOT_${targetUserId}`);
+                    }
+                    return { ok: true };
+                }
+
+                case 'unpublishBotProcessedAudioTrack': {
+                    const { roomName, targetUserId } = payload;
+                    const sfuRoom = sfuRooms.get(roomName);
+                    const botSession = sfuRoom?.participants.get('bot:spokes-voice');
+                    if (sfuRoom && botSession) {
+                        sfuRoom.unpublishTrack(botSession, `TR_BOT_${targetUserId}`);
+                    }
+                    return { ok: true };
+                }
+
+                case 'inspectClientAudioRouting': {
+                    const { clientId } = payload;
+                    const env = globalThis.__spokesClientEnvs[clientId];
+                    if (!env) throw new Error(`Unknown client '${clientId}'`);
+                    const room = env.getActiveClientRoom();
+                    const micPub = room
+                        ? Array.from(room.localParticipant.audioTrackPublications.values()).find(p => p.source === Track.Source.Microphone)
+                        : null;
+                    const localMst = micPub?.track?.processor?.originalTrack
+                        || micPub?.track?._mediaStreamTrack
+                        || micPub?.track?.mediaStreamTrack;
+                    const stationaryRoomMode = Boolean(micPub?.track?.processor && micPub.track.processor.autoGainEnabled === false);
+                    const localMicHardwareMuted = Boolean(localMst?.muted);
+                    const localMicEnabled = Boolean(micPub && !micPub.isMuted && localMst?.enabled !== false);
+                    const directLanPeerUserIds = env.window?.SpokesBridge?.directRoomAudio?.activePeerUserIds || [];
+
+                    const remoteUsers = {};
+                    const ensureUserEntry = (uid) => {
+                        if (!remoteUsers[uid]) {
+                            remoteUsers[uid] = {
+                                UserId: uid,
+                                RawMicSubscribed: false,
+                                RawMicAttached: false,
+                                ProcessedMicPublished: false,
+                                ProcessedMicHasTrack: false,
+                                ProcessedMicSubscribed: false,
+                                ProcessedMicAttached: false
+                            };
+                        }
+                        return remoteUsers[uid];
+                    };
+
+                    if (room && room.remoteParticipants) {
+                        for (const p of room.remoteParticipants.values()) {
+                            if (!p || !p.identity) continue;
+                            for (const pub of p.audioTrackPublications.values()) {
+                                const tName = pub.trackName || pub.track?.name || '';
+                                if (p.identity.startsWith('bot:') && tName.startsWith('processed-mic:')) {
+                                    const targetUid = tName.substring('processed-mic:'.length);
+                                    const entry = ensureUserEntry(targetUid);
+                                    entry.ProcessedMicPublished = true;
+                                    entry.ProcessedMicHasTrack = Boolean(pub.track);
+                                    entry.ProcessedMicSubscribed = Boolean(pub.isSubscribed);
+                                    entry.ProcessedMicAttached = Boolean(pub.track && pub.track.attachedElements && pub.track.attachedElements.length > 0);
+                                } else if (!p.identity.startsWith('bot:') && pub.source === Track.Source.Microphone) {
+                                    const entry = ensureUserEntry(p.identity);
+                                    entry.RawMicSubscribed = Boolean(pub.isSubscribed);
+                                    entry.RawMicAttached = Boolean(pub.track && pub.track.attachedElements && pub.track.attachedElements.length > 0);
+                                }
+                            }
+                        }
+                    }
+
+                    return {
+                        ClientId: clientId,
+                        UserId: env.userId,
+                        StationaryRoomMode: stationaryRoomMode,
+                        LocalMicHardwareMuted: localMicHardwareMuted,
+                        LocalMicEnabled: localMicEnabled,
+                        DirectLanPeerUserIds: directLanPeerUserIds,
+                        RemoteUsers: remoteUsers
+                    };
                 }
 
                 default:
@@ -2194,47 +3470,204 @@ public sealed class VoiceCallClusterSimulator : IAsyncDisposable
         """;
 }
 
+public sealed class SimulatedClusterVoiceBotService : IVoiceBotService
+{
+    public List<(string ChannelId, string SoundId)> PlayedSounds { get; } = new();
+
+    public void RegisterPipelineStage(Spokes_Server.Core.Services.Communication.Voice.Pipeline.IVoiceRoomPipelineStage stage) { }
+
+    public Task EnsureBotJoinedAsync(string channelId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task NotifyRoomConfigurationChangedAsync(string? channelId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task PlaySoundAsync(string channelId, string soundId, CancellationToken cancellationToken = default)
+    {
+        lock (PlayedSounds)
+        {
+            PlayedSounds.Add((channelId, VoiceBotService.NormalizeSoundId(soundId)));
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task StartRingingAsync(string channelId, string soundId, TimeSpan? maxDuration = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task StopRingingAsync(string channelId) => Task.CompletedTask;
+
+    public void ScheduleBotDeparture(string channelId, TimeSpan delay) { }
+
+    public Task LeaveRoomAsync(string channelId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+public sealed class SimulatedClusterLiveKitService : LiveKitService
+{
+    private readonly VoiceCallClusterSimulator _cluster;
+
+    public SimulatedClusterLiveKitService(VoiceCallClusterSimulator cluster, IConfiguration config)
+        : base(NullLogger<LiveKitService>.Instance, config)
+    {
+        _cluster = cluster;
+    }
+
+    public override async Task<IReadOnlyList<string>> GetActiveVoiceChannelIdsAsync(
+        string apiKey,
+        string apiSecret,
+        CancellationToken cancellationToken = default)
+    {
+        var raw = await _cluster.SendNodeCommandAsync("listSfuRooms", new { });
+        var result = new List<string>();
+        if (raw.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in raw.EnumerateArray())
+            {
+                var roomName = item.GetString();
+                if (TryExtractChannelIdFromRoomName(roomName, out var channelId))
+                {
+                    result.Add(channelId);
+                }
+            }
+        }
+        return result;
+    }
+
+    public override async Task<IReadOnlyList<LiveKitParticipantSnapshot>?> GetRoomParticipantStatesAsync(
+        string channelId,
+        string apiKey,
+        string apiSecret,
+        CancellationToken cancellationToken = default)
+    {
+        var raw = await _cluster.SendNodeCommandAsync("listSfuParticipants", new
+        {
+            roomName = GetRoomName(channelId)
+        });
+        var result = new List<LiveKitParticipantSnapshot>();
+        if (raw.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var p in raw.EnumerateArray())
+            {
+                bool? isMicMuted = p.TryGetProperty("isMicMuted", out var mm) && mm.ValueKind != JsonValueKind.Null
+                    ? mm.GetBoolean()
+                    : null;
+                result.Add(new LiveKitParticipantSnapshot(
+                    p.GetProperty("identity").GetString() ?? "",
+                    p.GetProperty("sid").GetString() ?? "",
+                    p.GetProperty("metadata").GetString() ?? "",
+                    isMicMuted,
+                    IsConnected: true,
+                    IsCameraOn: p.TryGetProperty("isCameraOn", out var cam) && cam.GetBoolean(),
+                    IsScreenSharing: p.TryGetProperty("isScreenSharing", out var scr) && scr.GetBoolean(),
+                    HasScreenAudio: p.TryGetProperty("hasScreenAudio", out var sa) && sa.GetBoolean()));
+            }
+        }
+        return result;
+    }
+}
+
 public sealed class SimulatedClusterVoiceChannelService : VoiceChannelService
 {
     private readonly VoiceCallClusterSimulator _cluster;
-    private readonly ChatStateService _chatState;
+    private readonly VoiceStateService _voiceState;
+    public SimulatedClusterVoiceBotService SimulatedBot { get; }
 
-    public SimulatedClusterVoiceChannelService(VoiceCallClusterSimulator cluster, ChatStateService chatState)
+    public SimulatedClusterVoiceChannelService(
+        VoiceCallClusterSimulator cluster,
+        VoiceStateService voiceState,
+        ChatStateService chatState,
+        DiskPersistenceService persistence,
+        IConfiguration config,
+        LiveKitService liveKitService,
+        SystemConfigRepository systemConfigRepo)
+        : this(cluster, voiceState, chatState, persistence, config, liveKitService, systemConfigRepo, new SimulatedClusterVoiceBotService())
     {
-        _cluster = cluster;
-        _chatState = chatState;
     }
 
-    public override string GenerateJoinToken(string channelId, string userId, string userName, string userAvatarUrl = "")
+    private SimulatedClusterVoiceChannelService(
+        VoiceCallClusterSimulator cluster,
+        VoiceStateService voiceState,
+        ChatStateService chatState,
+        DiskPersistenceService persistence,
+        IConfiguration config,
+        LiveKitService liveKitService,
+        SystemConfigRepository systemConfigRepo,
+        SimulatedClusterVoiceBotService botService)
+        : this(
+            cluster,
+            voiceState,
+            chatState,
+            persistence,
+            config,
+            liveKitService,
+            systemConfigRepo,
+            botService,
+            new Spokes_Server.Core.Data.Repositories.Core.CompanyProfileRepository(persistence, config))
     {
+    }
+
+    private SimulatedClusterVoiceChannelService(
+        VoiceCallClusterSimulator cluster,
+        VoiceStateService voiceState,
+        ChatStateService chatState,
+        DiskPersistenceService persistence,
+        IConfiguration config,
+        LiveKitService liveKitService,
+        SystemConfigRepository systemConfigRepo,
+        SimulatedClusterVoiceBotService botService,
+        Spokes_Server.Core.Data.Repositories.Core.CompanyProfileRepository companyProfiles)
+        : base(
+            voiceState,
+            chatState,
+            new ChatMessageRepository(persistence, config, companyProfiles),
+            Mock.Of<Spokes_Server.Core.Services.Communication.Notifications.Routing.INotificationRoutingService>(),
+            systemConfigRepo,
+            liveKitService,
+            NullLogger<VoiceChannelService>.Instance,
+            new Spokes_Server.Core.Data.Repositories.HR.EmployeeRepository(persistence, config),
+            new ChatChannelRepository(persistence, config),
+            new ChatReadStateRepository(persistence, config, companyProfiles),
+            chatAuth: null,
+            voiceBotService: botService)
+    {
+        _cluster = cluster;
+        _voiceState = voiceState;
+        SimulatedBot = botService;
+    }
+
+    public override string GenerateJoinToken(string channelId, string userId, string userName, string userAvatarUrl = "") =>
+        GenerateJoinToken(channelId, userId, userName, userAvatarUrl, voiceSessionId: null);
+
+    public override string GenerateJoinToken(
+        string channelId,
+        string userId,
+        string userName,
+        string? userAvatarUrl,
+        string? voiceSessionId,
+        string? deviceId = null,
+        string? deviceName = null,
+        string? platform = null)
+    {
+        var metadataJson = new VoiceParticipantMetadata
+        {
+            AvatarUrl = userAvatarUrl ?? string.Empty,
+            VoiceSessionId = voiceSessionId?.Trim() ?? string.Empty,
+            DeviceId = deviceId?.Trim() ?? string.Empty,
+            DeviceName = deviceName?.Trim() ?? string.Empty,
+            Platform = platform?.Trim() ?? string.Empty
+        }.ToJson();
+
         return JsonSerializer.Serialize(new
         {
             room = $"channel-{channelId}",
             identity = userId,
-            name = userName
+            name = userName,
+            metadata = metadataJson
         });
     }
 
-    public override string GenerateCameraCompanionToken(string channelId, string userId, string userName = "", string userAvatarUrl = "")
+    public override async Task<bool> TryLeaveVoiceAsync(string channelId, string userId, string? expectedSessionId, bool evictFromLiveKit = true, CancellationToken cancellationToken = default)
     {
-        return JsonSerializer.Serialize(new
-        {
-            room = $"channel-{channelId}",
-            identity = $"{userId}:cam",
-            name = string.IsNullOrWhiteSpace(userName) ? $"{userId} (Camera)" : $"{userName} (Camera)"
-        });
-    }
-
-    public override Task JoinVoiceAsync(string channelId, string userId, CancellationToken cancellationToken = default)
-    {
-        _chatState.NotifyVoiceMemberJoined(channelId, userId);
-        return Task.CompletedTask;
-    }
-
-    public override async Task LeaveVoiceAsync(string channelId, string userId, bool evictFromLiveKit, CancellationToken cancellationToken = default)
-    {
-        _chatState.NotifyVoiceMemberLeft(channelId, userId);
-        if (evictFromLiveKit)
+        bool wasPresent = await base.TryLeaveVoiceAsync(channelId, userId, expectedSessionId, evictFromLiveKit: false, cancellationToken);
+        if (evictFromLiveKit && wasPresent)
         {
             await _cluster.SendNodeCommandAsync("evictParticipantFromRoom", new
             {
@@ -2242,18 +3675,8 @@ public sealed class SimulatedClusterVoiceChannelService : VoiceChannelService
                 userId
             });
         }
-    }
 
-    public override Task SetUserSpeakingAsync(string channelId, string userId, bool isSpeaking, CancellationToken cancellationToken = default)
-    {
-        _chatState.SetUserSpeaking(channelId, userId, isSpeaking);
-        return Task.CompletedTask;
-    }
-
-    public override Task SetUserMutedAsync(string channelId, string userId, bool isMuted, CancellationToken cancellationToken = default)
-    {
-        _chatState.SetUserMuted(channelId, userId, isMuted);
-        return Task.CompletedTask;
+        return wasPresent;
     }
 }
 
@@ -2293,9 +3716,12 @@ public sealed class SimulatedVoiceClient : IAsyncDisposable
         VoiceService = new GlobalVoiceService(
             JsInterop,
             cluster.VoiceChannelService,
+            cluster.VoiceState,
             cluster.ChatState,
             NullLogger<GlobalVoiceService>.Instance,
-            DeviceService);
+            DeviceService,
+            cluster.PhysicalRoomService,
+            cluster.DirectSessionService);
 
         var snackbarMock = new Mock<ISnackbar>();
         snackbarMock.Setup(x => x.Add(It.IsAny<string>(), It.IsAny<Severity>(), It.IsAny<Action<SnackbarOptions>>(), It.IsAny<string>()))
@@ -2314,18 +3740,90 @@ public sealed class SimulatedVoiceClient : IAsyncDisposable
         VoiceService.OnChange += EvaluateChatRazorVoiceStateChanged;
     }
 
-    public async Task ConnectToChannelAsync(string channelId, int audioBitrateKbps = 64, string noiseSuppression = "webrtc")
+    public async Task ConnectToChannelAsync(
+        string channelId,
+        int audioBitrateKbps = 64,
+        string noiseSuppression = "webrtc",
+        string? deviceId = null,
+        string? deviceName = null,
+        string? voiceSessionId = null)
     {
         UiState.SetCallStageVisible(true);
-        var token = _cluster.VoiceChannelService.GenerateJoinToken(channelId, UserId, UserId);
+        var (resolvedDevId, resolvedDevName) = await VoiceService.GetOrCreatePhysicalDeviceIdentityAsync();
+        var effectiveDeviceId = string.IsNullOrWhiteSpace(deviceId) ? resolvedDevId : deviceId!;
+        var effectiveDeviceName = string.IsNullOrWhiteSpace(deviceName) ? resolvedDevName : deviceName!;
+        var effectiveSessionId = string.IsNullOrWhiteSpace(voiceSessionId) ? Guid.NewGuid().ToString("N") : voiceSessionId!;
+        var platformTag = VoiceService.GetLocalPlatformTag();
+
+        var token = _cluster.VoiceChannelService.GenerateJoinToken(
+            channelId,
+            UserId,
+            UserId,
+            userAvatarUrl: "",
+            voiceSessionId: effectiveSessionId,
+            deviceId: effectiveDeviceId,
+            deviceName: effectiveDeviceName,
+            platform: platformTag);
+
         await VoiceService.ConnectAsync(new VoiceConnectionOptions(
             token,
             "wss://lk.spokes.test",
             channelId,
             UserId,
             audioBitrateKbps,
-            noiseSuppression));
+            noiseSuppression)
+        {
+            VoiceSessionId = effectiveSessionId,
+            DeviceId = effectiveDeviceId,
+            DeviceName = effectiveDeviceName
+        });
         await SyncStageAndPipDomAsync();
+    }
+
+    public async Task DisconnectFromChannelAsync()
+    {
+        var channelId = VoiceService.CurrentChannelId;
+        var sessionId = VoiceService.CurrentVoiceSessionId;
+        await VoiceService.DisconnectAsync();
+        if (!string.IsNullOrWhiteSpace(channelId))
+        {
+            await _cluster.VoiceChannelService.TryLeaveVoiceAsync(
+                channelId,
+                UserId,
+                string.IsNullOrWhiteSpace(sessionId) ? null : sessionId);
+        }
+        await SyncStageAndPipDomAsync();
+    }
+
+    public async Task SimulateHardwareMicMuteAsync(bool isMuted)
+    {
+        await _cluster.SendNodeCommandAsync("simulateHardwareMicMute", new
+        {
+            clientId = ClientId,
+            isMuted
+        });
+    }
+
+    public int DirectRoomStatusCallbackCount { get; private set; }
+
+    public Task EmitSimulatedDirectRoomStatusAsync(double estimatedEndToEndMs, long txPacketCount)
+    {
+        return _cluster.SendNodeCommandAsync("emitSimulatedDirectRoomStatus", new
+        {
+            clientId = ClientId,
+            estimatedEndToEndMs,
+            txPacketCount
+        });
+    }
+
+    public async Task<ClientAudioRoutingSnapshot> GetAudioRoutingSnapshotAsync()
+    {
+        var raw = await _cluster.SendNodeCommandAsync("inspectClientAudioRouting", new
+        {
+            clientId = ClientId
+        });
+        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        return JsonSerializer.Deserialize<ClientAudioRoutingSnapshot>(raw.GetRawText(), opts)!;
     }
 
     public async Task NavigateAwayFromCallStageAsync()
@@ -2407,11 +3905,33 @@ public sealed class SimulatedVoiceClient : IAsyncDisposable
     internal async Task SyncStageAndPipDomAsync()
     {
         var participants = VoiceService.CallParticipants.ToArray();
+        var isNativeMobile = Platform is VoiceClientPlatform.AndroidNative or VoiceClientPlatform.IosNative;
+        var presentation = UiState.ComputePipPresentationState(isNativeMobile);
+
+        var pipClasses = new List<string> { "voice-pip-overlay", presentation.ModeClass };
+        if (!UiState.ShouldShowInAppPip)
+        {
+            pipClasses.Add("is-stage-hidden");
+        }
+        if (UiState.IsNativeMobilePipMode)
+        {
+            pipClasses.Add("is-native-pip");
+        }
+        if (UiState.IsInAppPipCollapsedPill)
+        {
+            pipClasses.Add("is-minimized-pill");
+        }
+        if (presentation.HasFilmstrip)
+        {
+            pipClasses.Add("has-filmstrip");
+        }
+
         await _cluster.SendNodeCommandAsync("syncStageDom", new
         {
             clientId = ClientId,
             stageVisible = VoiceService.IsInVoiceCall && UiState.IsCallStageVisible,
-            participantIds = participants
+            participantIds = participants,
+            pipOverlayClasses = pipClasses
         });
 
         if (VoiceService.IsInVoiceCall)
@@ -2436,10 +3956,16 @@ public sealed class SimulatedVoiceClient : IAsyncDisposable
                 ChannelName = "General Voice",
                 ServerName = "Spokes Test",
                 LocalUserId = VoiceService.CurrentUserId ?? "",
+                IsNativePlatform = isNativeMobile,
                 IsMuted = VoiceService.IsMuted,
                 IsVideoOn = VoiceService.IsVideoOn,
                 IsScreenSharing = VoiceService.IsScreenSharing,
                 FocusedParticipantId = UiState.FocusedParticipantId ?? "",
+                LayoutMode = presentation.IsGridMode ? "grid" : "focus",
+                ModeClass = presentation.ModeClass,
+                DisplaySpeakerId = presentation.DisplayParticipantId ?? "",
+                PrimaryVideoParticipantId = presentation.PrimaryTargetId,
+                PrimaryVideoSource = presentation.PrimaryVideoSource,
                 Participants = dtos
             });
         }
@@ -2473,6 +3999,9 @@ public sealed class SimulatedVoiceClient : IAsyncDisposable
             raw.GetProperty("inAppPip").GetRawText(), opts)!;
         var hw = JsonSerializer.Deserialize<ClientHardwareSnapshot>(
             raw.GetProperty("hardware").GetRawText(), opts)!;
+        NativeVideoSlotsPayloadSnapshot? nativeSlots = raw.TryGetProperty("nativeVideoSlots", out var slotsProp) && slotsProp.ValueKind == JsonValueKind.Object
+            ? JsonSerializer.Deserialize<NativeVideoSlotsPayloadSnapshot>(slotsProp.GetRawText(), opts)
+            : null;
 
         var focusedId = UiState.FocusedParticipantId;
         StageLayoutMode mode;
@@ -2500,7 +4029,8 @@ public sealed class SimulatedVoiceClient : IAsyncDisposable
             focusedId,
             tiles,
             pip,
-            hw);
+            hw,
+            nativeSlots);
     }
 
     internal async Task<object?> InvokeDotNetCallbackAsync(string method, JsonElement args)
@@ -2566,10 +4096,6 @@ public sealed class SimulatedVoiceClient : IAsyncDisposable
                 VoiceService.OnLocalScreenDimensions(maxEdge, fps);
                 return null;
             }
-            case "RequestCameraCompanionToken":
-            {
-                return VoiceService.RequestCameraCompanionToken();
-            }
             case "OnAudioDevicesUpdated":
             {
                 var jsonOpts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
@@ -2599,10 +4125,9 @@ public sealed class SimulatedVoiceClient : IAsyncDisposable
                 VoiceService.OnRemoteScreenAudioChanged(args[0].GetString() ?? "", args[1].GetBoolean());
                 return null;
             }
-            case "OnActiveSpeakersChanged":
+            case "OnLocalSpeakingChanged":
             {
-                var speakers = JsonSerializer.Deserialize<string[]>(args[0].GetRawText()) ?? [];
-                VoiceService.OnActiveSpeakersChanged(speakers);
+                VoiceService.OnLocalSpeakingChanged(args[0].GetBoolean());
                 return null;
             }
             case "OnLocalMuted":
@@ -2620,14 +4145,63 @@ public sealed class SimulatedVoiceClient : IAsyncDisposable
                 VoiceService.OnParticipantMuteChanged(args[0].GetString() ?? "", args[1].GetBoolean());
                 return null;
             }
+            case "SyncRoomSnapshotAsync":
+            {
+                var snapshot = args.GetArrayLength() > 0
+                    ? JsonSerializer.Deserialize<VoiceRoomSnapshotDto>(args[0].GetRawText(), new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    })
+                    : null;
+                await VoiceService.SyncRoomSnapshotAsync(snapshot);
+                await SyncStageAndPipDomAsync();
+                return null;
+            }
+            case "OnRoomReconnectedAsync":
+            {
+                var snapshot = args.GetArrayLength() > 0
+                    ? JsonSerializer.Deserialize<VoiceRoomSnapshotDto>(args[0].GetRawText(), new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    })
+                    : null;
+                await VoiceService.OnRoomReconnectedAsync(snapshot);
+                await SyncStageAndPipDomAsync();
+                return null;
+            }
             case "OnRoomDisconnected":
             {
                 await VoiceService.OnRoomDisconnected();
                 return null;
             }
+            case "OnRoomDisconnectedWithReason":
+            {
+                var reason = args.GetArrayLength() > 0 && args[0].ValueKind == JsonValueKind.String
+                    ? args[0].GetString()
+                    : null;
+                await VoiceService.OnRoomDisconnectedWithReason(reason);
+                return null;
+            }
             case "OnVoiceLog":
             {
                 VoiceService.OnVoiceLog(args[0].GetString() ?? "", args[1].GetString() ?? "info");
+                return null;
+            }
+            case "OnVoiceConnectingStageChanged":
+            {
+                VoiceService.OnVoiceConnectingStageChanged(args[0].GetString() ?? "");
+                return null;
+            }
+            case "OnDirectRoomAudioStatusChanged":
+            {
+                DirectRoomStatusCallbackCount++;
+                var telemetry = args.GetArrayLength() > 0 && args[0].ValueKind == JsonValueKind.Object
+                    ? JsonSerializer.Deserialize<DirectRoomClientTelemetry>(args[0].GetRawText(), new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    })
+                    : null;
+                VoiceService.OnDirectRoomAudioStatusChanged(telemetry);
                 return null;
             }
             case "OnOsPipStateChanged":

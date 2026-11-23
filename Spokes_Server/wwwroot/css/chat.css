@@ -22,6 +22,7 @@
     position: absolute;
     left: 28px; /* Center of the main message avatar (8px padding + 20px half avatar) */
     top: 50%;
+    bottom: -8px;
     width: 30px;
     border-left: 2px solid var(--mud-palette-action-disabled);
     border-top: 2px solid var(--mud-palette-action-disabled);
@@ -29,6 +30,17 @@
     box-sizing: border-box;
     pointer-events: none;
     transition: border-color 0.1s;
+}
+
+.reply-spine.is-grouped {
+    bottom: 0px;
+}
+
+.reply-sender-name {
+    font-weight: 600;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+    margin-right: 4px;
 }
 
 .reply-preview-row:hover .reply-spine {
@@ -54,13 +66,82 @@
 }
 
 .message-row {
+    position: relative;
+    padding-left: 64px;
+    width: 100%;
     border-radius: 4px;
     transition: background-color 0.1s ease-in-out;
 }
 
-.message-row:hover {
+.message-avatar-spacer {
+    position: absolute;
+    left: 8px;
+    top: 0;
+    width: 40px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+}
+
+.message-hover-time {
+    color: var(--mud-palette-text-disabled);
+    font-size: 0.65rem;
+    opacity: 0;
+    white-space: nowrap;
+}
+
+.message-avatar-trigger {
+    position: absolute;
+    left: 8px;
+    top: 4px;
+    cursor: pointer;
+}
+
+.message-body-col {
+    flex-grow: 1;
+    min-width: 0;
+}
+
+.message-sender-name {
+    font-weight: 700;
+    color: var(--mud-palette-text-primary);
+    cursor: pointer;
+}
+
+.message-timestamp {
+    color: var(--mud-palette-text-secondary);
+}
+
+.p-rel {
+    position: relative;
+}
+
+.icon-flip-x {
+    transform: scaleX(-1);
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .message-row:hover {
+        background-color: var(--mud-palette-action-default-hover); /* Fallback */
+        background-color: color-mix(in srgb, var(--mud-palette-text-primary) 6%, transparent);
+    }
+
+    /* Show hover timestamp on grouped messages */
+    .message-row:hover .message-hover-time {
+        opacity: 1 !important;
+    }
+}
+
+/* Mobile long-press feedback (JS-owned Blazor-untouched attribute) & active action-sheet target (Blazor-owned class) */
+.message-row[data-long-pressing="true"],
+.message-row.message-row-action-target {
     background-color: var(--mud-palette-action-default-hover); /* Fallback */
     background-color: color-mix(in srgb, var(--mud-palette-text-primary) 6%, transparent);
+}
+
+.message-row[data-long-pressing="true"] .message-hover-time,
+.message-row.message-row-action-target .message-hover-time {
+    opacity: 1 !important;
 }
 
 /* Right side blur overlay on hover */
@@ -107,6 +188,11 @@
     align-items: center;
 }
 
+.message-actions-slot {
+    display: flex;
+    align-items: center;
+}
+
 .message-row .message-actions {
     opacity: 0;
     pointer-events: none;
@@ -120,6 +206,36 @@
     pointer-events: auto;
 }
 
+.message-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--mud-palette-text-secondary);
+    cursor: pointer;
+    line-height: 1;
+    font-size: 1.05rem;
+    transition: background-color 0.12s ease, color 0.12s ease;
+}
+.message-action-btn:hover {
+    background-color: var(--mud-palette-action-default-hover);
+    color: var(--mud-palette-text-primary);
+}
+.message-action-btn svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
+}
+.message-action-btn-emoji {
+    color: var(--mud-palette-text-primary);
+    font-size: 1.1rem;
+}
+
 .message-row .message-read-receipts {
     transition: opacity 0.1s ease-in-out;
     opacity: 1;
@@ -129,11 +245,6 @@
         opacity: 0;
         pointer-events: none;
     }
-}
-
-/* Show hover timestamp on grouped messages */
-.message-row:hover .message-hover-time {
-    opacity: 1 !important;
 }
 
 /* ─── Mobile: hide inline actions (long-press bottom sheet handles them) ─── */
@@ -182,9 +293,75 @@
     border-radius: 8px;
     display: block;
     object-fit: contain;
+    margin: 4px 0;
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
+}
+
+.chat-markdown .gif-container {
+    position: relative;
+    display: inline-block;
+    vertical-align: bottom;
+    width: 100%;
+    max-width: 350px;
+    background-color: var(--mud-palette-background-grey);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 4px 0;
+}
+
+.chat-markdown .gif-container > img:not(.klipy-watermark) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+    margin: 0;
+    object-fit: cover;
+    opacity: 0;
+    transition: opacity 0.3s ease-in-out;
+}
+
+.chat-markdown .klipy-gif-container {
+    position: relative;
+    display: inline-block;
+    vertical-align: bottom;
+    width: fit-content;
+    max-width: 100%;
+    margin: 4px 0;
+}
+
+.chat-markdown .klipy-gif-container > img:not(.klipy-watermark) {
+    margin: 0;
+}
+
+.chat-markdown .klipy-watermark {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    width: 60px;
+    height: auto;
+    opacity: 0.9;
+    pointer-events: none;
+    border-radius: 0;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+}
+
+/* Grouped rows use py-0; give grouped cards matching 4px bottom breathing room so consecutive media/cards never touch */
+.message-row-grouped .chat-link-preview-card {
+    margin-bottom: 4px;
+}
+
+/* Ungrouped rows already provide 4px bottom padding via py-1; avoid doubling the gap on trailing inline media */
+.message-row:not(.message-row-grouped) .chat-markdown:last-child p:last-child > .gif-container:last-child,
+.message-row:not(.message-row-grouped) .chat-markdown:last-child p:last-child > .klipy-gif-container:last-child,
+.message-row:not(.message-row-grouped) .chat-markdown:last-child p:last-child > img:last-child {
+    margin-bottom: 0;
 }
 
 /* Markdown styles */
@@ -258,13 +435,131 @@
     z-index: 10;
 }
 
-.code-block-wrapper:hover .copy-code-btn {
-    opacity: 1;
+@media (hover: hover) and (pointer: fine) {
+    .code-block-wrapper:hover .copy-code-btn {
+        opacity: 1;
+    }
+
+    .code-block-wrapper .copy-code-btn:hover {
+        background-color: rgba(255, 255, 255, 0.2);
+        color: #fff;
+    }
 }
 
-.code-block-wrapper .copy-code-btn:hover {
-    background-color: rgba(255, 255, 255, 0.2);
-    color: #fff;
+@media (hover: none) {
+    .code-block-wrapper .copy-code-btn {
+        opacity: 0.78;
+    }
+}
+
+.code-block-wrapper .copy-code-icon {
+    width: 14px;
+    height: 14px;
+    margin-right: 4px;
+    fill: currentColor;
+    flex-shrink: 0;
+}
+
+/* Lightweight DateSeparator & Reaction pills (preserve MudBlazor .mud-chip styling without child component overhead) */
+.chat-date-separator {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    margin: 4px 0;
+}
+
+.chat-date-separator .mud-divider {
+    flex: 1;
+}
+
+.chat-date-chip {
+    font-weight: 600;
+    cursor: default;
+    pointer-events: none;
+    height: 24px;
+    padding: 0 10px;
+    font-size: 0.75rem;
+    border-radius: 16px;
+    display: inline-flex;
+    align-items: center;
+    color: var(--mud-palette-text-secondary);
+}
+
+.message-reaction-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 12px;
+    height: 24px;
+    padding: 0 8px;
+    font-size: 0.8125rem;
+    line-height: 1;
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid var(--mud-palette-lines-default);
+    color: var(--mud-palette-text-primary);
+    transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .message-reaction-pill:hover {
+        background-color: var(--mud-palette-action-default-hover);
+    }
+}
+
+.message-reaction-pill.mud-chip-color-primary {
+    border-color: var(--mud-palette-primary);
+    color: var(--mud-palette-primary);
+    background-color: rgba(var(--mud-palette-primary-rgb), 0.1);
+}
+
+/* MobileActionSheet styles (centralized from component inline <style>) */
+.action-sheet-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 9998;
+    animation: fadeIn 0.2s ease;
+}
+
+.action-sheet {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--mud-palette-background);
+    border-radius: 24px 24px 0 0;
+    z-index: 9999;
+    padding: 8px 0 env(safe-area-inset-bottom, 16px) 0;
+    animation: slideUp 0.25s ease;
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.2);
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.action-sheet-content {
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 16px 16px 16px;
+}
+
+.action-sheet-handle {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--mud-palette-text-disabled);
+    margin: 4px auto 8px;
+}
+
+@keyframes slideUp {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 /* Syntax Highlighting Base Colors (ColorCode generates inline styles, but we ensure consistency) */
@@ -310,42 +605,164 @@
     background-color: var(--mud-palette-background-grey);
     font-weight: 600;
 }
-.message-row .message-actions-stack .message-read-receipts {
-    opacity: 1;
-    transition: opacity 0s;
-    pointer-events: auto;
-}
 
-@media (min-width: 960px) {
-    .message-row:hover .message-actions-stack .message-read-receipts,
-    .message-actions-stack .message-read-receipts.force-hidden {
-        opacity: 0;
-        pointer-events: none;
-    }
+.attachment-image {
+    cursor: pointer;
+    position: relative;
+    display: inline-block;
 }
-
-.attachment-image .needs-fade {
+.attachment-image-el {
+    max-width: 100%;
+    max-height: 500px;
+    width: auto;
+    height: 100%;
+    border-radius: 8px;
+    display: block;
+    object-fit: contain;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+.attachment-skeleton {
+    position: absolute;
+    inset: 0;
+    border-radius: 8px;
+    background: linear-gradient(
+        90deg,
+        rgba(128, 128, 128, 0.08) 25%,
+        rgba(128, 128, 128, 0.16) 50%,
+        rgba(128, 128, 128, 0.08) 75%
+    );
+    background-size: 200% 100%;
+    animation: spokes-media-shimmer 1.4s ease-in-out infinite;
+    pointer-events: none;
+}
+.attachment-image .needs-fade,
+.attachment-video .needs-fade {
     opacity: 0;
     transition: opacity 0.3s ease-in-out;
 }
-.attachment-image.is-loaded .needs-fade {
+.attachment-image.is-instant .needs-fade,
+.attachment-video.is-instant .needs-fade {
+    opacity: 1;
+    transition: none !important;
+}
+.attachment-image.is-loaded .needs-fade,
+.attachment-image .needs-fade[data-loaded="true"],
+.attachment-video.is-loaded .needs-fade,
+.attachment-video .needs-fade[data-loaded="true"] {
     opacity: 1;
 }
-.attachment-image.is-loaded .attachment-skeleton {
+.attachment-image.is-loaded .attachment-skeleton,
+.attachment-image.is-instant .attachment-skeleton,
+.attachment-image.is-error .attachment-skeleton,
+.attachment-image:has(.needs-fade[data-loaded="true"]) .attachment-skeleton,
+.attachment-video.is-loaded .attachment-skeleton,
+.attachment-video.is-instant .attachment-skeleton,
+.attachment-video.is-error .attachment-skeleton,
+.attachment-video:has(.needs-fade[data-loaded="true"]) .attachment-skeleton {
     display: none !important;
 }
 
-/* ─── LinkPreviewCard ───────────────────────────────────────────── */
-.link-preview-card:hover {
-    border-color: var(--mud-palette-primary) !important;
+.attachment-video {
+    position: relative;
+    max-width: 100%;
+    max-height: 500px;
+    display: inline-block;
 }
-.yt-overlay:hover {
-    background: rgba(0,0,0,0.1) !important;
+.attachment-video-trigger {
+    position: relative;
+    cursor: pointer;
+    display: inline-block;
+    min-width: 160px;
+    min-height: 120px;
+}
+.attachment-video-thumb,
+.attachment-video-player {
+    max-width: 100%;
+    max-height: 500px;
+    width: auto;
+    height: auto;
+    border-radius: 8px;
+    display: block;
+    object-fit: contain;
+}
+.attachment-video-fallback {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 300px;
+    height: 200px;
+    max-width: 100%;
+    border-radius: 8px;
+    background: var(--mud-palette-background-grey);
+    box-shadow: var(--mud-elevation-1);
+}
+.attachment-video.is-error .attachment-video-thumb {
+    display: none;
+}
+.attachment-video.is-error .attachment-video-fallback {
+    display: flex;
+}
+.attachment-video-play-btn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 50%;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
-/* ─── EventMentionCard ──────────────────────────────────────────── */
-.attendee-row:hover {
-    background-color: var(--mud-palette-action-default-hover);
+/* ─── ChatSidebar Voice Channel Participant Speaking Indicators ─── */
+.voice-sidebar-participant {
+    padding: 2px 0 2px 8px;
+}
+.voice-sidebar-avatar-wrap {
+    position: relative;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+}
+.voice-sidebar-mute-badge {
+    position: absolute;
+    bottom: -2px;
+    right: -2px;
+    background: rgba(0, 0, 0, 0.8);
+    border-radius: 50%;
+    padding: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.voice-sidebar-name {
+    color: var(--mud-palette-text-secondary);
+    line-height: 1.2;
+}
+.voice-sidebar-participant[data-voice-speaking="true"]:not([data-voice-muted="true"]) .voice-sidebar-avatar {
+    border: 2px solid var(--mud-palette-success);
+}
+.voice-sidebar-participant[data-voice-speaking="true"]:not([data-voice-muted="true"]) .voice-sidebar-name {
+    color: var(--mud-palette-success) !important;
+}
+
+/* ─── LinkPreviewCard ───────────────────────────────────────────── */
+@media (hover: hover) and (pointer: fine) {
+    .link-preview-card:hover {
+        border-color: var(--mud-palette-primary) !important;
+    }
+    .yt-overlay:hover {
+        background: rgba(0,0,0,0.1) !important;
+    }
+
+    /* ─── EventMentionCard ──────────────────────────────────────────── */
+    .attendee-row:hover {
+        background-color: var(--mud-palette-action-default-hover);
+    }
 }
 
 
@@ -353,9 +770,11 @@
 .poll-option-paper {
     transition: border-color 0.15s ease-in-out, background-color 0.15s ease-in-out;
 }
-.poll-option-paper.interactive:hover {
-    border-color: var(--mud-palette-primary) !important;
-    background-color: color-mix(in srgb, var(--mud-palette-primary) 5%, transparent);
+@media (hover: hover) and (pointer: fine) {
+    .poll-option-paper.interactive:hover {
+        border-color: var(--mud-palette-primary) !important;
+        background-color: color-mix(in srgb, var(--mud-palette-primary) 5%, transparent);
+    }
 }
 .poll-option-paper.selected {
     border-color: var(--mud-palette-primary) !important;
@@ -451,6 +870,11 @@
     transition: none !important;
 }
 
+.voice-pip-overlay.mode-avatar {
+    width: 268px;
+    height: 170px;
+}
+
 .voice-pip-overlay.mode-video {
     width: 320px;
     height: 198px;
@@ -458,25 +882,23 @@
 
 .voice-pip-overlay.mode-grid,
 .voice-pip-overlay.has-filmstrip {
-    width: 372px;
-    height: 248px;
-}
-
-.voice-pip-overlay.mode-avatar {
-    width: 268px;
-    height: 170px;
+    width: 376px;
+    height: 256px;
 }
 
 @media (max-width: 599.98px) {
-    .voice-pip-overlay.mode-video,
-    .voice-pip-overlay.mode-grid,
-    .voice-pip-overlay.has-filmstrip {
-        width: 256px;
-        height: 168px;
-    }
     .voice-pip-overlay.mode-avatar {
         width: 220px;
         height: 150px;
+    }
+    .voice-pip-overlay.mode-video {
+        width: 256px;
+        height: 172px;
+    }
+    .voice-pip-overlay.mode-grid,
+    .voice-pip-overlay.has-filmstrip {
+        width: 284px;
+        height: 214px;
     }
 }
 
@@ -514,6 +936,7 @@
     max-width: 190px;
 }
 
+.voice-pip-overlay:not([data-corner]),
 .voice-pip-overlay[data-corner="bottom-right"] {
     right: 16px;
     bottom: calc(16px + env(safe-area-inset-bottom, 0px));
@@ -544,9 +967,14 @@
     z-index: 3;
 }
 
-.voice-pip-overlay.mode-video .voice-pip-video-stage,
 .voice-pip-overlay.mode-grid .voice-pip-video-stage,
 .voice-pip-overlay.has-filmstrip .voice-pip-video-stage {
+    background: transparent;
+    pointer-events: auto;
+    z-index: 1;
+}
+
+.voice-pip-overlay.mode-video .voice-pip-video-stage {
     background: #0c0c14;
     pointer-events: auto;
     z-index: 1;
@@ -563,7 +991,29 @@
 }
 
 .voice-pip-overlay.has-filmstrip .voice-pip-primary-video {
-    height: calc(100% - 104px);
+    position: absolute;
+    top: 38px;
+    left: 0;
+    right: 0;
+    height: calc(100% - 154px);
+}
+
+/* Native mobile (Android & iOS) In-App Floating PiP renders hardware video in nativePipOverlayLayer ABOVE the WebView.
+   Inset the primary video slot cleanly between the top header bar and bottom control bar so HTML controls remain 100% visible & clickable. */
+html.spokes-native-voice-active:not(.spokes-native-pip) .voice-pip-overlay:not(.is-native-pip):not(.has-filmstrip) .voice-pip-primary-video {
+    position: absolute;
+    top: 34px;
+    left: 0;
+    right: 0;
+    height: calc(100% - 82px);
+}
+
+html.spokes-native-voice-active:not(.spokes-native-pip) .voice-pip-overlay:not(.is-native-pip) .voice-pip-self-video {
+    top: 40px;
+}
+
+html.spokes-native-voice-active:not(.spokes-native-pip) .voice-pip-overlay:not(.is-native-pip) .voice-pip-presenter-cam-video {
+    bottom: 52px;
 }
 
 .voice-pip-primary-video.has-stream {
@@ -584,7 +1034,7 @@
     width: min(clamp(56px, 26cqw, 108px), calc(34cqh * var(--effective-self-aspect)));
     height: min(calc(clamp(56px, 26cqw, 108px) / var(--effective-self-aspect)), 34cqh);
     aspect-ratio: var(--effective-self-aspect);
-    object-fit: cover;
+    object-fit: contain;
     border-radius: 8px;
     border: 1.5px solid rgba(255, 255, 255, 0.72);
     background: #0c0c14;
@@ -596,7 +1046,7 @@
 }
 
 .voice-pip-overlay.has-filmstrip .voice-pip-presenter-cam-video {
-    bottom: 120px;
+    bottom: 118px;
 }
 
 .voice-pip-presenter-cam-video.has-stream {
@@ -613,7 +1063,7 @@
     width: min(clamp(56px, 28cqw, 112px), calc(36cqh * var(--effective-self-aspect)));
     height: min(calc(clamp(56px, 28cqw, 112px) / var(--effective-self-aspect)), 36cqh);
     aspect-ratio: var(--effective-self-aspect);
-    object-fit: cover;
+    object-fit: contain;
     border-radius: 8px;
     border: 1.5px solid rgba(126, 111, 255, 0.58);
     background: #0c0c14;
@@ -630,11 +1080,11 @@
 
 .voice-pip-grid {
     position: absolute;
-    inset: 38px 6px 46px 6px;
+    inset: 38px 8px 48px 8px;
     display: none;
-    gap: 5px;
+    gap: 6px;
     grid-template-columns: repeat(2, 1fr);
-    grid-auto-rows: 1fr;
+    grid-auto-rows: minmax(0, 1fr);
     align-items: stretch;
     justify-items: stretch;
     z-index: 2;
@@ -680,14 +1130,17 @@
 
 .voice-pip-filmstrip {
     position: absolute;
-    left: 6px;
-    right: 6px;
-    bottom: 48px;
-    height: 64px;
+    left: 8px;
+    right: 8px;
+    bottom: 50px;
+    height: 66px;
+    padding: 0 4px;
+    background: transparent;
+    border: none;
     display: none;
     align-items: stretch;
-    justify-content: center;
-    gap: 6px;
+    justify-content: safe center;
+    gap: 8px;
     overflow-x: auto;
     overflow-y: hidden;
     z-index: 4;
@@ -698,31 +1151,48 @@
 }
 
 .voice-pip-filmstrip .pip-participant-tile {
-    flex: 0 0 104px;
-    width: 104px;
+    flex: 1 1 0;
+    max-width: 112px;
+    min-width: 60px;
     height: 100%;
 }
 
 .voice-pip-overlay .pip-participant-tile {
     position: relative;
     overflow: hidden;
-    border-radius: 8px;
-    background: #000000;
-    border: 1.5px solid rgba(126, 111, 255, 0.22);
+    border-radius: 10px;
+    background: transparent;
+    border: 1.5px solid transparent;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 4px;
+    padding: 3px 4px;
     cursor: pointer;
     min-width: 0;
     min-height: 0;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+    transition: background-color 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
 }
 
-.voice-pip-overlay .pip-participant-tile:hover {
+.voice-pip-overlay .pip-participant-tile:not(.has-video):hover {
+    background: rgba(126, 111, 255, 0.08);
+    border-color: rgba(126, 111, 255, 0.22);
+}
+
+.voice-pip-overlay .pip-participant-tile.has-video {
+    border-radius: 8px;
+    background: #0c0c14;
+    border-color: rgba(126, 111, 255, 0.24);
+    padding: 0;
+    gap: 0;
+}
+
+.voice-pip-overlay .pip-participant-tile.has-video:hover {
     border-color: rgba(126, 111, 255, 0.65);
 }
 
-.voice-pip-overlay .pip-participant-tile.is-speaking {
+.voice-pip-overlay .pip-participant-tile.has-video.is-speaking {
     border-color: var(--spokes-pip-success);
     box-shadow: 0 0 0 2px rgba(61, 203, 108, 0.24);
 }
@@ -733,7 +1203,7 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
-    background: #000000;
+    background: #0c0c14;
     display: none;
     z-index: 1;
 }
@@ -759,7 +1229,7 @@
     max-width: 62px;
     min-width: 32px;
     aspect-ratio: var(--self-aspect, 1.7778);
-    object-fit: cover;
+    object-fit: contain;
     border-radius: 5px;
     border: 1px solid rgba(255, 255, 255, 0.75);
     background: #0c0c14;
@@ -773,24 +1243,103 @@
 
 .voice-pip-overlay .pip-tile-avatar-wrap {
     position: relative;
-    width: 34px;
-    height: 34px;
+    width: 54px;
+    height: 54px;
+    padding: 3px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, #2d2b45 0%, #202033 100%);
+    flex-shrink: 0;
+    background: transparent;
     color: #ffffff;
-    font-weight: 700;
-    font-size: 12px;
-    border: 2px solid rgba(126, 111, 255, 0.28);
+    font-weight: 600;
+    font-size: 16.5px;
+    border: 2.5px solid rgba(126, 111, 255, 0.28);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.36);
+    transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
     z-index: 2;
 }
 
+.voice-pip-overlay .pip-tile-initials {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: var(--avatar-bg, #673ab7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.voice-pip-overlay .pip-participant-tile:not(.has-video):hover .pip-tile-avatar-wrap {
+    border-color: rgba(126, 111, 255, 0.65);
+    transform: scale(1.04);
+}
+
+.voice-pip-overlay .pip-participant-tile.is-speaking:not(.has-video) .pip-tile-avatar-wrap {
+    border-color: var(--spokes-pip-success);
+    box-shadow: 0 0 0 3.5px rgba(61, 203, 108, 0.26), 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.voice-pip-overlay .voice-pip-grid[data-count="3"] .pip-participant-tile:not(.has-video),
+.voice-pip-overlay .voice-pip-grid[data-count="4"] .pip-participant-tile:not(.has-video),
+.voice-pip-overlay .voice-pip-grid[data-count="5"] .pip-participant-tile:not(.has-video),
+.voice-pip-overlay .voice-pip-grid[data-count="6"] .pip-participant-tile:not(.has-video) {
+    gap: 2px;
+    padding: 1px 2px;
+}
+
+.voice-pip-overlay .voice-pip-grid[data-count="3"] .pip-tile-avatar-wrap,
+.voice-pip-overlay .voice-pip-grid[data-count="4"] .pip-tile-avatar-wrap,
+.voice-pip-overlay .voice-pip-grid[data-count="5"] .pip-tile-avatar-wrap,
+.voice-pip-overlay .voice-pip-grid[data-count="6"] .pip-tile-avatar-wrap {
+    width: 38px;
+    height: 38px;
+    padding: 2px;
+    font-size: 13px;
+    border-width: 2px;
+}
+
+.voice-pip-overlay .voice-pip-grid[data-count="3"] .pip-participant-tile:not(.has-video) .pip-tile-name,
+.voice-pip-overlay .voice-pip-grid[data-count="4"] .pip-participant-tile:not(.has-video) .pip-tile-name,
+.voice-pip-overlay .voice-pip-grid[data-count="5"] .pip-participant-tile:not(.has-video) .pip-tile-name,
+.voice-pip-overlay .voice-pip-grid[data-count="6"] .pip-participant-tile:not(.has-video) .pip-tile-name {
+    font-size: 10.5px;
+    line-height: 1.1;
+}
+
+@media (max-width: 599.98px) {
+    .voice-pip-overlay .voice-pip-grid[data-count="3"] .pip-tile-avatar-wrap,
+    .voice-pip-overlay .voice-pip-grid[data-count="4"] .pip-tile-avatar-wrap,
+    .voice-pip-overlay .voice-pip-grid[data-count="5"] .pip-tile-avatar-wrap,
+    .voice-pip-overlay .voice-pip-grid[data-count="6"] .pip-tile-avatar-wrap {
+        width: 34px;
+        height: 34px;
+        padding: 2px;
+        font-size: 12px;
+        border-width: 2px;
+    }
+
+    .voice-pip-overlay .voice-pip-grid[data-count="3"] .pip-tile-mute,
+    .voice-pip-overlay .voice-pip-grid[data-count="4"] .pip-tile-mute,
+    .voice-pip-overlay .voice-pip-grid[data-count="5"] .pip-tile-mute,
+    .voice-pip-overlay .voice-pip-grid[data-count="6"] .pip-tile-mute {
+        width: 14px;
+        height: 14px;
+    }
+}
+
+.voice-pip-overlay .voice-pip-filmstrip .pip-participant-tile:not(.has-video) {
+    gap: 3px;
+    padding: 2px 4px;
+}
+
 .voice-pip-overlay .voice-pip-filmstrip .pip-tile-avatar-wrap {
-    width: 26px;
-    height: 26px;
-    font-size: 10px;
+    width: 42px;
+    height: 42px;
+    padding: 2.5px;
+    font-size: 13px;
+    border-width: 2.5px;
 }
 
 .voice-pip-overlay .pip-participant-tile.has-video .pip-tile-avatar-wrap {
@@ -806,45 +1355,71 @@
 }
 
 .voice-pip-overlay .pip-tile-footer {
-    position: absolute;
-    left: 4px;
-    right: 4px;
-    bottom: 3px;
+    position: static;
+    width: 100%;
     z-index: 4;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
     gap: 4px;
     pointer-events: none;
 }
 
+.voice-pip-overlay .pip-participant-tile.has-video .pip-tile-footer {
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    bottom: 3px;
+    width: auto;
+    justify-content: space-between;
+}
+
 .voice-pip-overlay .pip-tile-name {
-    font-size: 9.5px;
+    font-size: 11.5px;
     font-weight: 600;
-    color: #ffffff;
-    background: rgba(15, 15, 24, 0.74);
-    padding: 1px 4px;
+    color: var(--spokes-pip-text);
+    background: transparent;
+    padding: 0 2px;
     border-radius: 4px;
     max-width: 100%;
+    text-align: center;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.voice-pip-overlay .voice-pip-filmstrip .pip-participant-tile:not(.has-video) .pip-tile-name {
+    font-size: 10.5px;
+    line-height: 1.15;
+}
+
+.voice-pip-overlay .pip-participant-tile.has-video .pip-tile-name {
+    font-size: 9.5px;
+    color: #ffffff;
+    background: rgba(15, 15, 24, 0.76);
+    padding: 1px 5px;
+    text-align: left;
 }
 
 .voice-pip-overlay .pip-tile-mute {
     position: absolute;
     right: -2px;
     bottom: -2px;
-    width: 15px;
-    height: 15px;
+    width: 17px;
+    height: 17px;
     border-radius: 50%;
     background: var(--spokes-pip-error);
-    border: 1.5px solid var(--spokes-pip-bg);
+    border: 2px solid var(--spokes-pip-bg);
     color: #ffffff;
     display: none;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+}
+
+.voice-pip-overlay .voice-pip-filmstrip .pip-tile-mute {
+    width: 15px;
+    height: 15px;
 }
 
 .voice-pip-overlay .pip-tile-mute svg {
@@ -875,10 +1450,8 @@
     gap: 6px;
     padding: 2px 9px;
     border-radius: 999px;
-    background: rgba(30, 30, 45, 0.78);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(126, 111, 255, 0.22);
+    background: rgba(24, 24, 38, 0.90);
+    border: 1px solid rgba(126, 111, 255, 0.24);
     max-width: calc(100% - 62px);
     cursor: pointer;
     transition: border-color 0.14s ease, background 0.14s ease;
@@ -906,7 +1479,8 @@
     transition: background-color 0.14s ease, box-shadow 0.14s ease;
 }
 
-.voice-pip-live-dot.is-speaking {
+.voice-pip-live-dot.is-speaking,
+.voice-pip-live-dot[data-voice-speaking="true"] {
     background: var(--spokes-pip-success);
     box-shadow: 0 0 7px var(--spokes-pip-success);
 }
@@ -938,7 +1512,20 @@
 }
 
 .voice-pip-overlay.has-filmstrip .voice-pip-avatar-stage {
-    padding-bottom: 104px;
+    top: 34px;
+    left: 12px;
+    right: 12px;
+    bottom: 114px;
+    padding: 0;
+}
+
+.voice-pip-overlay.has-filmstrip .voice-pip-primary-avatar {
+    width: 50px !important;
+    height: 50px !important;
+}
+
+.voice-pip-overlay.has-filmstrip .voice-pip-channel-sub {
+    display: none !important;
 }
 
 .voice-pip-overlay.mode-video .voice-pip-avatar-stage {
@@ -954,7 +1541,8 @@
     transition: border-color 0.14s ease, box-shadow 0.14s ease;
 }
 
-.voice-pip-avatar-ring.is-speaking {
+.voice-pip-avatar-ring.is-speaking,
+.voice-pip-avatar-ring[data-voice-speaking="true"]:not([data-voice-muted="true"]) {
     border-color: var(--spokes-pip-success);
     box-shadow: 0 0 0 3.5px rgba(61, 203, 108, 0.26), 0 6px 16px rgba(0, 0, 0, 0.4);
 }
@@ -976,7 +1564,7 @@
 .voice-pip-speaker-name {
     color: var(--spokes-pip-text) !important;
     font-weight: 600 !important;
-    margin-top: 6px !important;
+    margin-top: 5px !important;
     max-width: 92%;
     white-space: nowrap;
     overflow: hidden;
@@ -1004,10 +1592,8 @@
     gap: 6px;
     padding: 4px 6px;
     border-radius: 12px;
-    background: rgba(26, 26, 39, 0.86);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border: 1px solid rgba(126, 111, 255, 0.18);
+    background: rgba(24, 24, 38, 0.92);
+    border: 1px solid rgba(126, 111, 255, 0.20);
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
 }
 
@@ -1052,8 +1638,20 @@ html.spokes-native-pip body {
 }
 
 html.spokes-native-pip #spokes-server-switcher-tab,
-html.spokes-native-pip #spokes-server-switcher-container {
-    display: none !important;
+html.spokes-native-pip #spokes-server-switcher-container,
+html.spokes-native-pip .mud-layout > .mud-appbar,
+html.spokes-native-pip .mud-layout > #nav-drawer,
+html.spokes-native-pip .mud-main-content > :not(#spokes-voice-pip-overlay),
+html.spokes-native-pip .mud-popover-provider,
+html.spokes-native-pip .mud-dialog-container,
+html.spokes-native-pip .mud-snackbar-provider,
+html.spokes-native-pip .mud-overlay {
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+html.spokes-native-pip #spokes-voice-pip-overlay {
+    visibility: visible !important;
 }
 
 html.spokes-native-pip .voice-pip-overlay,
@@ -1080,8 +1678,41 @@ html.spokes-native-pip .voice-pip-overlay.is-minimized-pill,
     transition: none !important;
 }
 
-html.spokes-native-pip .voice-pip-overlay.mode-video .voice-pip-video-stage {
+html.spokes-native-pip .voice-pip-overlay.mode-video .voice-pip-video-stage,
+html.spokes-native-pip .voice-pip-overlay:has(.has-stream) .voice-pip-video-stage {
     display: block !important;
+}
+
+/* Override mode-grid & filmstrip synchronously in 0ms on html.spokes-native-pip without mutating Blazor-owned classes on #spokes-voice-pip-overlay */
+html.spokes-native-pip .voice-pip-overlay.mode-grid .voice-pip-grid,
+html.spokes-native-pip .voice-pip-overlay.has-filmstrip .voice-pip-filmstrip {
+    display: none !important;
+}
+
+html.spokes-native-pip .voice-pip-overlay.mode-grid .voice-pip-primary-video.has-stream,
+html.spokes-native-pip .voice-pip-overlay.mode-grid .voice-pip-presenter-cam-video.has-stream,
+html.spokes-native-pip .voice-pip-overlay.mode-grid .voice-pip-self-video.has-stream {
+    display: block !important;
+}
+
+html.spokes-native-pip .voice-pip-overlay.mode-grid:not(:has(.has-stream)) .voice-pip-avatar-stage {
+    display: flex !important;
+    padding: 12px !important;
+}
+
+html.spokes-native-pip.spokes-native-video-underlay,
+html.spokes-native-pip.spokes-native-video-underlay body,
+html.spokes-native-pip.spokes-native-video-underlay #app,
+html.spokes-native-pip.spokes-native-video-underlay .mud-layout,
+html.spokes-native-pip.spokes-native-video-underlay .mud-main-content,
+html.spokes-native-pip.spokes-native-video-underlay .voice-pip-overlay,
+html.spokes-native-pip.spokes-native-video-underlay .voice-pip-overlay.mud-paper,
+html.spokes-native-pip.spokes-native-video-underlay .voice-pip-video-stage,
+html.spokes-native-pip.spokes-native-video-underlay .voice-pip-primary-video,
+html.spokes-native-pip.spokes-native-video-underlay .voice-pip-self-video,
+html.spokes-native-pip.spokes-native-video-underlay .voice-pip-presenter-cam-video {
+    background: transparent !important;
+    background-color: transparent !important;
 }
 
 html.spokes-native-pip .voice-pip-overlay.mode-avatar .voice-pip-avatar-stage {
@@ -1090,27 +1721,1454 @@ html.spokes-native-pip .voice-pip-overlay.mode-avatar .voice-pip-avatar-stage {
 }
 
 html.spokes-native-pip .voice-pip-overlay.mode-video .voice-pip-avatar-stage,
-html.spokes-native-pip .voice-pip-header-actions,
+html.spokes-native-pip .voice-pip-overlay:has(.has-stream) .voice-pip-avatar-stage,
+html.spokes-native-pip .voice-pip-top-bar,
 html.spokes-native-pip .voice-pip-controls {
     display: none !important;
 }
 
-html.spokes-native-pip .voice-pip-top-bar {
-    position: absolute !important;
-    height: auto !important;
-    padding: 6px 8px !important;
-    background: linear-gradient(to bottom, rgba(21, 21, 33, 0.82) 0%, transparent 100%) !important;
-}
-
 html.spokes-native-pip .voice-pip-self-video {
     --effective-self-aspect: var(--self-aspect, 1.7778);
-    top: 32px !important;
+    top: 8px !important;
     left: 8px !important;
     right: auto !important;
     bottom: auto !important;
     width: min(clamp(48px, 30cqw, 110px), calc(38cqh * var(--effective-self-aspect))) !important;
     height: min(calc(clamp(48px, 30cqw, 110px) / var(--effective-self-aspect)), 38cqh) !important;
     aspect-ratio: var(--effective-self-aspect) !important;
-    object-fit: cover !important;
+    object-fit: contain !important;
     border-radius: 10px !important;
+}
+
+.voice-video-area {
+    container-name: voice-stage;
+    container-type: inline-size;
+    min-width: 0;
+}
+
+/* Disable containment while fullscreen stage is active so position: fixed escapes to the viewport */
+.voice-video-area:has(.participant-rect.is-fullscreen-stage),
+#voice-video-container:has(.participant-rect.is-fullscreen-stage) {
+    container-type: normal !important;
+}
+
+.voice-stage-fab-actions {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 20;
+}
+
+/* ─── Adaptive Voice Stage Container ────────────────────────────────────────── */
+#voice-video-container.voice-stage-grid {
+    --stage-pad: 16px;
+    --stage-gap: 16px;
+    position: relative;
+    height: 100%;
+    min-height: 0;
+    background: #1e1e1e;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr));
+    gap: var(--stage-gap);
+    padding: var(--stage-pad) max(var(--stage-pad), calc((100% - 1640px) / 2));
+    align-content: start;
+    justify-items: stretch;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    box-sizing: border-box;
+}
+
+#voice-video-container:not(.is-facetime-layout):not(.has-grid-focus):not(:has(.participant-rect)) {
+    align-content: center;
+    grid-template-rows: 1fr;
+}
+
+#voice-video-container:not(.is-facetime-layout):not(.has-grid-focus) > :not(.participant-rect) {
+    grid-column: 1 / -1;
+    justify-self: center;
+    align-self: center;
+}
+
+/* Wide desktop / 1440p+ / ultrawide: generous large cards capped cleanly via container max width */
+@container voice-stage (min-width: 1400px) {
+    #voice-video-container:not(.is-facetime-layout):not(.has-grid-focus) {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+    }
+}
+
+/* Tablet / landscape phone / desktop with secondary chat drawer open */
+@container voice-stage (max-width: 899.98px) {
+    #voice-video-container:not(.is-facetime-layout):not(.has-grid-focus) {
+        --stage-pad: 12px;
+        --stage-gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+        padding: var(--stage-pad) var(--stage-pad) 84px var(--stage-pad);
+    }
+}
+
+/* Portrait phone: compact 2-column 4:3 grid */
+@container voice-stage (max-width: 539.98px) {
+    #voice-video-container:not(.is-facetime-layout):not(.has-grid-focus) {
+        --stage-pad: 8px;
+        --stage-gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        padding: var(--stage-pad) var(--stage-pad) 80px var(--stage-pad);
+    }
+}
+
+/* ─── Participant Tile (Container-Query Driven) ─────────────────────────────── */
+.participant-rect.mud-paper {
+    --tile-bg: #15151d;
+    --tile-avatar-size: clamp(34px, 34cqmin, 108px);
+    --tile-badge-size: clamp(16px, calc(var(--tile-avatar-size) * 0.30), 28px);
+    --presence-ring-color: var(--tile-bg);
+    --presence-ring-width: clamp(1.5px, calc(var(--tile-avatar-size) * 0.032), 3px);
+    position: relative;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 4 / 3;
+    min-height: 0;
+    flex-shrink: 0;
+    border-radius: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--tile-bg);
+    overflow: hidden;
+    container-name: voice-tile;
+    container-type: size;
+    transition: border-color 0.14s ease-in-out, box-shadow 0.14s ease-in-out, background-color 0.14s ease-in-out !important;
+}
+
+.participant-rect.mud-paper:has(video.has-stream) {
+    --tile-bg: #000;
+    background-color: #000;
+}
+
+.participant-rect.is-speaking,
+.participant-rect[data-voice-speaking="true"]:not([data-voice-muted="true"]) {
+    border-color: #4caf50 !important;
+    box-shadow: inset 0 0 0 1px rgba(76, 175, 80, 0.45), 0 0 14px rgba(76, 175, 80, 0.25) !important;
+}
+
+/* Centered audio-only identity stack */
+.participant-large-avatar {
+    z-index: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(4px, 3.5cqh, 10px);
+    padding: clamp(6px, 4cqmin, 16px);
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    text-align: center;
+}
+
+.participant-avatar-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.participant-rect .participant-tile-avatar.mud-avatar {
+    width: var(--tile-avatar-size);
+    height: var(--tile-avatar-size);
+    line-height: 1;
+}
+
+.participant-mute-badge {
+    position: absolute;
+    bottom: 14.64%;
+    right: 14.64%;
+    transform: translate(50%, 50%);
+    width: var(--tile-badge-size);
+    height: var(--tile-badge-size);
+    background: var(--mud-palette-error);
+    box-shadow: 0 0 0 var(--presence-ring-width) var(--presence-ring-color), 0 1px 4px rgba(0, 0, 0, 0.4);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    z-index: 12;
+}
+
+.participant-mute-badge-icon {
+    font-size: calc(var(--tile-badge-size) * 0.58) !important;
+    color: #fff;
+}
+
+.participant-name-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    max-width: 100%;
+    min-width: 0;
+}
+
+.participant-name-text {
+    color: #fff;
+    font-weight: 500;
+    font-size: clamp(0.7rem, 6.2cqmin, 1.05rem) !important;
+    line-height: 1.25 !important;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ─── Pinned Physical Room Chip (Option 1) ──────────────────────────────────── */
+.participant-room-chip {
+    position: absolute;
+    top: clamp(5px, 3cqmin, 10px);
+    left: clamp(5px, 3cqmin, 10px);
+    z-index: 10;
+    display: inline-flex;
+    align-items: center;
+    gap: clamp(3px, 1.4cqw, 5px);
+    padding: clamp(2px, 0.9cqh, 3px) clamp(6px, 2.5cqw, 9px);
+    max-width: calc(100% - 16px);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.92);
+    font-size: clamp(0.6rem, 4.6cqmin, 0.76rem);
+    font-weight: 500;
+    line-height: 1.25;
+    box-sizing: border-box;
+}
+
+.participant-room-chip-icon {
+    font-size: clamp(11px, 5.2cqmin, 14px) !important;
+    color: #90caf9;
+    flex-shrink: 0;
+}
+
+.participant-room-chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+/* Frosted contrast pill over active video & clear of top-right name overlay */
+.participant-rect:has(video.has-stream) .participant-room-chip,
+html.spokes-native-video-underlay .participant-rect.native-video-active .participant-room-chip {
+    background: rgba(12, 12, 18, 0.68);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border-color: rgba(255, 255, 255, 0.18);
+    max-width: calc(50% - 12px);
+}
+
+/* FaceTime focused: top-center on wide stages to clear top-left corner PiP & top-right name pill */
+.participant-rect.is-facetime-focused .participant-room-chip {
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: calc(100% - 280px);
+}
+
+@container voice-tile (max-width: 519.98px) {
+    .participant-rect.is-facetime-focused .participant-room-chip {
+        top: 12px;
+        right: 12px;
+        left: auto;
+        transform: none;
+        max-width: calc(100% - 144px);
+    }
+
+    .participant-rect.is-facetime-focused:has(video.has-stream) .participant-room-chip,
+    html.spokes-native-video-underlay .participant-rect.is-facetime-focused.native-video-active .participant-room-chip {
+        top: 44px;
+        right: 12px;
+        left: auto;
+        transform: none;
+        max-width: calc(100% - 144px);
+    }
+}
+
+/* Ultra-narrow tiles (FaceTime corner PiP & narrow mobile filmstrip): auto-compact to icon-only pill */
+@container voice-tile (max-width: 155px) {
+    .participant-room-chip {
+        padding: 4px;
+        gap: 0;
+        max-width: none;
+    }
+
+    .participant-room-chip-label {
+        display: none;
+    }
+
+    .participant-rect.is-facetime-corner:has(video.has-stream) .participant-room-chip,
+    html.spokes-native-video-underlay .participant-rect.is-facetime-corner.native-video-active .participant-room-chip {
+        top: auto;
+        left: auto;
+        bottom: 5px;
+        right: 5px;
+    }
+}
+
+/* ─── Video Active State & Small Name Overlay ───────────────────────────────── */
+.participant-rect:has(video.has-stream) .participant-large-avatar {
+    display: none !important;
+}
+
+.participant-small-overlay {
+    --presence-ring-color: rgba(14, 14, 20, 0.88);
+    --presence-ring-width: 1.5px;
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 10;
+    display: none;
+    align-items: center;
+    gap: 5px;
+    max-width: calc(100% - 16px);
+    background: rgba(12, 12, 18, 0.68);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 3px 8px 3px 4px;
+    border-radius: 999px;
+    box-sizing: border-box;
+}
+
+.participant-rect:has(.participant-room-chip) .participant-small-overlay {
+    max-width: calc(56% - 10px);
+}
+
+.participant-overlay-avatar-wrap {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+}
+
+.participant-small-overlay .participant-overlay-avatar.mud-avatar {
+    width: 22px;
+    height: 22px;
+}
+
+.participant-overlay-mute-badge {
+    position: absolute;
+    bottom: 14.64%;
+    right: 14.64%;
+    transform: translate(50%, 50%);
+    background: rgba(12, 12, 18, 0.92);
+    border-radius: 50%;
+    padding: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 12;
+}
+
+.participant-overlay-mute-icon {
+    font-size: 10px !important;
+}
+
+.participant-overlay-name {
+    color: #fff;
+    font-weight: 600;
+    font-size: 0.74rem !important;
+    line-height: 1.2 !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.participant-rect:not(.is-fullscreen-stage):has(video.has-stream) .participant-small-overlay {
+    display: flex !important;
+}
+
+@container voice-tile (max-width: 220px) {
+    .participant-small-overlay {
+        --presence-ring-width: 1px;
+        top: 5px;
+        right: 5px;
+        gap: 4px;
+        padding: 2px 6px 2px 3px;
+        max-width: calc(100% - 10px);
+    }
+
+    .participant-rect:has(.participant-room-chip) .participant-small-overlay {
+        max-width: calc(58% - 6px);
+    }
+
+    .participant-rect:has(video.has-stream) .participant-room-chip,
+    html.spokes-native-video-underlay .participant-rect.native-video-active .participant-room-chip {
+        max-width: calc(42% - 6px);
+    }
+
+    .participant-small-overlay .participant-overlay-avatar.mud-avatar {
+        width: 16px;
+        height: 16px;
+    }
+
+    .participant-overlay-mute-icon {
+        font-size: 8px !important;
+    }
+
+    .participant-overlay-name {
+        font-size: 0.65rem !important;
+    }
+
+    .participant-small-overlay .mud-icon-button {
+        padding: 1px !important;
+    }
+
+    .participant-small-overlay .mud-icon-button .mud-icon-root {
+        font-size: 0.9rem !important;
+    }
+
+    .participant-small-overlay .presence-dot {
+        width: 6px;
+        height: 6px;
+    }
+
+    .participant-small-overlay .presence-mobile-badge {
+        width: 8px;
+        height: 8px;
+    }
+}
+
+.participant-rect video.livekit-camera,
+.participant-rect video.livekit-screenshare {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+}
+
+.participant-rect video.livekit-screenshare {
+    z-index: 2 !important;
+}
+
+.participant-rect:has(video.livekit-screenshare.has-stream) video.livekit-camera.has-stream {
+    --effective-cam-aspect: var(--cam-aspect, 1.7778);
+    width: min(25cqw, calc(28cqh * var(--effective-cam-aspect))) !important;
+    height: min(calc(25cqw / var(--effective-cam-aspect)), 28cqh) !important;
+    aspect-ratio: var(--effective-cam-aspect) !important;
+    object-fit: contain !important;
+    top: auto !important;
+    left: auto !important;
+    bottom: 8px !important;
+    right: 8px !important;
+    z-index: 5 !important;
+    border: 2px solid rgba(255, 255, 255, 0.7) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* ─── Focused Grid Mode (Top Full-Width Stage + Horizontal Bottom Filmstrip) ── */
+#voice-video-container.voice-stage-grid.has-grid-focus {
+    --stage-pad: 12px;
+    --strip-gap: 10px;
+    --strip-h: clamp(104px, 18dvh, 146px);
+    /* Static so .is-grid-focused anchors to non-scrolling .voice-video-area without DOM reparenting */
+    position: static;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    justify-content: flex-start;
+    justify-content: safe center;
+    gap: var(--strip-gap);
+    padding: var(--stage-pad) calc(var(--stage-pad) + 64px) var(--stage-pad) var(--stage-pad);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+}
+
+@container voice-stage (max-width: 599.98px) {
+    #voice-video-container.voice-stage-grid.has-grid-focus {
+        --stage-pad: 8px;
+        --strip-gap: 8px;
+        --strip-h: clamp(78px, 16dvh, 114px);
+    }
+}
+
+.participant-rect.mud-paper.is-grid-focused {
+    --tile-avatar-size: clamp(56px, 32cqmin, 120px);
+    position: absolute;
+    top: var(--stage-pad, 12px);
+    left: var(--stage-pad, 12px);
+    right: var(--stage-pad, 12px);
+    bottom: calc(var(--strip-h, 130px) + var(--stage-pad, 12px) * 2);
+    width: auto;
+    height: auto;
+    aspect-ratio: auto;
+    min-height: 0;
+    z-index: 2;
+}
+
+.participant-rect.mud-paper.is-grid-unfocused {
+    height: var(--strip-h, 130px);
+    width: calc(var(--strip-h, 130px) * 4 / 3);
+    aspect-ratio: 4 / 3;
+    flex: 0 0 auto;
+    border-radius: 10px;
+    scroll-snap-align: start;
+}
+
+/* ─── FaceTime Layout (<= 2 Participants) ───────────────────────────────────── */
+#voice-video-container.is-facetime-layout {
+    display: block !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+
+.participant-rect.mud-paper.is-facetime-focused {
+    --tile-avatar-size: clamp(64px, 32cqmin, 120px);
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    aspect-ratio: auto;
+    min-height: 0;
+    order: 0;
+    z-index: 1;
+    border-radius: 0;
+    border-color: transparent;
+}
+
+.participant-rect.mud-paper.is-facetime-corner {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    width: 120px;
+    height: 160px;
+    aspect-ratio: auto;
+    z-index: 10;
+    border-radius: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+}
+
+.participant-rect.is-facetime-corner:has(video.has-stream) {
+    --effective-tile-aspect: var(--tile-video-aspect, 1.7778);
+    width: min(210px, calc(160px * var(--effective-tile-aspect))) !important;
+    height: min(calc(210px / var(--effective-tile-aspect)), 160px) !important;
+}
+
+.participant-rect.is-facetime-corner .participant-small-overlay {
+    top: 4px !important;
+    right: 4px !important;
+    left: 4px !important;
+    max-width: none !important;
+    padding: 2px 6px !important;
+    gap: 4px !important;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.participant-rect.is-facetime-corner .participant-small-overlay .mud-typography {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@container voice-stage (max-width: 959.98px) {
+    .participant-rect.mud-paper.is-facetime-corner {
+        top: 12px;
+        left: 12px;
+        width: 112px;
+        height: 148px;
+    }
+
+    .participant-rect.is-facetime-corner:has(video.has-stream) {
+        --effective-tile-aspect: var(--tile-video-aspect, 1.7778);
+        width: min(156px, calc(148px * var(--effective-tile-aspect))) !important;
+        height: min(calc(156px / var(--effective-tile-aspect)), 148px) !important;
+    }
+}
+
+.participant-rect.is-ringing {
+    cursor: default;
+    border-color: rgba(126, 111, 255, 0.55) !important;
+    animation: participant-rect-ring-border 1.8s ease-in-out infinite;
+}
+
+@keyframes participant-rect-ring-border {
+    0%, 100% {
+        border-color: rgba(126, 111, 255, 0.35);
+        box-shadow: 0 0 0 0 rgba(126, 111, 255, 0);
+    }
+    50% {
+        border-color: rgba(126, 111, 255, 0.85);
+        box-shadow: 0 0 18px rgba(126, 111, 255, 0.35);
+    }
+}
+
+.ringing-avatar-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ringing-avatar-wrapper::before,
+.ringing-avatar-wrapper::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 2px solid rgba(126, 111, 255, 0.7);
+    pointer-events: none;
+    animation: ringing-avatar-ripple 2s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+}
+
+.ringing-avatar-wrapper::after {
+    animation-delay: 1s;
+}
+
+@keyframes ringing-avatar-ripple {
+    0% {
+        transform: scale(0.95);
+        opacity: 0.85;
+    }
+    100% {
+        transform: scale(1.48);
+        opacity: 0;
+    }
+}
+
+.ringing-phone-badge {
+    position: absolute;
+    bottom: 14.64%;
+    right: 14.64%;
+    transform: translate(50%, 50%);
+    width: var(--tile-badge-size);
+    height: var(--tile-badge-size);
+    border-radius: 50%;
+    background: var(--mud-palette-primary);
+    box-shadow: 0 0 0 var(--presence-ring-width) var(--presence-ring-color), 0 1px 4px rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    z-index: 12;
+    animation: ringing-phone-shake 1.2s ease-in-out infinite;
+}
+
+.ringing-phone-badge-icon {
+    font-size: calc(var(--tile-badge-size) * 0.58) !important;
+    color: #fff;
+}
+
+@keyframes ringing-phone-shake {
+    0%, 60%, 100% { transform: translate(50%, 50%) rotate(0deg); }
+    10%, 30%, 50% { transform: translate(50%, 50%) rotate(-16deg); }
+    20%, 40% { transform: translate(50%, 50%) rotate(16deg); }
+}
+
+.ringing-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: clamp(1px, 0.8cqh, 3px) clamp(6px, 3cqw, 10px);
+    border-radius: 999px;
+    background: rgba(126, 111, 255, 0.2);
+    border: 1px solid rgba(126, 111, 255, 0.45);
+    color: rgba(255, 255, 255, 0.92);
+    font-size: clamp(0.6rem, 4.8cqmin, 0.76rem);
+    font-weight: 600;
+    animation: ringing-status-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ringing-status-pulse {
+    0%, 100% { opacity: 0.65; }
+    50% { opacity: 1; }
+}
+
+/* Native Android LiveKit video underlay: punch transparent stage cutouts over WebView backdrop */
+html.spokes-native-video-underlay,
+html.spokes-native-video-underlay body,
+html.spokes-native-video-underlay .mud-layout,
+html.spokes-native-video-underlay .mud-main-content,
+html.spokes-native-video-underlay .voice-video-area,
+html.spokes-native-video-underlay #voice-video-container {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+html.spokes-native-video-underlay .voice-chat-area {
+    background-color: var(--mud-palette-background) !important;
+}
+
+html.spokes-native-video-underlay .participant-rect.native-video-active {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+html.spokes-native-video-underlay .participant-rect.native-video-active .participant-large-avatar {
+    display: none !important;
+}
+
+html.spokes-native-video-underlay .participant-rect.native-video-active:not(.is-fullscreen-stage) .participant-small-overlay {
+    display: flex !important;
+}
+
+video.native-video-active,
+html.spokes-native-video-underlay .participant-rect.native-video-active video.livekit-camera,
+html.spokes-native-video-underlay .participant-rect.native-video-active video.livekit-screenshare {
+    opacity: 0 !important;
+    visibility: hidden !important;
+}
+
+html.spokes-native-video-underlay .participant-rect.is-facetime-focused {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+html.spokes-native-video-underlay .participant-rect.is-facetime-corner.native-video-active[style*="--tile-video-aspect"] {
+    --effective-tile-aspect: var(--tile-video-aspect);
+    width: min(210px, calc(160px * var(--effective-tile-aspect))) !important;
+    height: min(calc(210px / var(--effective-tile-aspect)), 160px) !important;
+}
+
+@media (max-width: 959.98px) {
+    html.spokes-native-video-underlay .participant-rect.is-facetime-corner.native-video-active[style*="--tile-video-aspect"] {
+        --effective-tile-aspect: var(--tile-video-aspect);
+        width: min(156px, calc(148px * var(--effective-tile-aspect))) !important;
+        height: min(calc(156px / var(--effective-tile-aspect)), 148px) !important;
+    }
+}
+
+/* Remote Participant Full-Screen Expand Button & Full-Screen Pinch-to-Zoom Stage */
+.participant-fullscreen-btn {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    z-index: 12;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: rgba(16, 16, 22, 0.68);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    color: #fff;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+    transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.participant-fullscreen-btn:hover {
+    background: rgba(28, 28, 38, 0.88);
+    transform: scale(1.06);
+}
+
+.participant-fullscreen-btn:active {
+    transform: scale(0.95);
+}
+
+.participant-rect:not(.is-fullscreen-stage):has(video.has-stream) .participant-fullscreen-btn,
+html.spokes-native-video-underlay .participant-rect.native-video-active:not(.is-fullscreen-stage) .participant-fullscreen-btn,
+.participant-rect:not(.is-fullscreen-stage) .participant-fullscreen-btn.has-active-stream {
+    display: inline-flex !important;
+}
+
+@container voice-tile (max-width: 210px) {
+    .participant-fullscreen-btn {
+        width: 26px;
+        height: 26px;
+        bottom: 5px;
+        left: 5px;
+    }
+
+    .participant-fullscreen-btn .mud-icon-root {
+        font-size: 1rem !important;
+    }
+}
+
+.participant-rect.is-fullscreen-stage {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100dvh !important;
+    aspect-ratio: auto !important;
+    max-width: 100vw !important;
+    max-height: 100dvh !important;
+    z-index: 2000 !important;
+    border-radius: 0 !important;
+    border: none !important;
+    margin: 0 !important;
+    background-color: #000 !important;
+    touch-action: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    cursor: default;
+}
+
+html.spokes-native-video-underlay .participant-rect.is-fullscreen-stage {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+#voice-video-container:has(.participant-rect.is-fullscreen-stage) .participant-rect:not(.is-fullscreen-stage),
+html:has(.participant-rect.is-fullscreen-stage) .mud-layout > .mud-appbar,
+html:has(.participant-rect.is-fullscreen-stage) .global-voice-bar-root,
+html:has(.participant-rect.is-fullscreen-stage) .chat-header-bar,
+html:has(.participant-rect.is-fullscreen-stage) .voice-stage-fab-actions {
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+.participant-rect.is-fullscreen-stage .participant-small-overlay,
+html.spokes-native-video-underlay .participant-rect.is-fullscreen-stage .participant-small-overlay,
+.participant-rect.is-fullscreen-stage .participant-room-chip,
+.participant-rect.is-fullscreen-stage .participant-fullscreen-btn {
+    display: none !important;
+}
+
+/* 90-degree landscape rotation in full-screen stage (Web / iOS <video>) */
+.participant-rect.is-fullscreen-stage.is-rotated-90 video.livekit-screenshare.has-stream,
+.participant-rect.is-fullscreen-stage.is-rotated-90:not(:has(video.livekit-screenshare.has-stream)) video.livekit-camera.has-stream {
+    width: 100dvh !important;
+    height: 100vw !important;
+    top: calc(50% - 50vw) !important;
+    left: calc(50% - 50dvh) !important;
+    transform-origin: center center !important;
+}
+
+/* Dual-stream corner webcam PiP in 90-degree rotated full-screen stage stays stationary at 1x & rotates 90 deg */
+.participant-rect.is-fullscreen-stage.is-rotated-90:has(video.livekit-screenshare.has-stream) video.livekit-camera.has-stream {
+    top: auto !important;
+    right: auto !important;
+    bottom: 24px !important;
+    left: 16px !important;
+    transform: rotate(90deg) !important;
+    transform-origin: center center !important;
+}
+
+.participant-fullscreen-hud {
+    position: absolute;
+    top: calc(12px + var(--safe-area-top, 0px));
+    left: 12px;
+    right: 12px;
+    z-index: 25;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.participant-fullscreen-hud.is-hud-hidden {
+    opacity: 0;
+    transform: translateY(-8px);
+}
+
+.participant-fullscreen-hud.is-hud-hidden .participant-fullscreen-hud-pill,
+.participant-fullscreen-hud.is-hud-hidden .participant-fullscreen-hud-actions {
+    pointer-events: none !important;
+}
+
+.participant-fullscreen-hud-pill,
+.participant-fullscreen-hud-actions {
+    --presence-ring-color: #121218;
+    --presence-ring-width: 1.5px;
+    pointer-events: auto;
+    background: rgba(18, 18, 24, 0.82);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+    padding: 4px 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+    color: #fff;
+}
+
+/* ──────── Shared Chat Card & Bubble Utilities (eliminates repeated inline style strings in RenderBatches) ──────── */
+.chat-card-unavailable {
+    width: 100%;
+    max-width: 350px;
+    border-radius: 8px;
+    border: 1px dashed var(--mud-palette-divider);
+    box-shadow: none !important;
+    background: transparent !important;
+}
+.chat-card-unavailable-lg {
+    max-width: 420px;
+}
+.chat-card-italic {
+    font-style: italic;
+}
+.chat-album-card {
+    width: 100%;
+    max-width: 350px;
+    border-radius: 8px;
+    border: 1px solid var(--mud-palette-divider);
+    box-shadow: none !important;
+}
+.chat-album-avatar {
+    background: color-mix(in srgb, var(--mud-palette-success) 15%, transparent) !important;
+    color: var(--mud-palette-success) !important;
+}
+.chat-album-title,
+.chat-event-title {
+    font-weight: 600 !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.chat-album-cta {
+    text-transform: none !important;
+    border-radius: 6px !important;
+    font-size: 0.75rem !important;
+    font-weight: 600 !important;
+}
+.chat-album-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    border-radius: 4px;
+    overflow: hidden;
+}
+.chat-album-tile {
+    aspect-ratio: 1 / 1;
+}
+.chat-album-tile-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.chat-album-tile-video {
+    width: 100%;
+    height: 100%;
+    background: #000;
+}
+.chat-event-card {
+    width: 100%;
+    max-width: 380px;
+    border-radius: 8px;
+    border: 1px solid var(--mud-palette-divider);
+    box-shadow: none !important;
+}
+.chat-event-avatar {
+    background: color-mix(in srgb, var(--mud-palette-info) 15%, transparent) !important;
+    color: var(--mud-palette-info) !important;
+}
+.chat-event-desc {
+    color: var(--mud-palette-text-secondary);
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.chat-event-footer {
+    min-height: 36px;
+}
+.chat-event-attendee-row {
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+.chat-mini-avatar-wrap {
+    display: inline-flex;
+    align-items: center;
+}
+.chat-mini-avatar-16 {
+    width: 16px !important;
+    height: 16px !important;
+    min-width: 16px !important;
+    min-height: 16px !important;
+}
+.chat-mini-avatar-18 {
+    width: 18px !important;
+    height: 18px !important;
+    min-width: 18px !important;
+    min-height: 18px !important;
+}
+.chat-event-count {
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+}
+.chat-link-preview-card {
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 8px;
+    overflow: hidden;
+    max-width: 480px;
+    transition: border-color 0.2s;
+}
+.chat-link-preview-anchor {
+    text-decoration: none;
+    color: inherit;
+    display: block;
+    cursor: pointer;
+}
+.chat-link-preview-yt-box {
+    position: relative;
+    width: 100%;
+    padding-bottom: 56.25%;
+}
+.chat-link-preview-yt-thumb {
+    background: var(--mud-palette-background-grey);
+    cursor: pointer;
+}
+.chat-link-preview-yt-iframe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+}
+.chat-link-preview-yt-img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.chat-link-preview-yt-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.2);
+    transition: background 0.2s;
+}
+.chat-link-preview-yt-icon {
+    font-size: 64px !important;
+    color: #ff0000 !important;
+    filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.5));
+}
+.chat-link-preview-img-wrap {
+    height: 160px;
+    overflow: hidden;
+    background: var(--mud-palette-background-grey);
+}
+.chat-link-preview-img {
+    width: 100%;
+    height: 160px;
+    object-fit: cover;
+    display: block;
+}
+.chat-link-preview-favicon {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+}
+.chat-link-preview-title {
+    font-weight: 600 !important;
+    line-height: 1.3 !important;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.chat-link-preview-desc {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    line-height: 1.4 !important;
+}
+.chat-poll-card {
+    width: 100%;
+    max-width: 420px;
+    border-radius: 10px;
+    border: 1px solid var(--mud-palette-divider);
+    box-shadow: none !important;
+}
+.chat-poll-avatar {
+    background: color-mix(in srgb, var(--mud-palette-primary) 15%, transparent) !important;
+    color: var(--mud-palette-primary) !important;
+}
+.chat-poll-question {
+    font-weight: 700 !important;
+    line-height: 1.3 !important;
+    word-break: break-word;
+}
+.chat-poll-anon-chip {
+    height: 18px !important;
+    font-size: 0.68rem !important;
+}
+.chat-poll-option-paper {
+    border-radius: 8px !important;
+}
+.chat-poll-option-emoji {
+    font-size: 1.1rem;
+    line-height: 1;
+}
+.chat-poll-option-text {
+    font-weight: 500 !important;
+    word-break: break-word;
+}
+.chat-poll-option-text.is-bold {
+    font-weight: 700 !important;
+}
+.chat-poll-more-voters {
+    font-size: 0.7rem !important;
+    font-weight: 600 !important;
+}
+.chat-poll-vote-count {
+    font-weight: 700 !important;
+    min-width: 58px;
+    text-align: right;
+}
+.chat-call-invite-card {
+    max-width: 350px;
+    background: var(--mud-palette-background-grey) !important;
+    box-shadow: none !important;
+    border: 1px solid var(--mud-palette-divider);
+}
+.chat-encrypted-msg-row {
+    opacity: 0.6;
+    font-style: italic;
+}
+.chat-file-card {
+    border-radius: 8px !important;
+}
+.chat-file-card-name {
+    font-weight: 500 !important;
+    cursor: pointer;
+}
+.chat-reply-avatar {
+    width: 16px !important;
+    height: 16px !important;
+    min-width: 16px !important;
+    min-height: 16px !important;
+    flex-shrink: 0;
+}
+.chat-msg-avatar {
+    flex-shrink: 0;
+    cursor: pointer;
+}
+.chat-flex-min0 {
+    min-width: 0;
+    flex: 1;
+}
+.chat-overflow-hidden {
+    overflow: hidden;
+}
+
+/* Chat page shell, reverse scroll container, secondary voice chat layout, and mobile action sheet */
+.chat-page-container {
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+}
+
+@media (max-width: 959.98px) {
+    .voice-chat-open .voice-video-area {
+        display: none !important;
+    }
+
+    .voice-chat-open .voice-chat-area {
+        width: 100% !important;
+        flex-grow: 1 !important;
+        border-left: none !important;
+    }
+}
+
+/* Reverse scroll implementation using scaleY(-1) for cross-browser consistency */
+#chat-messages-container {
+    transform: scaleY(-1) translateZ(0);
+    overflow-anchor: none;
+    animation: chat-container-appear 0.12s ease-out;
+}
+
+#chat-messages-container > * {
+    transform: scaleY(-1);
+}
+
+@keyframes chat-container-appear {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+/* Desktop overrides for native smooth mouse wheel scrolling */
+@media (hover: hover) and (pointer: fine) {
+    #chat-messages-container {
+        transform: none !important;
+        display: flex !important;
+        flex-direction: column-reverse !important;
+        overflow-anchor: none;
+    }
+
+    #chat-messages-container > * {
+        transform: none !important;
+    }
+}
+
+.voice-chat-area {
+    width: 100%;
+    flex-grow: 1;
+    border-left: none;
+}
+
+@media (min-width: 960px) {
+    .voice-chat-open .voice-chat-area {
+        width: 400px;
+        flex-grow: 0;
+        border-left: 1px solid var(--mud-palette-divider);
+    }
+}
+
+.action-sheet-emoji-row {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    padding: 8px 16px 16px 16px;
+}
+
+.action-sheet-emoji {
+    font-size: 1.8rem;
+    background: var(--mud-palette-background-grey);
+    border: none;
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.15s, background 0.15s;
+}
+
+.action-sheet-emoji:active {
+    transform: scale(1.2);
+    background: var(--mud-palette-primary-lighten);
+}
+
+/* ChatComposer desktop & mobile layout */
+.mobile-composer {
+    contain: layout; /* Fix InputSizing.Auto layout thrashing on fast typing */
+    padding: 4px 4px;
+}
+
+.mobile-composer .rounded-pill .mud-input-outlined-border {
+    border-radius: 16px !important;
+}
+
+.composer-box {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+}
+
+.composer-box:focus-within {
+    border-color: var(--mud-palette-primary);
+}
+
+.composer-textarea {
+    padding: 0;
+}
+
+.composer-textarea .mud-input-control {
+    margin: 0 !important;
+}
+
+.composer-textarea textarea {
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.composer-toolbar {
+    padding: 2px 4px;
+    border-top: 1px solid var(--mud-palette-lines-inputs);
+    background: var(--mud-palette-background-grey);
+}
+
+/* ChatHeader responsive layout & tappable identity bar (aligned with MainLayout MudAppBar) */
+.chat-header-bar {
+    padding: 6px 8px;
+}
+
+.chat-header-row {
+    gap: 8px;
+    min-height: 36px;
+}
+
+.chat-header-identity {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.chat-header-title-btn {
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 36px;
+    padding: 3px 6px 3px 4px;
+    border-radius: 8px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color 0.15s ease;
+}
+
+.chat-header-title-btn:hover,
+.chat-header-title-btn:active {
+    background-color: var(--mud-palette-action-default-hover);
+}
+
+.chat-header-title-btn:focus-visible {
+    outline: 2px solid var(--mud-palette-primary);
+    outline-offset: 1px;
+}
+
+.chat-header-avatar {
+    width: 30px !important;
+    height: 30px !important;
+    min-width: 30px !important;
+    min-height: 30px !important;
+}
+
+.chat-header-title {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    line-height: 1.25 !important;
+}
+
+.chat-header-status-icon {
+    font-size: 16px !important;
+}
+
+.chat-header-chevron {
+    font-size: 20px !important;
+    color: var(--mud-palette-text-secondary);
+    opacity: 0.65;
+    margin-left: -4px;
+    margin-right: -4px;
+}
+
+.chat-header-description {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 400px;
+    min-width: 0;
+    flex-shrink: 99;
+}
+
+.chat-header-actions {
+    gap: 4px;
+}
+
+@media (max-width: 959.98px) {
+    /* Match MainLayout dense MudAppBar (48px height, 16px horizontal gutters, Edge.Start / Edge.End) */
+    .chat-header-bar {
+        padding: 0 16px;
+    }
+
+    .chat-header-row {
+        gap: 0;
+        min-height: 48px;
+    }
+
+    .chat-header-identity {
+        margin-left: 4px;
+    }
+
+    .chat-header-title-btn {
+        gap: 8px;
+        min-height: 40px;
+        padding: 4px 6px 4px 2px;
+    }
+
+    .chat-header-avatar {
+        width: 32px !important;
+        height: 32px !important;
+        min-width: 32px !important;
+        min-height: 32px !important;
+    }
+
+    .chat-header-status-icon {
+        font-size: 16px !important;
+    }
+
+    .chat-header-actions {
+        gap: 0;
+    }
+}
+
+/* ChannelInfoPanel Section Separation & Notification Settings Card */
+.channel-info-section-header {
+    margin-top: 8px;
+    padding: 0 4px;
+    flex-shrink: 0;
+}
+
+.channel-info-section-icon {
+    font-size: 15px !important;
+}
+
+.channel-info-section-title {
+    font-weight: 700 !important;
+    letter-spacing: 0.06em !important;
+    line-height: 1.2 !important;
+    color: var(--mud-palette-text-secondary);
+}
+
+.channel-info-section-scope {
+    font-size: 0.7rem !important;
+    opacity: 0.8;
+    white-space: nowrap;
+}
+
+.channel-info-personal-card {
+    border-left: 3px solid var(--mud-palette-primary) !important;
+}
+
+.channel-notification-option {
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    border: 1px solid transparent;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.channel-notification-option:hover {
+    background-color: var(--mud-palette-action-default-hover);
+}
+
+.channel-notification-option.is-selected {
+    background-color: var(--mud-palette-action-default-hover);
+    border-color: var(--mud-palette-divider);
+}
+
+.channel-notification-option:focus-visible {
+    outline: 2px solid var(--mud-palette-primary);
+    outline-offset: 1px;
 }

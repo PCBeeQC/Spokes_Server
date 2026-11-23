@@ -3,33 +3,39 @@
 @inject FileTokenService FileTokens
 @inject UserCircuitContext CircuitContext
 
-<div class="attachment-video" style="position: relative; max-width: 100%; max-height: 500px; display: inline-block;">
+@{
+    var thumbUrl = GetThumbnailTokenUrl();
+    bool hasThumb = !string.IsNullOrEmpty(thumbUrl);
+}
+
+<div class="attachment-video @(hasThumb ? "" : "is-error")">
     @if (!_isPlaying)
     {
-        <div style="position: relative; cursor: pointer; display: inline-block;" @onclick="PlayVideo">
-            @if (Attachment.HasServerThumbnail && !_thumbnailFailed)
+        <div class="attachment-video-trigger" @onclick="PlayVideo">
+            @if (hasThumb)
             {
-                <img src="@GetThumbnailTokenUrl()" alt="@Attachment.FileName"
-                    @onerror="OnThumbnailError"
-                    style="max-width: 100%; max-height: 500px; width: auto; height: auto; border-radius: 8px; display: block; object-fit: contain;" />
+                <div class="attachment-skeleton"></div>
+                <img data-media-src="@thumbUrl"
+                     data-media-priority="chat"
+                     data-media-order="@MediaOrder"
+                     data-media-encrypted="@(!string.IsNullOrEmpty(ChannelKey) ? "true" : null)"
+                     alt="@Attachment.FileName"
+                     decoding="async"
+                     class="needs-fade attachment-video-thumb" />
             }
-            else
-            {
-                <MudPaper Elevation="1" Class="d-flex align-center justify-center" Style="width: 300px; height: 200px; max-width: 100%; border-radius: 8px; background: var(--mud-palette-background-grey);">
-                    <MudIcon Icon="@Icons.Material.Filled.VideoFile" Size="Size.Large" Color="Color.Secondary" />
-                </MudPaper>
-            }
-            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.5); border-radius: 50%; padding: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+            <div class="attachment-video-fallback">
+                <MudIcon Icon="@Icons.Material.Filled.VideoFile" Size="Size.Large" Color="Color.Secondary" />
+            </div>
+            <div class="attachment-video-play-btn">
                 <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Large" Style="color: white;" />
             </div>
         </div>
     }
     else
     {
-        <video @key="@($"{Attachment.FilePath}_{ChannelKey}")" src="@GetVideoTokenUrl()" playsinline webkit-playsinline controls autoplay poster="@(Attachment.HasServerThumbnail && !_thumbnailFailed ? GetThumbnailTokenUrl() : "")"
+        <video @key="@($"{Attachment.FilePath}_{ChannelKey}")" src="@GetVideoTokenUrl()" playsinline webkit-playsinline controls autoplay poster="@(hasThumb ? thumbUrl : "")"
             onerror="console.error('[VideoPlayer] Playback Error on src: ' + this.src + ' | Code: ' + (this.error ? this.error.code : 'unknown') + ' | Message: ' + (this.error ? this.error.message : 'none'));" onstalled="console.warn('[VideoPlayer] Playback stalled on src: ' + this.src);"
-            style="max-width: 100%; max-height: 500px; width: auto; height: auto; border-radius: 8px; display: block; object-fit: contain;">
-            <source src="@GetVideoTokenUrl()" type="@GetVideoMimeType()">
+            class="attachment-video-player">
             @Loc["BrowserDoesNotSupportVideo"]
         </video>
     }
@@ -51,41 +57,20 @@
     [Parameter]
     public string? SessionId { get; set; }
 
+    [Parameter]
+    public int MediaOrder { get; set; }
+
     private string? EffectiveSessionId => !string.IsNullOrWhiteSpace(SessionId) ? SessionId : CircuitContext?.SessionId;
 
     private bool _isPlaying;
-    private bool _thumbnailFailed;
 
     private void PlayVideo() => _isPlaying = true;
-    private void OnThumbnailError() => _thumbnailFailed = true;
 
-    private string GetVideoMimeType()
-    {
-        var ext = Path.GetExtension(Attachment.FileName).ToLowerInvariant();
-        return ext switch
-        {
-            ".mp4" => "video/mp4",
-            ".webm" => "video/webm",
-            ".ogg" => "video/ogg",
-            ".mov" => "video/quicktime",
-            _ => "video/mp4"
-        };
-    }
+    private string GetVideoTokenUrl() =>
+        FileTokens.BuildTokenizedUrl("chat", ChannelId, Attachment.FilePath, ChannelKey, CurrentUserId, EffectiveSessionId);
 
-    private string GetVideoTokenUrl()
-    {
-        if (string.IsNullOrWhiteSpace(CurrentUserId) || string.IsNullOrWhiteSpace(EffectiveSessionId))
-            return Attachment.FilePath;
-        var token = FileTokens.GenerateAccessToken("chat", ChannelId, Attachment.FilePath, ChannelKey, CurrentUserId, EffectiveSessionId);
-        return Attachment.FilePath.Contains("?") ? $"{Attachment.FilePath}&t={token}" : $"{Attachment.FilePath}?t={token}";
-    }
-
-    private string GetThumbnailTokenUrl()
-    {
-        if (!Attachment.HasServerThumbnail || string.IsNullOrEmpty(Attachment.ThumbnailUrl)) return "";
-        if (string.IsNullOrWhiteSpace(CurrentUserId) || string.IsNullOrWhiteSpace(EffectiveSessionId))
-            return Attachment.ThumbnailUrl;
-        var token = FileTokens.GenerateAccessToken("chat", ChannelId, Attachment.ThumbnailUrl, ChannelKey, CurrentUserId, EffectiveSessionId);
-        return Attachment.ThumbnailUrl.Contains("?") ? $"{Attachment.ThumbnailUrl}&t={token}" : $"{Attachment.ThumbnailUrl}?t={token}";
-    }
+    private string GetThumbnailTokenUrl() =>
+        (!Attachment.HasServerThumbnail || string.IsNullOrEmpty(Attachment.ThumbnailUrl))
+            ? string.Empty
+            : FileTokens.BuildTokenizedUrl("chat", ChannelId, Attachment.ThumbnailUrl, ChannelKey, CurrentUserId, EffectiveSessionId, isThumbnail: true);
 }

@@ -1,4 +1,9 @@
-import { NoiseSuppressionManager } from './noiseSuppressionManager.js?v=20261104c';
+import { NoiseSuppressionManager } from './noiseSuppressionManager.js';
+import {
+    ensureVoiceLevelerWorkletLoaded,
+    createReceiverVoiceLevelerNode,
+    createMasterSoftLimiterNode
+} from './voiceCaptureConditioner.js';
 import {
     configureVoicePip,
     registerPipVideoTrack,
@@ -12,140 +17,271 @@ import {
     closeOsPip as closePipOsWindow,
     isOsPipSupported as checkOsPipSupported,
     isStageSuppressedByExternalPip
-} from './voicePip.js?v=20261104c';
+} from './voicePip.js';
+import { MediaZoomGestureController } from './mediaZoomGesture.js';
+import {
+    voiceState,
+    PROCESSED_MIC_PREFIX,
+    VAD_HANGOVER_MS,
+    VAD_ATTACK_FRAMES,
+    toArray,
+    isBotIdentity,
+    isSyntheticIdentity,
+    getEffectiveParticipantIdentity,
+    getParticipantTrackPublications,
+    isScreenShareTrackOrPub,
+    isHumanMicrophonePublication,
+    getRemoteParticipantsIterable,
+    isEffectiveLocalMicMuted,
+    reportLocalSpeakingState,
+    resetLocalSpeakingState,
+    isNativePlatform,
+    getNativePlatform,
+    isDesktopClient,
+    isAppleMobileDevice,
+    isMobileVoiceClient,
+    resetMobileCameraSelectionForNewCall,
+    getNativeVoicePlugin,
+    getNativeVoiceTelemetryPlatformTag,
+    getAudioSessionPlugin,
+    invokeDotNetSafe,
+    flushPendingVoiceRoomSnapshot,
+    resetVoiceRoomSnapshotSync,
+    publishVoiceRoomSnapshot,
+    scheduleRoomSnapshotSync,
+    applyTrackSenderParameters
+} from './voice/voiceState.js';
+import {
+    configureScreenShareCallbacks,
+    getScreenTrackMaxSourceEdge,
+    stopAllScreenTracks,
+    setScreenShareEnabled,
+    setScreenShareAudioEnabled,
+    updateScreenShareSettings
+} from './voice/voiceScreenShare.js';
+import {
+    configureDirectLanCallbacks,
+    getDirectRoomAudioBridge,
+    pushDirectRoomControlsUpdate,
+    stopDirectRoomAudioInternal,
+    isDesktopDirectRoomSupported,
+    prepareDirectRoomEndpoints,
+    syncDirectRoomSession,
+    getDirectRoomAudioTelemetry
+} from './voice/voiceDirectLanCoordinator.js';
+import {
+    configureNativeMobileCallbacks,
+    estimateNativeMobileCaptureMs,
+    setNativeMobileVideoTrackActive,
+    scheduleNativeMobileVideoSlotsSync,
+    cleanupNativeMobileVoiceState,
+    syncNativeMobilePhysicalRoomState,
+    setNativeMobileVoiceSensitivity,
+    reportNativeMobileCameraCapabilitiesToDotnet,
+    resolveNativeMobileCaptureConfig,
+    fetchNativeMobileCameras,
+    syncNativeMobileConnectionState,
+    connectNativeMobileVoice
+} from './voice/voiceNativeMobileAdapter.js';
 
-let currentRoom = null;
-let dotnetHelper = null;
-let globalScreenTracks = [];
-let _isStoppingScreenShare = false;
+export {
+    isAppleMobileDevice,
+    isDesktopDirectRoomSupported,
+    prepareDirectRoomEndpoints,
+    syncDirectRoomSession,
+    getDirectRoomAudioTelemetry,
+    setScreenShareEnabled,
+    setScreenShareAudioEnabled,
+    updateScreenShareSettings
+};
+
 let noiseManager = new NoiseSuppressionManager();
-let currentNoiseSuppression = 'webrtc';
-
 let _iosActiveMicrophoneMode = 'unsupported';
-let _mutedRemoteScreenAudio = new Set();
-const PROCESSED_MIC_PREFIX = 'processed-mic:';
-let _coLocatedProcessedUsers = new Set();
-let _mutedRoommateUsers = new Set();
-let _activeLocalAudioProcessor = null;
-let _localHardwareMuteCleanup = null;
-let _suppressNextUnpublishMuteNotify = false;
-let _micOperationSeq = 0;
+let _wasLocalInActivePhysicalRoom = false;
+let _lastCaptureFifoFlushMs = 0;
+let _preJoinHydrated = false;
+let _preJoinMicDeviceId = '';
 let _nativeCallResourcesActive = false;
 let _iosAudioInterruptionListener = null;
-let _lastCameraResolution = 'Auto';
-let _lastCameraFps = 30;
-let _lastCameraSimulcast = null;
-let _lastScreenResolution = 'Auto';
-let _lastScreenFps = 30;
-let _lastScreenMode = 'motion';
-let _localCameraDesired = false;
-let _localCameraFacing = 'user';
-let _iosCompanionLiveKitUrl = '';
-let _iosCompanionToken = '';
-let _iosActiveCameraId = '';
-let _iosCachedCameras = [];
-const CAMERA_COMPANION_SUFFIX = ':cam';
-
-function isCameraCompanionIdentity(identity) {
-    return typeof identity === 'string' && identity.endsWith(CAMERA_COMPANION_SUFFIX);
-}
-
-function isSyntheticIdentity(identity) {
-    return isBotIdentity(identity) || isCameraCompanionIdentity(identity);
-}
-
-function getEffectiveParticipantIdentity(participantOrIdentity) {
-    const raw = typeof participantOrIdentity === 'string'
-        ? participantOrIdentity
-        : (participantOrIdentity?.identity || '');
-    if (!raw) return '';
-    if (raw.endsWith(CAMERA_COMPANION_SUFFIX) && raw.length > CAMERA_COMPANION_SUFFIX.length) {
-        return raw.slice(0, -CAMERA_COMPANION_SUFFIX.length);
+let _iosLastConfiguredVideoMode = null;
+let _webAvSkewPollTimer = null;
+let _webAvSkewPrev = { aDelay: 0, aEmit: 0, vDelay: 0, vEmit: 0, vDec: 0, vProc: 0, vFrames: 0 };
+function isCrossOriginVoiceUrl(url) {
+    if (!url || typeof window === 'undefined' || !window.location?.host) return false;
+    try {
+        const parsed = new URL(url, window.location.href);
+        return Boolean(parsed.host) && parsed.host.toLowerCase() !== window.location.host.toLowerCase();
+    } catch (e) {
+        return false;
     }
-    return raw;
 }
 
+export async function prepareVoiceConnection(url, token = '') {
+    if (!url || voiceState.usingNativeMobileVoice || getNativeVoicePlugin()) return;
+    try {
+        if (!window.LivekitClient && typeof window.ensureVoiceScriptsLoaded === 'function') {
+            await window.ensureVoiceScriptsLoaded();
+        }
+        if (!window.LivekitClient?.Room) return;
+        // When LiveKit is reverse-proxied on the same origin and no token is supplied, DNS/TCP/TLS
+        // to location.host is already open and livekit-client's prepareConnection(url) only issues
+        // an unauthenticated HEAD request to the root page (which hits Blazor GET / and logs 405).
+        if (!token && !isCrossOriginVoiceUrl(url)) return;
+        const warmRoom = new window.LivekitClient.Room();
+        if (typeof warmRoom.prepareConnection === 'function') {
+            await warmRoom.prepareConnection(url, token || undefined);
+        }
+    } catch (e) {}
+}
+
+export function isRoomConnected() {
+    let connected = false;
+    if (voiceState.usingNativeMobileVoice) {
+        connected = voiceState.nativeConnectionState === 'connected'
+            || voiceState.nativeConnectionState === 'reconnecting';
+    } else if (voiceState.currentRoom) {
+        const ConnectionState = window.LivekitClient?.ConnectionState;
+        const disconnectedState = ConnectionState?.Disconnected || 'disconnected';
+        if (typeof voiceState.currentRoom.state === 'string') {
+            connected = voiceState.currentRoom.state !== disconnectedState && voiceState.currentRoom.state !== 'disconnected';
+        } else {
+            connected = Boolean(voiceState.currentRoom.localParticipant);
+        }
+    }
+    if (connected) {
+        flushPendingVoiceRoomSnapshot();
+    }
+    return connected;
+}
+
+function reportConnectingStage(stage) {
+    if (!voiceState.dotnetHelper || !stage) return;
+    invokeDotNetSafe('OnVoiceConnectingStageChanged', stage);
+}
+
+function flushLocalCaptureFifoIfAvailable() {
+    if (voiceState.activeLocalAudioProcessor && typeof voiceState.activeLocalAudioProcessor.flushCaptureFifo === 'function') {
+        try {
+            if (voiceState.activeLocalAudioProcessor.flushCaptureFifo()) {
+                _lastCaptureFifoFlushMs = Date.now();
+            }
+        } catch (e) {}
+    }
+}
+
+function applyLowLatencyAudioReceiverHints(track, publication = null) {
+    try {
+        const receiver = track?.receiver || publication?.track?.receiver;
+        if (!receiver) return;
+        // 20 ms playout target keeps LAN/WAN playout ultra-crisp without forcing 0ms NetEq underrun/PLC time-stretching
+        if ('playoutDelayHint' in receiver) {
+            receiver.playoutDelayHint = 0.02;
+        }
+        if ('jitterBufferTarget' in receiver) {
+            receiver.jitterBufferTarget = 20;
+        }
+    } catch (e) {}
+}
 function syncLocalStageVideoMirroring() {
-    if (typeof document === 'undefined' || !currentRoom?.localParticipant?.identity) return;
-    const localId = currentRoom.localParticipant.identity;
+    if (voiceState.usingNativeMobileVoice) {
+        scheduleNativeMobileVideoSlotsSync();
+        return;
+    }
+    if (typeof document === 'undefined' || !voiceState.currentRoom?.localParticipant?.identity) return;
+    const localId = voiceState.currentRoom.localParticipant.identity;
     const stageEl = document.getElementById(`participant-video-${localId}`);
     if (stageEl) {
-        stageEl.style.transform = (_localCameraFacing === 'environment')
+        stageEl.style.transform = (voiceState.localCameraFacing === 'environment')
             ? 'translateZ(0)'
             : 'translateZ(0) scaleX(-1)';
     }
 }
 
-async function ensureIosCompanionCredentials() {
-    if (!(isNativePlatform() && getNativePlatform() === 'ios')) return null;
-    const localUserId = currentRoom?.localParticipant?.identity || '';
-    if (!_iosCompanionToken && dotnetHelper) {
-        try {
-            const tok = await dotnetHelper.invokeMethodAsync('RequestCameraCompanionToken');
-            if (tok && typeof tok === 'string') {
-                _iosCompanionToken = tok;
+function hasAnyActiveRoomVideo() {
+    if (voiceState.localCameraDesired) return true;
+    if (voiceState.usingNativeMobileVoice) {
+        return voiceState.nativeVideoTracks.size > 0;
+    }
+    if (!voiceState.currentRoom) return false;
+    const Kind = window.LivekitClient?.Track?.Kind;
+    const participants = [voiceState.currentRoom.localParticipant, ...getRemoteParticipantsIterable()].filter(Boolean);
+    for (const p of participants) {
+        for (const pub of getParticipantTrackPublications(p)) {
+            const isVideo = pub?.kind === Kind?.Video || pub?.track?.kind === Kind?.Video;
+            if (isVideo && pub.track && !pub.isMuted) {
+                return true;
             }
-        } catch (e) {
-            console.warn('[Voice] RequestCameraCompanionToken failed:', e);
         }
     }
-    if (!_iosCompanionLiveKitUrl || !_iosCompanionToken) {
-        return null;
-    }
-    const creds = {
-        url: _iosCompanionLiveKitUrl,
-        token: _iosCompanionToken,
-        localUserId
-    };
-    const audioPlugin = getAudioSessionPlugin();
-    if (audioPlugin && typeof audioPlugin.configureCompanionSession === 'function') {
-        try {
-            await audioPlugin.configureCompanionSession(creds);
-        } catch (e) {}
-    } else if (typeof window !== 'undefined' && typeof window.SpokesNative?.controlNativeCamera === 'function') {
-        try {
-            await window.SpokesNative.controlNativeCamera('configure', creds);
-        } catch (e) {}
-    }
-    return creds;
+    return false;
 }
 
-async function fetchIosNativeCameras() {
-    if (!(isNativePlatform() && getNativePlatform() === 'ios')) return [];
+async function syncIosAudioSessionVideoMode() {
+    if (!isNativePlatform() || getNativePlatform() !== 'ios' || (!voiceState.currentRoom && !voiceState.usingNativeMobileVoice)) return;
     const audioPlugin = getAudioSessionPlugin();
+    if (!audioPlugin || typeof audioPlugin.configureVoiceChat !== 'function') return;
+    const desiredVideo = hasAnyActiveRoomVideo();
+    if (_iosLastConfiguredVideoMode === desiredVideo) return;
     try {
-        if (audioPlugin && typeof audioPlugin.getNativeCameras === 'function') {
-            const res = await audioPlugin.getNativeCameras();
-            if (Array.isArray(res?.cameras) && res.cameras.length > 0) {
-                _iosCachedCameras = res.cameras;
-                return _iosCachedCameras;
-            }
-        }
-        if (typeof window !== 'undefined' && typeof window.SpokesNative?.controlNativeCamera === 'function') {
-            const res = await window.SpokesNative.controlNativeCamera('enumerate', {});
-            if (Array.isArray(res?.cameras) && res.cameras.length > 0) {
-                _iosCachedCameras = res.cameras;
-                return _iosCachedCameras;
-            }
-        }
+        await audioPlugin.configureVoiceChat({ enabled: true, video: desiredVideo });
+        _iosLastConfiguredVideoMode = desiredVideo;
+        console.info(`[Voice] iOS AVAudioSession mode synced (video=${desiredVideo})`);
     } catch (e) {
-        console.warn('[Voice] fetchIosNativeCameras failed:', e);
+        console.warn('[Voice] iOS syncIosAudioSessionVideoMode failed:', e);
     }
-    if (_iosCachedCameras.length > 0) return _iosCachedCameras;
-    return [
-        { deviceId: 'ios_front', label: 'Front Camera', facingMode: 'user', maxWidth: 3840, maxHeight: 2160, maxFps: 60 },
-        { deviceId: 'ios_back', label: 'Back Camera (Wide)', facingMode: 'environment', maxWidth: 3840, maxHeight: 2160, maxFps: 60 }
-    ];
 }
 
-function getIosCameraCapabilities(deviceId, facingMode = null) {
-    const targetFacing = facingMode || _localCameraFacing || 'user';
-    const match = (deviceId && _iosCachedCameras.find(c => c.deviceId === deviceId))
-        || _iosCachedCameras.find(c => c.facingMode === targetFacing)
-        || _iosCachedCameras[0];
-    const maxDim = Math.max(match?.maxWidth || 1920, match?.maxHeight || 1080);
-    const maxFps = match?.maxFps || 30;
-    return { maxDim, maxFps, matchedCamera: match || null };
+function stopWebAvSkewTelemetryPolling() {
+    if (_webAvSkewPollTimer) {
+        clearInterval(_webAvSkewPollTimer);
+        _webAvSkewPollTimer = null;
+    }
+    _webAvSkewPrev = { aDelay: 0, aEmit: 0, vDelay: 0, vEmit: 0, vDec: 0, vProc: 0, vFrames: 0 };
+}
+
+function startWebAvSkewTelemetryPolling() {
+    stopWebAvSkewTelemetryPolling();
+    if (voiceState.usingNativeMobileVoice) return;
+    _webAvSkewPollTimer = setInterval(async () => {
+        if (!voiceState.currentRoom || !voiceState.dotnetHelper || voiceState.usingNativeMobileVoice) return;
+        const subPc = voiceState.currentRoom?.engine?.pcManager?.subscriber?.pc;
+        if (!subPc || typeof subPc.getStats !== 'function') return;
+        try {
+            const report = await subPc.getStats();
+            if (!report || typeof report.forEach !== 'function') return;
+            let aDelay = 0, aEmit = 0, vDelay = 0, vEmit = 0, vDec = 0, vProc = 0, vFrames = 0;
+            report.forEach(stat => {
+                if (stat.type !== 'inbound-rtp') return;
+                if (stat.kind === 'audio') {
+                    aDelay += stat.jitterBufferDelay || 0;
+                    aEmit += stat.jitterBufferEmittedCount || 0;
+                } else if (stat.kind === 'video') {
+                    vDelay += stat.jitterBufferDelay || 0;
+                    vEmit += stat.jitterBufferEmittedCount || 0;
+                    vDec += stat.totalDecodeTime || 0;
+                    vProc += stat.totalProcessingDelay || 0;
+                    vFrames += stat.framesDecoded || 0;
+                }
+            });
+            if (vEmit <= 0 || aEmit <= 0) return;
+            const dADelay = Math.max(0, aDelay - _webAvSkewPrev.aDelay);
+            const dAEmit = Math.max(0, aEmit - _webAvSkewPrev.aEmit);
+            const dVDelay = Math.max(0, vDelay - _webAvSkewPrev.vDelay);
+            const dVEmit = Math.max(0, vEmit - _webAvSkewPrev.vEmit);
+            const dVDec = Math.max(0, vDec - _webAvSkewPrev.vDec);
+            const dVProc = Math.max(0, vProc - _webAvSkewPrev.vProc);
+            const dVFrames = Math.max(0, vFrames - _webAvSkewPrev.vFrames);
+            _webAvSkewPrev = { aDelay, aEmit, vDelay, vEmit, vDec, vProc, vFrames };
+
+            const audioJbMs = dAEmit > 0 ? (dADelay * 1000.0) / dAEmit : (aDelay * 1000.0) / aEmit;
+            const videoJbMs = dVEmit > 0 ? (dVDelay * 1000.0) / dVEmit : (vDelay * 1000.0) / vEmit;
+            const videoDecMs = dVFrames > 0 ? (dVDec * 1000.0) / dVFrames : 0;
+            const videoProcMs = dVFrames > 0 ? (dVProc * 1000.0) / dVFrames : (videoJbMs + videoDecMs);
+            const skewMs = audioJbMs - videoProcMs;
+            const platformTag = isNativePlatform() ? (getNativePlatform() || 'mobile') : (isAppleMobileDevice() ? 'ios-web' : 'web');
+            voiceState.dotnetHelper.invokeMethodAsync('OnAvSkewTelemetry', skewMs, audioJbMs, videoJbMs, videoDecMs, platformTag)?.catch?.(() => {});
+        } catch (e) {}
+    }, 4000);
 }
 
 function clampCameraResolutionForCapabilities(resolutionStr, targetFps, maxDim, maxFps) {
@@ -183,41 +319,6 @@ function getHardwareCameraCapabilities(mediaStreamTrack) {
     return { maxDim: Math.max(w, h), maxFps: fps };
 }
 
-function reportIosCameraCapabilitiesToDotnet(deviceId) {
-    if (!dotnetHelper) return;
-    const { maxDim, maxFps } = getIosCameraCapabilities(deviceId, _localCameraFacing);
-    try {
-        dotnetHelper.invokeMethodAsync('OnLocalVideoDimensions', maxDim, maxFps);
-    } catch (e) {}
-}
-
-function getParticipantTrackPublications(participant) {
-    if (!participant) return [];
-    const seen = new Set();
-    const result = [];
-    const collect = (mapOrObj) => {
-        if (!mapOrObj) return;
-        const arr = typeof mapOrObj.values === 'function' ? Array.from(mapOrObj.values()) : Object.values(mapOrObj);
-        for (const pub of arr) {
-            if (pub && !seen.has(pub)) {
-                seen.add(pub);
-                result.push(pub);
-            }
-        }
-    };
-    collect(participant.trackPublications);
-    collect(participant.videoTrackPublications);
-    collect(participant.audioTrackPublications);
-    collect(participant.tracks);
-    return result;
-}
-
-function isScreenShareTrackOrPub(track, publication) {
-    const Source = window.LivekitClient?.Track?.Source;
-    const src = publication?.source || track?.source;
-    return Boolean(Source && src === Source.ScreenShare);
-}
-
 function getVideoElementIdForTrack(participantIdentity, track, publication) {
     return isScreenShareTrackOrPub(track, publication)
         ? `participant-screen-${participantIdentity}`
@@ -237,21 +338,86 @@ function clearParticipantVideoDom(participantIdentity, source = null) {
             safeRemove(el);
         }
     }
-}
-
-function isBotIdentity(identity) {
-    return typeof identity === 'string' && identity.startsWith('bot:');
+    if (voiceState.fullscreenParticipantId === participantIdentity && voiceState.fullscreenGestureController) {
+        refreshParticipantFullscreenPrimaryTarget();
+    }
 }
 
 function isLocalInActivePhysicalRoom() {
-    const localId = currentRoom?.localParticipant?.identity;
-    return Boolean(localId && _coLocatedProcessedUsers.has(localId));
+    const localId = voiceState.currentRoom?.localParticipant?.identity;
+    return Boolean(localId && voiceState.coLocatedProcessedUsers.has(localId));
 }
 
-function updateLocalProcessorStationaryRoomMode() {
-    if (_activeLocalAudioProcessor && typeof _activeLocalAudioProcessor.setStationaryRoomMode === 'function') {
-        _activeLocalAudioProcessor.setStationaryRoomMode(isLocalInActivePhysicalRoom());
+function isEffectiveSenderAutoGainEnabled() {
+    return Boolean(voiceState.autoGainControl) && !isLocalInActivePhysicalRoom();
+}
+
+function syncLocalCaptureAutoGainState({ allowWebRtcTrackUpdate = true } = {}) {
+    if (voiceState.usingNativeMobileVoice) {
+        const nativeVoice = getNativeVoicePlugin();
+        if (nativeVoice && typeof nativeVoice.setNoiseFilter === 'function') {
+            const inPhysicalRoom = Boolean(voiceState.nativeLocalIdentity && voiceState.coLocatedProcessedUsers.has(voiceState.nativeLocalIdentity));
+            nativeVoice.setNoiseFilter({
+                noiseFilter: String(voiceState.currentNoiseSuppression || 'rnnoise').toLowerCase(),
+                stationaryRoomMode: inPhysicalRoom,
+                autoGainControl: Boolean(voiceState.autoGainControl)
+            }).catch(() => {});
+        }
+        return;
     }
+
+    const inRoom = isLocalInActivePhysicalRoom();
+    const enteredRoom = inRoom && !_wasLocalInActivePhysicalRoom;
+    _wasLocalInActivePhysicalRoom = inRoom;
+    const effectiveAutoGain = isEffectiveSenderAutoGainEnabled();
+
+    if (voiceState.activeLocalAudioProcessor && typeof voiceState.activeLocalAudioProcessor.setAutoGainEnabled === 'function') {
+        voiceState.activeLocalAudioProcessor.setAutoGainEnabled(effectiveAutoGain);
+        if (enteredRoom) {
+            flushLocalCaptureFifoIfAvailable();
+        }
+        return;
+    }
+
+    if (allowWebRtcTrackUpdate &&
+        voiceState.currentRoom?.localParticipant &&
+        !voiceState.isLocalSoftwareMuted &&
+        !isAppleMobileDevice()) {
+        const filter = voiceState.currentNoiseSuppression || 'webrtc';
+        if (filter === 'webrtc') {
+            const micPub = toArray(voiceState.currentRoom.localParticipant.audioTrackPublications)
+                .find(p => p && p.track && p.source !== window.LivekitClient?.Track?.Source?.ScreenShareAudio);
+            const rawTrack = getRawCaptureMediaStreamTrack(micPub?.audioTrack || micPub?.track);
+            if (rawTrack && rawTrack.readyState === 'live') {
+                const currentAgc = rawTrack.getSettings?.()?.autoGainControl;
+                if (currentAgc !== effectiveAutoGain) {
+                    const applyPromise = typeof rawTrack.applyConstraints === 'function'
+                        ? rawTrack.applyConstraints({ autoGainControl: effectiveAutoGain })
+                        : Promise.reject(new Error('applyConstraints unavailable'));
+                    Promise.resolve(applyPromise).then(() => {
+                        const applied = rawTrack.getSettings?.()?.autoGainControl;
+                        if (typeof applied === 'boolean' && applied !== effectiveAutoGain) {
+                            reinitializeMicrophone().catch(() => {});
+                        }
+                    }).catch(() => {
+                        reinitializeMicrophone().catch(() => {});
+                    });
+                }
+            }
+        }
+    }
+}
+
+function syncIncomingVoiceNormalizationState() {
+    const enabled = Boolean(voiceState.incomingVoiceNormalization);
+    _participantGainNodes.forEach((item) => {
+        if (item?.levelerNode?.port) {
+            try {
+                item.levelerNode.port.postMessage({ type: 'SET_ENABLED', value: enabled });
+            } catch (_) {}
+        }
+    });
+    pushDirectRoomControlsUpdate({ incomingVoiceNormalization: enabled });
 }
 
 function getRawCaptureMediaStreamTrack(livekitTrack) {
@@ -262,28 +428,57 @@ function getRawCaptureMediaStreamTrack(livekitTrack) {
         || null;
 }
 
+function isLocalScreenShareActive() {
+    if (Array.isArray(voiceState.globalScreenTracks) && voiceState.globalScreenTracks.some(t =>
+        t && t.kind === 'video' && t.mediaStreamTrack?.readyState !== 'ended'
+    )) {
+        return true;
+    }
+    const localParticipant = voiceState.currentRoom?.localParticipant;
+    if (!localParticipant) return false;
+    const screenSource = window.LivekitClient?.Track?.Source?.ScreenShare || 'screen_share';
+    return toArray(localParticipant.videoTrackPublications).some(p => {
+        if (!p || p.source !== screenSource) return false;
+        const track = p.videoTrack || p.track;
+        if (!track) return false;
+        return track.mediaStreamTrack ? track.mediaStreamTrack.readyState !== 'ended' : true;
+    });
+}
+
+function isHostViewHiddenForStage() {
+    return typeof window !== 'undefined' && window._spokesHostViewVisible === false;
+}
+
 function notifyHostVoiceState(active, isMuted = false) {
     const isActive = Boolean(active);
     const muted = Boolean(isMuted);
+    const isScreenSharing = isActive && isLocalScreenShareActive();
     window._spokesInVoiceCall = isActive;
     if (isActive) {
         updatePipCallState({ active: true, isMuted: muted });
     } else {
         resetPipOnCallEnd();
     }
-    const channelName = currentRoom?.name || '';
+    const channelName = voiceState.currentRoom?.name || '';
 
     try {
         if (window.SpokesBridge && typeof window.SpokesBridge.setVoiceCallState === 'function') {
             window.SpokesBridge.setVoiceCallState({
                 active: isActive,
                 channelName,
-                isMuted: muted
+                isMuted: muted,
+                isScreenSharing
             });
         } else if (window.SpokesNative && typeof window.SpokesNative.setVoiceCallState === 'function') {
             window.SpokesNative.setVoiceCallState(isActive, muted);
         }
     } catch (e) {}
+
+    if (isActive) {
+        pushDirectRoomControlsUpdate({ isMuted: muted });
+    } else {
+        stopDirectRoomAudioInternal();
+    }
 
     try {
         window.dispatchEvent(new CustomEvent('spokes:voice-state-changed', {
@@ -291,6 +486,7 @@ function notifyHostVoiceState(active, isMuted = false) {
                 active: isActive,
                 channelName,
                 isMuted: muted,
+                isScreenSharing,
                 origin: window.location.origin
             }
         }));
@@ -312,8 +508,8 @@ async function requestHostCrossServerVoiceHandoff() {
 if (typeof window !== 'undefined') {
     window.spokesLeaveVoiceCall = async function () {
         try {
-            if (dotnetHelper) {
-                await dotnetHelper.invokeMethodAsync('RequestExternalDisconnect');
+            if (voiceState.dotnetHelper) {
+                await voiceState.dotnetHelper.invokeMethodAsync('RequestExternalDisconnect');
                 return true;
             }
         } catch (e) {
@@ -347,8 +543,8 @@ if (typeof window !== 'undefined') {
     window.spokesNativeCallAction = async function (action) {
         const act = String(action || '');
         try {
-            if (dotnetHelper) {
-                await dotnetHelper.invokeMethodAsync('OnNativeCallAction', act);
+            if (voiceState.dotnetHelper) {
+                await voiceState.dotnetHelper.invokeMethodAsync('OnNativeCallAction', act);
                 return true;
             }
         } catch (e) {
@@ -357,18 +553,34 @@ if (typeof window !== 'undefined') {
         if (act === 'hangup') {
             await disconnectFromVoice();
         } else if (act === 'toggleMute') {
-            await setMicrophoneEnabled(_isLocalSoftwareMuted);
+            await setMicrophoneEnabled(voiceState.isLocalSoftwareMuted);
         } else if (act === 'toggleCamera') {
-            await setCameraEnabled(!_localCameraDesired, _lastCameraResolution, _lastCameraFps);
+            await setCameraEnabled(!voiceState.localCameraDesired, voiceState.lastCameraResolution, voiceState.lastCameraFps);
+        } else if (act === 'toggleScreenShare') {
+            await setScreenShareEnabled(voiceState.globalScreenTracks.length === 0, voiceState.lastScreenResolution, voiceState.lastScreenFps, voiceState.lastScreenMode, false);
         }
         return true;
     };
 
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState !== 'visible' || !currentRoom) return;
+        if (document.visibilityState !== 'visible' || (!voiceState.currentRoom && !voiceState.usingNativeMobileVoice)) return;
+        if (voiceState.usingNativeMobileVoice) {
+            syncNativeMobileConnectionState().catch(() => {});
+        }
         resumeAllVoiceAudioPlayback();
         refreshVideoLayouts();
     });
+
+    if (typeof window.addEventListener === 'function') {
+        window.addEventListener('spokes:host-view-visible-changed', (ev) => {
+            if (!voiceState.currentRoom && !voiceState.usingNativeMobileVoice) return;
+            const isVisible = ev?.detail?.visible !== false && window._spokesHostViewVisible !== false;
+            if (isVisible) {
+                resumeAllVoiceAudioPlayback();
+            }
+            refreshVideoLayouts();
+        });
+    }
 }
 
 function getProcessedMicOwner(track, publication, participant) {
@@ -378,6 +590,55 @@ function getProcessedMicOwner(track, publication, participant) {
         return name.substring(PROCESSED_MIC_PREFIX.length);
     }
     return null;
+}
+
+export function detectPhysicalDeviceName() {
+    try {
+        const nav = typeof navigator !== 'undefined' ? navigator : null;
+        const ua = nav?.userAgent || '';
+        const platformHint = String(nav?.userAgentData?.platform || nav?.platform || '');
+        const desktopClient = isDesktopClient(ua);
+
+        let os = 'Device';
+        if (!desktopClient && isAppleMobileDevice()) {
+            os = 'iOS Device';
+        } else if (/Android/i.test(ua) || /Android/i.test(platformHint)) {
+            os = 'Android Device';
+        } else if (/Windows/i.test(ua) || /^Win/i.test(platformHint)) {
+            os = 'Windows PC';
+        } else if (/Macintosh|Mac OS X/i.test(ua) || /Mac/i.test(platformHint)) {
+            os = 'Mac';
+        } else if (/CrOS/i.test(ua) || /Chrome\s*OS/i.test(platformHint)) {
+            os = 'Chromebook';
+        } else if (/Linux/i.test(ua) || /Linux/i.test(platformHint)) {
+            os = 'Linux PC';
+        }
+
+        let client = '';
+        if (isNativePlatform()) {
+            client = 'Spokes App';
+        } else if (desktopClient) {
+            client = 'Spokes Desktop';
+        } else if (/Edg(?:A|iOS)?\//i.test(ua)) {
+            client = 'Edge';
+        } else if (/OPR\/|Opera/i.test(ua)) {
+            client = 'Opera';
+        } else if (/Vivaldi\//i.test(ua)) {
+            client = 'Vivaldi';
+        } else if (/Brave\//i.test(ua) || Boolean(nav?.brave && typeof nav.brave.isBrave === 'function')) {
+            client = 'Brave';
+        } else if (/Firefox\/|FxiOS\//i.test(ua)) {
+            client = 'Firefox';
+        } else if (/Chrome\/|CriOS\//i.test(ua)) {
+            client = 'Chrome';
+        } else if (/Safari\//i.test(ua)) {
+            client = 'Safari';
+        }
+
+        return client ? `${os} (${client})` : os;
+    } catch (e) {
+        return 'Desktop Browser';
+    }
 }
 
 export function getOrCreatePhysicalDeviceIdentity() {
@@ -396,128 +657,331 @@ export function getOrCreatePhysicalDeviceIdentity() {
         deviceId = 'dev-session-fallback';
     }
 
-    let deviceName = 'Desktop Browser';
-    try {
-        const ua = navigator.userAgent || '';
-        let os = 'Device';
-        if (/Windows/i.test(ua)) os = 'Windows PC';
-        else if (/Macintosh|Mac OS X/i.test(ua) && !('ontouchend' in document)) os = 'Mac';
-        else if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && 'ontouchend' in document)) os = 'iOS Device';
-        else if (/Android/i.test(ua)) os = 'Android Device';
-        else if (/Linux/i.test(ua)) os = 'Linux PC';
-
-        let browser = '';
-        if (isNativePlatform()) {
-            browser = 'Spokes App';
-        } else if (/Edg\//i.test(ua)) {
-            browser = 'Edge';
-        } else if (/Chrome\//i.test(ua)) {
-            browser = 'Chrome';
-        } else if (/Firefox\//i.test(ua)) {
-            browser = 'Firefox';
-        } else if (/Safari\//i.test(ua)) {
-            browser = 'Safari';
-        }
-        deviceName = browser ? `${os} (${browser})` : os;
-    } catch (e) {}
-
+    const deviceName = detectPhysicalDeviceName();
     return { deviceId, deviceName };
 }
 
+function stripChromiumDevicePrefix(label) {
+    if (!label || typeof label !== 'string') return '';
+    return label.replace(/^(?:Default|Communications)\s*-\s*/i, '').trim();
+}
+
+async function resolveSelectedAudioDeviceLabel(storageKey, cacheKey, fetchDevices) {
+    try {
+        let saved = '';
+        try {
+            saved = localStorage.getItem(storageKey) || '';
+        } catch (e) {}
+        if (!saved || saved === 'default') return '';
+        const devices = voiceState[cacheKey] && voiceState[cacheKey].length > 0
+            ? voiceState[cacheKey]
+            : await fetchDevices();
+        const match = devices.find(d => d.deviceId === saved);
+        const clean = match?.label && match.label !== 'System Default' ? stripChromiumDevicePrefix(match.label) : '';
+        return clean && clean !== 'System Default' ? clean : '';
+    } catch (e) {
+        return '';
+    }
+}
+
+async function resolveSelectedMicLabelForDirectAudio() {
+    const savedLabel = await resolveSelectedAudioDeviceLabel('spokes_active_mic_id', 'cachedMicDevices', getAvailableMicrophones);
+    if (savedLabel) return savedLabel;
+
+    // Parity with getActiveMicrophoneId(): when saved mic is empty or 'default', inspect the live
+    // published raw microphone MediaStreamTrack so Direct LAN opens the exact same physical mic
+    // that Chromium/LiveKit opened (e.g., Corsair HS55 headset vs motherboard microphone).
+    try {
+        if (voiceState.currentRoom?.localParticipant && window.LivekitClient?.Track) {
+            const micPub = toArray(voiceState.currentRoom.localParticipant.audioTrackPublications)
+                .find(p => p.source === window.LivekitClient.Track.Source.Microphone && p.track);
+            const rawTrack = getRawCaptureMediaStreamTrack(micPub?.track);
+            const liveLabel = stripChromiumDevicePrefix(rawTrack?.label || '');
+            if (liveLabel && liveLabel !== 'System Default') {
+                return liveLabel;
+            }
+        }
+    } catch (e) {}
+    return '';
+}
+
+const resolveSelectedSpeakerLabelForDirectAudio = () =>
+    resolveSelectedAudioDeviceLabel('spokes_active_speaker_id', 'cachedSpeakerDevices', getAvailableSpeakers);
+
+export async function getClientVoiceBootstrap() {
+    const native = isNativePlatform();
+    const nativePlatform = native ? getNativePlatform() : '';
+    const isAndroid = native && nativePlatform === 'android';
+    const isIOS = isAppleMobileDevice();
+    const directSupported = await isDesktopDirectRoomSupported();
+    const identity = getOrCreatePhysicalDeviceIdentity();
+    let savedNoiseFilter = 'rnnoise';
+    try {
+        const storedFilter = localStorage.getItem('spokes_noise_filter');
+        if (storedFilter && storedFilter.trim()) {
+            savedNoiseFilter = storedFilter.trim();
+        }
+    } catch (e) {}
+
+    return {
+        isIOS,
+        isAndroid,
+        isNativePlatform: native,
+        isDesktopClient: isDesktopClient(),
+        isDesktopDirectRoomSupported: directSupported,
+        deviceId: identity?.deviceId || '',
+        deviceName: identity?.deviceName || '',
+        savedNoiseFilter
+    };
+}
+
+function hydratePreJoinVoiceState(settingsJson, coLocatedUserIds, mutedRoommateUserIds) {
+    hydrateSavedVoiceSettingsFromStorage();
+    if (settingsJson) {
+        initVoiceSettings(settingsJson);
+    }
+    voiceState.coLocatedProcessedUsers = new Set(Array.isArray(coLocatedUserIds) ? coLocatedUserIds : []);
+    voiceState.mutedRoommateUsers = new Set(Array.isArray(mutedRoommateUserIds) ? mutedRoommateUserIds : []);
+    _preJoinHydrated = true;
+}
+
 export function syncPhysicalRoomState(coLocatedUserIds, mutedRoommateUserIds) {
-    _coLocatedProcessedUsers = new Set(Array.isArray(coLocatedUserIds) ? coLocatedUserIds : []);
-    _mutedRoommateUsers = new Set(Array.isArray(mutedRoommateUserIds) ? mutedRoommateUserIds : []);
-    updateLocalProcessorStationaryRoomMode();
+    voiceState.coLocatedProcessedUsers = new Set(Array.isArray(coLocatedUserIds) ? coLocatedUserIds : []);
+    voiceState.mutedRoommateUsers = new Set(Array.isArray(mutedRoommateUserIds) ? mutedRoommateUserIds : []);
+    if (voiceState.usingNativeMobileVoice) {
+        syncNativeMobilePhysicalRoomState().catch(() => {});
+        return;
+    }
+    syncLocalCaptureAutoGainState({ allowWebRtcTrackUpdate: true });
+    reconcileAudioRouting();
+}
 
-    if (!currentRoom || !currentRoom.remoteParticipants) return;
+function getRemoteAudioPublicationsForParticipant(participant) {
+    if (!participant) return [];
+    const Kind = window.LivekitClient?.Track?.Kind;
+    const Source = window.LivekitClient?.Track?.Source;
+    const allPubs = getParticipantTrackPublications(participant);
+    return allPubs.filter(pub => {
+        if (!pub) return false;
+        if (pub.kind === Kind?.Audio || pub.track?.kind === Kind?.Audio) return true;
+        const src = pub.source || pub.track?.source;
+        if (Source && (src === Source.Microphone || src === Source.ScreenShareAudio)) return true;
+        const name = pub.trackName || pub.track?.name || '';
+        return typeof name === 'string' && name.startsWith(PROCESSED_MIC_PREFIX);
+    });
+}
 
-    const localIdentity = currentRoom.localParticipant?.identity;
-    const remotes = typeof currentRoom.remoteParticipants.values === 'function'
-        ? Array.from(currentRoom.remoteParticipants.values())
-        : Object.values(currentRoom.remoteParticipants);
+function suppressAndDetachAudioPublication(pub, effectiveIdentity) {
+    if (!pub) return;
+    const trackSid = pub.trackSid || pub.track?.sid || null;
+    if (effectiveIdentity) {
+        detachParticipantAudio(effectiveIdentity, trackSid);
+    }
+    if (pub.track && typeof pub.track.detach === 'function') {
+        try { pub.track.detach().forEach(el => safeRemove(el)); } catch (e) {}
+    }
+    const shouldUnsub = pub.isSubscribed !== false || pub.isDesired !== false || (trackSid && !voiceState.suppressedPublicationSids.has(trackSid));
+    if (typeof pub.setSubscribed === 'function' && shouldUnsub) {
+        if (trackSid) {
+            voiceState.suppressedPublicationSids.add(trackSid);
+        }
+        try { pub.setSubscribed(false); } catch (e) {}
+    }
+}
+
+function ensureDesiredAudioPublication(pub, participant, effectiveIdentity) {
+    if (!pub || !participant || !effectiveIdentity) return;
+    const pubSid = pub.trackSid || pub.track?.sid || '';
+    if (pubSid) {
+        voiceState.suppressedPublicationSids.delete(pubSid);
+    }
+    if (typeof pub.setSubscribed === 'function' && (!pub.isSubscribed || pub.isDesired === false)) {
+        try { pub.setSubscribed(true); } catch (e) {}
+        if (!pub.track) {
+            return;
+        }
+    }
+    if (!pub.track) {
+        return;
+    }
+
+    const Source = window.LivekitClient?.Track?.Source;
+    const isScreenAudio = Boolean(Source && (pub.source === Source.ScreenShareAudio || pub.track.source === Source.ScreenShareAudio));
+    const trackSid = pub.track.sid || pub.trackSid || pub.track.mediaStreamTrack?.id || (isScreenAudio ? 'screenshare_audio' : 'mic');
+    const trackKey = `${effectiveIdentity}_${trackSid}`;
+    const existing = _participantGainNodes.get(trackKey);
+
+    if (existing &&
+        existing.element &&
+        existing.element.isConnected &&
+        existing.trackMediaStreamTrack &&
+        existing.trackMediaStreamTrack === pub.track.mediaStreamTrack) {
+        const isScreenMuted = isScreenAudio && voiceState.mutedRemoteScreenAudio.has(effectiveIdentity);
+        const isRoommateMuted = !isScreenAudio && voiceState.mutedRoommateUsers.has(effectiveIdentity);
+        const savedPct = (!isScreenAudio && voiceState.savedVoiceSettings?.participantVolumes && typeof voiceState.savedVoiceSettings.participantVolumes[effectiveIdentity] === 'number')
+            ? voiceState.savedVoiceSettings.participantVolumes[effectiveIdentity]
+            : 100;
+        const effectiveMuted = isScreenMuted || isRoommateMuted || (!isScreenAudio && savedPct === 0);
+
+        if (existing.gainNode) {
+            existing.gainNode.gain.value = (isScreenMuted || isRoommateMuted)
+                ? 0
+                : (isScreenAudio ? 1.0 : Math.max(0, Math.min(200, savedPct)) / 100.0);
+        } else if (existing.element) {
+            existing.element.muted = Boolean(effectiveMuted);
+            existing.element.volume = effectiveMuted ? 0 : Math.min(1.0, voiceState.masterVolume);
+            if (!effectiveMuted && existing.element.paused) {
+                existing.element.play?.().catch(() => {});
+            }
+        }
+        return;
+    }
+
+    attachTrack(pub.track, participant, pub);
+}
+
+/**
+ * Single-authority deterministic client audio routing state machine.
+ * Reconciles every remote participant's audio tracks against:
+ *   1. Muted roommates / Direct LAN peers -> neither processed-mic nor raw-mic
+ *   2. Co-located room members (with published processed-mic:<U>) -> processed-mic:<U> only
+ *   3. Standard remote callers (or fallback before processed-mic:<U> publishes) -> raw-mic:<U> only
+ *   4. Screen share audio & non-processed bot chimes -> always subscribed & attached
+ */
+function reconcileAudioRouting() {
+    if (!voiceState.currentRoom || !voiceState.currentRoom.remoteParticipants) return;
+
+    const localIdentity = voiceState.currentRoom.localParticipant?.identity || '';
+    const Source = window.LivekitClient?.Track?.Source;
+    const remotes = getRemoteParticipantsIterable();
+
+    const userVoiceMap = new Map(); // userId -> { raw: Array<{pub, participant}>, processed: Array<{pub, participant}> }
+    const ensureUserBucket = (uid) => {
+        let bucket = userVoiceMap.get(uid);
+        if (!bucket) {
+            bucket = { raw: [], processed: [] };
+            userVoiceMap.set(uid, bucket);
+        }
+        return bucket;
+    };
 
     remotes.forEach(p => {
-        if (!p) return;
-        const pubs = p.audioTrackPublications
-            ? (typeof p.audioTrackPublications.values === 'function'
-                ? Array.from(p.audioTrackPublications.values())
-                : Object.values(p.audioTrackPublications))
-            : [];
-
+        if (!p || !p.identity) return;
+        const pubs = getRemoteAudioPublicationsForParticipant(p);
         pubs.forEach(pub => {
             if (!pub) return;
-            const processedOwner = getProcessedMicOwner(pub.track, pub, p);
-            if (processedOwner) {
-                const shouldMuteProcessed = processedOwner === localIdentity || _mutedRoommateUsers.has(processedOwner) || !_coLocatedProcessedUsers.has(processedOwner);
-                if (shouldMuteProcessed) {
-                    detachParticipantAudio(processedOwner, pub.trackSid || pub.track?.sid);
-                    if (pub.track && typeof pub.track.detach === 'function') {
-                        try { pub.track.detach().forEach(el => safeRemove(el)); } catch (e) {}
-                    }
-                    if (processedOwner !== localIdentity) {
-                        unregisterRemoteVoiceTrack(processedOwner, pub.track?.mediaStreamTrack || null);
-                    }
-                    if (typeof pub.setSubscribed === 'function') {
-                        try { pub.setSubscribed(false); } catch (e) {}
-                    }
-                } else {
-                    if (typeof pub.setSubscribed === 'function' && !pub.isSubscribed) {
-                        try { pub.setSubscribed(true); } catch (e) {}
-                    } else if (pub.track) {
-                        attachTrack(pub.track, p, pub);
-                    }
+            const src = pub.source || pub.track?.source;
+            if (Source && src === Source.ScreenShareAudio) {
+                if (p.identity !== localIdentity) {
+                    ensureDesiredAudioPublication(pub, p, p.identity);
                 }
                 return;
             }
 
-            if (!isBotIdentity(p.identity) && pub.source !== window.LivekitClient?.Track?.Source?.ScreenShareAudio) {
-                const shouldSuppressRawMic = _coLocatedProcessedUsers.has(p.identity) || _mutedRoommateUsers.has(p.identity);
-                if (shouldSuppressRawMic) {
-                    detachParticipantAudio(p.identity, pub.trackSid || pub.track?.sid);
-                    if (pub.track && typeof pub.track.detach === 'function') {
-                        try { pub.track.detach().forEach(el => safeRemove(el)); } catch (e) {}
-                    }
-                    if (_mutedRoommateUsers.has(p.identity)) {
-                        unregisterRemoteVoiceTrack(p.identity);
-                    } else if (pub.track?.mediaStreamTrack) {
-                        unregisterRemoteVoiceTrack(p.identity, pub.track.mediaStreamTrack);
-                    }
-                    if (typeof pub.setSubscribed === 'function') {
-                        try { pub.setSubscribed(false); } catch (e) {}
-                    }
-                } else {
-                    if (typeof pub.setSubscribed === 'function' && !pub.isSubscribed) {
-                        try { pub.setSubscribed(true); } catch (e) {}
-                    } else if (pub.track) {
-                        attachTrack(pub.track, p, pub);
-                    }
-                }
+            const processedOwner = getProcessedMicOwner(pub.track, pub, p);
+            if (processedOwner) {
+                ensureUserBucket(processedOwner).processed.push({ pub, participant: p });
+                return;
             }
+
+            if (isBotIdentity(p.identity)) {
+                // Non-processed bot audio (e.g., join/leave chimes) is always subscribed & attached
+                ensureDesiredAudioPublication(pub, p, p.identity);
+                return;
+            }
+
+            ensureUserBucket(p.identity).raw.push({ pub, participant: p });
         });
     });
-}
-// --- Native Platform Helpers ---
-const isNativePlatform = () => typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.());
-const getNativePlatform = () => window.Capacitor?.getPlatform?.() || '';
 
-// --- Initialize local iOS native plugin lazily ---
-let _spokesAudioSessionPlugin = null;
-function getAudioSessionPlugin() {
-    if (!_spokesAudioSessionPlugin && window.Capacitor?.registerPlugin) {
-        _spokesAudioSessionPlugin = window.Capacitor.registerPlugin('SpokesAudioSessionPlugin');
-    }
-    return _spokesAudioSessionPlugin || window.Capacitor?.Plugins?.SpokesAudioSessionPlugin;
-}
+    userVoiceMap.forEach((bucket, userId) => {
+        const suppressAll =
+            !userId ||
+            userId === localIdentity ||
+            voiceState.mutedRoommateUsers.has(userId) ||
+            voiceState.activeDirectLanPeerUsers.has(userId);
 
+        if (suppressAll) {
+            bucket.processed.forEach(({ pub }) => suppressAndDetachAudioPublication(pub, userId));
+            bucket.raw.forEach(({ pub }) => suppressAndDetachAudioPublication(pub, userId));
+            return;
+        }
+
+        const preferProcessed = voiceState.coLocatedProcessedUsers.has(userId) && bucket.processed.length > 0;
+        if (preferProcessed) {
+            let preferredProcessed = bucket.processed[bucket.processed.length - 1];
+            for (let i = bucket.processed.length - 1; i >= 0; i--) {
+                const candidate = bucket.processed[i];
+                if (candidate?.pub?.track && !candidate.pub.isMuted) {
+                    preferredProcessed = candidate;
+                    break;
+                }
+            }
+            bucket.processed.forEach(({ pub, participant }) => {
+                if (pub === preferredProcessed.pub) {
+                    ensureDesiredAudioPublication(pub, participant, userId);
+                } else {
+                    suppressAndDetachAudioPublication(pub, userId);
+                }
+            });
+            // Readiness-gated handoff: only detach raw-mic once processed-mic has finished subscribing
+            // its MediaStreamTrack so remote callers never experience a silent gap during DSP startup.
+            const isProcessedTrackReady = Boolean(preferredProcessed?.pub?.track);
+            if (isProcessedTrackReady) {
+                bucket.raw.forEach(({ pub }) => suppressAndDetachAudioPublication(pub, userId));
+            } else {
+                bucket.raw.forEach(({ pub, participant }) => ensureDesiredAudioPublication(pub, participant, userId));
+            }
+        } else {
+            bucket.processed.forEach(({ pub }) => suppressAndDetachAudioPublication(pub, userId));
+            bucket.raw.forEach(({ pub, participant }) => ensureDesiredAudioPublication(pub, participant, userId));
+        }
+    });
+}
 export function setNoiseSuppressionType(type) {
-    currentNoiseSuppression = type;
+    voiceState.currentNoiseSuppression = type;
+    if (voiceState.usingNativeMobileVoice) {
+        const nativeVoice = getNativeVoicePlugin();
+        const inPhysicalRoom = Boolean(voiceState.nativeLocalIdentity && voiceState.coLocatedProcessedUsers.has(voiceState.nativeLocalIdentity));
+        if (nativeVoice && typeof nativeVoice.setNoiseFilter === 'function') {
+            nativeVoice.setNoiseFilter({
+                noiseFilter: String(type || 'rnnoise').toLowerCase(),
+                stationaryRoomMode: inPhysicalRoom,
+                autoGainControl: Boolean(voiceState.autoGainControl)
+            }).then((res) => {
+                const effFilter = res?.effectiveFilter || type || 'rnnoise';
+                voiceState.nativeEffectiveFilter = effFilter;
+                if (voiceState.dotnetHelper) {
+                    voiceState.dotnetHelper.invokeMethodAsync('OnLocalAudioPipelineTelemetry', effFilter, estimateNativeMobileCaptureMs(effFilter), getNativeVoiceTelemetryPlatformTag(), 0)?.catch?.(() => {});
+                }
+            }).catch(() => {});
+        }
+    }
 }
 
 export function setVoiceSensitivity(val) {
     if (typeof val === 'number') {
-        _voiceSensitivity = Math.max(0, Math.min(100, val));
-        _savedVoiceSettings.voiceSensitivity = _voiceSensitivity;
+        voiceState.voiceSensitivity = Math.max(0, Math.min(100, val));
+        voiceState.savedVoiceSettings.voiceSensitivity = voiceState.voiceSensitivity;
+        setNativeMobileVoiceSensitivity(voiceState.voiceSensitivity);
     }
+}
+
+export function setAutoGainControl(enabled) {
+    const next = Boolean(enabled);
+    const changed = voiceState.autoGainControl !== next;
+    voiceState.autoGainControl = next;
+    voiceState.savedVoiceSettings.autoGainControl = next;
+    if (changed) {
+        syncLocalCaptureAutoGainState({ allowWebRtcTrackUpdate: true });
+    }
+}
+
+export function setIncomingVoiceNormalization(enabled) {
+    const next = Boolean(enabled);
+    voiceState.incomingVoiceNormalization = next;
+    voiceState.savedVoiceSettings.incomingVoiceNormalization = next;
+    syncIncomingVoiceNormalizationState();
 }
 
 function resolveInitialTrackDimensions(track, publication = null) {
@@ -596,30 +1060,31 @@ function safeRemove(el) {
     }
 }
 
-// Toggle to true to capture client-side browser logs and output them to the C# server console
-const ENABLE_TELEMETRY = false;
-
-export function isAppleMobileDevice() {
-    if (isNativePlatform() && getNativePlatform() === 'ios') return true;
-    return Boolean(/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document));
-}
-
 let _androidHasBluetooth = false;
-let _androidInitialRouteSet = false;
+let _androidHasWiredHeadset = false;
+let _androidHasEarpiece = true;
 let _globalAudioContext = null;
-let _activeGainNodes = new Map();
 
 function getVoiceAudioContext() {
     if (!_globalAudioContext) {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (AudioCtx) {
-            _globalAudioContext = new AudioCtx();
             try {
-                const savedSink = localStorage.getItem('spokes_active_speaker_id');
-                if (savedSink && typeof _globalAudioContext.setSinkId === 'function') {
-                    _globalAudioContext.setSinkId(savedSink === 'default' ? '' : savedSink).catch(() => {});
-                }
-            } catch(e) {}
+                _globalAudioContext = new AudioCtx({ latencyHint: 'interactive' });
+            } catch (e) {
+                _globalAudioContext = new AudioCtx();
+            }
+            if (!isNativePlatform()) {
+                try {
+                    const savedSink = localStorage.getItem('spokes_active_speaker_id');
+                    if (isSyntheticMobileSpeakerRoute(savedSink)) {
+                        localStorage.removeItem('spokes_active_speaker_id');
+                    } else if (savedSink && typeof _globalAudioContext.setSinkId === 'function') {
+                        _globalAudioContext.setSinkId(savedSink === 'default' ? '' : savedSink).catch(() => {});
+                    }
+                } catch(e) {}
+                ensureDesktopPlaybackConditioning(_globalAudioContext);
+            }
         }
     }
     if (_globalAudioContext && _globalAudioContext.state === 'suspended') {
@@ -639,7 +1104,7 @@ async function getCaptureAudioContext() {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (!AudioCtx) return null;
         try {
-            _captureAudioContext = new AudioCtx({ sampleRate: 48000 });
+            _captureAudioContext = new AudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
         } catch (e) {
             _captureAudioContext = new AudioCtx();
         }
@@ -652,23 +1117,64 @@ async function getCaptureAudioContext() {
     return _captureAudioContext;
 }
 
-// --- Web Audio Volume Pipeline (0% to 200% Master & Per-Participant) ---
-let _masterVolume = 1.0; // 0.0 to 2.0
+// --- Web Audio Volume Pipeline (0% to 200% Master & Per-Participant + -16.5 dBFS Trim & -0.5 dBFS Limiter) ---
 let _masterGainNode = null;
-const _participantGainNodes = new Map(); // trackKey -> { identity, trackSid, source, gainNode, element }
-let _savedVoiceSettings = {
-    masterVolume: 100,
-    participantVolumes: {},
-    voiceSensitivity: 50
-};
+let _masterLimiterNode = null;
+const _participantGainNodes = new Map(); // trackKey -> { identity, trackSid, source, levelerNode, gainNode, element }
+
+function attachMasterLimiterIfReady(ctx) {
+    if (!ctx || !_masterGainNode || _masterGainNode.context !== ctx || _masterLimiterNode) return;
+    const limiter = createMasterSoftLimiterNode(ctx);
+    if (!limiter) return;
+    try {
+        _masterGainNode.disconnect();
+        _masterGainNode.connect(limiter);
+        limiter.connect(ctx.destination);
+        _masterLimiterNode = limiter;
+    } catch (e) {
+        try { _masterGainNode.connect(ctx.destination); } catch (_) {}
+    }
+}
+
+function ensureDesktopPlaybackConditioning(ctx) {
+    if (!ctx || isNativePlatform()) return;
+    ensureVoiceLevelerWorkletLoaded(ctx)
+        .then((loaded) => {
+            if (!loaded || ctx.state === 'closed') return;
+            attachMasterLimiterIfReady(ctx);
+            _participantGainNodes.forEach((item) => {
+                if (!item || item.isScreenAudio || item.levelerNode || !item.source || !item.gainNode) return;
+                const levelerNode = createReceiverVoiceLevelerNode(ctx, voiceState.incomingVoiceNormalization);
+                if (!levelerNode) return;
+                try {
+                    item.source.disconnect();
+                    item.source.connect(levelerNode);
+                    levelerNode.connect(item.gainNode);
+                    item.levelerNode = levelerNode;
+                } catch (_) {
+                    try { item.source.connect(item.gainNode); } catch (__) {}
+                }
+            });
+        })
+        .catch(() => {});
+}
 
 function getMasterGainNode() {
     const ctx = getVoiceAudioContext();
     if (!ctx) return null;
-    if (!_masterGainNode) {
+    if (!_masterGainNode || _masterGainNode.context !== ctx) {
+        _masterLimiterNode = null;
         _masterGainNode = ctx.createGain();
-        _masterGainNode.gain.value = _masterVolume;
-        _masterGainNode.connect(ctx.destination);
+        _masterGainNode.gain.value = voiceState.masterVolume;
+        const limiter = createMasterSoftLimiterNode(ctx);
+        if (limiter) {
+            _masterGainNode.connect(limiter);
+            limiter.connect(ctx.destination);
+            _masterLimiterNode = limiter;
+        } else {
+            _masterGainNode.connect(ctx.destination);
+            ensureDesktopPlaybackConditioning(ctx);
+        }
     }
     return _masterGainNode;
 }
@@ -677,55 +1183,57 @@ function attachParticipantAudio(track, participant, element, overrideIdentity = 
     if (!participant || !participant.identity || !track.mediaStreamTrack) return;
     
     // Never route local audio back through speakers
-    if (participant === currentRoom?.localParticipant) return;
+    if (participant === voiceState.currentRoom?.localParticipant) return;
 
     const identity = overrideIdentity || participant.identity;
-    if (identity === currentRoom?.localParticipant?.identity) return;
+    if (identity === voiceState.currentRoom?.localParticipant?.identity) return;
     const trackSid = track.sid || track.mediaStreamTrack.id || (track.source === window.LivekitClient.Track.Source.ScreenShareAudio ? 'screenshare_audio' : 'mic');
     const trackKey = `${identity}_${trackSid}`;
     detachParticipantAudio(identity, trackSid, element);
 
-    // Apply active speaker sinkId to the HTML element if supported
+    // Apply active speaker sinkId to the HTML element on desktop/web where SinkId selection is supported
     try {
         const savedSink = localStorage.getItem('spokes_active_speaker_id');
-        const sinkVal = (!savedSink || savedSink === 'default') ? '' : savedSink;
-        if (element && typeof element.setSinkId === 'function') {
-            element.setSinkId(sinkVal).catch(() => {});
+        if (isSyntheticMobileSpeakerRoute(savedSink)) {
+            localStorage.removeItem('spokes_active_speaker_id');
+        } else {
+            const sinkVal = (!savedSink || savedSink === 'default') ? '' : savedSink;
+            if (element && typeof element.setSinkId === 'function') {
+                element.setSinkId(sinkVal).catch(() => {});
+            }
         }
     } catch(e) {}
 
     const isScreenAudio = track.source === window.LivekitClient.Track.Source.ScreenShareAudio;
-    const isScreenMuted = isScreenAudio && _mutedRemoteScreenAudio.has(identity);
-    const isRoommateMuted = !isScreenAudio && _mutedRoommateUsers.has(identity);
+    const isScreenMuted = isScreenAudio && voiceState.mutedRemoteScreenAudio.has(identity);
+    const isRoommateMuted = !isScreenAudio && voiceState.mutedRoommateUsers.has(identity);
+    const trackMediaStreamTrack = track.mediaStreamTrack;
 
-    // NATIVE MOBILE (ANDROID & IOS):
-    // Do NOT route incoming WebRTC call audio through Web Audio API!
-    if (isNativePlatform()) {
-        const isMuted = isScreenMuted || isRoommateMuted || (!isScreenAudio && _savedVoiceSettings?.participantVolumes && _savedVoiceSettings.participantVolumes[identity] === 0);
+    if (element) {
+        element.playsInline = true;
+        element.autoplay = true;
+    }
+
+    const attachDirectElementAudio = (targetVolume) => {
+        const isMuted = isScreenMuted || isRoommateMuted || (!isScreenAudio && voiceState.savedVoiceSettings?.participantVolumes && voiceState.savedVoiceSettings.participantVolumes[identity] === 0);
         element.muted = Boolean(isMuted);
-        element.volume = isMuted ? 0 : 1.0;
+        element.volume = isMuted ? 0 : targetVolume;
+        if (!isMuted) {
+            element.play?.().catch(() => {});
+        }
         _participantGainNodes.set(trackKey, {
             identity,
             trackSid,
+            trackMediaStreamTrack,
             isScreenAudio,
             element
         });
-        return;
-    }
+    };
 
     const ctx = getVoiceAudioContext();
     const masterGain = getMasterGainNode();
     if (!ctx || !masterGain || ctx.state === 'suspended') {
-        // Fallback: If Web Audio is not available or suspended, play the raw HTML element directly
-        const isMuted = isScreenMuted || isRoommateMuted || (!isScreenAudio && _savedVoiceSettings?.participantVolumes && _savedVoiceSettings.participantVolumes[identity] === 0);
-        element.muted = Boolean(isMuted);
-        element.volume = isMuted ? 0 : Math.min(1.0, _masterVolume);
-        _participantGainNodes.set(trackKey, {
-            identity,
-            trackSid,
-            isScreenAudio,
-            element
-        });
+        attachDirectElementAudio(Math.min(1.0, voiceState.masterVolume));
         return;
     }
 
@@ -733,17 +1241,26 @@ function attachParticipantAudio(track, participant, element, overrideIdentity = 
         const stream = new MediaStream([track.mediaStreamTrack]);
         const source = ctx.createMediaStreamSource(stream);
         const gainNode = ctx.createGain();
+        const levelerNode = !isScreenAudio ? createReceiverVoiceLevelerNode(ctx, voiceState.incomingVoiceNormalization) : null;
 
         let userVolume = 1.0;
         if (isScreenMuted || isRoommateMuted) {
             userVolume = 0;
-        } else if (!isScreenAudio && _savedVoiceSettings?.participantVolumes && typeof _savedVoiceSettings.participantVolumes[identity] === 'number') {
-            userVolume = Math.max(0, Math.min(200, _savedVoiceSettings.participantVolumes[identity])) / 100.0;
+        } else if (!isScreenAudio && voiceState.savedVoiceSettings?.participantVolumes && typeof voiceState.savedVoiceSettings.participantVolumes[identity] === 'number') {
+            userVolume = Math.max(0, Math.min(200, voiceState.savedVoiceSettings.participantVolumes[identity])) / 100.0;
         }
 
         gainNode.gain.value = userVolume;
 
-        source.connect(gainNode);
+        if (levelerNode) {
+            source.connect(levelerNode);
+            levelerNode.connect(gainNode);
+        } else {
+            source.connect(gainNode);
+            if (!isScreenAudio) {
+                ensureDesktopPlaybackConditioning(ctx);
+            }
+        }
         gainNode.connect(masterGain);
 
         // Mute raw HTML audio element to prevent double playback on desktop where Web Audio is active
@@ -753,22 +1270,16 @@ function attachParticipantAudio(track, participant, element, overrideIdentity = 
         _participantGainNodes.set(trackKey, {
             identity,
             trackSid,
+            trackMediaStreamTrack,
             isScreenAudio,
             source,
+            levelerNode,
             gainNode,
             element
         });
     } catch (e) {
         console.warn("[Voice] Web Audio routing fallback for", identity, trackSid, e);
-        const isMuted = isScreenMuted || isRoommateMuted || (!isScreenAudio && _savedVoiceSettings?.participantVolumes && _savedVoiceSettings.participantVolumes[identity] === 0);
-        element.muted = Boolean(isMuted);
-        element.volume = isMuted ? 0 : Math.min(1.0, _masterVolume);
-        _participantGainNodes.set(trackKey, {
-            identity,
-            trackSid,
-            isScreenAudio,
-            element
-        });
+        attachDirectElementAudio(Math.min(1.0, voiceState.masterVolume));
     }
 }
 
@@ -776,6 +1287,7 @@ function teardownAudioItem(item, preserveElement = null) {
     if (!item) return;
     try {
         if (item.source) item.source.disconnect();
+        if (item.levelerNode) item.levelerNode.disconnect();
         if (item.gainNode) item.gainNode.disconnect();
     } catch (e) {}
     try {
@@ -826,52 +1338,72 @@ function clearAllParticipantAudio() {
 }
 
 export function setMasterVolume(volumePercent) {
-    _masterVolume = Math.max(0, Math.min(200, volumePercent)) / 100.0;
-    if (_masterGainNode) {
-        _masterGainNode.gain.value = _masterVolume;
+    voiceState.masterVolume = Math.max(0, Math.min(200, volumePercent)) / 100.0;
+    if (voiceState.usingNativeMobileVoice) {
+        const nativeVoice = getNativeVoicePlugin();
+        if (nativeVoice) {
+            nativeVoice.setMasterVolume?.({ volume: voiceState.masterVolume })?.catch?.(() => {});
+            nativeVoice.setDeafened?.({ deafened: voiceState.masterVolume <= 0.001 })?.catch?.(() => {});
+        }
+        return;
     }
+    if (_masterGainNode) {
+        _masterGainNode.gain.value = voiceState.masterVolume;
+    }
+    pushDirectRoomControlsUpdate({ masterVolume: voiceState.masterVolume });
 }
 
 export function setParticipantVolume(participantId, volumePercent) {
     if (!participantId) return;
-    if (!_savedVoiceSettings.participantVolumes) {
-        _savedVoiceSettings.participantVolumes = {};
+    if (!voiceState.savedVoiceSettings.participantVolumes) {
+        voiceState.savedVoiceSettings.participantVolumes = {};
     }
-    _savedVoiceSettings.participantVolumes[participantId] = volumePercent;
+    voiceState.savedVoiceSettings.participantVolumes[participantId] = volumePercent;
 
     const isMuted = volumePercent === 0;
     const vol = Math.max(0, Math.min(200, volumePercent)) / 100.0;
+
+    if (voiceState.usingNativeMobileVoice) {
+        const nativeVoice = getNativeVoicePlugin();
+        nativeVoice?.setParticipantVolume?.({ identity: participantId, volume: vol })?.catch?.(() => {});
+        return;
+    }
 
     _participantGainNodes.forEach(item => {
         if (item.identity === participantId && !item.isScreenAudio) {
             if (item.element) {
                 item.element.muted = isMuted;
-                if (isNativePlatform()) {
-                    item.element.volume = isMuted ? 0 : 1.0;
-                }
             }
             if (item.gainNode) {
                 item.gainNode.gain.value = vol;
             }
         }
     });
+
+    if (voiceState.directUserIdToPeerToken.has(participantId)) {
+        pushDirectRoomControlsUpdate();
+    }
 }
 
 export function setRemoteScreenAudioMuted(participantIdentity, isMuted) {
     if (!participantIdentity) return;
     if (isMuted) {
-        _mutedRemoteScreenAudio.add(participantIdentity);
+        voiceState.mutedRemoteScreenAudio.add(participantIdentity);
     } else {
-        _mutedRemoteScreenAudio.delete(participantIdentity);
+        voiceState.mutedRemoteScreenAudio.delete(participantIdentity);
+    }
+
+    if (voiceState.usingNativeMobileVoice) {
+        getNativeVoicePlugin()?.setRemoteScreenAudioMuted?.({
+            identity: participantIdentity,
+            muted: Boolean(isMuted)
+        })?.catch?.(() => {});
     }
 
     _participantGainNodes.forEach(item => {
         if (item.identity === participantIdentity && item.isScreenAudio) {
             if (item.element) {
                 item.element.muted = isMuted;
-                if (isNativePlatform()) {
-                    item.element.volume = isMuted ? 0 : 1.0;
-                }
             }
             if (item.gainNode) {
                 item.gainNode.gain.value = isMuted ? 0 : 1.0;
@@ -880,29 +1412,45 @@ export function setRemoteScreenAudioMuted(participantIdentity, isMuted) {
     });
 }
 
+function pickVoiceSetting(settings, camelKey, pascalKey) {
+    if (!settings || typeof settings !== 'object') return undefined;
+    if (settings[camelKey] !== undefined) return settings[camelKey];
+    return settings[pascalKey];
+}
+
 export function initVoiceSettings(settingsJson) {
     try {
         const settings = typeof settingsJson === 'string' ? JSON.parse(settingsJson) : settingsJson;
-        if (settings) {
-            _savedVoiceSettings = {
-                masterVolume: typeof settings.masterVolume === 'number' ? settings.masterVolume : 100,
-                participantVolumes: settings.participantVolumes || {},
-                voiceSensitivity: typeof settings.voiceSensitivity === 'number' ? settings.voiceSensitivity : 50
+        if (settings && typeof settings === 'object') {
+            const rawMasterVolume = pickVoiceSetting(settings, 'masterVolume', 'MasterVolume');
+            const rawParticipantVolumes = pickVoiceSetting(settings, 'participantVolumes', 'ParticipantVolumes');
+            const rawVoiceSensitivity = pickVoiceSetting(settings, 'voiceSensitivity', 'VoiceSensitivity');
+            const rawAutoGainControl = pickVoiceSetting(settings, 'autoGainControl', 'AutoGainControl');
+            const rawIncomingNorm = pickVoiceSetting(settings, 'incomingVoiceNormalization', 'IncomingVoiceNormalization');
+
+            const masterVolume = typeof rawMasterVolume === 'number' ? rawMasterVolume : 100;
+            const participantVolumes = (rawParticipantVolumes && typeof rawParticipantVolumes === 'object') ? rawParticipantVolumes : {};
+            const voiceSensitivity = typeof rawVoiceSensitivity === 'number' ? rawVoiceSensitivity : 50;
+            const autoGainControl = typeof rawAutoGainControl === 'boolean' ? rawAutoGainControl : true;
+            const incomingVoiceNormalization = typeof rawIncomingNorm === 'boolean' ? rawIncomingNorm : true;
+
+            voiceState.savedVoiceSettings = {
+                masterVolume,
+                participantVolumes,
+                voiceSensitivity,
+                autoGainControl,
+                incomingVoiceNormalization
             };
-            if (typeof settings.masterVolume === 'number') {
-                setMasterVolume(settings.masterVolume);
-            }
-            if (typeof settings.voiceSensitivity === 'number') {
-                setVoiceSensitivity(settings.voiceSensitivity);
-            }
-            if (settings.participantVolumes) {
-                Object.keys(settings.participantVolumes).forEach(id => {
-                    const vol = settings.participantVolumes[id];
-                    if (typeof vol === 'number') {
-                        setParticipantVolume(id, vol);
-                    }
-                });
-            }
+            setMasterVolume(masterVolume);
+            setVoiceSensitivity(voiceSensitivity);
+            setAutoGainControl(autoGainControl);
+            setIncomingVoiceNormalization(incomingVoiceNormalization);
+            Object.keys(participantVolumes).forEach(id => {
+                const vol = participantVolumes[id];
+                if (typeof vol === 'number') {
+                    setParticipantVolume(id, vol);
+                }
+            });
         }
     } catch (e) {
         console.warn('[Voice] initVoiceSettings error:', e);
@@ -918,91 +1466,73 @@ function hydrateSavedVoiceSettingsFromStorage() {
     } catch (e) {}
 }
 
-function setLocalAudioMuted(muted) {
-    if (!currentRoom || !currentRoom.localParticipant) return;
-    _isLocalSoftwareMuted = Boolean(muted);
-    const localId = currentRoom.localParticipant.identity;
-    if (isEffectiveLocalMicMuted() && localId) {
-        updateParticipantSpeakingDOM(localId, false);
-        if (_localMicVadEntry) {
-            _localMicVadEntry.isSpeaking = false;
-            _localMicVadEntry.consecutiveActiveFrames = 0;
-        }
-        notifyActiveSpeakersToDotnet(null, true);
+function yieldToBrowserFrame() {
+    if (typeof requestAnimationFrame === 'function') {
+        return new Promise(resolve => requestAnimationFrame(() => resolve()));
     }
-    notifyHostVoiceState(Boolean(currentRoom), isEffectiveLocalMicMuted());
-    const tracks = currentRoom.localParticipant.audioTrackPublications;
-    if (tracks) {
-        const pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
-        pubArr.forEach(p => {
-            if (p.track && p.track.mediaStreamTrack) {
-                p.track.mediaStreamTrack.enabled = !muted;
-            }
-            if (muted) {
-                if (typeof p.mute === 'function') p.mute().catch(() => {});
-            } else {
-                if (typeof p.unmute === 'function') p.unmute().catch(() => {});
-            }
-        });
-    }
+    return new Promise(resolve => setTimeout(resolve, 0));
 }
 
-export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, noiseSuppression = 'webrtc') {
-    dotnetHelper = helper;
-    currentNoiseSuppression = noiseSuppression;
-    
-    // Wire up detailed console intercept to funnel logs to the C# backend
-    if (ENABLE_TELEMETRY && !window._voiceLoggerPatched) {
-        window._voiceLoggerPatched = true;
-        ['debug', 'log', 'info', 'warn', 'error'].forEach(level => {
-            const original = console[level];
-            if (!original) return;
-            console[level] = function() {
-                original.apply(console, arguments);
-                if (dotnetHelper) {
-                    try {
-                        let msg = Array.from(arguments).map(a => {
-                            if (a instanceof Error) return `${a.name}: ${a.message}\n${a.stack}`;
-                            if (typeof a === 'object') {
-                                try { return JSON.stringify(a); } catch(e) { return String(a); }
-                            }
-                            return String(a);
-                        }).join(' ');
-                        
-                        // Prevent giant JSON objects from blowing out the signalR connection
-                        if (msg.length > 3000) msg = msg.substring(0, 3000) + '...[truncated]';
-                        
-                        dotnetHelper.invokeMethodAsync('LogToServer', level.toUpperCase(), msg).catch(()=>{});
-                    } catch(e) {}
-                }
-            };
-        });
-    }
-    
-    // Ensure LivekitClient is loaded on-demand if idle preload hasn't finished yet
-    if (!window.LivekitClient && typeof window.ensureVoiceScriptsLoaded === 'function') {
-        await window.ensureVoiceScriptsLoaded();
-    }
-    if (!window.LivekitClient) {
-        console.error('[Voice] LivekitClient not found! Ensure the CDN script is loaded.');
-        return false;
-    }
+function markVoiceDiag(label) {
+    try {
+        if (typeof window !== 'undefined' && window.spokesChatDiagnostics?.isEnabled?.()) {
+            window.spokesChatDiagnostics.mark(label);
+        }
+    } catch (_) {}
+}
 
-    if (ENABLE_TELEMETRY) {
-        // Enable verbose debug logging to trace the exact network failure
-        window.LivekitClient.setLogLevel(window.LivekitClient.LogLevel.debug);
+export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, noiseSuppression = 'webrtc', preJoinContext = null) {
+    markVoiceDiag(`Voice: connectToVoice Start (filter=${noiseSuppression})`);
+    voiceState.dotnetHelper = helper;
+    voiceState.currentNoiseSuppression = noiseSuppression;
+    voiceState.lastAudioDevicesSignature = '';
+    resetVoiceRoomSnapshotSync();
+    if (isMobileVoiceClient()) {
+        resetMobileCameraSelectionForNewCall();
     }
+    let micPrepToken = null;
+    let prefetchedMicPromise = null;
 
+    if (preJoinContext && typeof preJoinContext === 'object') {
+        hydratePreJoinVoiceState(
+            preJoinContext.settingsJson ?? null,
+            preJoinContext.coLocatedUserIds ?? [],
+            preJoinContext.mutedRoommateUserIds ?? []);
+        _preJoinMicDeviceId = typeof preJoinContext.preferredMicDeviceId === 'string'
+            ? preJoinContext.preferredMicDeviceId
+            : '';
+    } else {
+        _preJoinMicDeviceId = '';
+    }
+    const initialMuted = Boolean(preJoinContext?.initialMuted);
 
+    const hasNativeAndroidVoice = Boolean(getNativeVoicePlugin());
+    if (!hasNativeAndroidVoice) {
+        // Ensure LivekitClient is loaded on-demand if idle preload hasn't finished yet
+        if (!window.LivekitClient && typeof window.ensureVoiceScriptsLoaded === 'function') {
+            markVoiceDiag('Voice: ensureVoiceScriptsLoaded Start');
+            await window.ensureVoiceScriptsLoaded();
+            markVoiceDiag('Voice: ensureVoiceScriptsLoaded Done');
+            await yieldToBrowserFrame();
+        }
+        if (!window.LivekitClient) {
+            console.error('[Voice] LivekitClient not found! Ensure the CDN script is loaded.');
+            return false;
+        }
+    }
 
     try {
-        hydrateSavedVoiceSettingsFromStorage();
+        if (!_preJoinHydrated) {
+            hydrateSavedVoiceSettingsFromStorage();
+        }
+        _preJoinHydrated = false;
         await requestHostCrossServerVoiceHandoff();
 
+        await cleanupNativeMobileVoiceState();
         getVoiceAudioContext();
-        if (currentRoom) {
-            const staleRoom = currentRoom;
-            currentRoom = null;
+        if (voiceState.currentRoom) {
+            const staleRoom = voiceState.currentRoom;
+            voiceState.currentRoom = null;
             try {
                 console.warn('[Voice] Existing room found in connectToVoice, disconnecting first...');
                 stopAllLocalMediaTracks(staleRoom);
@@ -1014,83 +1544,24 @@ export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, 
         }
 
         cleanupLocalHardwareMuteMonitor();
-        _isLocalSoftwareMuted = false;
-        _isLocalHardwareMuted = false;
+        voiceState.isLocalSoftwareMuted = false;
+        voiceState.isLocalHardwareMuted = false;
+        voiceState.suppressedPublicationSids.clear();
 
-        // Universal H.264: Leverages on-die hardware acceleration across iOS (VideoToolbox), Android (MediaCodec), and Desktop/Web (NVENC/QuickSync/AMF/VideoToolbox)
-        let preferredCodec = 'h264';
-        const preferredMicDeviceId = await resolvePreferredMicDeviceId();
-
-        currentRoom = new window.LivekitClient.Room({
-            adaptiveStream: false,
-            dynacast: true,
-            audioCaptureDefaults: preferredMicDeviceId ? { deviceId: preferredMicDeviceId } : undefined,
-            publishDefaults: {
-                audioBitrate: audioBitrateKbps * 1000,
-                audioPreset: { maxBitrate: audioBitrateKbps * 1000 },
-                dtx: true,
-                videoCodec: preferredCodec,
-                backupCodec: true,
-                screenShareEncoding: {
-                    maxBitrate: 12000000,
-                    maxFramerate: 60
-                }
-            }
-        });
-
-        // Setup event listeners for the specific events you'll need
-        currentRoom
-            .on(window.LivekitClient.RoomEvent.TrackSubscribed, handleTrackSubscribed)
-            .on(window.LivekitClient.RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed)
-            .on(window.LivekitClient.RoomEvent.ActiveSpeakersChanged, handleActiveSpeakers)
-            .on(window.LivekitClient.RoomEvent.Disconnected, handleDisconnect)
-            .on(window.LivekitClient.RoomEvent.LocalTrackPublished, handleLocalTrackPublished)
-            .on(window.LivekitClient.RoomEvent.LocalTrackUnpublished, handleLocalUnpublished)
-            .on(window.LivekitClient.RoomEvent.ParticipantConnected, handleParticipantConnected)
-            .on(window.LivekitClient.RoomEvent.ParticipantDisconnected, handleParticipantDisconnected)
-            .on(window.LivekitClient.RoomEvent.TrackMuted, handleTrackMuted)
-            .on(window.LivekitClient.RoomEvent.TrackUnmuted, handleTrackUnmuted);
-
-        _isLocalSoftwareMuted = false;
-        _isLocalHardwareMuted = false;
-        _micOperationSeq = 0;
-
-        await currentRoom.connect(url, token);
-        notifyHostVoiceState(true, isEffectiveLocalMicMuted());
-        console.log('[Voice] Connected to room:', currentRoom.name);
-        _nativeCallResourcesActive = true;
-        _localCameraDesired = false;
-        _iosCompanionLiveKitUrl = url || '';
-        _iosCompanionToken = '';
-
-        configureVoicePip(dotnetHelper, {
-            onToggleMute: () => window.spokesNativeCallAction('toggleMute'),
-            onToggleCamera: () => window.spokesNativeCallAction('toggleCamera'),
-            onHangUp: () => window.spokesLeaveVoiceCall(),
-            onReturnToCall: () => window.spokesNativeCallAction('returnToCall'),
-            onRestoreStageTracks: () => reattachAllTracks()
-        });
-        updatePipCallState({
-            active: true,
-            channelName: currentRoom.name || '',
-            localUserId: currentRoom.localParticipant?.identity || '',
-            isMuted: isEffectiveLocalMicMuted(),
-            isVideoOn: false,
-            isScreenSharing: false
-        });
-
-        // --- Capacitor Native Mobile Fixes ---
+        // Activate native mobile call audio session (Android Telecom MODE_IN_COMMUNICATION / iOS AVAudioSession VoiceChat)
+        // BEFORE voiceState.currentRoom.connect() so incoming WebRTC tracks attach directly to active voice-call audio streams on first join.
         if (isNativePlatform()) {
+            _nativeCallResourcesActive = true;
             try {
-                // Prevent screen lock (fixes background audio dropping)
                 if (window.Capacitor?.Plugins?.KeepAwake) {
                     await window.Capacitor.Plugins.KeepAwake.keepAwake();
                 }
-                
-                let platform = getNativePlatform();
-                let audioPlugin = getAudioSessionPlugin();
+
+                const platform = getNativePlatform();
+                const audioPlugin = getAudioSessionPlugin();
                 if (platform === 'ios' && audioPlugin) {
-                    let res = await audioPlugin.configureVoiceChat({ enabled: true });
+                    const res = await audioPlugin.configureVoiceChat({ enabled: true, video: false });
+                    _iosLastConfiguredVideoMode = false;
                     _iosActiveMicrophoneMode = res?.microphoneMode || 'unsupported';
                     if (typeof audioPlugin.addListener === 'function') {
                         try {
@@ -1103,82 +1574,187 @@ export async function connectToVoice(token, url, helper, audioBitrateKbps = 64, 
                             });
                         } catch (e) {}
                     }
-                    console.info(`[Voice] iOS Native Session Initialized: Category=${res?.category}, Mode=${res?.mode}, Output=${res?.activeOutput}, MicMode=${_iosActiveMicrophoneMode}`);
-                    ensureIosCompanionCredentials().catch(() => {});
-                    fetchIosNativeCameras().then(() => reportIosCameraCapabilitiesToDotnet(_iosActiveCameraId)).catch(() => {});
+                    console.info(`[Voice] iOS Native Session Initialized (Pre-Connect): Category=${res?.category}, Mode=${res?.mode}, Output=${res?.activeOutput}, MicMode=${_iosActiveMicrophoneMode}`);
                 } else if (platform === 'ios') {
-                    console.warn(`[Voice] iOS Native Session plugin NOT FOUND`);
-                    ensureIosCompanionCredentials().catch(() => {});
-                    fetchIosNativeCameras().then(() => reportIosCameraCapabilitiesToDotnet(_iosActiveCameraId)).catch(() => {});
+                    console.warn('[Voice] iOS Native Session plugin NOT FOUND');
                 }
-                
+
                 if (platform === 'android' && window.Capacitor.Plugins.TelecomConnectionPlugin) {
-                    _androidInitialRouteSet = false;
-                    _activeNativeSpeakerId = 'speaker';
+                    voiceState.activeNativeSpeakerId = 'speaker';
+                    try {
+                        await window.Capacitor.Plugins.TelecomConnectionPlugin.removeAllListeners();
+                    } catch (e) {}
+
                     window.Capacitor.Plugins.TelecomConnectionPlugin.addListener('onAudioStateChanged', (data) => {
-                        if (data && data.state) {
-                            if (typeof data.state.hasBluetooth === 'boolean') _androidHasBluetooth = data.state.hasBluetooth;
+                        if (!data || !data.state) return;
 
-                            if (!_androidInitialRouteSet) {
-                                // First callback signals the telecom session is ready.
-                                // Apply the desired default route (speaker) now.
-                                _androidInitialRouteSet = true;
-                                let desiredRoute = _androidHasBluetooth ? 'bluetooth' : 'speaker';
-                                window.Capacitor.Plugins.TelecomConnectionPlugin.setAudioRoute({ route: desiredRoute })
-                                    .then(() => {
-                                        _activeNativeSpeakerId = desiredRoute;
-                                        updateAudioDevices().catch(()=>{});
-                                    })
-                                    .catch(() => {
-                                        // Route set failed, accept whatever Android reports
-                                        if (data.state.route) _activeNativeSpeakerId = data.state.route;
-                                        updateAudioDevices().catch(()=>{});
-                                    });
-                                return;
-                            }
+                        if (typeof data.state.hasBluetooth === 'boolean') _androidHasBluetooth = data.state.hasBluetooth;
+                        if (typeof data.state.hasWiredHeadset === 'boolean') _androidHasWiredHeadset = data.state.hasWiredHeadset;
+                        if (typeof data.state.hasEarpiece === 'boolean') _androidHasEarpiece = data.state.hasEarpiece;
 
-                            // Subsequent callbacks: accept the reported route (user or system initiated)
-                            if (data.state.route) _activeNativeSpeakerId = data.state.route;
-                            updateAudioDevices().catch(()=>{});
+                        const reportedRoute = (typeof data.state.route === 'string' && data.state.route !== 'unknown')
+                            ? data.state.route
+                            : '';
+
+                        if (reportedRoute) {
+                            voiceState.activeNativeSpeakerId = reportedRoute;
                         }
+                        updateAudioDevices().catch(() => {});
+                        refreshLocalAudioPipelineTelemetry();
                     });
                     window.Capacitor.Plugins.TelecomConnectionPlugin.addListener('onCallEnded', () => {
                         console.info('[Voice] Android TelecomConnectionPlugin reported onCallEnded');
-                        if (currentRoom && typeof window.spokesLeaveVoiceCall === 'function') {
+                        if ((voiceState.currentRoom || voiceState.usingNativeMobileVoice) && typeof window.spokesLeaveVoiceCall === 'function') {
                             window.spokesLeaveVoiceCall().catch(() => {});
                         }
                     });
                     await window.Capacitor.Plugins.TelecomConnectionPlugin.startCall();
                 }
             } catch (e) {
-                console.warn('[Voice] Capacitor native plugins error on connect:', e);
+                console.warn('[Voice] Capacitor native plugins error on pre-connect:', e);
             }
         }
 
-        if (dotnetHelper) {
-            let existingParticipants = [];
-            if (currentRoom.remoteParticipants) {
-                if (typeof currentRoom.remoteParticipants.values === 'function') {
-                    existingParticipants = Array.from(currentRoom.remoteParticipants.values()).map(p => getEffectiveParticipantIdentity(p)).filter(id => Boolean(id) && !isSyntheticIdentity(id));
-                } else {
-                    existingParticipants = Object.values(currentRoom.remoteParticipants).map(p => getEffectiveParticipantIdentity(p)).filter(id => Boolean(id) && !isSyntheticIdentity(id));
+        // Unified Native Mobile Voice & Video (Android & iOS): SpokesNativeVoice is the sole
+        // voice/video engine on native mobile — never silently fall back to WebView LiveKit.
+        const nativeVoice = getNativeVoicePlugin();
+        if (nativeVoice) {
+            const availRes = typeof nativeVoice.isAvailable === 'function'
+                ? await nativeVoice.isAvailable()
+                : { available: true };
+            if (!availRes?.available) {
+                throw new Error('SpokesNativeVoice plugin reported unavailable on native mobile platform.');
+            }
+            return await connectNativeMobileVoice(nativeVoice, token, url, noiseSuppression, initialMuted);
+        }
+
+        // Universal H.264: Leverages on-die hardware acceleration across iOS (VideoToolbox), Android (MediaCodec), and Desktop/Web (NVENC/QuickSync/AMF/VideoToolbox)
+        let preferredCodec = 'h264';
+        const preferredMicDeviceId = resolvePreferredMicDeviceIdFast();
+
+        voiceState.currentRoom = new window.LivekitClient.Room({
+            adaptiveStream: false,
+            dynacast: true,
+            audioCaptureDefaults: preferredMicDeviceId ? { deviceId: preferredMicDeviceId } : undefined,
+            publishDefaults: {
+                audioBitrate: audioBitrateKbps * 1000,
+                audioPreset: { maxBitrate: audioBitrateKbps * 1000 },
+                dtx: false,
+                videoCodec: preferredCodec,
+                backupCodec: true,
+                screenShareEncoding: {
+                    maxBitrate: 12000000,
+                    maxFramerate: 60
                 }
             }
-            try {
-                dotnetHelper.invokeMethodAsync('OnRoomConnected', existingParticipants);
-            } catch(e) {}
+        });
+
+        // Setup event listeners for the specific events you'll need
+        voiceState.currentRoom
+            .on(window.LivekitClient.RoomEvent.TrackSubscribed, handleTrackSubscribed)
+            .on(window.LivekitClient.RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed)
+            .on(window.LivekitClient.RoomEvent.TrackPublished, handleRemoteAudioPublicationChanged)
+            .on(window.LivekitClient.RoomEvent.TrackUnpublished, handleRemoteAudioPublicationChanged)
+            .on(window.LivekitClient.RoomEvent.Disconnected, handleDisconnect)
+            .on(window.LivekitClient.RoomEvent.LocalTrackPublished, handleLocalTrackPublished)
+            .on(window.LivekitClient.RoomEvent.LocalTrackUnpublished, handleLocalUnpublished)
+            .on(window.LivekitClient.RoomEvent.ParticipantConnected, handleParticipantConnected)
+            .on(window.LivekitClient.RoomEvent.ParticipantDisconnected, handleParticipantDisconnected)
+            .on(window.LivekitClient.RoomEvent.TrackMuted, handleTrackMuted)
+            .on(window.LivekitClient.RoomEvent.TrackUnmuted, handleTrackUnmuted);
+        if (window.LivekitClient.RoomEvent.Reconnecting) {
+            voiceState.currentRoom.on(window.LivekitClient.RoomEvent.Reconnecting, () => { voiceState.isRoomReconnecting = true; });
+        }
+        if (window.LivekitClient.RoomEvent.SignalReconnecting) {
+            voiceState.currentRoom.on(window.LivekitClient.RoomEvent.SignalReconnecting, () => { voiceState.isRoomReconnecting = true; });
+        }
+        if (window.LivekitClient.RoomEvent.Reconnected) {
+            voiceState.currentRoom.on(window.LivekitClient.RoomEvent.Reconnected, handleRoomReconnected);
+        }
+
+        voiceState.isLocalSoftwareMuted = initialMuted;
+        voiceState.isLocalHardwareMuted = false;
+        voiceState.micOperationSeq = 0;
+
+        // Overlap mic capture + WASM denoiser warmup with LiveKit room signaling/ICE negotiation
+        // on desktop/web clients, while deferring track.setProcessor(processor) attachment until
+        // voiceState.currentRoom.connect() resolves so PushPullFIFO never accumulates pre-publish backlog
+        // and autoGainEnabled is evaluated with the authenticated localParticipant.identity.
+        if (!initialMuted && !isNativePlatform()) {
+            micPrepToken = { cancelled: false };
+            _activeMicPrepToken = micPrepToken;
+            prefetchedMicPromise = prepareLocalMicTrackAndProcessor(
+                voiceState.currentNoiseSuppression,
+                preferredMicDeviceId,
+                () => Boolean(micPrepToken?.cancelled || voiceState.isLocalSoftwareMuted || voiceState.micOperationSeq > 1),
+                true
+            ).catch(() => null);
+        }
+
+        reportConnectingStage('connecting');
+        markVoiceDiag('Voice: room.connect Start');
+        await voiceState.currentRoom.connect(url, token);
+        markVoiceDiag('Voice: room.connect Done');
+        if (typeof voiceState.currentRoom.startAudio === 'function') {
+            voiceState.currentRoom.startAudio().catch(() => {});
+        }
+        notifyHostVoiceState(true, isEffectiveLocalMicMuted());
+        console.log('[Voice] Connected to room:', voiceState.currentRoom.name);
+        _nativeCallResourcesActive = true;
+        voiceState.localCameraDesired = false;
+
+        syncLocalCaptureAutoGainState({ allowWebRtcTrackUpdate: false });
+        reconcileAudioRouting();
+        rebindRemoteAudioElementsPlayback(false);
+
+        configureVoicePip(voiceState.dotnetHelper, {
+            onToggleMute: () => window.spokesNativeCallAction('toggleMute'),
+            onToggleCamera: () => window.spokesNativeCallAction('toggleCamera'),
+            onToggleScreenShare: () => window.spokesNativeCallAction('toggleScreenShare'),
+            onHangUp: () => window.spokesLeaveVoiceCall(),
+            onReturnToCall: () => window.spokesNativeCallAction('returnToCall'),
+            onRestoreStageTracks: () => reattachAllTracks()
+        });
+        updatePipCallState({
+            active: true,
+            channelName: '',
+            localUserId: voiceState.currentRoom.localParticipant?.identity || '',
+            isNativePlatform: false,
+            isMuted: isEffectiveLocalMicMuted(),
+            isVideoOn: false,
+            isScreenSharing: false
+        });
+
+        if (voiceState.dotnetHelper) {
+            const existingParticipants = getRemoteParticipantsIterable()
+                .map(p => getEffectiveParticipantIdentity(p))
+                .filter(id => Boolean(id) && !isSyntheticIdentity(id));
+            invokeDotNetSafe('OnRoomConnected', existingParticipants);
+            publishVoiceRoomSnapshot('SyncRoomSnapshotAsync');
         }
 
         // Turn on microphone by default when joining a voice channel (unless muted during connect)
-        // Executed asynchronously to prevent the permission prompt from blocking the UI render
-        if (!_isLocalSoftwareMuted) {
-            setMicrophoneEnabled(true).then(() => {
-                updateAudioDevices().catch(e => console.warn('[Voice] Failed to update audio devices:', e));
-            }).catch(e => console.warn('[Voice] Failed to enable microphone:', e));
+        // Executed asynchronously after yielding a frame so UI paint & Blazor channel mount never stall.
+        if (typeof voiceState.currentRoom?.name === 'string' && voiceState.currentRoom.name.startsWith('channel-')) {
+            voiceState.activeVoiceChannelId = voiceState.currentRoom.name.slice('channel-'.length);
+        }
+        if (!voiceState.isLocalSoftwareMuted && voiceState.micOperationSeq === 0) {
+            reportConnectingStage('microphone');
+            yieldToBrowserFrame()
+                .then(() => setMicrophoneEnabled(true, prefetchedMicPromise).catch(e => console.warn('[Voice] Failed to enable microphone:', e)))
+                .then(() => updateAudioDevices().then(() => markVoiceDiag('Voice: updateAudioDevices Done')).catch(e => console.warn('[Voice] Failed to update audio devices:', e)));
+        } else {
+            cancelActiveMicPrep();
+            yieldToBrowserFrame()
+                .then(() => updateAudioDevices().then(() => markVoiceDiag('Voice: updateAudioDevices Done')).catch(() => {}))
+                .catch(() => {});
         }
 
+        startWebAvSkewTelemetryPolling();
         return true;
     } catch (error) {
+        if (micPrepToken) micPrepToken.cancelled = true;
+        cancelActiveMicPrep();
         console.error('[Voice] Connection failed:', error);
         try {
             await disconnectFromVoice();
@@ -1207,30 +1783,9 @@ function stopLivekitTrackCompletely(track) {
     } catch (e) {}
 }
 
-function stopAllScreenTracks(room = null) {
-    if (globalScreenTracks && globalScreenTracks.length > 0) {
-        for (let t of globalScreenTracks) {
-            stopLivekitTrackCompletely(t);
-        }
-        globalScreenTracks = [];
-    }
-    const targetRoom = room || currentRoom;
-    if (targetRoom && targetRoom.localParticipant) {
-        try {
-            const pubs = getParticipantTrackPublications(targetRoom.localParticipant);
-            for (const p of pubs) {
-                if (p.source === window.LivekitClient?.Track?.Source?.ScreenShare || p.source === window.LivekitClient?.Track?.Source?.ScreenShareAudio) {
-                    const t = p.videoTrack || p.audioTrack || p.track;
-                    if (t) stopLivekitTrackCompletely(t);
-                }
-            }
-        } catch (e) {}
-    }
-}
-
 function stopAllLocalMediaTracks(room = null) {
     stopAllScreenTracks(room);
-    const targetRoom = room || currentRoom;
+    const targetRoom = room || voiceState.currentRoom;
     if (targetRoom && targetRoom.localParticipant) {
         try {
             const pubs = getParticipantTrackPublications(targetRoom.localParticipant);
@@ -1257,10 +1812,10 @@ function stopAllLocalMediaTracks(room = null) {
 }
 
 function cleanupLocalHardwareMuteMonitor() {
-    if (typeof _localHardwareMuteCleanup === 'function') {
-        try { _localHardwareMuteCleanup(); } catch (e) {}
+    if (typeof voiceState.localHardwareMuteCleanup === 'function') {
+        try { voiceState.localHardwareMuteCleanup(); } catch (e) {}
     }
-    _localHardwareMuteCleanup = null;
+    voiceState.localHardwareMuteCleanup = null;
 }
 
 function bindLocalHardwareMuteMonitor(livekitTrack) {
@@ -1271,10 +1826,10 @@ function bindLocalHardwareMuteMonitor(livekitTrack) {
     // MediaStreamTrack.muted; WebKit/Blink instead toggle .muted during AVAudioSession/Telecom route
     // transitions. Never treat mobile track.muted as a hardware switch mute.
     if (isNativePlatform() || isAppleMobileDevice()) {
-        if (_isLocalHardwareMuted) {
-            _isLocalHardwareMuted = false;
-            if (dotnetHelper) {
-                dotnetHelper.invokeMethodAsync('OnLocalHardwareMuteChanged', false).catch(() => {});
+        if (voiceState.isLocalHardwareMuted) {
+            voiceState.isLocalHardwareMuted = false;
+            if (voiceState.dotnetHelper) {
+                voiceState.dotnetHelper.invokeMethodAsync('OnLocalHardwareMuteChanged', false).catch(() => {});
             }
         }
         return;
@@ -1285,22 +1840,28 @@ function bindLocalHardwareMuteMonitor(livekitTrack) {
 
     const reportHardwareMute = (hwMuted) => {
         const next = Boolean(hwMuted);
-        if (_isLocalHardwareMuted === next) return;
-        _isLocalHardwareMuted = next;
+        if (voiceState.isLocalHardwareMuted === next) return;
+        voiceState.isLocalHardwareMuted = next;
 
-        const localId = currentRoom?.localParticipant?.identity;
-        if (isEffectiveLocalMicMuted() && localId) {
+        try {
+            const procTrack = livekitTrack?.processor?.processedTrack;
+            if (procTrack && typeof procTrack.enabled === 'boolean') {
+                procTrack.enabled = !next && !voiceState.isLocalSoftwareMuted;
+            }
+        } catch (e) {}
+
+        if (isEffectiveLocalMicMuted()) {
             if (_localMicVadEntry) {
                 _localMicVadEntry.isSpeaking = false;
                 _localMicVadEntry.consecutiveActiveFrames = 0;
             }
-            updateParticipantSpeakingDOM(localId, false);
-            notifyActiveSpeakersToDotnet(null, true);
+            reportLocalSpeakingState(false);
         }
-        notifyHostVoiceState(Boolean(currentRoom), isEffectiveLocalMicMuted());
+        notifyHostVoiceState(Boolean(voiceState.currentRoom), isEffectiveLocalMicMuted());
+        scheduleRoomSnapshotSync();
 
-        if (dotnetHelper) {
-            dotnetHelper.invokeMethodAsync('OnLocalHardwareMuteChanged', next).catch(() => {});
+        if (voiceState.dotnetHelper) {
+            voiceState.dotnetHelper.invokeMethodAsync('OnLocalHardwareMuteChanged', next).catch(() => {});
         }
     };
 
@@ -1326,7 +1887,7 @@ function bindLocalHardwareMuteMonitor(livekitTrack) {
         } catch (e) {}
     }
 
-    _localHardwareMuteCleanup = () => {
+    voiceState.localHardwareMuteCleanup = () => {
         try {
             rawTrack.removeEventListener('mute', onRawMute);
             rawTrack.removeEventListener('unmute', onRawUnmute);
@@ -1339,9 +1900,32 @@ function bindLocalHardwareMuteMonitor(livekitTrack) {
         }
     };
 
-    if (typeof rawTrack.muted === 'boolean' && rawTrack.muted !== _isLocalHardwareMuted) {
+    if (typeof rawTrack.muted === 'boolean' && rawTrack.muted !== voiceState.isLocalHardwareMuted) {
         reportHardwareMute(rawTrack.muted);
     }
+}
+
+let _activeMicPrepToken = null;
+
+function cancelActiveMicPrep() {
+    if (_activeMicPrepToken) {
+        _activeMicPrepToken.cancelled = true;
+        _activeMicPrepToken = null;
+    }
+}
+
+function resolvePreferredMicDeviceIdFast() {
+    if (isNativePlatform()) return undefined;
+    if (_preJoinMicDeviceId && _preJoinMicDeviceId !== 'default') {
+        return _preJoinMicDeviceId;
+    }
+    try {
+        const saved = localStorage.getItem('spokes_active_mic_id');
+        if (saved && saved !== 'default') {
+            return saved;
+        }
+    } catch (e) {}
+    return undefined;
 }
 
 async function resolvePreferredMicDeviceId() {
@@ -1350,7 +1934,7 @@ async function resolvePreferredMicDeviceId() {
     let devices = [];
     if (window.LivekitClient?.Room?.getLocalDevices) {
         try {
-            devices = await window.LivekitClient.Room.getLocalDevices('audioinput');
+            devices = await window.LivekitClient.Room.getLocalDevices('audioinput', false);
         } catch (e) {}
     }
     if ((!devices || devices.length === 0) && navigator?.mediaDevices?.enumerateDevices) {
@@ -1360,10 +1944,12 @@ async function resolvePreferredMicDeviceId() {
         } catch (e) {}
     }
 
-    let saved = null;
-    try {
-        saved = localStorage.getItem('spokes_active_mic_id');
-    } catch (e) {}
+    let saved = _preJoinMicDeviceId || null;
+    if (!saved) {
+        try {
+            saved = localStorage.getItem('spokes_active_mic_id');
+        } catch (e) {}
+    }
 
     if (saved && saved !== 'default') {
         if (!devices || devices.length === 0 || devices.some(d => d.deviceId === saved)) {
@@ -1380,60 +1966,207 @@ async function resolvePreferredMicDeviceId() {
     return undefined;
 }
 
-async function createConfiguredLocalAudioTrack(baseOptions) {
-    const preferredDeviceId = await resolvePreferredMicDeviceId();
+async function createConfiguredLocalAudioTrack(baseOptions, preResolvedDeviceId = undefined) {
+    const preferredDeviceId = preResolvedDeviceId !== undefined
+        ? preResolvedDeviceId
+        : await resolvePreferredMicDeviceId();
     const opts = { ...baseOptions };
     if (preferredDeviceId) {
         opts.deviceId = preferredDeviceId;
     }
 
     try {
-        return await window.LivekitClient.createLocalAudioTrack(opts);
+        markVoiceDiag('Voice: micPrep getUserMedia Start');
+        const track = await window.LivekitClient.createLocalAudioTrack(opts);
+        markVoiceDiag('Voice: micPrep getUserMedia Done');
+        return track;
     } catch (err) {
         if (opts.deviceId) {
             console.warn(`[Voice] createLocalAudioTrack with deviceId=${opts.deviceId} failed (${err?.name || err?.message}), retrying with system default`);
             delete opts.deviceId;
-            return await window.LivekitClient.createLocalAudioTrack(opts);
+            const fallback = await window.LivekitClient.createLocalAudioTrack(opts);
+            markVoiceDiag('Voice: micPrep getUserMedia Done (fallback)');
+            return fallback;
         }
         throw err;
     }
 }
 
-async function unpublishAndStopAllLocalMicTracks() {
-    if (!currentRoom || !currentRoom.localParticipant) return;
-    const tracks = currentRoom.localParticipant.audioTrackPublications;
-    if (!tracks) return;
-    const pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
-    for (const p of pubArr) {
+async function attachProcessorToLocalMicTrack(track, processor, preResolvedDeviceId, isAbortedFn) {
+    if (!track || !processor) {
+        return { track, processor: null, processorAttached: false };
+    }
+    markVoiceDiag(`Voice: attachProcessor Start (${processor.name || 'ai'})`);
+    try {
+        if (typeof track.setAudioContext === 'function') {
+            const captureCtx = await getCaptureAudioContext();
+            if (isAbortedFn()) {
+                try { await processor?.destroy?.(); } catch (_) {}
+                stopLivekitTrackCompletely(track);
+                return null;
+            }
+            if (captureCtx) {
+                track.setAudioContext(captureCtx);
+            }
+        }
+        if (typeof processor.setAutoGainEnabled === 'function') {
+            processor.setAutoGainEnabled(isEffectiveSenderAutoGainEnabled());
+        }
+        await track.setProcessor(processor);
+        if (isAbortedFn()) {
+            try { await processor?.destroy?.(); } catch (_) {}
+            stopLivekitTrackCompletely(track);
+            return null;
+        }
+        if (typeof processor.flushCaptureFifo === 'function') {
+            try { processor.flushCaptureFifo(); } catch (_) {}
+        }
+        markVoiceDiag(`Voice: attachProcessor Done (${processor.name || 'ai'})`);
+        return { track, processor, processorAttached: true };
+    } catch (err) {
+        console.error('[Voice] Failed to attach processor to track:', err);
+        try { await processor.destroy?.(); } catch (_) {}
+        stopLivekitTrackCompletely(track);
+        if (isAbortedFn()) return null;
+        if (voiceState.dotnetHelper) {
+            voiceState.dotnetHelper.invokeMethodAsync('OnVoiceLog', `AI Filter Processing Failed: ${err.message}.`, 'error').catch(() => {});
+        }
+        const fallbackTrack = await createConfiguredLocalAudioTrack(
+            { echoCancellation: true, noiseSuppression: true, autoGainControl: isEffectiveSenderAutoGainEnabled() },
+            preResolvedDeviceId
+        );
+        if (isAbortedFn()) {
+            stopLivekitTrackCompletely(fallbackTrack);
+            return null;
+        }
+        return { track: fallbackTrack, processor: null, processorAttached: false };
+    }
+}
+
+async function createUnprocessedMicTrackResult(trackOptions, preResolvedDeviceId, isAbortedFn) {
+    const track = await createConfiguredLocalAudioTrack(trackOptions, preResolvedDeviceId);
+    if (isAbortedFn()) {
+        stopLivekitTrackCompletely(track);
+        return null;
+    }
+    return { track, processor: null, processorAttached: false };
+}
+
+async function prepareLocalMicTrackAndProcessor(noiseFilter, preResolvedDeviceId, isAbortedFn, deferProcessorAttachment = false) {
+    const isIOS = isAppleMobileDevice();
+    const filter = noiseFilter || 'webrtc';
+
+    if (filter === 'none') {
+        return await createUnprocessedMicTrackResult(
+            { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+            preResolvedDeviceId,
+            isAbortedFn
+        );
+    }
+
+    if (filter === 'webrtc' || isIOS) {
+        return await createUnprocessedMicTrackResult(
+            { echoCancellation: true, noiseSuppression: true, autoGainControl: !isIOS && isEffectiveSenderAutoGainEnabled() },
+            preResolvedDeviceId,
+            isAbortedFn
+        );
+    }
+
+    let processor = null;
+    let captureCtx = null;
+    try {
+        markVoiceDiag(`Voice: micPrep Start (filter=${filter})`);
+        const [resolvedCtx, loadedProcessor] = await Promise.all([
+            getCaptureAudioContext().catch(() => null),
+            noiseManager.getProcessor(filter, {
+                autoGainEnabled: isEffectiveSenderAutoGainEnabled()
+            })
+        ]);
+        captureCtx = resolvedCtx;
+        processor = loadedProcessor;
+        markVoiceDiag(`Voice: micPrep AudioContext+Processor Ready (filter=${filter})`);
+        if (isAbortedFn()) {
+            try { await processor?.destroy?.(); } catch (_) {}
+            return null;
+        }
+    } catch (err) {
+        console.error('[Voice] Failed to load AI processor:', err);
+        if (isAbortedFn()) return null;
+        if (voiceState.dotnetHelper) {
+            voiceState.dotnetHelper.invokeMethodAsync('OnVoiceLog', `AI Filter Failed: ${err.message}. Falling back to WebRTC.`, 'error').catch(() => {});
+        }
+        return await createUnprocessedMicTrackResult(
+            { echoCancellation: true, noiseSuppression: true, autoGainControl: isEffectiveSenderAutoGainEnabled() },
+            preResolvedDeviceId,
+            isAbortedFn
+        );
+    }
+
+    // Overlap AudioWorklet module loading (e.g. 1.94MB rnnoise-processor.js + voiceLevelerWorklet.js)
+    // with getUserMedia() and LiveKit room.connect() instead of stalling after room.connect() resolves.
+    const workletPreloadPromise = (processor && captureCtx && typeof processor.preload === 'function')
+        ? processor.preload(captureCtx).catch((err) => {
+            console.warn('[Voice] AudioWorklet preload failed (will retry on attach):', err);
+        })
+        : Promise.resolve();
+
+    const [track] = await Promise.all([
+        createConfiguredLocalAudioTrack(
+            { echoCancellation: true, noiseSuppression: false, autoGainControl: false },
+            preResolvedDeviceId
+        ),
+        workletPreloadPromise
+    ]);
+    markVoiceDiag(`Voice: micPrep Track+Worklets Ready (filter=${filter})`);
+    if (isAbortedFn()) {
+        try { await processor?.destroy?.(); } catch (_) {}
+        stopLivekitTrackCompletely(track);
+        return null;
+    }
+
+    if (processor && !deferProcessorAttachment) {
+        return await attachProcessorToLocalMicTrack(track, processor, preResolvedDeviceId, isAbortedFn);
+    }
+
+    return { track, processor, processorAttached: false, preResolvedDeviceId };
+}
+
+async function unpublishAndStopAllLocalMicTracks(suppressMuteNotify = false) {
+    if (!voiceState.currentRoom || !voiceState.currentRoom.localParticipant) return;
+    for (const p of toArray(voiceState.currentRoom.localParticipant.audioTrackPublications)) {
         if (p && p.track && p.source !== window.LivekitClient?.Track?.Source?.ScreenShareAudio) {
             const trackToStop = p.audioTrack || p.track;
+            if (suppressMuteNotify) voiceState.suppressNextUnpublishMuteNotify = true;
             try {
-                await currentRoom.localParticipant.unpublishTrack(trackToStop, true);
+                await voiceState.currentRoom.localParticipant.unpublishTrack(trackToStop, true);
             } catch (e) {
             } finally {
+                if (suppressMuteNotify) voiceState.suppressNextUnpublishMuteNotify = false;
                 stopLivekitTrackCompletely(trackToStop);
             }
         }
     }
 }
 
-async function publishConfiguredLocalMicTrack(track, opSeq = _micOperationSeq) {
+async function publishConfiguredLocalMicTrack(track, opSeq = voiceState.micOperationSeq) {
     if (!track) return false;
-    if (opSeq !== _micOperationSeq || _isLocalSoftwareMuted || !currentRoom || !currentRoom.localParticipant) {
+    if (opSeq !== voiceState.micOperationSeq || voiceState.isLocalSoftwareMuted || !voiceState.currentRoom || !voiceState.currentRoom.localParticipant) {
         stopLivekitTrackCompletely(track);
         return false;
     }
     bindLocalHardwareMuteMonitor(track);
-    await currentRoom.localParticipant.publishTrack(track, {
-        dtx: true,
+    markVoiceDiag('Voice: publishMicTrack Start');
+    await voiceState.currentRoom.localParticipant.publishTrack(track, {
+        dtx: false,
         source: window.LivekitClient?.Track?.Source?.Microphone
     });
-    if (opSeq !== _micOperationSeq || _isLocalSoftwareMuted || !currentRoom || !currentRoom.localParticipant) {
+    markVoiceDiag('Voice: publishMicTrack Done');
+    if (opSeq !== voiceState.micOperationSeq || voiceState.isLocalSoftwareMuted || !voiceState.currentRoom || !voiceState.currentRoom.localParticipant) {
         cleanupLocalHardwareMuteMonitor();
-        _activeLocalAudioProcessor = null;
+        voiceState.activeLocalAudioProcessor = null;
         try {
-            if (currentRoom?.localParticipant) {
-                await currentRoom.localParticipant.unpublishTrack(track, true);
+            if (voiceState.currentRoom?.localParticipant) {
+                await voiceState.currentRoom.localParticipant.unpublishTrack(track, true);
             }
         } catch (e) {}
         stopLivekitTrackCompletely(track);
@@ -1459,10 +2192,7 @@ function detachAllRoomMedia(room) {
         }
         const remoteMap = room.remoteParticipants || room.participants;
         if (remoteMap) {
-            const remotes = typeof remoteMap.values === 'function'
-                ? Array.from(remoteMap.values())
-                : Object.values(remoteMap);
-            remotes.forEach(p => {
+            toArray(remoteMap).forEach(p => {
                 const pubs = getParticipantTrackPublications(p);
                 pubs.forEach(pub => {
                     if (pub.track && typeof pub.track.detach === 'function') {
@@ -1481,15 +2211,14 @@ function detachAllRoomMedia(room) {
 }
 
 async function releaseNativeCallResources() {
-    const wasActive = _nativeCallResourcesActive || _localCameraDesired || Boolean(_iosCompanionToken);
+    const wasActive = _nativeCallResourcesActive || voiceState.localCameraDesired;
     _nativeCallResourcesActive = false;
-    _localCameraDesired = false;
-    _iosCompanionToken = '';
-    _iosActiveCameraId = '';
+    voiceState.localCameraDesired = false;
+    _iosLastConfiguredVideoMode = null;
     if (!wasActive) return;
 
     if (isNativePlatform()) {
-        _activeNativeSpeakerId = 'default';
+        voiceState.activeNativeSpeakerId = 'default';
         try {
             if (window.Capacitor?.Plugins?.KeepAwake) {
                 await window.Capacitor.Plugins.KeepAwake.allowSleep();
@@ -1502,17 +2231,11 @@ async function releaseNativeCallResources() {
                     try { await _iosAudioInterruptionListener.remove(); } catch (e) {}
                     _iosAudioInterruptionListener = null;
                 }
-                if (typeof audioPlugin.stopNativeCamera === 'function') {
-                    try { await audioPlugin.stopNativeCamera(); } catch (e) {}
-                } else if (typeof window !== 'undefined' && typeof window.SpokesNative?.controlNativeCamera === 'function') {
-                    try { window.SpokesNative.controlNativeCamera('stop', {}); } catch (e) {}
-                }
                 let res = await audioPlugin.configureVoiceChat({ enabled: false });
                 console.info(`[Voice] iOS Native Session Released: Category=${res?.category}, Mode=${res?.mode}, Output=${res?.activeOutput}`);
             }
 
             if (platform === 'android' && window.Capacitor?.Plugins?.TelecomConnectionPlugin) {
-                _androidInitialRouteSet = false;
                 window.Capacitor.Plugins.TelecomConnectionPlugin.removeAllListeners();
                 await window.Capacitor.Plugins.TelecomConnectionPlugin.endCall();
             }
@@ -1522,24 +2245,53 @@ async function releaseNativeCallResources() {
     }
 }
 
-export async function disconnectFromVoice() {
-    _micOperationSeq++;
+function teardownLocalRoomState() {
+    voiceState.micOperationSeq++;
+    cancelActiveMicPrep();
+    _preJoinHydrated = false;
+    _preJoinMicDeviceId = '';
+    voiceState.pendingCircuitSnapshotMethod = null;
+    voiceState.isRoomReconnecting = false;
+    voiceState.lastAudioDevicesSignature = '';
+    resetVoiceRoomSnapshotSync();
+    voiceState.suppressedPublicationSids.clear();
+    const prevChannelId = voiceState.activeVoiceChannelId
+        || (typeof voiceState.currentRoom?.name === 'string' && voiceState.currentRoom.name.startsWith('channel-')
+            ? voiceState.currentRoom.name.slice('channel-'.length)
+            : '');
+    voiceState.activeVoiceChannelId = '';
+    if (prevChannelId && typeof window !== 'undefined' && window.spokesVoiceSpeaking?.clearChannel) {
+        window.spokesVoiceSpeaking.clearChannel(prevChannelId);
+    }
+    stopWebAvSkewTelemetryPolling();
     cleanupLocalHardwareMuteMonitor();
-    _activeLocalAudioProcessor = null;
-    _isLocalSoftwareMuted = false;
-    _isLocalHardwareMuted = false;
-    _localCameraDesired = false;
-    _mutedRemoteScreenAudio.clear();
-    _coLocatedProcessedUsers.clear();
-    _mutedRoommateUsers.clear();
-    const roomToClose = currentRoom;
-    currentRoom = null;
+    voiceState.activeLocalAudioProcessor = null;
+    voiceState.isLocalSoftwareMuted = false;
+    voiceState.isLocalHardwareMuted = false;
+    voiceState.localCameraDesired = false;
+    voiceState.mutedRemoteScreenAudio.clear();
+    voiceState.coLocatedProcessedUsers.clear();
+    voiceState.mutedRoommateUsers.clear();
+    const roomToClose = voiceState.currentRoom;
+    voiceState.currentRoom = null;
     stopAllLocalMediaTracks(roomToClose);
     clearAllVoiceTracks();
     clearAllParticipantAudio();
     notifyHostVoiceState(false, false);
     if (roomToClose) {
         detachAllRoomMedia(roomToClose);
+    }
+    return roomToClose;
+}
+
+export async function disconnectFromVoice() {
+    exitParticipantFullscreen(false);
+    const roomToClose = teardownLocalRoomState();
+    await cleanupNativeMobileVoiceState();
+    if (isMobileVoiceClient()) {
+        resetMobileCameraSelectionForNewCall();
+    }
+    if (roomToClose) {
         try {
             await roomToClose.disconnect(true);
         } catch (e) {
@@ -1547,221 +2299,137 @@ export async function disconnectFromVoice() {
         }
     }
     await releaseNativeCallResources();
+    if (!voiceState.currentRoom && !voiceState.usingNativeMobileVoice) {
+        notifyHostVoiceState(false, false);
+    }
 }
 
 export async function reinitializeMicrophone() {
-    if (!currentRoom || !currentRoom.localParticipant) return;
-    if (_isLocalSoftwareMuted) return;
+    if (voiceState.usingNativeMobileVoice) {
+        if (voiceState.isLocalSoftwareMuted) return;
+        const nativeVoice = getNativeVoicePlugin();
+        if (nativeVoice && typeof nativeVoice.setMicrophoneEnabled === 'function') {
+            await nativeVoice.setMicrophoneEnabled({ enabled: true }).catch(() => {});
+        }
+        return;
+    }
+    if (!voiceState.currentRoom || !voiceState.currentRoom.localParticipant) return;
+    if (voiceState.isLocalSoftwareMuted) return;
 
     try {
         cleanupLocalHardwareMuteMonitor();
-        _activeLocalAudioProcessor = null;
-        const tracks = currentRoom.localParticipant.audioTrackPublications;
-        if (tracks) {
-            const pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
-            for (const p of pubArr) {
-                if (p.track && p.source !== window.LivekitClient.Track.Source.ScreenShareAudio) {
-                    const trackToStop = p.audioTrack || p.track;
-                    _suppressNextUnpublishMuteNotify = true;
-                    try {
-                        await currentRoom.localParticipant.unpublishTrack(trackToStop, true);
-                    } finally {
-                        _suppressNextUnpublishMuteNotify = false;
-                        stopLivekitTrackCompletely(trackToStop);
-                    }
-                }
-            }
-        }
+        voiceState.activeLocalAudioProcessor = null;
+        await unpublishAndStopAllLocalMicTracks(true);
         await setMicrophoneEnabled(true);
     } catch (e) {
         console.error('[Voice] reinitializeMicrophone failed:', e);
     }
 }
 
-export async function setMicrophoneEnabled(enabled) {
-    if (!currentRoom || !currentRoom.localParticipant) return;
+export async function setMicrophoneEnabled(enabled, prePreparedPromise = null) {
+    if (voiceState.usingNativeMobileVoice) {
+        const nativeVoice = getNativeVoicePlugin();
+        voiceState.isLocalSoftwareMuted = !enabled;
+        if (isEffectiveLocalMicMuted()) {
+            reportLocalSpeakingState(false);
+        }
+        notifyHostVoiceState(true, isEffectiveLocalMicMuted());
+        if (nativeVoice && typeof nativeVoice.setMicrophoneEnabled === 'function') {
+            await nativeVoice.setMicrophoneEnabled({ enabled: Boolean(enabled) });
+        }
+        if (voiceState.dotnetHelper) {
+            try { voiceState.dotnetHelper.invokeMethodAsync('OnLocalMuted', !enabled)?.catch?.(() => {}); } catch (e) {}
+        }
+        scheduleRoomSnapshotSync();
+        return;
+    }
+    if (!voiceState.currentRoom || !voiceState.currentRoom.localParticipant) return;
 
-    const opSeq = ++_micOperationSeq;
-    _isLocalSoftwareMuted = !enabled;
-    const localId = currentRoom.localParticipant.identity;
+    const opSeq = ++voiceState.micOperationSeq;
+    voiceState.isLocalSoftwareMuted = !enabled;
     notifyHostVoiceState(true, isEffectiveLocalMicMuted());
 
     const isMicEnableAborted = () =>
-        opSeq !== _micOperationSeq || _isLocalSoftwareMuted || !currentRoom || !currentRoom.localParticipant;
+        opSeq !== voiceState.micOperationSeq || voiceState.isLocalSoftwareMuted || !voiceState.currentRoom || !voiceState.currentRoom.localParticipant;
 
     try {
         if (!enabled) {
+            cancelActiveMicPrep();
             cleanupLocalHardwareMuteMonitor();
-            _activeLocalAudioProcessor = null;
-            if (localId) {
-                updateParticipantSpeakingDOM(localId, false);
-                unregisterLocalMicVad();
-            }
-            notifyActiveSpeakersToDotnet(null, true);
+            voiceState.activeLocalAudioProcessor = null;
+            unregisterLocalMicVad();
 
             // Unpublish existing tracks and explicitly stop underlying MediaStreamTracks
             await unpublishAndStopAllLocalMicTracks();
             return;
         }
 
-        _activeLocalAudioProcessor = null;
-        let isIOS = isAppleMobileDevice();
-
-        if (currentNoiseSuppression === 'webrtc') {
-            if (isIOS) {
-                let trackOptions = {
-                    echoCancellation: true, 
-                    noiseSuppression: true,
-                    autoGainControl: false
-                };
-                console.info(`[Voice] Publishing iOS Basic Track: echo=${trackOptions.echoCancellation}, ns=${trackOptions.noiseSuppression}, agc=${trackOptions.autoGainControl}`);
-                let track = await createConfiguredLocalAudioTrack(trackOptions);
-                if (isMicEnableAborted()) {
-                    stopLivekitTrackCompletely(track);
-                    return;
-                }
-                await publishConfiguredLocalMicTrack(track, opSeq);
-            } else {
-                console.info(`[Voice] Publishing Standard WebRTC Track`);
-                let track = await createConfiguredLocalAudioTrack({ echoCancellation: true, noiseSuppression: true, autoGainControl: true });
-                if (isMicEnableAborted()) {
-                    stopLivekitTrackCompletely(track);
-                    return;
-                }
-                await publishConfiguredLocalMicTrack(track, opSeq);
-            }
+        voiceState.activeLocalAudioProcessor = null;
+        markVoiceDiag('Voice: setMicrophoneEnabled Start');
+        let prepared = (prePreparedPromise && typeof prePreparedPromise.then === 'function')
+            ? await prePreparedPromise.catch(() => null)
+            : null;
+        markVoiceDiag(`Voice: setMicrophoneEnabled PrepAwaited (hit=${Boolean(prepared && prepared.track)})`);
+        if (prepared && isMicEnableAborted()) {
+            try { await prepared.processor?.destroy?.(); } catch (_) {}
+            stopLivekitTrackCompletely(prepared.track);
             return;
         }
 
-        if (currentNoiseSuppression === 'none') {
-            let trackOptions = {
-                echoCancellation: false, 
-                noiseSuppression: false,
-                autoGainControl: false
-            };
-            console.info(`[Voice] Publishing Raw Track (None): isIOS=${isIOS}`);
-            let track = await createConfiguredLocalAudioTrack(trackOptions);
-            if (isMicEnableAborted()) {
-                stopLivekitTrackCompletely(track);
-                return;
-            }
-            await publishConfiguredLocalMicTrack(track, opSeq);
-            return;
+        if (!prepared || !prepared.track) {
+            prepared = await prepareLocalMicTrackAndProcessor(
+                voiceState.currentNoiseSuppression,
+                null,
+                isMicEnableAborted
+            );
         }
 
-        // --- AI Filtering Logic ---
-        if (isIOS) {
-            let trackOptions = {
-                echoCancellation: true, 
-                noiseSuppression: true,
-                autoGainControl: false
-            };
-            console.info(`[Voice] iOS: using optimized hardware & spectral noise filter. echo=${trackOptions.echoCancellation}, ns=${trackOptions.noiseSuppression}`);
-            let track = await createConfiguredLocalAudioTrack(trackOptions);
-            if (isMicEnableAborted()) {
-                stopLivekitTrackCompletely(track);
-                return;
-            }
-            await publishConfiguredLocalMicTrack(track, opSeq);
+        if (!prepared || !prepared.track) {
             return;
         }
-
-        let processor = null;
-        try {
-            processor = await noiseManager.getProcessor(currentNoiseSuppression, {
-                stationaryRoomMode: isLocalInActivePhysicalRoom()
-            });
-            if (isMicEnableAborted()) {
-                try { await processor?.destroy?.(); } catch (_) {}
-                return;
-            }
-        } catch (err) {
-            console.error('[Voice] Failed to load AI processor:', err);
-            if (isMicEnableAborted()) {
-                return;
-            }
-            if (dotnetHelper) {
-                dotnetHelper.invokeMethodAsync('OnVoiceLog', `AI Filter Failed: ${err.message}. Falling back to WebRTC.`, "error").catch(()=>{});
-            }
-            let track = await createConfiguredLocalAudioTrack({ echoCancellation: true, noiseSuppression: true, autoGainControl: true });
-            if (isMicEnableAborted()) {
-                stopLivekitTrackCompletely(track);
-                return;
-            }
-            await publishConfiguredLocalMicTrack(track, opSeq);
-            return;
-        }
-        
-        let trackOptions = {
-            echoCancellation: currentNoiseSuppression !== 'none',
-            // Disable native WebRTC noise suppression and AGC when using a neural processor;
-            // pre-calibration and post-denoiser -20 dBFS loudness normalization run inside the processor graph.
-            noiseSuppression: currentNoiseSuppression === 'webrtc',
-            autoGainControl: currentNoiseSuppression === 'webrtc'
-        };
-        console.info(`[Voice] Publishing AI Track (${currentNoiseSuppression}): echo=${trackOptions.echoCancellation}, ns=${trackOptions.noiseSuppression}, agc=${trackOptions.autoGainControl}`);
-        
-        let track = await createConfiguredLocalAudioTrack(trackOptions);
         if (isMicEnableAborted()) {
-            try { await processor?.destroy?.(); } catch (_) {}
-            stopLivekitTrackCompletely(track);
+            try { await prepared.processor?.destroy?.(); } catch (_) {}
+            stopLivekitTrackCompletely(prepared.track);
             return;
         }
-        
-        if (processor) {
-            try {
-                if (typeof track.setAudioContext === 'function') {
-                    const captureCtx = await getCaptureAudioContext();
-                    if (isMicEnableAborted()) {
-                        try { await processor?.destroy?.(); } catch (_) {}
-                        stopLivekitTrackCompletely(track);
-                        return;
-                    }
-                    if (captureCtx) {
-                        track.setAudioContext(captureCtx);
-                    }
-                }
-                await track.setProcessor(processor);
-                if (isMicEnableAborted()) {
-                    try { await processor?.destroy?.(); } catch (_) {}
-                    stopLivekitTrackCompletely(track);
-                    return;
-                }
-                _activeLocalAudioProcessor = processor;
-                updateLocalProcessorStationaryRoomMode();
-            } catch (err) {
-                console.error('[Voice] Failed to attach processor to track:', err);
-                try { await processor.destroy?.(); } catch (_) {}
-                _activeLocalAudioProcessor = null;
-                stopLivekitTrackCompletely(track);
-                if (isMicEnableAborted()) {
-                    return;
-                }
-                if (dotnetHelper) {
-                    dotnetHelper.invokeMethodAsync('OnVoiceLog', `AI Filter Processing Failed: ${err.message}.`, "error").catch(()=>{});
-                }
-                
-                trackOptions.noiseSuppression = true;
-                trackOptions.autoGainControl = true;
-                trackOptions.echoCancellation = true;
-                
-                track = await createConfiguredLocalAudioTrack(trackOptions);
-                if (isMicEnableAborted()) {
-                    stopLivekitTrackCompletely(track);
-                    return;
-                }
+
+        if (prepared.processor && !prepared.processorAttached) {
+            prepared = await attachProcessorToLocalMicTrack(
+                prepared.track,
+                prepared.processor,
+                prepared.preResolvedDeviceId,
+                isMicEnableAborted
+            );
+            if (!prepared || !prepared.track) {
+                return;
             }
         }
-        
-        await publishConfiguredLocalMicTrack(track, opSeq);
+
+        voiceState.activeLocalAudioProcessor = prepared.processor || null;
+        if (voiceState.activeLocalAudioProcessor) {
+            syncLocalCaptureAutoGainState({ allowWebRtcTrackUpdate: false });
+            flushLocalCaptureFifoIfAvailable();
+        }
+        const published = await publishConfiguredLocalMicTrack(prepared.track, opSeq);
+        if (published) {
+            syncLocalCaptureAutoGainState({ allowWebRtcTrackUpdate: true });
+            if (voiceState.activeLocalAudioProcessor) {
+                flushLocalCaptureFifoIfAvailable();
+                setTimeout(() => {
+                    if (voiceState.activeLocalAudioProcessor === prepared.processor) {
+                        flushLocalCaptureFifoIfAvailable();
+                    }
+                }, 60);
+            }
+        }
         
     } catch (e) {
         console.error('[Voice] setMicrophoneEnabled failed:', e);
-        if (dotnetHelper) {
-            dotnetHelper.invokeMethodAsync('OnVoiceLog', `Microphone Error: ${e.message}`, "error").catch(()=>{});
+        if (voiceState.dotnetHelper) {
+            voiceState.dotnetHelper.invokeMethodAsync('OnVoiceLog', `Microphone Error: ${e.message}`, "error").catch(()=>{});
         }
-        if (!isMicEnableAborted() && currentRoom && currentRoom.localParticipant) {
-            await currentRoom.localParticipant.setMicrophoneEnabled(true).catch(()=>{});
+        if (!isMicEnableAborted() && voiceState.currentRoom && voiceState.currentRoom.localParticipant) {
+            await voiceState.currentRoom.localParticipant.setMicrophoneEnabled(true).catch(()=>{});
         }
     }
 }
@@ -1769,29 +2437,16 @@ export async function setMicrophoneEnabled(enabled) {
 function getCustomPreset(resolutionStr, is60fps) {
     const mult = is60fps ? 1.5 : 1;
 
-    // Unified 'Auto' preset across iOS, Android, and Desktop:
-    // 1080p ceiling at 30fps / 3.0 Mbps with 'balanced' degradation
-    // so WebRTC handles all stepdown and network management automatically.
+    // Unified self-hosted 'Auto' preset across iOS, Android, and Web/Desktop:
+    // 1080p @ 30fps with generous 8.0 Mbps ceiling and 'balanced' degradation so
+    // handheld motion stays sharp on LAN/broadband while poor networks adapt smoothly.
     if (!resolutionStr || resolutionStr === 'Auto') {
-        return { width: 1920, height: 1080, maxBitrate: 3000000 };
+        return { width: 1920, height: 1080, maxBitrate: 8000000 };
     }
 
-    let isAppleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
-    let isAndroidMobile = /Android/i.test(navigator.userAgent) || (isNativePlatform() && getNativePlatform() === 'android');
-
-    if (isAppleMobile && window.LivekitClient && window.LivekitClient.VideoPresets) {
-        if (resolutionStr === '2160p') return window.LivekitClient.VideoPresets.h2160;
-        if (resolutionStr === '1080p') return window.LivekitClient.VideoPresets.h1080;
-        return window.LivekitClient.VideoPresets.h1080;
-    }
-
-    if (isAndroidMobile) {
-        // Match iOS native hardware H.264 presets 1:1 on Android for explicit 1080p and 4K (2160p)
-        if (resolutionStr === '2160p') return { width: 3840, height: 2160, maxBitrate: Math.round(8000000 * mult) };
-        return { width: 1920, height: 1080, maxBitrate: Math.round(3000000 * mult) };
-    }
-
-    // Explicit manual resolutions on PC/Desktop (1080p and 4K/2160p)
+    // Unified explicit manual resolutions across Mobile and Desktop (1080p and 4K/2160p):
+    // 1080p: 8 Mbps (30fps) / 12 Mbps (60fps); 4K: 20 Mbps (30fps) / 30 Mbps (60fps).
+    // WebRTC GCC adapts down automatically on constrained cellular/WAN links.
     if (resolutionStr === '2160p') return { width: 3840, height: 2160, maxBitrate: Math.round(20000000 * mult) };
     return { width: 1920, height: 1080, maxBitrate: Math.round(8000000 * mult) };
 }
@@ -1804,7 +2459,7 @@ async function createConfiguredLocalVideoTrack(trackOptions) {
         if (opts.deviceId) {
             console.warn(`[Voice] createLocalVideoTrack with deviceId=${opts.deviceId} failed (${err?.name || err?.message}), retrying with facingMode/default`);
             delete opts.deviceId;
-            if (!opts.facingMode) opts.facingMode = _localCameraFacing || 'user';
+            if (!opts.facingMode) opts.facingMode = voiceState.localCameraFacing || 'user';
             return await window.LivekitClient.createLocalVideoTrack(opts);
         }
         throw err;
@@ -1819,275 +2474,111 @@ async function applyCameraTrackEncoding(track, targetPreset, targetFps = 30, res
 
     if (track.mediaStreamTrack) {
         try {
-            // In Auto mode, leave contentHint unset ('') so WebRTC's congestion controller
-            // handles all stepdown & network management. When a specific resolution (1080p / 4K)
-            // is chosen, set 'detail' so WebRTC pushes that resolution without downscaling.
             track.mediaStreamTrack.contentHint = isAuto ? '' : 'detail';
         } catch (e) {}
     }
-    if (typeof track.setDegradationPreference === 'function') {
-        try {
-            await track.setDegradationPreference(degradationPref);
-        } catch (e) {}
-    }
-    const sender = track.sender;
-    if (sender && typeof sender.getParameters === 'function' && typeof sender.setParameters === 'function') {
-        try {
-            const params = sender.getParameters();
-            if (params && Array.isArray(params.encodings) && params.encodings.length > 0) {
-                const topIdx = params.encodings.length - 1;
-                params.encodings.forEach((enc, idx) => {
-                    if (idx === topIdx) {
-                        enc.maxBitrate = targetPreset.maxBitrate;
-                        enc.maxFramerate = effectiveFps;
-                        if (!isAuto) {
-                            enc.scaleResolutionDownBy = 1.0;
-                        }
-                    } else if (idx === topIdx - 1 && params.encodings.length >= 3) {
-                        enc.maxBitrate = Math.max(900000, Math.round(targetPreset.maxBitrate * 0.4));
-                        enc.maxFramerate = effectiveFps;
-                    } else {
-                        enc.maxBitrate = Math.max(350000, Math.round(targetPreset.maxBitrate * 0.15));
-                        enc.maxFramerate = Math.min(30, effectiveFps);
-                    }
-                });
-                if (track.encodings) {
-                    track.encodings = params.encodings;
-                }
-                await sender.setParameters(params);
+    await applyTrackSenderParameters(track, degradationPref, (encodings) => {
+        const topIdx = encodings.length - 1;
+        encodings.forEach((enc, idx) => {
+            if (idx === topIdx) {
+                enc.active = true;
+                enc.maxBitrate = targetPreset.maxBitrate;
+                enc.maxFramerate = effectiveFps;
+                enc.scaleResolutionDownBy = 1.0;
+            } else if (idx === topIdx - 1 && encodings.length >= 3) {
+                enc.active = isAuto;
+                enc.maxBitrate = Math.max(900000, Math.round(targetPreset.maxBitrate * 0.4));
+                enc.maxFramerate = effectiveFps;
+            } else {
+                enc.active = isAuto;
+                enc.maxBitrate = Math.max(350000, Math.round(targetPreset.maxBitrate * 0.15));
+                enc.maxFramerate = Math.min(30, effectiveFps);
             }
-        } catch (e) {
-            console.warn('[VoiceInterop] Failed to update camera RTCRtpSender parameters:', e);
-        }
-    }
+        });
+    }, 'camera');
 }
-
-function getScreenPreset(resolutionStr, is60fps) {
-    const targetFps = is60fps ? 60 : 30;
-    let isAppleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
-
-    if (isAppleMobile && window.LivekitClient && window.LivekitClient.VideoPresets) {
-        if (resolutionStr === '2160p') return { width: 3840, height: 2160, maxBitrate: is60fps ? 18000000 : 12000000, frameRate: targetFps };
-        if (resolutionStr === '1440p') return { width: 2560, height: 1440, maxBitrate: is60fps ? 12000000 : 8000000, frameRate: targetFps };
-        return { width: 1920, height: 1080, maxBitrate: is60fps ? 8000000 : 6000000, frameRate: targetFps };
-    }
-
-    // High-bitrate hardware-encoded H.264 presets tailored for gameplay ('Smooth') and meetings ('Clarity'):
-    // - 2160p (4K): 25 Mbps @ 30fps / 35 Mbps @ 60fps
-    // - 1440p (2K/QHD): 16 Mbps @ 30fps / 24 Mbps @ 60fps
-    // - 1080p (FHD): 10 Mbps @ 30fps / 15 Mbps @ 60fps
-    // - Auto: 1080p ceiling at 8 Mbps @ 30fps / 12 Mbps @ 60fps with dynamic network stepdown
-    if (resolutionStr === '2160p') return { width: 3840, height: 2160, maxBitrate: is60fps ? 35000000 : 25000000, frameRate: targetFps };
-    if (resolutionStr === '1440p') return { width: 2560, height: 1440, maxBitrate: is60fps ? 24000000 : 16000000, frameRate: targetFps };
-    if (resolutionStr === '1080p') return { width: 1920, height: 1080, maxBitrate: is60fps ? 15000000 : 10000000, frameRate: targetFps };
-    if (resolutionStr === '720p') return { width: 1280, height: 720, maxBitrate: is60fps ? 7500000 : 5000000, frameRate: targetFps };
-
-    return { width: 1920, height: 1080, maxBitrate: is60fps ? 12000000 : 8000000, frameRate: targetFps };
-}
-
-function getScreenTrackMaxSourceEdge(track) {
-    if (!track) return 0;
-    const mediaStreamTrack = track.mediaStreamTrack || track;
-    const settings = typeof mediaStreamTrack.getSettings === 'function' ? mediaStreamTrack.getSettings() : {};
-    let srcW = settings.width || track.dimensions?.width || 0;
-    let srcH = settings.height || track.dimensions?.height || 0;
-    if ((srcW <= 0 || srcH <= 0) && typeof window !== 'undefined' && window.screen) {
-        const dpr = window.devicePixelRatio || 1;
-        srcW = Math.round((window.screen.width || 1920) * dpr);
-        srcH = Math.round((window.screen.height || 1080) * dpr);
-    }
-    return Math.max(srcW, srcH);
-}
-
-function computeScreenScaleDown(track, targetPreset) {
-    if (!track || !targetPreset) return 1.0;
-    const sourceMaxEdge = getScreenTrackMaxSourceEdge(track);
-    const targetMaxEdge = Math.max(targetPreset.width || 1920, targetPreset.height || 1080);
-
-    if (sourceMaxEdge <= 0 || targetMaxEdge <= 0 || sourceMaxEdge <= targetMaxEdge) {
-        return 1.0;
-    }
-    const rawScale = sourceMaxEdge / targetMaxEdge;
-    return rawScale < 1.05 ? 1.0 : Math.round(rawScale * 1000) / 1000;
-}
-
-async function applyScreenShareEncoding(track, resolutionStr = 'Auto', targetFps = 30, mode = 'motion') {
-    if (!track) return;
-    const isAuto = !resolutionStr || resolutionStr === 'Auto';
-    const is60 = targetFps > 35;
-    const targetPreset = getScreenPreset(resolutionStr, is60);
-    const isDetail = mode === 'detail';
-    // When an explicit resolution (1080p, 1440p, 4K) is selected, lock 'maintain-resolution' even in Smooth/gameplay
-    // mode so WebRTC never downscales a 1440p60/1080p60 stream during high-motion scenes.
-    // In 'Auto' mode, allow 'balanced' stepdown in motion mode while preserving sharpness in 'detail' mode.
-    const degradationPref = (isAuto && !isDetail) ? 'balanced' : 'maintain-resolution';
-
-    // Content hint & capture frameRate constraint:
-    // "motion" prioritizes fluid 30/60 FPS gameplay/video frame pacing
-    // "detail" optimizes quantization for razor-sharp static text/lines in meetings & IDE sharing
-    if (track.mediaStreamTrack) {
-        try {
-            track.mediaStreamTrack.contentHint = isDetail ? 'detail' : 'motion';
-        } catch (e) {}
-        if (typeof track.mediaStreamTrack.applyConstraints === 'function') {
-            try {
-                await track.mediaStreamTrack.applyConstraints({
-                    frameRate: { ideal: targetFps, max: targetFps }
-                });
-            } catch (e) {
-                console.warn('[VoiceInterop] Failed to apply frameRate constraint on screen track:', e);
-            }
-        }
-    }
-
-    if (typeof track.setDegradationPreference === 'function') {
-        try {
-            await track.setDegradationPreference(degradationPref);
-        } catch (e) {}
-    }
-
-    const scaleDown = computeScreenScaleDown(track, targetPreset);
-    const sender = track.sender;
-    if (sender && typeof sender.getParameters === 'function' && typeof sender.setParameters === 'function') {
-        try {
-            const params = sender.getParameters();
-            if (params && Array.isArray(params.encodings) && params.encodings.length > 0) {
-                const topIdx = params.encodings.length - 1;
-                params.encodings.forEach((enc, idx) => {
-                    enc.maxFramerate = targetFps;
-                    if (idx === topIdx) {
-                        enc.maxBitrate = targetPreset.maxBitrate;
-                        enc.scaleResolutionDownBy = scaleDown;
-                    } else {
-                        enc.maxBitrate = Math.max(500000, Math.round(targetPreset.maxBitrate / 3));
-                        enc.scaleResolutionDownBy = scaleDown * 2;
-                    }
-                });
-                if (track.encodings) {
-                    track.encodings = params.encodings;
-                }
-                await sender.setParameters(params);
-            }
-        } catch (e) {
-            console.warn('[VoiceInterop] Failed to update screen share RTCRtpSender parameters:', e);
-        }
-    }
-}
-
-
 
 
 export async function setCameraEnabled(enabled, resolutionStr = 'Auto', targetFps = 30, deviceId = null) {
-    _localCameraDesired = Boolean(enabled);
-    _lastCameraResolution = resolutionStr || 'Auto';
-    _lastCameraFps = targetFps || 30;
-    if (!enabled && isNativePlatform() && getNativePlatform() === 'ios') {
-        const audioPlugin = getAudioSessionPlugin();
-        if (audioPlugin && typeof audioPlugin.stopNativeCamera === 'function') {
-            await audioPlugin.stopNativeCamera().catch(() => {});
-        } else if (typeof window !== 'undefined' && typeof window.SpokesNative?.controlNativeCamera === 'function') {
-            try { window.SpokesNative.controlNativeCamera('stop', {}); } catch (e) {}
-        }
-        const localId = currentRoom?.localParticipant?.identity;
-        if (localId) {
-            try { unregisterPipVideoTrack(localId, 'camera'); } catch (e) {}
-            clearParticipantVideoDom(localId, 'camera');
-            if (dotnetHelper) {
-                dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', localId, 'camera', false).catch(() => {});
+    voiceState.localCameraDesired = Boolean(enabled);
+    voiceState.lastCameraResolution = resolutionStr || 'Auto';
+    voiceState.lastCameraFps = targetFps || 30;
+    if (voiceState.usingNativeMobileVoice) {
+        const nativeVoice = getNativeVoicePlugin();
+        const localId = voiceState.nativeLocalIdentity;
+        if (!enabled) {
+            await nativeVoice?.setCameraEnabled?.({ enabled: false })?.catch?.(() => {});
+            setNativeMobileVideoTrackActive(localId, 'camera', false);
+            if (localId) {
+                try { unregisterPipVideoTrack(localId, 'camera'); } catch (e) {}
+                if (voiceState.dotnetHelper) {
+                    voiceState.dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', localId, 'camera', false).catch(() => {});
+                }
             }
+            try { updatePipCallState({ isVideoOn: false, localCameraFacing: voiceState.localCameraFacing }); } catch (e) {}
+            syncIosAudioSessionVideoMode().catch(() => {});
+            scheduleRoomSnapshotSync();
+            return;
         }
-        try { updatePipCallState({ isVideoOn: false, localCameraFacing: _localCameraFacing }); } catch (e) {}
-        return;
-    }
-    if (currentRoom && currentRoom.localParticipant) {
+        const cfg = await resolveNativeMobileCaptureConfig(voiceState.lastCameraResolution, voiceState.lastCameraFps, deviceId);
+        voiceState.lastCameraResolution = cfg.quality || voiceState.lastCameraResolution;
+        voiceState.lastCameraFps = cfg.fps || voiceState.lastCameraFps;
+        voiceState.localCameraFacing = cfg.facingMode;
+        if (typeof window !== 'undefined') window._spokesLocalCameraFacing = voiceState.localCameraFacing;
+        if (cfg.deviceId) {
+            voiceState.nativeActiveCameraId = cfg.deviceId;
+        }
         try {
-            if (isNativePlatform() && getNativePlatform() === 'ios') {
-                const audioPlugin = getAudioSessionPlugin();
-                if (enabled) {
-                    if (_iosCachedCameras.length === 0) {
-                        await fetchIosNativeCameras();
-                    }
-
-                    let targetDeviceId = deviceId || _iosActiveCameraId || localStorage.getItem('spokes_active_camera_id') || '';
-                    let targetFacing = _localCameraFacing || 'user';
-                    const matchedCam = _iosCachedCameras.find(c => c.deviceId === targetDeviceId);
-                    if (matchedCam) {
-                        targetFacing = matchedCam.facingMode || targetFacing;
-                    } else {
-                        const rawDev = String(targetDeviceId || '').toLowerCase();
-                        if (rawDev === 'ios_back' || rawDev.includes('back') || rawDev === 'environment' || rawDev.includes('telephoto') || rawDev.includes('ultra_wide')) {
-                            targetFacing = 'environment';
-                        } else if (rawDev === 'ios_front' || rawDev.includes('front') || rawDev === 'user') {
-                            targetFacing = 'user';
-                        }
-                    }
-
-                    const iosCaps = getIosCameraCapabilities(targetDeviceId, targetFacing);
-                    const clamped = clampCameraResolutionForCapabilities(
-                        _lastCameraResolution,
-                        _lastCameraFps,
-                        iosCaps.maxDim,
-                        iosCaps.maxFps
-                    );
-                    _lastCameraResolution = clamped.resolution;
-                    _lastCameraFps = clamped.fps;
-
-                    const creds = await ensureIosCompanionCredentials();
-                    const startPayload = {
-                        url: creds?.url || _iosCompanionLiveKitUrl || '',
-                        token: creds?.token || _iosCompanionToken || '',
-                        localUserId: creds?.localUserId || currentRoom.localParticipant.identity || '',
-                        deviceId: targetDeviceId,
-                        facingMode: targetFacing,
-                        resolution: _lastCameraResolution,
-                        fps: _lastCameraFps
-                    };
-
-                    if (audioPlugin && typeof audioPlugin.startNativeCamera === 'function') {
-                        try {
-                            const res = await audioPlugin.startNativeCamera(startPayload);
-                            console.info('[Voice] iOS startNativeCamera result:', JSON.stringify(res || {}));
-                            if (res?.facingMode === 'environment' || res?.facingMode === 'user') {
-                                targetFacing = res.facingMode;
-                            }
-                            if (res?.deviceId) {
-                                targetDeviceId = res.deviceId;
-                            }
-                        } catch (e) {
-                            console.warn('[Voice] iOS audioPlugin.startNativeCamera error:', e);
-                        }
-                    } else if (typeof window !== 'undefined' && typeof window.SpokesNative?.controlNativeCamera === 'function') {
-                        try { window.SpokesNative.controlNativeCamera('start', startPayload); } catch (e) {}
-                    }
-
-                    _localCameraFacing = targetFacing;
-                    if (typeof window !== 'undefined') window._spokesLocalCameraFacing = _localCameraFacing;
-
-                    const cameras = await getAvailableCameras();
-                    if (!targetDeviceId || !cameras.some(c => c.deviceId === targetDeviceId)) {
-                        const byFacing = _iosCachedCameras.find(c => c.facingMode === _localCameraFacing);
-                        targetDeviceId = byFacing?.deviceId || cameras[0]?.deviceId || targetDeviceId;
-                    }
-                    _iosActiveCameraId = targetDeviceId;
-                    if (_iosActiveCameraId) {
-                        localStorage.setItem('spokes_active_camera_id', _iosActiveCameraId);
-                    }
-
-                    try { updatePipCallState({ isVideoOn: true, localCameraFacing: _localCameraFacing }); } catch (e) {}
-                    syncLocalStageVideoMirroring();
-                    reportIosCameraCapabilitiesToDotnet(_iosActiveCameraId);
-
-                    return { cameras, activeCameraDeviceId: _iosActiveCameraId };
-                }
+            await nativeVoice.setCameraEnabled({
+                enabled: true,
+                deviceId: cfg.deviceId || '',
+                facingMode: cfg.facingMode,
+                quality: cfg.quality,
+                videoWidth: cfg.width,
+                videoHeight: cfg.height,
+                videoFps: cfg.fps,
+                videoMaxBitrate: cfg.maxBitrate
+            });
+        } catch (err) {
+            console.error('[Voice] Native setCameraEnabled failed:', err);
+            if (voiceState.dotnetHelper) {
+                voiceState.dotnetHelper.invokeMethodAsync('OnVoiceLog', `Camera Error: ${err?.message || err}`, 'error').catch(() => {});
             }
-
+            throw err;
+        }
+        const existingLocalDims = voiceState.nativeVideoDims.get(`${localId}:camera`);
+        setNativeMobileVideoTrackActive(
+            localId,
+            'camera',
+            true,
+            existingLocalDims?.width || 0,
+            existingLocalDims?.height || 0
+        );
+        if (localId && voiceState.dotnetHelper) {
+            voiceState.dotnetHelper.invokeMethodAsync('EnsureParticipantSlot', localId).catch(() => {});
+            voiceState.dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', localId, 'camera', true).catch(() => {});
+        }
+        reportNativeMobileCameraCapabilitiesToDotnet(voiceState.nativeActiveCameraId || cfg.deviceId);
+        try { updatePipCallState({ isVideoOn: true, localCameraFacing: voiceState.localCameraFacing }); } catch (e) {}
+        syncIosAudioSessionVideoMode().catch(() => {});
+        scheduleRoomSnapshotSync();
+        const cameras = await getAvailableCameras();
+        const activeId = await getActiveVoiceCameraId();
+        return { cameras, activeCameraDeviceId: activeId };
+    }
+    if (voiceState.currentRoom && voiceState.currentRoom.localParticipant) {
+        try {
             if (enabled) {
-                let exTracks = currentRoom.localParticipant.videoTrackPublications;
-                let pubArr = [];
-                if (exTracks) {
-                    pubArr = typeof exTracks.values === 'function' ? Array.from(exTracks.values()) : Object.values(exTracks);
-                }
+                let pubArr = toArray(voiceState.currentRoom.localParticipant.videoTrackPublications);
                 let cameraPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.Camera);
+
+                // Preserve active camera selection and facing mode across operations within a call.
+                // On mobile browsers, never restore a previous call's camera from localStorage.
+                const isMobileDevice = isMobileVoiceClient();
+                let activeMediaTrack = cameraPub?.track?.mediaStreamTrack;
+                const savedCameraId = isMobileDevice ? null : localStorage.getItem('spokes_active_camera_id');
+                let targetDeviceId = deviceId || activeMediaTrack?.getSettings?.().deviceId || savedCameraId;
+                let currentFacing = activeMediaTrack?.getSettings?.().facingMode || voiceState.localCameraFacing || 'user';
 
                 const isAutoRes = !resolutionStr || resolutionStr === 'Auto';
                 const effectiveFps = isAutoRes ? 30 : targetFps;
@@ -2095,18 +2586,13 @@ export async function setCameraEnabled(enabled, resolutionStr = 'Auto', targetFp
                 let targetPreset = getCustomPreset(resolutionStr, is60);
                 
                 let livekitPreset = targetPreset;
-                let isApple = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
-                if (!isApple && window.LivekitClient && window.LivekitClient.VideoPreset) {
+                if (window.LivekitClient && window.LivekitClient.VideoPreset) {
                     livekitPreset = new window.LivekitClient.VideoPreset(targetPreset.width, targetPreset.height, targetPreset.maxBitrate, effectiveFps);
                 }
 
-                // Preserve active camera selection and facing mode across operations
-                let activeMediaTrack = cameraPub?.track?.mediaStreamTrack;
-                let targetDeviceId = deviceId || activeMediaTrack?.getSettings?.().deviceId || localStorage.getItem('spokes_active_camera_id');
-                let currentFacing = activeMediaTrack?.getSettings?.().facingMode || _localCameraFacing || 'user';
                 if (currentFacing === 'environment' || currentFacing === 'user') {
-                    _localCameraFacing = currentFacing;
-                    if (typeof window !== 'undefined') window._spokesLocalCameraFacing = _localCameraFacing;
+                    voiceState.localCameraFacing = currentFacing;
+                    if (typeof window !== 'undefined') window._spokesLocalCameraFacing = voiceState.localCameraFacing;
                 }
 
                 let trackOptions = { resolution: livekitPreset };
@@ -2118,14 +2604,7 @@ export async function setCameraEnabled(enabled, resolutionStr = 'Auto', targetFp
                     trackOptions.facingMode = 'user';
                 }
 
-                // Universal H.264 hardware acceleration across iOS, Android, and Desktop.
-                // - 'Auto': 1080p @ 30fps, 3.0 Mbps ceiling with 'balanced' degradation handling all stepdown & network management.
-                // - Explicit '1080p' or '2160p' (4K): single-layer (simulcast: false) + 'maintain-resolution' so the app pushes
-                //   that exact resolution no matter what.
-                const isMobileDevice = isNativePlatform() || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
                 const useSimulcast = isAutoRes && !isMobileDevice;
-                const simulcastModeChanged = _lastCameraSimulcast !== null && _lastCameraSimulcast !== useSimulcast;
-                _lastCameraSimulcast = useSimulcast;
                 let publishOptions = { 
                     source: window.LivekitClient.Track.Source.Camera, 
                     simulcast: useSimulcast,
@@ -2143,75 +2622,82 @@ export async function setCameraEnabled(enabled, resolutionStr = 'Auto', targetFp
                     ];
                 }
 
+                const publishNewCameraTrack = async () => {
+                    const track = await createConfiguredLocalVideoTrack(trackOptions);
+                    await voiceState.currentRoom.localParticipant.publishTrack(track, publishOptions);
+                    await applyCameraTrackEncoding(track, targetPreset, effectiveFps, resolutionStr);
+                };
+                const unpublishAndStopCameraTrack = async (actualTrack) => {
+                    try { await voiceState.currentRoom.localParticipant.unpublishTrack(actualTrack, true); } catch (_) {}
+                    stopLivekitTrackCompletely(actualTrack);
+                };
+
                 if (cameraPub && cameraPub.track) {
                     let actualTrack = cameraPub.videoTrack || cameraPub.track;
                     const isTrackEnded = actualTrack.mediaStreamTrack && actualTrack.mediaStreamTrack.readyState === 'ended';
                     try {
-                        if (!isTrackEnded && !simulcastModeChanged && typeof actualTrack.restartTrack === 'function') {
+                        if (!isTrackEnded && typeof actualTrack.restartTrack === 'function') {
                             let restartOptions = { resolution: livekitPreset };
                             if (targetDeviceId && targetDeviceId !== 'default') restartOptions.deviceId = targetDeviceId;
                             else if (currentFacing) restartOptions.facingMode = currentFacing;
                             await actualTrack.restartTrack(restartOptions);
+                            if (actualTrack.publishOptionsUsed) {
+                                actualTrack.publishOptionsUsed = {
+                                    ...actualTrack.publishOptionsUsed,
+                                    ...publishOptions
+                                };
+                            }
                             await applyCameraTrackEncoding(actualTrack, targetPreset, effectiveFps, resolutionStr);
-                            handleLocalTrackPublished(cameraPub, currentRoom.localParticipant);
+                            handleLocalTrackPublished(cameraPub, voiceState.currentRoom.localParticipant);
                         } else {
-                            try { await currentRoom.localParticipant.unpublishTrack(actualTrack, true); } catch (e) {}
-                            stopLivekitTrackCompletely(actualTrack);
-                            let track = await createConfiguredLocalVideoTrack(trackOptions);
-                            await currentRoom.localParticipant.publishTrack(track, publishOptions);
-                            await applyCameraTrackEncoding(track, targetPreset, effectiveFps, resolutionStr);
+                            await unpublishAndStopCameraTrack(actualTrack);
+                            await publishNewCameraTrack();
                         }
                     } catch(e) {
                         console.warn("[Voice] LiveKit restartTrack failed, recreating camera track:", e);
-                        try { await currentRoom.localParticipant.unpublishTrack(actualTrack, true); } catch (_) {}
-                        stopLivekitTrackCompletely(actualTrack);
-                        let track = await createConfiguredLocalVideoTrack(trackOptions);
-                        await currentRoom.localParticipant.publishTrack(track, publishOptions);
-                        await applyCameraTrackEncoding(track, targetPreset, effectiveFps, resolutionStr);
+                        await unpublishAndStopCameraTrack(actualTrack);
+                        await publishNewCameraTrack();
                     }
                 } else {
-                    let track = await createConfiguredLocalVideoTrack(trackOptions);
-                    await currentRoom.localParticipant.publishTrack(track, publishOptions);
-                    await applyCameraTrackEncoding(track, targetPreset, effectiveFps, resolutionStr);
+                    await publishNewCameraTrack();
                 }
 
-                if (targetDeviceId && targetDeviceId !== 'default') {
+                if (!isMobileDevice && targetDeviceId && targetDeviceId !== 'default') {
                     localStorage.setItem('spokes_active_camera_id', targetDeviceId);
                 }
 
-                try { updatePipCallState({ isVideoOn: true, localCameraFacing: _localCameraFacing }); } catch (e) {}
+                try { updatePipCallState({ isVideoOn: true, localCameraFacing: voiceState.localCameraFacing }); } catch (e) {}
+                scheduleRoomSnapshotSync();
 
                 const cameras = await getAvailableCameras();
                 const activeId = await getActiveVoiceCameraId();
                 return { cameras, activeCameraDeviceId: activeId };
 
             } else {
-                const localId = currentRoom.localParticipant.identity;
-                let tracks = currentRoom.localParticipant.videoTrackPublications;
-                if (tracks) {
-                    let pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
-                    let cameraPubs = pubArr.filter(p => p.source === window.LivekitClient.Track.Source.Camera || (!isScreenShareTrackOrPub(p.track, p) && p.kind === window.LivekitClient.Track.Kind.Video));
-                    for (let cameraPub of cameraPubs) {
-                        let actualTrack = cameraPub.videoTrack || cameraPub.track;
-                        if (actualTrack) {
-                            try {
-                                await currentRoom.localParticipant.unpublishTrack(actualTrack, true);
-                            } catch (e) {
-                                console.warn('[VoiceInterop] unpublishTrack camera warning:', e);
-                            } finally {
-                                stopLivekitTrackCompletely(actualTrack);
-                            }
+                const localId = voiceState.currentRoom.localParticipant.identity;
+                let cameraPubs = toArray(voiceState.currentRoom.localParticipant.videoTrackPublications)
+                    .filter(p => p.source === window.LivekitClient.Track.Source.Camera || (!isScreenShareTrackOrPub(p.track, p) && p.kind === window.LivekitClient.Track.Kind.Video));
+                for (let cameraPub of cameraPubs) {
+                    let actualTrack = cameraPub.videoTrack || cameraPub.track;
+                    if (actualTrack) {
+                        try {
+                            await voiceState.currentRoom.localParticipant.unpublishTrack(actualTrack, true);
+                        } catch (e) {
+                            console.warn('[VoiceInterop] unpublishTrack camera warning:', e);
+                        } finally {
+                            stopLivekitTrackCompletely(actualTrack);
                         }
                     }
                 }
                 if (localId) {
                     try { unregisterPipVideoTrack(localId, 'camera'); } catch (e) {}
                     clearParticipantVideoDom(localId, 'camera');
-                    if (dotnetHelper) {
-                        dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', localId, 'camera', false).catch(() => {});
+                    if (voiceState.dotnetHelper) {
+                        voiceState.dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', localId, 'camera', false).catch(() => {});
                     }
                 }
-                try { updatePipCallState({ isVideoOn: false, localCameraFacing: _localCameraFacing }); } catch (e) {}
+                try { updatePipCallState({ isVideoOn: false, localCameraFacing: voiceState.localCameraFacing }); } catch (e) {}
+                scheduleRoomSnapshotSync();
             }
         } catch (error) {
             console.error('[VoiceInterop] Error in setCameraEnabled:', error);
@@ -2221,61 +2707,20 @@ export async function setCameraEnabled(enabled, resolutionStr = 'Auto', targetFp
 }
 
 export async function getAvailableCameras() {
-    if (isNativePlatform() && getNativePlatform() === 'ios') {
-        const cams = await fetchIosNativeCameras();
+    if (voiceState.usingNativeMobileVoice || isNativePlatform()) {
+        const cams = await fetchNativeMobileCameras();
         return cams.map(c => ({ deviceId: c.deviceId, label: c.label }));
     }
-    if (!window.LivekitClient || !currentRoom) return [];
+    if (!window.LivekitClient || !voiceState.currentRoom) return [];
     try {
         let devices = await window.LivekitClient.Room.getLocalDevices('videoinput');
-        let nativeAndroidCams = [];
-        const isAndroid = isNativePlatform() && getNativePlatform() === 'android';
-        if (isAndroid && window.Capacitor?.Plugins?.TelecomConnectionPlugin?.getNativeCameras) {
-            try {
-                const res = await window.Capacitor.Plugins.TelecomConnectionPlugin.getNativeCameras();
-                if (Array.isArray(res?.cameras)) {
-                    nativeAndroidCams = res.cameras;
-                }
-            } catch (e) {
-                console.warn('[Voice] Android getNativeCameras error:', e);
-            }
-        }
-
         let distinct = [];
-        let backOrdinal = 0;
-        let frontOrdinal = 0;
         for (let d of devices) {
             if (d.deviceId === 'default' || d.deviceId === 'communications') continue;
             let rawLabel = String(d.label || '').trim();
-            let cleanLabel = rawLabel;
-
-            if (isAndroid) {
-                const camMatch = /camera2?\s+(\d+)/i.exec(rawLabel);
-                const camIdNum = camMatch ? camMatch[1] : null;
-                const matchedNative = camIdNum !== null
-                    ? nativeAndroidCams.find(nc => String(nc.cameraId) === camIdNum)
-                    : nativeAndroidCams.find(nc => String(nc.cameraId) === String(d.deviceId));
-
-                if (matchedNative?.label) {
-                    cleanLabel = matchedNative.label;
-                } else if (/facing\s+front/i.test(rawLabel) || /front/i.test(rawLabel)) {
-                    frontOrdinal++;
-                    cleanLabel = frontOrdinal === 1 ? 'Front Camera' : `Front Camera ${frontOrdinal}`;
-                } else if (/facing\s+back/i.test(rawLabel) || /back/i.test(rawLabel)) {
-                    const backNative = nativeAndroidCams.filter(nc => nc.facingMode === 'environment');
-                    if (backNative[backOrdinal]?.label) {
-                        cleanLabel = backNative[backOrdinal].label;
-                    } else {
-                        const fallbackRoles = ['Back Camera (Wide)', 'Back Camera (Ultra-Wide)', 'Back Camera (Telephoto)'];
-                        cleanLabel = fallbackRoles[backOrdinal] || `Back Camera ${backOrdinal + 1}`;
-                    }
-                    backOrdinal++;
-                }
-            }
-
-            let exists = distinct.find(x => x.deviceId === d.deviceId || (cleanLabel && x.label === cleanLabel && !isAndroid));
+            let exists = distinct.find(x => x.deviceId === d.deviceId || (rawLabel && x.label === rawLabel));
             if (!exists) {
-                distinct.push({ deviceId: d.deviceId, label: cleanLabel || rawLabel || `Camera ${distinct.length + 1}` });
+                distinct.push({ deviceId: d.deviceId, label: rawLabel || `Camera ${distinct.length + 1}` });
             }
         }
         return distinct;
@@ -2285,28 +2730,23 @@ export async function getAvailableCameras() {
 }
 
 export async function getActiveVoiceCameraId() {
-    if (isNativePlatform() && getNativePlatform() === 'ios') {
-        if (_iosActiveCameraId) return _iosActiveCameraId;
-        const saved = localStorage.getItem('spokes_active_camera_id');
-        if (saved) return saved;
-        const cams = await fetchIosNativeCameras();
-        const byFacing = cams.find(c => c.facingMode === _localCameraFacing) || cams[0];
-        return byFacing?.deviceId || 'com.apple.avfoundation.avcapturedevice.built-in_video:1';
+    if (voiceState.usingNativeMobileVoice || isNativePlatform()) {
+        if (voiceState.nativeActiveCameraId) return voiceState.nativeActiveCameraId;
+        const cams = await fetchNativeMobileCameras();
+        const byFacing = cams.find(c => c.facingMode === voiceState.localCameraFacing) || cams[0];
+        return byFacing?.deviceId || '';
     }
-    if (!currentRoom) return "";
+    if (!voiceState.currentRoom) return "";
     try {
-        if (typeof currentRoom.getActiveDevice === 'function') {
-            const deviceId = await currentRoom.getActiveDevice('videoinput');
+        if (typeof voiceState.currentRoom.getActiveDevice === 'function') {
+            const deviceId = await voiceState.currentRoom.getActiveDevice('videoinput');
             if (deviceId) return deviceId;
         }
-        if (currentRoom.localParticipant && window.LivekitClient && window.LivekitClient.Track) {
-            let tracks = currentRoom.localParticipant.videoTrackPublications;
-            if (tracks) {
-                let pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
-                let cameraPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.Camera);
-                if (cameraPub && cameraPub.track && cameraPub.track.mediaStreamTrack) {
-                    return cameraPub.track.mediaStreamTrack.getSettings().deviceId || "";
-                }
+        if (voiceState.currentRoom.localParticipant && window.LivekitClient && window.LivekitClient.Track) {
+            let cameraPub = toArray(voiceState.currentRoom.localParticipant.videoTrackPublications)
+                .find(p => p.source === window.LivekitClient.Track.Source.Camera);
+            if (cameraPub?.track?.mediaStreamTrack) {
+                return cameraPub.track.mediaStreamTrack.getSettings().deviceId || "";
             }
         }
     } catch (e) {
@@ -2315,143 +2755,134 @@ export async function getActiveVoiceCameraId() {
     return "";
 }
 
-export async function switchActiveCamera(deviceId) {
-    if (!currentRoom || !currentRoom.localParticipant) return;
+export async function switchActiveCamera(deviceId = null) {
+    const cleanDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
+    if (voiceState.usingNativeMobileVoice) {
+        const nativeVoice = getNativeVoicePlugin();
+        if (!nativeVoice) return '';
+        const cams = await fetchNativeMobileCameras();
+        let requestedFacing = (voiceState.localCameraFacing === 'environment') ? 'user' : 'environment';
+        const matched = (cleanDeviceId && cams.find(c => c.deviceId === cleanDeviceId || c.cameraId === cleanDeviceId))
+            || (!cleanDeviceId ? cams.find(c => c.facingMode === requestedFacing) : null);
+        if (matched?.facingMode === 'environment' || matched?.facingMode === 'user') {
+            requestedFacing = matched.facingMode;
+        }
+        const targetCamId = matched ? (matched.cameraId || matched.deviceId) : (cleanDeviceId || undefined);
+        const cfg = await resolveNativeMobileCaptureConfig(voiceState.lastCameraResolution, voiceState.lastCameraFps, targetCamId);
+        voiceState.lastCameraResolution = cfg.quality || voiceState.lastCameraResolution;
+        voiceState.lastCameraFps = cfg.fps || voiceState.lastCameraFps;
+        const res = await nativeVoice.switchCamera({
+            facingMode: requestedFacing,
+            deviceId: targetCamId,
+            quality: cfg.quality,
+            videoWidth: cfg.width,
+            videoHeight: cfg.height,
+            videoFps: cfg.fps,
+            videoMaxBitrate: cfg.maxBitrate
+        });
+        voiceState.localCameraFacing = (res?.facingMode === 'environment' || res?.facingMode === 'user') ? res.facingMode : requestedFacing;
+        if (typeof window !== 'undefined') window._spokesLocalCameraFacing = voiceState.localCameraFacing;
+        const resolvedCam = matched || cams.find(c => c.facingMode === voiceState.localCameraFacing);
+        if (resolvedCam?.deviceId) {
+            voiceState.nativeActiveCameraId = resolvedCam.deviceId;
+        }
+        if (voiceState.nativeLocalIdentity) {
+            voiceState.nativeVideoDims.delete(`${voiceState.nativeLocalIdentity}:camera`);
+        }
+        reportNativeMobileCameraCapabilitiesToDotnet(voiceState.nativeActiveCameraId || targetCamId);
+        updatePipCallState({ isVideoOn: true, localCameraFacing: voiceState.localCameraFacing });
+        setNativeMobileVideoTrackActive(voiceState.nativeLocalIdentity, 'camera', true);
+        scheduleNativeMobileVideoSlotsSync();
+        return voiceState.nativeActiveCameraId || targetCamId || '';
+    }
+    if (!voiceState.currentRoom || !voiceState.currentRoom.localParticipant) return '';
     try {
-        if (isNativePlatform() && getNativePlatform() === 'ios') {
-            if (_iosCachedCameras.length === 0) {
-                await fetchIosNativeCameras();
-            }
-            const audioPlugin = getAudioSessionPlugin();
-            const matchedCam = _iosCachedCameras.find(c => c.deviceId === deviceId);
-            const rawDev = String(deviceId || '').toLowerCase();
-            let requestedFacing = (_localCameraFacing === 'environment') ? 'user' : 'environment';
-            if (matchedCam?.facingMode === 'environment' || matchedCam?.facingMode === 'user') {
-                requestedFacing = matchedCam.facingMode;
-            } else if (rawDev === 'ios_back' || rawDev.includes('back') || rawDev === 'environment' || rawDev.includes('telephoto') || rawDev.includes('ultra_wide')) {
-                requestedFacing = 'environment';
-            } else if (rawDev === 'ios_front' || rawDev.includes('front') || rawDev === 'user') {
-                requestedFacing = 'user';
-            }
-
-            let targetDeviceId = matchedCam?.deviceId || deviceId || '';
-            const iosCaps = getIosCameraCapabilities(targetDeviceId, requestedFacing);
-            const clamped = clampCameraResolutionForCapabilities(
-                _lastCameraResolution || 'Auto',
-                _lastCameraFps || 30,
-                iosCaps.maxDim,
-                iosCaps.maxFps
-            );
-            _lastCameraResolution = clamped.resolution;
-            _lastCameraFps = clamped.fps;
-
-            const creds = await ensureIosCompanionCredentials();
-            const switchPayload = {
-                url: creds?.url || _iosCompanionLiveKitUrl || '',
-                token: creds?.token || _iosCompanionToken || '',
-                localUserId: creds?.localUserId || currentRoom.localParticipant.identity || '',
-                deviceId: targetDeviceId,
-                facingMode: requestedFacing,
-                resolution: _lastCameraResolution,
-                fps: _lastCameraFps
-            };
-
-            if (audioPlugin && typeof audioPlugin.switchNativeCamera === 'function') {
-                try {
-                    const res = await audioPlugin.switchNativeCamera(switchPayload);
-                    if (res?.facingMode === 'environment' || res?.facingMode === 'user') {
-                        requestedFacing = res.facingMode;
-                    }
-                    if (res?.deviceId) {
-                        targetDeviceId = res.deviceId;
-                    }
-                } catch (e) {
-                    console.warn('[Voice] iOS audioPlugin.switchNativeCamera error:', e);
-                }
-            } else if (typeof window !== 'undefined' && typeof window.SpokesNative?.controlNativeCamera === 'function') {
-                try { window.SpokesNative.controlNativeCamera('switch', switchPayload); } catch (e) {}
-            }
-
-            _localCameraFacing = requestedFacing;
-            if (typeof window !== 'undefined') window._spokesLocalCameraFacing = _localCameraFacing;
-            if (!targetDeviceId) {
-                const byFacing = _iosCachedCameras.find(c => c.facingMode === _localCameraFacing);
-                targetDeviceId = byFacing?.deviceId || _iosActiveCameraId;
-            }
-            _iosActiveCameraId = targetDeviceId;
-            if (_iosActiveCameraId) {
-                localStorage.setItem('spokes_active_camera_id', _iosActiveCameraId);
-            }
-            updatePipCallState({ isVideoOn: true, localCameraFacing: _localCameraFacing });
-            syncLocalStageVideoMirroring();
-            reportIosCameraCapabilitiesToDotnet(_iosActiveCameraId);
-            return;
-        }
-        await currentRoom.switchActiveDevice('videoinput', deviceId);
-        if (deviceId && deviceId !== 'default') {
-            localStorage.setItem('spokes_active_camera_id', deviceId);
-        }
-        let pubArr = typeof currentRoom.localParticipant.videoTrackPublications.values === 'function' ? Array.from(currentRoom.localParticipant.videoTrackPublications.values()) : Object.values(currentRoom.localParticipant.videoTrackPublications);
+        let pubArr = toArray(voiceState.currentRoom.localParticipant.videoTrackPublications);
         let cameraPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.Camera);
         const activeTrack = cameraPub?.videoTrack || cameraPub?.track;
-        const rawFacing = activeTrack?.mediaStreamTrack?.getSettings?.()?.facingMode;
-        if (rawFacing === 'environment' || rawFacing === 'user') {
-            _localCameraFacing = rawFacing;
-            if (typeof window !== 'undefined') window._spokesLocalCameraFacing = _localCameraFacing;
+
+        if (!cleanDeviceId) {
+            const targetFacing = (voiceState.localCameraFacing === 'environment') ? 'user' : 'environment';
+            const isAutoRes = !voiceState.lastCameraResolution || voiceState.lastCameraResolution === 'Auto';
+            const effectiveFps = isAutoRes ? 30 : (voiceState.lastCameraFps || 30);
+            const targetPreset = getCustomPreset(voiceState.lastCameraResolution, effectiveFps > 35);
+            const livekitPreset = window.LivekitClient?.VideoPreset
+                ? new window.LivekitClient.VideoPreset(targetPreset.width, targetPreset.height, targetPreset.maxBitrate, effectiveFps)
+                : targetPreset;
+            if (activeTrack && typeof activeTrack.restartTrack === 'function') {
+                try {
+                    await activeTrack.restartTrack({ facingMode: { exact: targetFacing }, resolution: livekitPreset });
+                } catch {
+                    await activeTrack.restartTrack({ facingMode: targetFacing, resolution: livekitPreset });
+                }
+            }
+            voiceState.localCameraFacing = targetFacing;
+            if (typeof window !== 'undefined') window._spokesLocalCameraFacing = voiceState.localCameraFacing;
+        } else {
+            await voiceState.currentRoom.switchActiveDevice('videoinput', cleanDeviceId);
+            if (!isMobileVoiceClient() && cleanDeviceId !== 'default') {
+                localStorage.setItem('spokes_active_camera_id', cleanDeviceId);
+            }
         }
-        if (activeTrack?.mediaStreamTrack) {
-            const hwCaps = getHardwareCameraCapabilities(activeTrack.mediaStreamTrack);
+
+        pubArr = toArray(voiceState.currentRoom.localParticipant.videoTrackPublications);
+        cameraPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.Camera);
+        const resolvedTrack = cameraPub?.videoTrack || cameraPub?.track;
+        const settings = resolvedTrack?.mediaStreamTrack?.getSettings?.() || {};
+        const rawFacing = settings.facingMode;
+        if (rawFacing === 'environment' || rawFacing === 'user') {
+            voiceState.localCameraFacing = rawFacing;
+            if (typeof window !== 'undefined') window._spokesLocalCameraFacing = voiceState.localCameraFacing;
+        }
+        const resolvedDeviceId = settings.deviceId || cleanDeviceId || '';
+        if (resolvedTrack?.mediaStreamTrack) {
+            const hwCaps = getHardwareCameraCapabilities(resolvedTrack.mediaStreamTrack);
             if (hwCaps.maxDim > 0) {
                 const clamped = clampCameraResolutionForCapabilities(
-                    _lastCameraResolution || 'Auto',
-                    _lastCameraFps || 30,
+                    voiceState.lastCameraResolution || 'Auto',
+                    voiceState.lastCameraFps || 30,
                     hwCaps.maxDim,
                     hwCaps.maxFps
                 );
-                const resChanged = clamped.resolution !== (_lastCameraResolution || 'Auto');
-                const fpsChanged = clamped.fps !== (_lastCameraFps || 30);
-                _lastCameraResolution = clamped.resolution;
-                _lastCameraFps = clamped.fps;
+                const resChanged = clamped.resolution !== (voiceState.lastCameraResolution || 'Auto');
+                const fpsChanged = clamped.fps !== (voiceState.lastCameraFps || 30);
+                voiceState.lastCameraResolution = clamped.resolution;
+                voiceState.lastCameraFps = clamped.fps;
                 if (resChanged || fpsChanged) {
-                    const isAutoRes = !_lastCameraResolution || _lastCameraResolution === 'Auto';
-                    const effectiveFps = isAutoRes ? 30 : _lastCameraFps;
-                    const targetPreset = getCustomPreset(_lastCameraResolution, effectiveFps > 35);
-                    await applyCameraTrackEncoding(activeTrack, targetPreset, effectiveFps, _lastCameraResolution);
+                    const isAutoRes = !voiceState.lastCameraResolution || voiceState.lastCameraResolution === 'Auto';
+                    const effectiveFps = isAutoRes ? 30 : voiceState.lastCameraFps;
+                    const targetPreset = getCustomPreset(voiceState.lastCameraResolution, effectiveFps > 35);
+                    if (typeof resolvedTrack.restartTrack === 'function' && window.LivekitClient?.VideoPreset) {
+                        const livekitPreset = new window.LivekitClient.VideoPreset(targetPreset.width, targetPreset.height, targetPreset.maxBitrate, effectiveFps);
+                        const restartOpts = resolvedDeviceId
+                            ? { deviceId: resolvedDeviceId, resolution: livekitPreset }
+                            : { facingMode: voiceState.localCameraFacing || 'user', resolution: livekitPreset };
+                        await resolvedTrack.restartTrack(restartOpts);
+                    }
+                    await applyCameraTrackEncoding(resolvedTrack, targetPreset, effectiveFps, voiceState.lastCameraResolution);
                 }
             }
         }
-        if (cameraPub && cameraPub.track) handleLocalTrackPublished(cameraPub, currentRoom.localParticipant);
+        if (cameraPub && cameraPub.track) handleLocalTrackPublished(cameraPub, voiceState.currentRoom.localParticipant);
+        updatePipCallState({ isVideoOn: true, localCameraFacing: voiceState.localCameraFacing });
+        return resolvedDeviceId;
     } catch(e) {
         console.error('[Voice] Failed to switch camera:', e);
+        return '';
     }
 }
 
 export async function updateCameraSettings(resolutionStr = 'Auto', targetFps = 30, deviceId = null) {
-    if (!currentRoom || !currentRoom.localParticipant || !_localCameraDesired) return;
-    _lastCameraResolution = resolutionStr || 'Auto';
-    _lastCameraFps = targetFps || 30;
+    if (voiceState.usingNativeMobileVoice) {
+        if (!voiceState.localCameraDesired) return;
+        await setCameraEnabled(true, resolutionStr || 'Auto', targetFps || 30, deviceId);
+        return;
+    }
+    if (!voiceState.currentRoom || !voiceState.currentRoom.localParticipant || !voiceState.localCameraDesired) return;
+    voiceState.lastCameraResolution = resolutionStr || 'Auto';
+    voiceState.lastCameraFps = targetFps || 30;
     try {
-        if (isNativePlatform() && getNativePlatform() === 'ios') {
-            const audioPlugin = getAudioSessionPlugin();
-            const targetDeviceId = deviceId || _iosActiveCameraId || localStorage.getItem('spokes_active_camera_id') || '';
-            const creds = await ensureIosCompanionCredentials();
-            const updatePayload = {
-                url: creds?.url || _iosCompanionLiveKitUrl || '',
-                token: creds?.token || _iosCompanionToken || '',
-                localUserId: creds?.localUserId || currentRoom.localParticipant.identity || '',
-                deviceId: targetDeviceId,
-                facingMode: _localCameraFacing || 'user',
-                resolution: _lastCameraResolution,
-                fps: _lastCameraFps
-            };
-            if (audioPlugin && typeof audioPlugin.startNativeCamera === 'function') {
-                await audioPlugin.startNativeCamera(updatePayload);
-            } else if (typeof window !== 'undefined' && typeof window.SpokesNative?.controlNativeCamera === 'function') {
-                window.SpokesNative.controlNativeCamera('start', updatePayload);
-            }
-            return;
-        }
-        await setCameraEnabled(true, _lastCameraResolution, _lastCameraFps, deviceId);
+        await setCameraEnabled(true, voiceState.lastCameraResolution, voiceState.lastCameraFps, deviceId);
     } catch (e) {
         console.warn('[Voice] Failed to update camera settings in-place:', e);
     }
@@ -2487,86 +2918,100 @@ function ensureDeviceChangeListener() {
 
 export async function updateAudioDevices() {
     ensureDeviceChangeListener();
-    if (!dotnetHelper) return;
+    if (!voiceState.dotnetHelper) return;
     try {
-        const mics = await getAvailableMicrophones();
-        const activeMicId = await getActiveMicrophoneId();
-        const speakers = await getAvailableSpeakers();
-        const activeSpeakerId = await getActiveSpeakerId();
-        dotnetHelper.invokeMethodAsync('OnAudioDevicesUpdated', mics, activeMicId, speakers, activeSpeakerId);
+        let mics;
+        let speakers;
+        if (isNativePlatform()) {
+            mics = await getAvailableMicrophones();
+            speakers = await getAvailableSpeakers();
+        } else {
+            const enumerated = await enumerateAllStandardAudioDevices();
+            mics = enumerated.mics;
+            speakers = enumerated.speakers;
+        }
+        const activeMicId = await getActiveMicrophoneId(mics);
+        const activeSpeakerId = await getActiveSpeakerId(speakers);
+        const signature = JSON.stringify([activeMicId, activeSpeakerId, mics, speakers]);
+        if (signature === voiceState.lastAudioDevicesSignature) {
+            return;
+        }
+        voiceState.lastAudioDevicesSignature = signature;
+        invokeDotNetSafe('OnAudioDevicesUpdated', mics, activeMicId, speakers, activeSpeakerId);
     } catch (e) {
         console.warn('[Voice] Failed to update audio devices:', e);
     }
 }
 
-export async function getAvailableMicrophones() {
-    if (isNativePlatform()) {
-        let platform = getNativePlatform();
-        if (platform === 'ios' || platform === 'android') {
-            return [];
+function normalizeStandardAudioDeviceList(rawDevices, fallbackPrefix) {
+    const result = [{ deviceId: 'default', label: 'System Default' }];
+    for (const d of rawDevices || []) {
+        if (!d || d.deviceId === 'default' || d.deviceId === 'communications' || (!d.deviceId && !d.label)) continue;
+        const label = d.label || `${fallbackPrefix} (${d.deviceId.substring(0, 5)})`;
+        if (!result.some(x => x.deviceId === d.deviceId || x.label === label)) {
+            result.push({ deviceId: d.deviceId, groupId: d.groupId, label });
         }
     }
-    
-    let devices = [];
-    if (window.LivekitClient?.Room?.getLocalDevices) {
-        try {
-            devices = await window.LivekitClient.Room.getLocalDevices('audioinput');
-        } catch(e) {}
-    }
-    if ((!devices || devices.length === 0) && navigator?.mediaDevices?.enumerateDevices) {
-        try {
-            const all = await navigator.mediaDevices.enumerateDevices();
-            devices = all.filter(d => d.kind === 'audioinput');
-        } catch(e) {}
-    }
-
-    const result = [
-        { deviceId: 'default', label: 'System Default' }
-    ];
-
-    if (devices && devices.length > 0) {
-        for (const d of devices) {
-            if (d.deviceId === 'default' || d.deviceId === 'communications') continue;
-            if (!d.deviceId && !d.label) continue;
-            
-            const label = d.label || `Microphone (${d.deviceId.substring(0, 5)})`;
-            if (!result.some(x => x.deviceId === d.deviceId || x.label === label)) {
-                result.push({
-                    deviceId: d.deviceId,
-                    groupId: d.groupId,
-                    label: label
-                });
-            }
-        }
-    }
-
     return result;
 }
 
-export async function getActiveMicrophoneId() {
+async function enumerateAllStandardAudioDevices() {
+    let rawInputs = [];
+    let rawOutputs = [];
+    if (navigator?.mediaDevices?.enumerateDevices) {
+        try {
+            const all = await navigator.mediaDevices.enumerateDevices();
+            if (Array.isArray(all) && all.length > 0) {
+                rawInputs = all.filter(d => d.kind === 'audioinput');
+                rawOutputs = all.filter(d => d.kind === 'audiooutput');
+            }
+        } catch (e) {}
+    }
+    if (rawInputs.length === 0 && rawOutputs.length === 0 && window.LivekitClient?.Room?.getLocalDevices) {
+        try {
+            rawInputs = (await window.LivekitClient.Room.getLocalDevices('audioinput', false)) || [];
+        } catch (e) {}
+        try {
+            rawOutputs = (await window.LivekitClient.Room.getLocalDevices('audiooutput', false)) || [];
+        } catch (e) {}
+    }
+    const mics = normalizeStandardAudioDeviceList(rawInputs, 'Microphone');
+    const speakers = normalizeStandardAudioDeviceList(rawOutputs, 'Speaker');
+    voiceState.cachedMicDevices = mics;
+    voiceState.cachedSpeakerDevices = speakers;
+    return { mics, speakers };
+}
+
+export async function getAvailableMicrophones() {
+    if (isNativePlatform()) {
+        const platform = getNativePlatform();
+        if (platform === 'ios' || platform === 'android') return [];
+    }
+    const { mics } = await enumerateAllStandardAudioDevices();
+    return mics;
+}
+
+export async function getActiveMicrophoneId(preEnumeratedMics = null) {
     if (isNativePlatform()) return "";
     
-    const mics = await getAvailableMicrophones();
+    const mics = Array.isArray(preEnumeratedMics) ? preEnumeratedMics : await getAvailableMicrophones();
     if (mics.length === 0) return "default";
 
     // 1. When actively connected, inspect the live published raw hardware capture track first
     // so Voice Settings always reflects the actual physical microphone transmitting audio.
-    if (currentRoom) {
+    if (voiceState.currentRoom) {
         try {
             let liveDeviceId = "";
-            if (currentRoom.localParticipant && window.LivekitClient?.Track) {
-                const tracks = currentRoom.localParticipant.audioTrackPublications;
-                if (tracks) {
-                    const pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
-                    const micPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.Microphone && p.track);
-                    const rawTrack = getRawCaptureMediaStreamTrack(micPub?.track);
-                    if (rawTrack && typeof rawTrack.getSettings === 'function') {
-                        liveDeviceId = rawTrack.getSettings()?.deviceId || "";
-                    }
+            if (voiceState.currentRoom.localParticipant && window.LivekitClient?.Track) {
+                const micPub = toArray(voiceState.currentRoom.localParticipant.audioTrackPublications)
+                    .find(p => p.source === window.LivekitClient.Track.Source.Microphone && p.track);
+                const rawTrack = getRawCaptureMediaStreamTrack(micPub?.track);
+                if (rawTrack && typeof rawTrack.getSettings === 'function') {
+                    liveDeviceId = rawTrack.getSettings()?.deviceId || "";
                 }
             }
-            if ((!liveDeviceId || liveDeviceId === 'default' || liveDeviceId === 'communications') && typeof currentRoom.getActiveDevice === 'function') {
-                liveDeviceId = (await currentRoom.getActiveDevice('audioinput')) || liveDeviceId;
+            if ((!liveDeviceId || liveDeviceId === 'default' || liveDeviceId === 'communications') && typeof voiceState.currentRoom.getActiveDevice === 'function') {
+                liveDeviceId = (await voiceState.currentRoom.getActiveDevice('audioinput')) || liveDeviceId;
             }
             if (liveDeviceId && liveDeviceId !== 'default' && liveDeviceId !== 'communications') {
                 if (mics.some(m => m.deviceId === liveDeviceId)) {
@@ -2593,26 +3038,24 @@ export async function switchActiveMicrophone(deviceId) {
         localStorage.setItem('spokes_active_mic_id', targetMic);
     } catch (e) {}
 
-    if (currentRoom) {
+    if (voiceState.currentRoom) {
         try {
             const effectiveSwitchId = targetMic === 'default'
                 ? ((await resolvePreferredMicDeviceId()) || 'default')
                 : targetMic;
-            await currentRoom.switchActiveDevice('audioinput', effectiveSwitchId);
+            await voiceState.currentRoom.switchActiveDevice('audioinput', effectiveSwitchId);
 
-            if (currentRoom.localParticipant && window.LivekitClient?.Track) {
-                const tracks = currentRoom.localParticipant.audioTrackPublications;
-                const pubArr = tracks
-                    ? (typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks))
-                    : [];
-                const micPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.Microphone && p.track);
+            if (voiceState.currentRoom.localParticipant && window.LivekitClient?.Track) {
+                const micPub = toArray(voiceState.currentRoom.localParticipant.audioTrackPublications)
+                    .find(p => p.source === window.LivekitClient.Track.Source.Microphone && p.track);
                 if (micPub?.track) {
                     bindLocalHardwareMuteMonitor(micPub.track);
                     const vadTrack = micPub.track.processor?.processedTrack || micPub.track.mediaStreamTrack;
                     const rawTrack = getRawCaptureMediaStreamTrack(micPub.track);
-                    if (currentRoom.localParticipant.identity && vadTrack) {
-                        registerLocalMicVad(currentRoom.localParticipant.identity, vadTrack, rawTrack);
+                    if (voiceState.currentRoom.localParticipant.identity && vadTrack) {
+                        registerLocalMicVad(voiceState.currentRoom.localParticipant.identity, vadTrack, rawTrack);
                     }
+                    reportLocalAudioPipelineTelemetry(micPub.track);
                 }
             }
         } catch (e) {
@@ -2620,6 +3063,10 @@ export async function switchActiveMicrophone(deviceId) {
         }
     }
     await updateAudioDevices();
+    if (voiceState.directSessionActive) {
+        const inputDeviceLabel = await resolveSelectedMicLabelForDirectAudio();
+        pushDirectRoomControlsUpdate({ inputDeviceLabel });
+    }
 }
 
 export async function isAndroidDevice() {
@@ -2630,75 +3077,110 @@ export async function isNativePlatformApp() {
     return isNativePlatform();
 }
 
+function rebindRemoteAudioElementsPlayback(forceSrcReset = false) {
+    try {
+        if (voiceState.currentRoom && typeof voiceState.currentRoom.startAudio === 'function') {
+            voiceState.currentRoom.startAudio().catch(() => {});
+        }
+        resumeAllVoiceAudioPlayback();
+        const seen = new Set();
+        const rebindEl = (audioEl) => {
+            if (!audioEl || seen.has(audioEl)) return;
+            seen.add(audioEl);
+            try {
+                // Only reassign srcObject on genuine post-connect hardware route transitions;
+                // reassigning srcObject during initial connect aborts in-flight play() and resets WebMediaPlayerMS!
+                if (forceSrcReset) {
+                    const srcObj = audioEl.srcObject;
+                    if (srcObj) {
+                        audioEl.srcObject = srcObj;
+                    }
+                }
+                if (!audioEl.muted) {
+                    audioEl.play?.().catch(() => {});
+                }
+            } catch (_) {}
+        };
+
+        _participantGainNodes.forEach((item) => {
+            if (item?.element) {
+                rebindEl(item.element);
+            }
+        });
+
+        const container = document.getElementById('voice-audio-container');
+        if (container && typeof container.querySelectorAll === 'function') {
+            container.querySelectorAll('audio').forEach(rebindEl);
+        }
+    } catch (e) {}
+}
+
 export async function getAvailableSpeakers() {
     if (isNativePlatform()) {
         let platform = getNativePlatform();
         if (platform === 'ios') {
             return [];
         } else if (platform === 'android') {
-            let devices = [];
-            devices.push({ deviceId: 'speaker', label: 'Speaker' });
-            devices.push({ deviceId: 'earpiece', label: 'Earpiece' });
-            
+            let hasBluetooth = _androidHasBluetooth;
+            let hasWiredHeadset = _androidHasWiredHeadset;
+            let hasEarpiece = _androidHasEarpiece;
+
             try {
                 if (window.Capacitor.Plugins.TelecomConnectionPlugin) {
                     let res = await window.Capacitor.Plugins.TelecomConnectionPlugin.getAvailableRoutes();
-                    if (res && typeof res.hasBluetooth === 'boolean' && res.hasBluetooth) {
-                        devices.push({ deviceId: 'bluetooth', label: 'Bluetooth' });
+                    if (res) {
+                        if (typeof res.hasBluetooth === 'boolean') {
+                            hasBluetooth = res.hasBluetooth;
+                            _androidHasBluetooth = res.hasBluetooth;
+                        }
+                        if (typeof res.hasWiredHeadset === 'boolean') {
+                            hasWiredHeadset = res.hasWiredHeadset;
+                            _androidHasWiredHeadset = res.hasWiredHeadset;
+                        }
+                        if (typeof res.hasEarpiece === 'boolean') {
+                            hasEarpiece = res.hasEarpiece;
+                            _androidHasEarpiece = res.hasEarpiece;
+                        }
+                        if (typeof res.route === 'string' && res.route && res.route !== 'unknown') {
+                            voiceState.activeNativeSpeakerId = res.route;
+                        }
                     }
                 }
             } catch(e) {}
+
+            let devices = [{ deviceId: 'speaker', label: 'Speaker' }];
+            if (hasEarpiece !== false) {
+                devices.push({ deviceId: 'earpiece', label: 'Earpiece' });
+            }
+            if (hasWiredHeadset) {
+                devices.push({ deviceId: 'headset', label: 'Wired Headset' });
+            }
+            if (hasBluetooth) {
+                devices.push({ deviceId: 'bluetooth', label: 'Bluetooth' });
+            }
             return devices;
         }
     }
-    
-    let devices = [];
-    if (window.LivekitClient?.Room?.getLocalDevices) {
-        try {
-            devices = await window.LivekitClient.Room.getLocalDevices('audiooutput');
-        } catch(e) {}
-    }
-    if ((!devices || devices.length === 0) && navigator?.mediaDevices?.enumerateDevices) {
-        try {
-            const all = await navigator.mediaDevices.enumerateDevices();
-            devices = all.filter(d => d.kind === 'audiooutput');
-        } catch(e) {}
-    }
 
-    const result = [
-        { deviceId: 'default', label: 'System Default' }
-    ];
-
-    if (devices && devices.length > 0) {
-        for (const d of devices) {
-            if (d.deviceId === 'default' || d.deviceId === 'communications') continue;
-            if (!d.deviceId && !d.label) continue;
-            
-            const label = d.label || `Speaker (${d.deviceId.substring(0, 5)})`;
-            if (!result.some(x => x.deviceId === d.deviceId || x.label === label)) {
-                result.push({
-                    deviceId: d.deviceId,
-                    groupId: d.groupId,
-                    label: label
-                });
-            }
-        }
-    }
-
-    return result;
+    const { speakers } = await enumerateAllStandardAudioDevices();
+    return speakers;
 }
 
-let _activeNativeSpeakerId = 'default';
+const SYNTHETIC_MOBILE_SPEAKER_ROUTES = new Set(['earpiece', 'speaker', 'speakerphone', 'headset', 'bluetooth']);
 
-export async function getActiveSpeakerId() {
+function isSyntheticMobileSpeakerRoute(deviceId) {
+    return Boolean(deviceId) && SYNTHETIC_MOBILE_SPEAKER_ROUTES.has(String(deviceId).trim().toLowerCase());
+}
+
+export async function getActiveSpeakerId(preEnumeratedSpeakers = null) {
     if (isNativePlatform()) {
         let platform = getNativePlatform();
         if (platform === 'ios' || platform === 'android') {
-            return _activeNativeSpeakerId;
+            return voiceState.activeNativeSpeakerId;
         }
     }
 
-    const speakers = await getAvailableSpeakers();
+    const speakers = Array.isArray(preEnumeratedSpeakers) ? preEnumeratedSpeakers : await getAvailableSpeakers();
     if (speakers.length === 0) return "default";
 
     try {
@@ -2710,8 +3192,8 @@ export async function getActiveSpeakerId() {
     
     try {
         let activeId = "";
-        if (currentRoom && typeof currentRoom.getActiveDevice === 'function') {
-            activeId = await currentRoom.getActiveDevice('audiooutput');
+        if (voiceState.currentRoom && typeof voiceState.currentRoom.getActiveDevice === 'function') {
+            activeId = await voiceState.currentRoom.getActiveDevice('audiooutput');
         }
         if (activeId && activeId !== 'default' && activeId !== 'communications') {
             if (speakers.some(s => s.deviceId === activeId)) return activeId;
@@ -2723,6 +3205,42 @@ export async function getActiveSpeakerId() {
 
 export async function switchActiveSpeaker(deviceId) {
     const targetSink = (!deviceId || deviceId === 'default') ? 'default' : deviceId;
+
+    if (isNativePlatform()) {
+        const platform = getNativePlatform();
+        try {
+            if (platform === 'ios') {
+                const audioPlugin = getAudioSessionPlugin();
+                if (audioPlugin) {
+                    const targetRoute = targetSink === 'speakerphone' || targetSink === 'speaker' ? 'speaker' : 'earpiece';
+                    const res = await audioPlugin.setAudioRoute({ route: targetRoute });
+                    voiceState.activeNativeSpeakerId = res?.activeOutput || targetRoute;
+                    console.info(`[Voice] iOS Native Route Set (${targetRoute}): Category=${res?.category}, Mode=${res?.mode}, Output=${res?.activeOutput}`);
+                }
+            } else if (platform === 'android') {
+                if (window.Capacitor.Plugins.TelecomConnectionPlugin) {
+                    const res = await window.Capacitor.Plugins.TelecomConnectionPlugin.setAudioRoute({ route: targetSink });
+                    if (res && typeof res.route === 'string' && res.route && res.route !== 'unknown') {
+                        voiceState.activeNativeSpeakerId = res.route;
+                    }
+                }
+            }
+            await updateAudioDevices();
+            refreshLocalAudioPipelineTelemetry();
+        } catch (e) {
+            console.error('[Voice] Failed to switch native speaker:', e);
+            await updateAudioDevices();
+        }
+        return;
+    }
+
+    if (isSyntheticMobileSpeakerRoute(targetSink)) {
+        try {
+            localStorage.removeItem('spokes_active_speaker_id');
+        } catch(e) {}
+        return;
+    }
+
     try {
         localStorage.setItem('spokes_active_speaker_id', targetSink);
     } catch(e) {}
@@ -2752,43 +3270,26 @@ export async function switchActiveSpeaker(deviceId) {
         } catch(e) {}
     }
 
-    if (isNativePlatform()) {
-        let platform = getNativePlatform();
+    if (voiceState.currentRoom) {
         try {
-            if (platform === 'ios') {
-                let audioPlugin = getAudioSessionPlugin();
-                if (audioPlugin) {
-                    let targetRoute = targetSink === 'speakerphone' || targetSink === 'speaker' ? 'speaker' : 'earpiece';
-                    let res = await audioPlugin.setAudioRoute({ route: targetRoute });
-                    console.info(`[Voice] iOS Native Route Set (${targetRoute}): Category=${res.category}, Mode=${res.mode}, Output=${res.activeOutput}`);
-                }
-            } else if (platform === 'android') {
-                if (window.Capacitor.Plugins.TelecomConnectionPlugin) {
-                    await window.Capacitor.Plugins.TelecomConnectionPlugin.setAudioRoute({ route: targetSink });
-                }
-            }
-            _activeNativeSpeakerId = targetSink;
-            await updateAudioDevices();
-        } catch (e) {
-            console.error('[Voice] Failed to switch native speaker:', e);
+            await voiceState.currentRoom.switchActiveDevice('audiooutput', sinkVal);
+        } catch(e) {
+            console.error('[Voice] Failed to switch speaker:', e);
         }
-    } else {
-        if (currentRoom) {
-            try {
-                await currentRoom.switchActiveDevice('audiooutput', targetSink === 'default' ? '' : targetSink);
-            } catch(e) {
-                console.error('[Voice] Failed to switch speaker:', e);
-            }
-        }
-        await updateAudioDevices();
+    }
+    await updateAudioDevices();
+    refreshLocalAudioPipelineTelemetry();
+    if (voiceState.directSessionActive) {
+        const outputDeviceLabel = await resolveSelectedSpeakerLabelForDirectAudio();
+        pushDirectRoomControlsUpdate({ outputDeviceLabel });
     }
 }
 
 export async function playTestSpeakerSound(deviceId) {
     try {
         const audio = new Audio('/sounds/spokesnotif1.wav');
-        const sink = (!deviceId || deviceId === 'default') ? '' : deviceId;
-        if (typeof audio.setSinkId === 'function') {
+        const sink = (!deviceId || deviceId === 'default' || isNativePlatform() || isSyntheticMobileSpeakerRoute(deviceId)) ? '' : deviceId;
+        if (!isNativePlatform() && sink && typeof audio.setSinkId === 'function') {
             try {
                 await audio.setSinkId(sink);
             } catch(e) {
@@ -2806,205 +3307,6 @@ export async function playTestSpeakerSound(deviceId) {
 }
 
 
-export async function setScreenShareEnabled(enabled, resolutionStr = 'Auto', targetFps = 30, mode = 'motion', captureAudio = false) {
-    if (currentRoom && currentRoom.localParticipant) {
-        try {
-            if (enabled) {
-                let exTracks = currentRoom.localParticipant.videoTrackPublications;
-                if (exTracks) {
-                    let pubArr = typeof exTracks.values === 'function' ? Array.from(exTracks.values()) : Object.values(exTracks);
-                    let screenPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.ScreenShare);
-                    if (screenPub && screenPub.track) {
-                        const oldTrack = screenPub.videoTrack || screenPub.track;
-                        try { await currentRoom.localParticipant.unpublishTrack(oldTrack, true); } catch (e) {}
-                        stopLivekitTrackCompletely(oldTrack);
-                    }
-                }
-
-                let exAudioTracks = currentRoom.localParticipant.audioTrackPublications;
-                if (exAudioTracks) {
-                    let pubArr = typeof exAudioTracks.values === 'function' ? Array.from(exAudioTracks.values()) : Object.values(exAudioTracks);
-                    let screenAudioPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.ScreenShareAudio);
-                    if (screenAudioPub && screenAudioPub.track) {
-                        const oldAudioTrack = screenAudioPub.audioTrack || screenAudioPub.track;
-                        try { await currentRoom.localParticipant.unpublishTrack(oldAudioTrack, true); } catch (e) {}
-                        stopLivekitTrackCompletely(oldAudioTrack);
-                    }
-                }
-
-                let is60 = targetFps > 35;
-                let targetPreset = getScreenPreset(resolutionStr, is60);
-                let probePreset = Object.assign({}, getScreenPreset('2160p', is60), { frameRate: targetFps });
-
-                let trackRes = await window.LivekitClient.createLocalScreenTracks({
-                    resolution: probePreset,
-                    audio: true
-                });
-                let tracks = Array.isArray(trackRes) ? trackRes : [trackRes];
-                let videoTrack = tracks.find(t => t.kind === 'video') || tracks[0];
-                let audioTrack = tracks.find(t => t.kind === 'audio');
-                globalScreenTracks = tracks;
-
-                // Content hint controls WebRTC rate control degradation:
-                // "motion" maintains frame rate (preventing 1-5 FPS drops during window movement)
-                // "detail" prioritizes razor-sharp static text/lines for documents
-                if (videoTrack && videoTrack.mediaStreamTrack) {
-                    videoTrack.mediaStreamTrack.contentHint = mode === 'detail' ? 'detail' : 'motion';
-                    if (typeof videoTrack.mediaStreamTrack.addEventListener === 'function') {
-                        const onScreenEnded = () => {
-                            try { videoTrack.mediaStreamTrack.removeEventListener('ended', onScreenEnded); } catch (e) {}
-                            if (_isStoppingScreenShare) return;
-                            console.info('[VoiceInterop] Screen share MediaStreamTrack ended externally');
-                            setScreenShareEnabled(false).catch(() => {});
-                        };
-                        videoTrack.mediaStreamTrack.addEventListener('ended', onScreenEnded);
-                    }
-                }
-
-                const isAuto = !resolutionStr || resolutionStr === 'Auto';
-                const isDetail = mode === 'detail';
-                const initialScaleDown = computeScreenScaleDown(videoTrack, targetPreset);
-                const degradationPref = (isAuto && !isDetail) ? 'balanced' : 'maintain-resolution';
-
-                let publishOptions = { 
-                    source: window.LivekitClient.Track.Source.ScreenShare,
-                    simulcast: false,
-                    videoCodec: 'h264',
-                    degradationPreference: degradationPref,
-                    screenShareEncoding: {
-                        maxBitrate: targetPreset.maxBitrate,
-                        maxFramerate: targetFps,
-                        scaleResolutionDownBy: initialScaleDown
-                    },
-                    videoEncoding: {
-                        maxBitrate: targetPreset.maxBitrate,
-                        maxFramerate: targetFps
-                    }
-                };
-
-                _lastScreenResolution = resolutionStr || 'Auto';
-                _lastScreenFps = targetFps || 30;
-                _lastScreenMode = mode || 'motion';
-
-                // Publish with screenShareEncoding and enforce active capture/sender parameters.
-                await currentRoom.localParticipant.publishTrack(videoTrack, publishOptions);
-                await applyScreenShareEncoding(videoTrack, _lastScreenResolution, _lastScreenFps, _lastScreenMode);
-                try { updatePipCallState({ isScreenSharing: true }); } catch (e) {}
-                // Re-apply once first WGC/desktop frame dimensions settle (using latest active settings)
-                setTimeout(() => {
-                    if (currentRoom && videoTrack && globalScreenTracks.includes(videoTrack)) {
-                        applyScreenShareEncoding(videoTrack, _lastScreenResolution, _lastScreenFps, _lastScreenMode).catch(() => {});
-                    }
-                }, 250);
-
-                // Publish desktop audio if captured
-                if (audioTrack) {
-                    console.log('[Voice] Publishing desktop audio track:', audioTrack.sid);
-                    await currentRoom.localParticipant.publishTrack(audioTrack, {
-                        source: window.LivekitClient.Track.Source.ScreenShareAudio
-                    });
-                    if (dotnetHelper) {
-                        dotnetHelper.invokeMethodAsync('OnScreenShareAudioActive', true).catch(() => {});
-                    }
-                } else {
-                    if (dotnetHelper) {
-                        dotnetHelper.invokeMethodAsync('OnScreenShareAudioActive', false).catch(() => {});
-                        if (captureAudio) {
-                            dotnetHelper.invokeMethodAsync('OnVoiceLog', 'No desktop audio captured. When sharing in browser, select "Entire Screen" and check "Share system audio" (or share a browser tab).', 'warning').catch(() => {});
-                        }
-                    }
-                }
-            } else {
-                _isStoppingScreenShare = true;
-                const localId = currentRoom.localParticipant?.identity;
-                try {
-                    const tracksToStop = new Set(globalScreenTracks);
-                    globalScreenTracks = [];
-
-                    const allPubs = getParticipantTrackPublications(currentRoom.localParticipant);
-                    for (const p of allPubs) {
-                        if (p.source === window.LivekitClient?.Track?.Source?.ScreenShare || p.source === window.LivekitClient?.Track?.Source?.ScreenShareAudio) {
-                            const t = p.videoTrack || p.audioTrack || p.track;
-                            if (t) tracksToStop.add(t);
-                        }
-                    }
-
-                    for (const t of tracksToStop) {
-                        try {
-                            await currentRoom.localParticipant.unpublishTrack(t, true);
-                        } catch (e) {
-                            console.warn('[VoiceInterop] unpublishTrack screen share warning:', e);
-                        } finally {
-                            stopLivekitTrackCompletely(t);
-                        }
-                    }
-                } finally {
-                    _isStoppingScreenShare = false;
-                    if (localId) {
-                        try { unregisterPipVideoTrack(localId, 'screenshare'); } catch (e) {}
-                        clearParticipantVideoDom(localId, 'screenshare');
-                        if (dotnetHelper) {
-                            dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', localId, 'screenshare', false).catch(() => {});
-                            dotnetHelper.invokeMethodAsync('OnScreenShareAudioActive', false).catch(() => {});
-                        }
-                    }
-                    try { updatePipCallState({ isScreenSharing: false }); } catch (e) {}
-                }
-            }
-        } catch (error) {
-            console.error('[VoiceInterop] Error in setScreenShareEnabled:', error);
-            throw error;
-        }
-    }
-}
-
-export async function setScreenShareAudioEnabled(enabled) {
-    if (!currentRoom || !currentRoom.localParticipant) return false;
-    let audioTrack = globalScreenTracks.find(t => t.kind === 'audio');
-    if (audioTrack) {
-        if (enabled) {
-            if (audioTrack.mediaStreamTrack) audioTrack.mediaStreamTrack.enabled = true;
-            let pubs = currentRoom.localParticipant.audioTrackPublications;
-            let pubArr = typeof pubs?.values === 'function' ? Array.from(pubs.values()) : Object.values(pubs || {});
-            let existingPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.ScreenShareAudio);
-            if (!existingPub) {
-                await currentRoom.localParticipant.publishTrack(audioTrack, {
-                    source: window.LivekitClient.Track.Source.ScreenShareAudio
-                });
-            }
-        } else {
-            if (audioTrack.mediaStreamTrack) audioTrack.mediaStreamTrack.enabled = false;
-            let pubs = currentRoom.localParticipant.audioTrackPublications;
-            let pubArr = typeof pubs?.values === 'function' ? Array.from(pubs.values()) : Object.values(pubs || {});
-            let existingPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.ScreenShareAudio);
-            if (existingPub && existingPub.track) {
-                await currentRoom.localParticipant.unpublishTrack(existingPub.track, false);
-            }
-        }
-        return true;
-    }
-    return false;
-}
-
-export async function updateScreenShareSettings(resolutionStr = 'Auto', targetFps = 30, mode = 'motion') {
-    _lastScreenResolution = resolutionStr || 'Auto';
-    _lastScreenFps = targetFps || 30;
-    _lastScreenMode = mode || 'motion';
-    if (!currentRoom || !currentRoom.localParticipant) return;
-    try {
-        let exTracks = currentRoom.localParticipant.videoTrackPublications;
-        if (!exTracks) return;
-        let pubArr = typeof exTracks.values === 'function' ? Array.from(exTracks.values()) : Object.values(exTracks);
-        let screenPub = pubArr.find(p => p.source === window.LivekitClient.Track.Source.ScreenShare);
-        if (!screenPub || !screenPub.track) return;
-
-        let track = screenPub.track;
-        await applyScreenShareEncoding(track, _lastScreenResolution, _lastScreenFps, _lastScreenMode);
-    } catch (err) {
-        console.warn('[VoiceInterop] Error in updateScreenShareSettings:', err);
-    }
-}
-
 // --- Event Handlers ---
 
 function waitForElement(id, timeoutMs = 5000) {
@@ -3021,7 +3323,7 @@ function waitForElement(id, timeoutMs = 5000) {
                 obs.disconnect();
                 clearTimeout(timeout);
                 resolve(el);
-            } else if (!currentRoom) {
+            } else if (!voiceState.currentRoom) {
                 obs.disconnect();
                 clearTimeout(timeout);
                 reject(new Error(`Aborted waiting for ${id} due to room disconnection`));
@@ -3046,38 +3348,18 @@ function attachTrack(track, participant, publication = null) {
     const isBot = participant?.identity?.startsWith('bot:');
     
     if (isAudio) {
-        // Never attach local participant audio tracks to playback <audio> elements (e.g. during reattachAllTracks)
-        if (participant === currentRoom?.localParticipant) {
+        // Remote audio routing is governed by reconcileAudioRouting() -> ensureDesiredAudioPublication().
+        if (participant === voiceState.currentRoom?.localParticipant) {
             return;
         }
 
         const processedOwner = getProcessedMicOwner(track, publication, participant);
-        const localIdentity = currentRoom?.localParticipant?.identity;
-
-        if (processedOwner) {
-            if (processedOwner === localIdentity || _mutedRoommateUsers.has(processedOwner) || !_coLocatedProcessedUsers.has(processedOwner)) {
-                if (typeof publication?.setSubscribed === 'function') {
-                    try { publication.setSubscribed(false); } catch (e) {}
-                }
-                return;
-            }
-        } else if (!isBot && track.source !== window.LivekitClient.Track.Source.ScreenShareAudio) {
-            if (_coLocatedProcessedUsers.has(participant?.identity) || _mutedRoommateUsers.has(participant?.identity)) {
-                if (typeof publication?.setSubscribed === 'function') {
-                    try { publication.setSubscribed(false); } catch (e) {}
-                }
-                return;
-            }
-        }
-
+        const localIdentity = voiceState.currentRoom?.localParticipant?.identity;
         const effectiveIdentity = processedOwner || participant?.identity;
         if (!effectiveIdentity || effectiveIdentity === localIdentity) {
             return;
         }
 
-        // Universal fast-path for remote audio tracks (bot and human participants):
-        // Audio has no visual component in the UI grid. Attach directly to the permanent
-        // voice-audio-container without waiting for Blazor DOM slots or SignalR roundtrips!
         console.log(`[Voice] Fast-path attaching audio track: ${track.sid} for ${effectiveIdentity} (isBot=${isBot}, processed=${Boolean(processedOwner)})`);
         const container = document.getElementById('voice-audio-container') || document.body;
         let element;
@@ -3090,12 +3372,15 @@ function attachTrack(track, participant, publication = null) {
             element = track.attach();
             container.appendChild(element);
         }
-        
+
+        applyLowLatencyAudioReceiverHints(track, publication);
         attachParticipantAudio(track, participant, element, effectiveIdentity);
-        
-        if (effectiveIdentity && track.mediaStreamTrack && (!isBot || Boolean(processedOwner)) && track.source !== window.LivekitClient.Track.Source.ScreenShareAudio) {
-            registerRemoteVoiceTrack(effectiveIdentity, track.mediaStreamTrack);
+
+        const slotId = processedOwner || (!isBot ? effectiveIdentity : null);
+        if (slotId && voiceState.dotnetHelper) {
+            try { voiceState.dotnetHelper.invokeMethodAsync('EnsureParticipantSlot', slotId)?.catch?.(() => {}); } catch (e) {}
         }
+        scheduleRoomSnapshotSync();
         return;
     }
     
@@ -3103,8 +3388,8 @@ function attachTrack(track, participant, publication = null) {
         const isScreenShare = isScreenShareTrackOrPub(track, publication);
         const pipSource = isScreenShare ? 'screenshare' : 'camera';
         const effectiveIdentity = getEffectiveParticipantIdentity(participant);
-        const localIdentity = currentRoom?.localParticipant?.identity;
-        const isLocalParticipant = participant === currentRoom?.localParticipant
+        const localIdentity = voiceState.currentRoom?.localParticipant?.identity;
+        const isLocalParticipant = participant === voiceState.currentRoom?.localParticipant
             || (Boolean(localIdentity) && effectiveIdentity === localIdentity);
         const targetId = getVideoElementIdForTrack(effectiveIdentity, track, publication);
 
@@ -3134,9 +3419,10 @@ function attachTrack(track, participant, publication = null) {
             }
         }
 
-        if (dotnetHelper && effectiveIdentity) {
-            dotnetHelper.invokeMethodAsync('EnsureParticipantSlot', effectiveIdentity).catch(() => {});
-            dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', effectiveIdentity, pipSource, true).catch(() => {});
+        if (voiceState.dotnetHelper && effectiveIdentity) {
+            voiceState.dotnetHelper.invokeMethodAsync('EnsureParticipantSlot', effectiveIdentity).catch(() => {});
+            voiceState.dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', effectiveIdentity, pipSource, true).catch(() => {});
+            scheduleRoomSnapshotSync();
         }
 
         // While in Android Native PiP or external OS/Desktop PiP, the PiP surface is the sole video sink;
@@ -3146,14 +3432,14 @@ function attachTrack(track, participant, publication = null) {
         }
 
         waitForElement(targetId).then((targetEl) => {
-            if (!currentRoom || isStageSuppressedByExternalPip()) {
+            if (!voiceState.currentRoom || isStageSuppressedByExternalPip()) {
                 return;
             }
             if (track.mediaStreamTrack && track.mediaStreamTrack.readyState === 'ended') {
                 clearParticipantVideoDom(effectiveIdentity, pipSource);
                 return;
             }
-            if (isLocalParticipant && !isScreenShare && !_localCameraDesired) {
+            if (isLocalParticipant && !isScreenShare && !voiceState.localCameraDesired) {
                 clearParticipantVideoDom(effectiveIdentity, 'camera');
                 return;
             }
@@ -3164,14 +3450,26 @@ function attachTrack(track, participant, publication = null) {
             targetEl.style.pointerEvents = 'auto';
             targetEl.classList.add('has-stream');
             if (isLocalParticipant && !isScreenShare) {
-                targetEl.style.transform = (_localCameraFacing === 'environment')
+                targetEl.style.transform = (voiceState.localCameraFacing === 'environment')
                     ? 'translateZ(0)'
                     : 'translateZ(0) scaleX(-1)';
+            } else if (voiceState.fullscreenParticipantId === effectiveIdentity && voiceState.fullscreenGestureController) {
+                refreshParticipantFullscreenPrimaryTarget();
             } else {
                 targetEl.style.transform = 'translateZ(0)';
             }
             
-            track.attach(targetEl);
+            const currentBoundTrack = targetEl.srcObject && typeof targetEl.srcObject.getVideoTracks === 'function'
+                ? targetEl.srcObject.getVideoTracks()[0]
+                : null;
+            const isAlreadyAttached = currentBoundTrack === track.mediaStreamTrack
+                && (!Array.isArray(track.attachedElements) || track.attachedElements.includes(targetEl));
+            if (!isAlreadyAttached) {
+                if (currentBoundTrack && currentBoundTrack !== track.mediaStreamTrack) {
+                    try { track.detach(targetEl); } catch (e) {}
+                }
+                track.attach(targetEl);
+            }
             syncStageVideoAspectRatio(targetEl, track, publication);
             
             // CRITICAL: iOS Safari ignores HTML 'muted' attribute on dynamic WebRTC streams.
@@ -3195,12 +3493,12 @@ function attachTrack(track, participant, publication = null) {
                     );
                     if (!isLocalParticipant) {
                         updateParticipantQualityMax(participant);
-                    } else if (dotnetHelper && isScreenShare) {
+                    } else if (voiceState.dotnetHelper && isScreenShare) {
                         const localMaxEdge = Math.max(targetEl.videoWidth, targetEl.videoHeight);
                         const settings = typeof track.mediaStreamTrack.getSettings === 'function' ? track.mediaStreamTrack.getSettings() : {};
                         const localFps = Math.max(30, Math.round(settings?.frameRate || 60));
                         const screenMaxEdge = Math.max(localMaxEdge, getScreenTrackMaxSourceEdge(track));
-                        dotnetHelper.invokeMethodAsync('OnLocalScreenDimensions', screenMaxEdge, localFps).catch(() => {});
+                        voiceState.dotnetHelper.invokeMethodAsync('OnLocalScreenDimensions', screenMaxEdge, localFps).catch(() => {});
                     }
                 }
             };
@@ -3219,8 +3517,13 @@ function attachTrack(track, participant, publication = null) {
                 notifyVideoDimensions();
             }
             
-            // Ensure it plays if the browser blocked autoplay
-            if (targetEl.paused) {
+            // Keep stage <video> paused while the host view is hidden (minimized, tray, or another server)
+            // so Chromium does not decode/composite unseen stage video (including the local screen-share preview).
+            if (isHostViewHiddenForStage()) {
+                if (typeof targetEl.pause === 'function') {
+                    try { targetEl.pause(); } catch (e) {}
+                }
+            } else if (targetEl.paused) {
                 targetEl.play().catch(e => console.warn("[Voice] Retry Play:", e));
             }
             
@@ -3234,8 +3537,8 @@ function attachTrack(track, participant, publication = null) {
 
 function updateParticipantQualityMax(participant, retryCount = 0) {
     const effectiveIdentity = getEffectiveParticipantIdentity(participant);
-    if (!dotnetHelper || !participant || !effectiveIdentity) return;
-    if (effectiveIdentity === currentRoom?.localParticipant?.identity) return;
+    if (!voiceState.dotnetHelper || !participant || !effectiveIdentity) return;
+    if (effectiveIdentity === voiceState.currentRoom?.localParticipant?.identity) return;
     
     let maxOverallDim = 0;
     let maxOverallFps = 30;
@@ -3243,21 +3546,14 @@ function updateParticipantQualityMax(participant, retryCount = 0) {
     let missingDims = false;
 
     const matchingParticipants = [participant];
-    const remoteMap = currentRoom?.remoteParticipants || currentRoom?.participants;
-    if (remoteMap) {
-        const remotes = typeof remoteMap.values === 'function' ? Array.from(remoteMap.values()) : Object.values(remoteMap);
-        for (const p of remotes) {
-            if (p && p !== participant && getEffectiveParticipantIdentity(p) === effectiveIdentity) {
-                matchingParticipants.push(p);
-            }
+    for (const p of getRemoteParticipantsIterable()) {
+        if (p && p !== participant && getEffectiveParticipantIdentity(p) === effectiveIdentity) {
+            matchingParticipants.push(p);
         }
     }
     
     for (const part of matchingParticipants) {
-        let tracks = part.videoTrackPublications;
-        if (!tracks) continue;
-        let pubArr = typeof tracks.values === 'function' ? Array.from(tracks.values()) : Object.values(tracks);
-        for (let p of pubArr) {
+        for (let p of toArray(part.videoTrackPublications)) {
             if (p.isSubscribed && p.track) {
                 hasTracks = true;
                 
@@ -3305,28 +3601,52 @@ function updateParticipantQualityMax(participant, retryCount = 0) {
     
     if (hasTracks && maxOverallDim === 0) return;
     
-    try { dotnetHelper.invokeMethodAsync('OnParticipantVideoDimensions', effectiveIdentity, maxOverallDim, maxOverallFps); } catch(e) {}
+    invokeDotNetSafe('OnParticipantVideoDimensions', effectiveIdentity, maxOverallDim, maxOverallFps);
+}
+
+function handleRemoteAudioPublicationChanged(publication, participant) {
+    const Kind = window.LivekitClient?.Track?.Kind;
+    if (publication?.kind === Kind?.Audio ||
+        publication?.track?.kind === Kind?.Audio ||
+        getProcessedMicOwner(publication?.track, publication, participant)) {
+        reconcileAudioRouting();
+        if (voiceState.dotnetHelper && participant && participant !== voiceState.currentRoom?.localParticipant && isHumanMicrophonePublication(publication, participant)) {
+            const pubs = getParticipantTrackPublications(participant);
+            const stillPublished = pubs.includes(publication);
+            if (stillPublished && !publication.isMuted) {
+                invokeDotNetSafe('OnParticipantMuteChanged', participant.identity, false);
+            }
+        }
+        scheduleRoomSnapshotSync();
+    }
 }
 
 function handleTrackSubscribed(track, publication, participant) {
+    if (track.kind === window.LivekitClient.Track.Kind.Audio) {
+        reconcileAudioRouting();
+        scheduleRoomSnapshotSync();
+        if (track.source === window.LivekitClient.Track.Source.ScreenShareAudio || publication?.source === window.LivekitClient.Track.Source.ScreenShareAudio) {
+            if (voiceState.dotnetHelper && participant?.identity) {
+                voiceState.dotnetHelper.invokeMethodAsync('OnRemoteScreenAudioChanged', participant.identity, true).catch(() => {});
+            }
+        }
+        return;
+    }
+
     attachTrack(track, participant, publication);
     if (track.kind === window.LivekitClient.Track.Kind.Video) {
         updateParticipantQualityMax(participant);
-        // Ensure remote screen shares are not throttled down to low quality by adaptiveStream in grid view
+        syncIosAudioSessionVideoMode().catch(() => {});
+        // Request HIGH quality by default on subscribed video tracks so simulcast camera and
+        // screen-share feeds promote cleanly to full resolution whenever downlink bandwidth allows.
+        publication?.setVideoQuality?.(window.LivekitClient.VideoQuality.HIGH);
         if (publication?.source === window.LivekitClient.Track.Source.ScreenShare || track.source === window.LivekitClient.Track.Source.ScreenShare) {
-            publication?.setVideoQuality?.(window.LivekitClient.VideoQuality.HIGH);
             publication?.setVideoDimensions?.({ width: 3840, height: 2160 });
-        }
-    } else if (track.kind === window.LivekitClient.Track.Kind.Audio) {
-        if (track.source === window.LivekitClient.Track.Source.ScreenShareAudio || publication?.source === window.LivekitClient.Track.Source.ScreenShareAudio) {
-            if (dotnetHelper && participant?.identity) {
-                dotnetHelper.invokeMethodAsync('OnRemoteScreenAudioChanged', participant.identity, true).catch(() => {});
-            }
         }
     }
 }
 
-function handleTrackUnsubscribed(track, publication, participant) {
+function detachTrackAndOrphanedMediaElement(track, publication) {
     if (track) {
         track.detach().forEach(el => safeRemove(el));
     }
@@ -3335,58 +3655,74 @@ function handleTrackUnsubscribed(track, publication, participant) {
         const orphaned = document.getElementById(`media-${sid}`);
         if (orphaned) safeRemove(orphaned);
     }
+    return sid;
+}
+
+function clearParticipantVideoState(participant, track, publication, { resolveEffectiveIdentity = true, notifyDotNet = true } = {}) {
+    if (!participant || !participant.identity) return;
+    const targetIdentity = resolveEffectiveIdentity ? getEffectiveParticipantIdentity(participant) : participant.identity;
+    const pipSource = isScreenShareTrackOrPub(track, publication) ? 'screenshare' : 'camera';
+    unregisterPipVideoTrack(targetIdentity, pipSource);
+    clearParticipantVideoDom(targetIdentity, pipSource);
+    if (notifyDotNet && voiceState.dotnetHelper && targetIdentity) {
+        invokeDotNetSafe('OnVideoTrackStateChanged', targetIdentity, pipSource, false);
+        scheduleRoomSnapshotSync();
+    }
+}
+
+function handleTrackUnsubscribed(track, publication, participant) {
+    const sid = detachTrackAndOrphanedMediaElement(track, publication);
+    const isReconnecting = isRoomCurrentlyReconnecting();
     const isScreenAudio = track?.source === window.LivekitClient.Track.Source.ScreenShareAudio || publication?.source === window.LivekitClient.Track.Source.ScreenShareAudio;
     if (participant && participant.identity && (track?.kind === window.LivekitClient.Track.Kind.Audio || publication?.kind === window.LivekitClient.Track.Kind.Audio)) {
-        const localIdentity = currentRoom?.localParticipant?.identity;
-        const effectiveIdentity = getProcessedMicOwner(track, publication, participant) || participant.identity;
-        if (!isScreenAudio && effectiveIdentity && effectiveIdentity !== localIdentity) {
-            unregisterRemoteVoiceTrack(effectiveIdentity, track?.mediaStreamTrack || null);
-        }
+        const localIdentity = voiceState.currentRoom?.localParticipant?.identity;
+        const processedOwner = getProcessedMicOwner(track, publication, participant);
+        const effectiveIdentity = processedOwner || participant.identity;
         if (effectiveIdentity && effectiveIdentity !== localIdentity) {
             detachParticipantAudio(effectiveIdentity, sid);
         }
-        if (isScreenAudio && dotnetHelper) {
-            dotnetHelper.invokeMethodAsync('OnRemoteScreenAudioChanged', participant.identity, false).catch(() => {});
-        }
-    }
-    
-    // Explicit fallback to clear the Blazor-managed video tag, since LiveKit detaches tracks before firing this event
-    if (participant && participant.identity) {
-        if (!track || track.kind === window.LivekitClient.Track.Kind.Video || (publication && publication.kind === window.LivekitClient.Track.Kind.Video)) {
-            const effectiveIdentity = getEffectiveParticipantIdentity(participant);
-            const localIdentity = currentRoom?.localParticipant?.identity;
-            const pipSource = isScreenShareTrackOrPub(track, publication) ? 'screenshare' : 'camera';
-            const isLocalCompanionReconfig = Boolean(localIdentity)
-                && effectiveIdentity === localIdentity
-                && isCameraCompanionIdentity(participant?.identity)
-                && _localCameraDesired
-                && pipSource === 'camera';
-            if (!isLocalCompanionReconfig) {
-                unregisterPipVideoTrack(effectiveIdentity, pipSource);
-                clearParticipantVideoDom(effectiveIdentity, pipSource);
-                if (dotnetHelper && effectiveIdentity) {
-                    dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', effectiveIdentity, pipSource, false).catch(() => {});
-                }
+        if (!isReconnecting) {
+            reconcileAudioRouting();
+            if (isScreenAudio && voiceState.dotnetHelper) {
+                invokeDotNetSafe('OnRemoteScreenAudioChanged', participant.identity, false);
             }
         }
     }
     
-    if (track && track.kind === window.LivekitClient.Track.Kind.Video) {
+    // Explicit fallback to clear the Blazor-managed video tag, since LiveKit detaches tracks before firing this event.
+    // Suppress during LiveKit room reconnects so synthetic handleRestarting unsubscribes do not tear down the stage UI,
+    // and suppress when the participant already has a newer active subscribed video track for the same source.
+    if (!isReconnecting && participant && participant.identity) {
+        if (!track || track.kind === window.LivekitClient.Track.Kind.Video || (publication && publication.kind === window.LivekitClient.Track.Kind.Video)) {
+            const isScreen = isScreenShareTrackOrPub(track, publication);
+            const hasReplacement = toArray(participant.videoTrackPublications).some(pub => {
+                if (!pub || pub.isMuted || !pub.track) return false;
+                if (sid && (pub.trackSid === sid || pub.track?.sid === sid)) return false;
+                return isScreenShareTrackOrPub(pub.track, pub) === isScreen;
+            });
+            if (!hasReplacement) {
+                clearParticipantVideoState(participant, track, publication);
+            }
+        }
+    }
+    
+    if (!isReconnecting && track && track.kind === window.LivekitClient.Track.Kind.Video) {
         updateParticipantQualityMax(participant);
+        syncIosAudioSessionVideoMode().catch(() => {});
     }
 }
 
 async function measureWebRtcServerDelayMs(track) {
     try {
         let rttMs = 0;
-        const engineRtt = currentRoom?.engine?.client?.rtt;
+        const engineRtt = voiceState.currentRoom?.engine?.client?.rtt;
         if (typeof engineRtt === 'number' && engineRtt > 0 && engineRtt < 2000) {
             rttMs = engineRtt;
         }
 
         const statsTarget = track?.sender
-            || currentRoom?.engine?.pcManager?.publisher?.pc
-            || currentRoom?.engine?.publisher?.pc;
+            || voiceState.currentRoom?.engine?.pcManager?.publisher?.pc
+            || voiceState.currentRoom?.engine?.publisher?.pc;
         if (statsTarget && typeof statsTarget.getStats === 'function') {
             const report = await statsTarget.getStats();
             if (report && typeof report.forEach === 'function') {
@@ -3407,14 +3743,59 @@ async function measureWebRtcServerDelayMs(track) {
     return 0;
 }
 
+const BLUETOOTH_DEVICE_LABEL_REGEX = /\b(bluetooth|airpods|hands-free|hfp|ag audio|ble audio|galaxy buds|pixel buds|powerbeats|wh-1000|wf-1000|bose qc)\b/i;
+const NON_BLUETOOTH_DONGLE_LABEL_REGEX = /\b(usb|2\.4\s*ghz|dongle|lightspeed|hyperspeed|slipstream|wired|line in)\b/i;
+
+function isBluetoothCaptureActive(track) {
+    try {
+        if (isNativePlatform() && getNativePlatform() === 'android' && voiceState.activeNativeSpeakerId === 'bluetooth') {
+            return true;
+        }
+
+        const rawMst = getRawCaptureMediaStreamTrack(track);
+        const candidates = [rawMst?.label, track?.mediaStreamTrack?.label];
+        for (const label of candidates) {
+            if (typeof label === 'string' && label.length > 0) {
+                if (BLUETOOTH_DEVICE_LABEL_REGEX.test(label) && !NON_BLUETOOTH_DONGLE_LABEL_REGEX.test(label)) {
+                    return true;
+                }
+            }
+        }
+    } catch (e) {}
+    return false;
+}
+
+function refreshLocalAudioPipelineTelemetry() {
+    try {
+        if (voiceState.usingNativeMobileVoice) {
+            if (voiceState.dotnetHelper) {
+                voiceState.dotnetHelper.invokeMethodAsync(
+                    'OnLocalAudioPipelineTelemetry',
+                    voiceState.nativeEffectiveFilter || 'rnnoise',
+                    estimateNativeMobileCaptureMs(voiceState.nativeEffectiveFilter),
+                    getNativeVoiceTelemetryPlatformTag(),
+                    0
+                )?.catch?.(() => {});
+            }
+            return;
+        }
+        if (!voiceState.currentRoom?.localParticipant || !window.LivekitClient?.Track) return;
+        const micPub = toArray(voiceState.currentRoom.localParticipant.audioTrackPublications)
+            .find(p => p.source === window.LivekitClient.Track.Source.Microphone && p.track);
+        if (micPub?.track) {
+            reportLocalAudioPipelineTelemetry(micPub.track);
+        }
+    } catch (e) {}
+}
+
 function reportLocalAudioPipelineTelemetry(track) {
-    if (!dotnetHelper || !track) return;
+    if (!voiceState.dotnetHelper || !track) return;
     try {
         let platformTag = 'web';
         if (isNativePlatform()) {
             platformTag = getNativePlatform() || 'mobile';
-        } else if (typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent || '')) {
-            platformTag = 'electron';
+        } else if (isDesktopClient()) {
+            platformTag = 'desktop';
         } else if (isAppleMobileDevice()) {
             platformTag = 'ios-web';
         } else if (typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '')) {
@@ -3423,13 +3804,13 @@ function reportLocalAudioPipelineTelemetry(track) {
 
         const hasAiProcessor = Boolean(track.processor);
         const effectiveFilter = hasAiProcessor
-            ? currentNoiseSuppression
-            : (currentNoiseSuppression === 'none' ? 'none' : 'webrtc');
+            ? voiceState.currentNoiseSuppression
+            : (voiceState.currentNoiseSuppression === 'none' ? 'none' : 'webrtc');
 
         let captureMs = 0;
-        const mst = track.mediaStreamTrack;
-        if (mst && typeof mst.getSettings === 'function') {
-            const settings = mst.getSettings() || {};
+        const rawMst = getRawCaptureMediaStreamTrack(track) || track.mediaStreamTrack;
+        if (rawMst && typeof rawMst.getSettings === 'function') {
+            const settings = rawMst.getSettings() || {};
             if (typeof settings.latency === 'number' && settings.latency > 0 && settings.latency < 1.0) {
                 captureMs = settings.latency * 1000.0;
             }
@@ -3445,6 +3826,11 @@ function reportLocalAudioPipelineTelemetry(track) {
             captureMs = 15.0;
         }
 
+        if (isBluetoothCaptureActive(track)) {
+            // Bluetooth HFP/SCO/BLE voice capture adds ~150ms radio packetization + codec buffering
+            captureMs += 150.0;
+        }
+
         let filterLookaheadMs = 0;
         const ctx = track.audioContext || _globalAudioContext;
         const baseLatMs = (ctx && typeof ctx.baseLatency === 'number' && ctx.baseLatency > 0) ? (ctx.baseLatency * 1000.0) : 5.3;
@@ -3458,9 +3844,9 @@ function reportLocalAudioPipelineTelemetry(track) {
 
         const totalEstimatedMs = Math.round((captureMs + filterLookaheadMs) * 10) / 10;
         const pushTelemetry = async () => {
-            if (!dotnetHelper || !currentRoom) return;
+            if (!voiceState.dotnetHelper || !voiceState.currentRoom) return;
             const serverDelayMs = await measureWebRtcServerDelayMs(track);
-            dotnetHelper.invokeMethodAsync('OnLocalAudioPipelineTelemetry', effectiveFilter, totalEstimatedMs, platformTag, serverDelayMs).catch(() => {});
+            invokeDotNetSafe('OnLocalAudioPipelineTelemetry', effectiveFilter, totalEstimatedMs, platformTag, serverDelayMs);
         };
 
         pushTelemetry();
@@ -3474,7 +3860,7 @@ function handleLocalTrackPublished(publication, participant) {
         // playing your own mic back through speakers causes echo/feedback.
         if (publication.track.kind === window.LivekitClient.Track.Kind.Audio) {
             if (publication.source !== window.LivekitClient?.Track?.Source?.ScreenShareAudio) {
-                if (_isLocalSoftwareMuted) {
+                if (voiceState.isLocalSoftwareMuted) {
                     unpublishAndStopAllLocalMicTracks().catch(() => {});
                     return;
                 }
@@ -3484,69 +3870,38 @@ function handleLocalTrackPublished(publication, participant) {
                 if (participant && participant.identity && mediaStreamTrack) {
                     registerLocalMicVad(participant.identity, mediaStreamTrack, rawTrack);
                 }
+                notifyHostVoiceState(Boolean(voiceState.currentRoom), isEffectiveLocalMicMuted());
+                updatePipCallState({ isMuted: isEffectiveLocalMicMuted() });
+                invokeDotNetSafe('OnLocalMuted', false);
+                scheduleRoomSnapshotSync();
                 reportLocalAudioPipelineTelemetry(publication.track);
             }
             return;
         }
         attachTrack(publication.track, participant, publication);
         
-        if (dotnetHelper) {
-            let w = 0, h = 0, fps = 30;
-            
-            // Robust check leveraging native capabilities (e.g. Discord method)
-            if (publication.track.mediaStreamTrack && typeof publication.track.mediaStreamTrack.getCapabilities === 'function') {
-                try {
-                    let caps = publication.track.mediaStreamTrack.getCapabilities();
-                    if (caps.width && caps.width.max) w = caps.width.max;
-                    if (caps.height && caps.height.max) h = caps.height.max;
-                    if (caps.frameRate && caps.frameRate.max) fps = caps.frameRate.max;
-                } catch(e) {}
-            }
-            
-            // Fallback for Safari/Firefox
-            if ((w === 0 || h === 0) && publication.track.mediaStreamTrack) {
-                let settings = publication.track.mediaStreamTrack.getSettings();
-                w = settings.width || 0;
-                h = settings.height || 0;
-            }
-            if (publication.track.mediaStreamTrack && typeof publication.track.mediaStreamTrack.getSettings === 'function') {
-                let settings = publication.track.mediaStreamTrack.getSettings();
-                if (settings.frameRate) fps = Math.max(fps, Math.round(settings.frameRate));
-            }
-            
-            let maxDim = Math.max(w, h);
+        if (voiceState.dotnetHelper) {
+            let { maxDim, maxFps: fps } = getHardwareCameraCapabilities(publication.track.mediaStreamTrack);
             if (publication.source === window.LivekitClient.Track.Source.ScreenShare) {
                 maxDim = Math.max(maxDim, getScreenTrackMaxSourceEdge(publication.track));
                 fps = Math.max(fps, 60);
             }
             if (maxDim > 0) {
-                if (publication.source === window.LivekitClient.Track.Source.ScreenShare) {
-                    try { dotnetHelper.invokeMethodAsync('OnLocalScreenDimensions', maxDim, fps); } catch(e) {}
-                } else {
-                    try { dotnetHelper.invokeMethodAsync('OnLocalVideoDimensions', maxDim, fps); } catch(e) {}
-                }
+                const method = publication.source === window.LivekitClient.Track.Source.ScreenShare
+                    ? 'OnLocalScreenDimensions'
+                    : 'OnLocalVideoDimensions';
+                invokeDotNetSafe(method, maxDim, fps);
             }
         }
     }
 }
 
-// --- Real-time Voice Activity Detection (VAD) Engine (Discord-Grade Responsiveness) ---
-// Local capture VAD (_localMicVadEntry) is strictly isolated from remote playback VAD (_trackedAudioStreams)
-// so Physical Room Isolation bot track suppression (processed-mic:<localIdentity>) can never tear down local VAD.
-const _trackedAudioStreams = new Map(); // remoteIdentity -> { source, analyser, dataArray, lastSpokeTime, isSpeaking, track, noiseFloor, consecutiveActiveFrames }
+// --- Sender-Only Local Microphone Voice Activity Detection (VAD) ---
+// Each client evaluates only its own local capture microphone and reports speaking transitions
+// (`OnLocalSpeakingChanged(bool)`) to the server. Remote speaking indicators and PiP badges
+// are driven solely by canonical server state (VoiceStateService / GlobalVoiceService).
 let _localMicVadEntry = null; // { identity, source, analyser, dataArray, lastSpokeTime, isSpeaking, track, rawTrack, noiseFloor, consecutiveActiveFrames }
 let _vadIntervalId = null;
-let _isLocalSoftwareMuted = false;
-let _isLocalHardwareMuted = false;
-const VAD_HANGOVER_MS = 280; // Release time to bridge syllables without lingering or clipping word endings
-const VAD_ATTACK_FRAMES = 2; // ~60ms attack buffer to reject single-frame transients (clicks, taps, breath pops)
-let _voiceSensitivity = 50.0; // 0 (strict gate, higher threshold) to 100 (sensitive gate, lower threshold)
-let _lastNotifiedSpeakers = "";
-let _speakerSyncDebounce = null;
-
-function isEffectiveLocalMicMuted() {
-    return _isLocalSoftwareMuted || _isLocalHardwareMuted;
-}
 
 function createVadAnalyserNodeEntry(identity, mediaStreamTrack, rawTrack = null) {
     const ctx = getVoiceAudioContext();
@@ -3589,92 +3944,22 @@ function registerLocalMicVad(identity, mediaStreamTrack, rawTrack = null) {
 
 function unregisterLocalMicVad(shouldNotify = true) {
     if (_localMicVadEntry) {
-        const prevId = _localMicVadEntry.identity;
         try { _localMicVadEntry.source.disconnect(); } catch (e) {}
         _localMicVadEntry = null;
-        if (prevId) {
-            updateParticipantSpeakingDOM(prevId, false);
-        }
     }
-    if (!_localMicVadEntry && _trackedAudioStreams.size === 0) {
-        stopVADLoop();
-    }
+    stopVADLoop();
     if (shouldNotify) {
-        notifyActiveSpeakersToDotnet(null, true);
+        reportLocalSpeakingState(false);
     }
-}
-
-function registerRemoteVoiceTrack(identity, mediaStreamTrack) {
-    if (!identity || !mediaStreamTrack) return;
-    const localIdentity = currentRoom?.localParticipant?.identity;
-    if (identity === localIdentity) return;
-
-    unregisterRemoteVoiceTrack(identity);
-
-    try {
-        const entry = createVadAnalyserNodeEntry(identity, mediaStreamTrack, mediaStreamTrack);
-        if (!entry) return;
-        _trackedAudioStreams.set(identity, entry);
-        startVADLoop();
-    } catch (err) {
-        console.warn('[Voice:VAD] Failed to register remote track for', identity, err);
-    }
-}
-
-function unregisterRemoteVoiceTrack(identity, expectedMediaStreamTrack = null) {
-    if (!identity) return;
-    const localIdentity = currentRoom?.localParticipant?.identity;
-    if (identity === localIdentity) return;
-
-    const item = _trackedAudioStreams.get(identity);
-    if (!item) return;
-
-    if (expectedMediaStreamTrack && item.track && item.track !== expectedMediaStreamTrack) {
-        return;
-    }
-
-    try {
-        item.source.disconnect();
-    } catch (e) {}
-    _trackedAudioStreams.delete(identity);
-    updateParticipantSpeakingDOM(identity, false);
-
-    if (!_localMicVadEntry && _trackedAudioStreams.size === 0) {
-        stopVADLoop();
-    }
-    notifyActiveSpeakersToDotnet(null, true);
 }
 
 function clearAllVoiceTracks() {
     if (_localMicVadEntry) {
         try { _localMicVadEntry.source.disconnect(); } catch (e) {}
-        if (_localMicVadEntry.identity) {
-            updateParticipantSpeakingDOM(_localMicVadEntry.identity, false);
-        }
         _localMicVadEntry = null;
     }
-    _trackedAudioStreams.forEach((item, id) => {
-        try { item.source.disconnect(); } catch (e) {}
-        updateParticipantSpeakingDOM(id, false);
-    });
-    _trackedAudioStreams.clear();
     stopVADLoop();
-    _lastNotifiedSpeakers = "";
-    if (_speakerSyncDebounce) {
-        clearTimeout(_speakerSyncDebounce);
-        _speakerSyncDebounce = null;
-    }
-}
-
-function updateParticipantSpeakingDOM(identity, isSpeaking) {
-    const el = document.getElementById(`participant-rect-${identity}`);
-    if (el) {
-        if (isSpeaking && !el.classList.contains('is-speaking')) {
-            el.classList.add('is-speaking');
-        } else if (!isSpeaking && el.classList.contains('is-speaking')) {
-            el.classList.remove('is-speaking');
-        }
-    }
+    resetLocalSpeakingState();
 }
 
 function startVADLoop() {
@@ -3689,28 +3974,17 @@ function stopVADLoop() {
     }
 }
 
-function evaluateVadEntry(item, identity, isLocal, now, sensMult) {
-    if (isLocal) {
-        const raw = item.rawTrack || item.track;
-        const ignoreTrackMutedFlag = isNativePlatform() || isAppleMobileDevice();
-        if (isEffectiveLocalMicMuted()
-            || !item.track?.enabled
-            || item.track?.readyState === 'ended'
-            || (!ignoreTrackMutedFlag && item.track?.muted)
-            || (raw && (!raw.enabled || raw.readyState === 'ended' || (!ignoreTrackMutedFlag && raw.muted)))) {
-            if (item.isSpeaking) {
-                item.isSpeaking = false;
-                item.consecutiveActiveFrames = 0;
-                updateParticipantSpeakingDOM(identity, false);
-                return true;
-            }
-            return false;
-        }
-    } else if (item.track && (!item.track.enabled || item.track.readyState === 'ended' || item.track.muted)) {
+function evaluateLocalMicVad(item, now, sensMult) {
+    const raw = item.rawTrack || item.track;
+    const ignoreTrackMutedFlag = isNativePlatform() || isAppleMobileDevice();
+    if (isEffectiveLocalMicMuted()
+        || !item.track?.enabled
+        || item.track?.readyState === 'ended'
+        || (!ignoreTrackMutedFlag && item.track?.muted)
+        || (raw && (!raw.enabled || raw.readyState === 'ended' || (!ignoreTrackMutedFlag && raw.muted)))) {
         if (item.isSpeaking) {
             item.isSpeaking = false;
             item.consecutiveActiveFrames = 0;
-            updateParticipantSpeakingDOM(identity, false);
             return true;
         }
         return false;
@@ -3754,7 +4028,6 @@ function evaluateVadEntry(item, identity, isLocal, now, sensMult) {
             item.lastSpokeTime = now;
             if (!item.isSpeaking) {
                 item.isSpeaking = true;
-                updateParticipantSpeakingDOM(identity, true);
                 return true;
             }
         }
@@ -3762,7 +4035,6 @@ function evaluateVadEntry(item, identity, isLocal, now, sensMult) {
         item.consecutiveActiveFrames = 0;
         if (item.isSpeaking && (now - item.lastSpokeTime >= VAD_HANGOVER_MS)) {
             item.isSpeaking = false;
-            updateParticipantSpeakingDOM(identity, false);
             return true;
         }
     }
@@ -3771,176 +4043,121 @@ function evaluateVadEntry(item, identity, isLocal, now, sensMult) {
 }
 
 function vadLoopTick() {
-    const now = Date.now();
-    let stateChanged = false;
-
-    // Sensitivity multiplier: at 50 -> 1.0; at 0 -> 1.5 (stricter); at 100 -> 0.5 (more sensitive)
-    const sensMult = 1.0 + (50 - _voiceSensitivity) * 0.01;
-
-    if (_localMicVadEntry && _localMicVadEntry.identity) {
-        if (evaluateVadEntry(_localMicVadEntry, _localMicVadEntry.identity, true, now, sensMult)) {
-            stateChanged = true;
-        }
-    }
-
-    _trackedAudioStreams.forEach((item, identity) => {
-        if (evaluateVadEntry(item, identity, false, now, sensMult)) {
-            stateChanged = true;
-        }
-    });
-
-    if (stateChanged) {
-        notifyActiveSpeakersToDotnet();
-    }
-}
-
-function getCurrentlySpeakingIdentities(sfuSpeakers = []) {
-    const localIdentity = currentRoom?.localParticipant?.identity;
-    const isLocalMuted = isEffectiveLocalMicMuted() || !currentRoom?.localParticipant || !_localMicVadEntry;
-
-    // SFU speakers should NEVER drive the local participant's speaking state
-    const remoteSfu = sfuSpeakers.filter(id => id !== localIdentity && !isBotIdentity(id));
-    const activeSet = new Set(remoteSfu);
-
-    _trackedAudioStreams.forEach((item, id) => {
-        if (item.isSpeaking) {
-            activeSet.add(id);
-        } else {
-            activeSet.delete(id);
-        }
-    });
-
-    if (localIdentity) {
-        if (!isLocalMuted && _localMicVadEntry?.isSpeaking) {
-            activeSet.add(localIdentity);
-        } else {
-            activeSet.delete(localIdentity);
-        }
-    }
-    return Array.from(activeSet);
-}
-
-function notifyActiveSpeakersToDotnet(explicitList = null, forceImmediate = false) {
-    if (!dotnetHelper) return;
-
-    const sendUpdate = (list) => {
-        const currentActive = list || getCurrentlySpeakingIdentities();
-        updatePipSpeakingParticipants(currentActive);
-        const currentSorted = [...currentActive].sort().join(',');
-        if (currentSorted !== _lastNotifiedSpeakers) {
-            _lastNotifiedSpeakers = currentSorted;
-            try {
-                dotnetHelper.invokeMethodAsync('OnActiveSpeakersChanged', currentActive);
-            } catch(e) {}
-        }
-    };
-
-    if (forceImmediate) {
-        if (_speakerSyncDebounce) {
-            clearTimeout(_speakerSyncDebounce);
-            _speakerSyncDebounce = null;
-        }
-        sendUpdate(explicitList);
+    if (!_localMicVadEntry || !_localMicVadEntry.identity) {
         return;
     }
 
-    if (_speakerSyncDebounce) return;
+    const now = Date.now();
+    // Sensitivity multiplier: at 50 -> 1.0; at 0 -> 1.5 (stricter); at 100 -> 0.5 (more sensitive)
+    const sensMult = 1.0 + (50 - voiceState.voiceSensitivity) * 0.01;
 
-    _speakerSyncDebounce = setTimeout(() => {
-        _speakerSyncDebounce = null;
-        sendUpdate(explicitList);
-    }, 80);
-}
-
-function handleActiveSpeakers(speakers) {
-    if (!dotnetHelper) return;
-    
-    const localIdentity = currentRoom?.localParticipant?.identity;
-    const isLocalMuted = isEffectiveLocalMicMuted();
-
-    // SFU speakers should NEVER drive the local participant's speaking state, and bots should never count as human speakers
-    const remoteSpeakers = speakers.filter(s => s.identity !== localIdentity && !isBotIdentity(s.identity));
-    const activeSidsList = remoteSpeakers.map(s => s.identity);
-
-    if (localIdentity && isLocalMuted) {
-        updateParticipantSpeakingDOM(localIdentity, false);
+    const raw = _localMicVadEntry.rawTrack || _localMicVadEntry.track;
+    if (voiceState.isLocalHardwareMuted && raw && raw.muted === false && raw.readyState === 'live') {
+        voiceState.isLocalHardwareMuted = false;
+        if (_localMicVadEntry.track && typeof _localMicVadEntry.track.enabled === 'boolean') {
+            _localMicVadEntry.track.enabled = !voiceState.isLocalSoftwareMuted;
+        }
+        notifyHostVoiceState(Boolean(voiceState.currentRoom), isEffectiveLocalMicMuted());
+        scheduleRoomSnapshotSync();
+        voiceState.dotnetHelper?.invokeMethodAsync('OnLocalHardwareMuteChanged', false)?.catch?.(() => {});
     }
-
-    // For remote participants not tracked by local playback VAD, update DOM from SFU
-    activeSidsList.forEach(identity => {
-        if (!_trackedAudioStreams.has(identity)) {
-            updateParticipantSpeakingDOM(identity, true);
+    if (
+        !_localMicVadEntry.isSpeaking &&
+        now - (_localMicVadEntry.lastSpokeTime || 0) >= 2500 &&
+        now - _lastCaptureFifoFlushMs >= 60000 &&
+        isLocalInActivePhysicalRoom() &&
+        voiceState.activeLocalAudioProcessor &&
+        typeof voiceState.activeLocalAudioProcessor.flushCaptureFifo === 'function'
+    ) {
+        if (voiceState.activeLocalAudioProcessor.flushCaptureFifo()) {
+            _lastCaptureFifoFlushMs = now;
         }
-    });
-
-    document.querySelectorAll('.participant-rect.is-speaking').forEach(el => {
-        if (el.id && el.id.startsWith('participant-rect-')) {
-            const sid = el.id.substring(17);
-            if (sid === localIdentity) {
-                if (isLocalMuted || !_localMicVadEntry?.isSpeaking) {
-                    updateParticipantSpeakingDOM(sid, false);
-                }
-            } else if (!_trackedAudioStreams.has(sid) && !activeSidsList.includes(sid)) {
-                updateParticipantSpeakingDOM(sid, false);
-            }
-        }
-    });
-
-    notifyActiveSpeakersToDotnet(getCurrentlySpeakingIdentities(activeSidsList));
+    }
+    if (evaluateLocalMicVad(_localMicVadEntry, now, sensMult)) {
+        reportLocalSpeakingState(_localMicVadEntry.isSpeaking);
+    }
 }
 
-function handleDisconnect() {
-    console.log('[Voice] Disconnected');
-    cleanupLocalHardwareMuteMonitor();
-    _activeLocalAudioProcessor = null;
-    _localCameraDesired = false;
-    const roomToClean = currentRoom;
-    currentRoom = null;
-    stopAllLocalMediaTracks(roomToClean);
-    notifyHostVoiceState(false, false);
-    _isLocalSoftwareMuted = false;
-    _isLocalHardwareMuted = false;
-    _mutedRemoteScreenAudio.clear();
-    _coLocatedProcessedUsers.clear();
-    _mutedRoommateUsers.clear();
-    clearAllVoiceTracks();
-    clearAllParticipantAudio();
+function formatLivekitDisconnectReason(reason) {
+    if (reason === undefined || reason === null || reason === '') return 'UNKNOWN_REASON';
+    const enumObj = window.LivekitClient?.DisconnectReason;
+    if (typeof reason === 'number' && enumObj && typeof enumObj[reason] === 'string') {
+        return enumObj[reason];
+    }
+    if (typeof reason === 'string') {
+        const numeric = Number(reason);
+        if (!Number.isNaN(numeric) && enumObj && typeof enumObj[numeric] === 'string') {
+            return enumObj[numeric];
+        }
+        return reason;
+    }
+    return String(reason);
+}
+
+function handleDisconnect(reason) {
+    const reasonName = formatLivekitDisconnectReason(reason);
+    console.log(`[Voice] Disconnected (reason=${reasonName})`);
+    teardownLocalRoomState();
     releaseNativeCallResources().catch(() => {});
-    
-    // Only detach LiveKit-created media elements (tracks we attached via JS).
-    // Do NOT clear container.innerHTML — those parent containers are owned by Blazor's
-    // render tree, and removing them directly causes "Cannot read properties of null
-    // (reading 'removeChild')" when Blazor tries to diff-update the DOM.
-    if (roomToClean) {
-        detachAllRoomMedia(roomToClean);
-    }
-    
-    if (dotnetHelper) {
+
+    if (voiceState.dotnetHelper) {
         try {
-            dotnetHelper.invokeMethodAsync('OnRoomDisconnected');
+            if (reasonName === 'DUPLICATE_IDENTITY') {
+                const p = voiceState.dotnetHelper.invokeMethodAsync('OnRoomDisconnectedWithReason', reasonName);
+                if (p && typeof p.catch === 'function') {
+                    p.catch(() => {
+                        try { voiceState.dotnetHelper?.invokeMethodAsync?.('OnRoomDisconnected')?.catch?.(() => {}); } catch (e) {}
+                    });
+                }
+            } else {
+                const p = voiceState.dotnetHelper.invokeMethodAsync('OnRoomDisconnected');
+                if (p && typeof p.catch === 'function') {
+                    p.catch(() => {});
+                }
+            }
         } catch(e) {}
     }
 }
 
+function isRoomCurrentlyReconnecting() {
+    if (!voiceState.currentRoom) return false;
+    if (voiceState.isRoomReconnecting) return true;
+    const ConnectionState = window.LivekitClient?.ConnectionState;
+    const reconnectingState = ConnectionState?.Reconnecting || 'reconnecting';
+    const signalReconnectingState = ConnectionState?.SignalReconnecting || 'signalReconnecting';
+    if (voiceState.currentRoom.state === reconnectingState ||
+        voiceState.currentRoom.state === 'reconnecting' ||
+        voiceState.currentRoom.state === signalReconnectingState ||
+        voiceState.currentRoom.state === 'signalReconnecting') {
+        return true;
+    }
+    if (voiceState.currentRoom.engine?.attemptingReconnect || voiceState.currentRoom.engine?.fullReconnectOnNext) {
+        return true;
+    }
+    return false;
+}
+
 function handleLocalUnpublished(publication, participant) {
-    if (publication.track) {
-        publication.track.detach().forEach(el => safeRemove(el));
-    }
-    const sid = publication.track?.sid || publication?.trackSid;
-    if (sid) {
-        const orphaned = document.getElementById(`media-${sid}`);
-        if (orphaned) safeRemove(orphaned);
-    }
+    detachTrackAndOrphanedMediaElement(publication?.track, publication);
     
+    const isReconnecting = isRoomCurrentlyReconnecting();
+
     // Aggressive fallback to ensure video tags are wiped so CSS :has(video) unhides the avatar
     if (publication.kind === window.LivekitClient.Track.Kind.Video || (publication.track && publication.track.kind === window.LivekitClient.Track.Kind.Video)) {
-        if (participant && participant.identity) {
-            const pipSource = isScreenShareTrackOrPub(publication.track, publication) ? 'screenshare' : 'camera';
-            unregisterPipVideoTrack(participant.identity, pipSource);
-            clearParticipantVideoDom(participant.identity, pipSource);
-            if (dotnetHelper) {
-                dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', participant.identity, pipSource, false).catch(() => {});
-            }
+        clearParticipantVideoState(participant, publication.track, publication, {
+            resolveEffectiveIdentity: false,
+            notifyDotNet: !isReconnecting
+        });
+    }
+
+    const isScreenShareVideo = publication?.source === window.LivekitClient?.Track?.Source?.ScreenShare;
+    if (isScreenShareVideo && !isReconnecting) {
+        const unpublishedTrack = publication.videoTrack || publication.track;
+        if (unpublishedTrack && Array.isArray(voiceState.globalScreenTracks) && voiceState.globalScreenTracks.length > 0) {
+            voiceState.globalScreenTracks = voiceState.globalScreenTracks.filter(t => t !== unpublishedTrack);
+        }
+        if (voiceState.currentRoom) {
+            notifyHostVoiceState(true, isEffectiveLocalMicMuted());
         }
     }
 
@@ -3952,69 +4169,41 @@ function handleLocalUnpublished(publication, participant) {
         unregisterLocalMicVad();
     }
 
-    // Fired when the user mutes themselves or stops video (suppressed during live noise-filter swap)
-    if (dotnetHelper && !_suppressNextUnpublishMuteNotify) {
-        try {
-            if (isMicAudio) {
-                dotnetHelper.invokeMethodAsync('OnLocalMuted', true);
-            } else if (publication.source === window.LivekitClient.Track.Source.ScreenShareAudio) {
-                dotnetHelper.invokeMethodAsync('OnScreenShareAudioActive', false);
-            }
-        } catch(e) {}
+    // Fired when the user mutes themselves or stops video (suppressed during live noise-filter swap or LiveKit full reconnect)
+    if (voiceState.dotnetHelper && !voiceState.suppressNextUnpublishMuteNotify && !isReconnecting) {
+        if (isMicAudio && voiceState.isLocalSoftwareMuted) {
+            invokeDotNetSafe('OnLocalMuted', true);
+            scheduleRoomSnapshotSync();
+        } else if (publication.source === window.LivekitClient.Track.Source.ScreenShareAudio) {
+            invokeDotNetSafe('OnScreenShareAudioActive', false);
+        }
     }
-}
-
-function isHumanMicrophonePublication(publication, participant) {
-    if (!participant || !participant.identity || isBotIdentity(participant.identity)) {
-        return false;
-    }
-    const Kind = window.LivekitClient?.Track?.Kind;
-    const Source = window.LivekitClient?.Track?.Source;
-    const isAudio = publication?.kind === Kind?.Audio || publication?.track?.kind === Kind?.Audio;
-    if (!isAudio) return false;
-
-    const src = publication?.source || publication?.track?.source;
-    if (Source && src === Source.ScreenShareAudio) {
-        return false;
-    }
-    return !Source || !src || src === Source.Microphone;
 }
 
 function handleTrackMuted(publication, participant) {
-    if (publication?.track) {
-        publication.track.detach().forEach(el => safeRemove(el));
-    }
-    const sid = publication?.track?.sid || publication?.trackSid;
-    if (sid) {
-        const orphaned = document.getElementById(`media-${sid}`);
-        if (orphaned) safeRemove(orphaned);
+    const VideoKind = window.LivekitClient?.Track?.Kind?.Video;
+    const isVideo = Boolean(
+        VideoKind &&
+        (publication?.kind === VideoKind || publication?.track?.kind === VideoKind)
+    );
+
+    // Only clear DOM elements for muted video tracks. Detaching muted <audio> elements
+    // removes them from #voice-audio-container while leaving _participantGainNodes entries
+    // alive, forcing redundant re-attaches and Web Audio graph rebuilds on unmute.
+    if (isVideo) {
+        detachTrackAndOrphanedMediaElement(publication?.track, publication);
     }
 
-    if (participant !== currentRoom?.localParticipant && isHumanMicrophonePublication(publication, participant)) {
-        const item = _trackedAudioStreams.get(participant.identity);
-        if (item) {
-            item.isSpeaking = false;
-            item.consecutiveActiveFrames = 0;
-            updateParticipantSpeakingDOM(participant.identity, false);
-        }
-        if (dotnetHelper) {
-            try {
-                dotnetHelper.invokeMethodAsync('OnParticipantMuteChanged', participant.identity, true);
-            } catch (e) {}
+    if (participant !== voiceState.currentRoom?.localParticipant && isHumanMicrophonePublication(publication, participant)) {
+        if (voiceState.dotnetHelper) {
+            invokeDotNetSafe('OnParticipantMuteChanged', participant.identity, true);
+            scheduleRoomSnapshotSync();
         }
     }
 
     // Fallback: forcefully clear video element if it's a video track muting
-    if (publication?.kind === window.LivekitClient?.Track?.Kind?.Video || publication?.track?.kind === window.LivekitClient?.Track?.Kind?.Video) {
-        if (participant && participant.identity) {
-            const effectiveIdentity = getEffectiveParticipantIdentity(participant);
-            const pipSource = isScreenShareTrackOrPub(publication?.track, publication) ? 'screenshare' : 'camera';
-            unregisterPipVideoTrack(effectiveIdentity, pipSource);
-            clearParticipantVideoDom(effectiveIdentity, pipSource);
-            if (dotnetHelper && effectiveIdentity) {
-                dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', effectiveIdentity, pipSource, false).catch(() => {});
-            }
-        }
+    if (isVideo) {
+        clearParticipantVideoState(participant, publication?.track, publication);
     }
 }
 
@@ -4023,24 +4212,26 @@ function handleTrackUnmuted(publication, participant) {
     // During Physical Room Isolation, remote clients are unsubscribed from a co-located peer's raw mic
     // (`publication.track == null`) while receiving `processed-mic:<userId>`. Unblocking this ensures
     // lowering a hardware boom-mic immediately clears the remote mute icon.
-    if (participant !== currentRoom?.localParticipant && isHumanMicrophonePublication(publication, participant)) {
-        if (dotnetHelper) {
-            try {
-                dotnetHelper.invokeMethodAsync('OnParticipantMuteChanged', participant.identity, false);
-            } catch (e) {}
+    if (participant !== voiceState.currentRoom?.localParticipant && isHumanMicrophonePublication(publication, participant)) {
+        if (voiceState.dotnetHelper) {
+            invokeDotNetSafe('OnParticipantMuteChanged', participant.identity, false);
+            scheduleRoomSnapshotSync();
         }
     }
 
     if (publication?.track) {
-        // Never attach local AUDIO to speakers
-        if (participant === currentRoom?.localParticipant && publication.track.kind === window.LivekitClient.Track.Kind.Audio) {
-            if (publication.source !== window.LivekitClient?.Track?.Source?.ScreenShareAudio) {
-                bindLocalHardwareMuteMonitor(publication.track);
-                const mediaStreamTrack = publication.track.processor?.processedTrack || publication.track.mediaStreamTrack;
-                const rawTrack = getRawCaptureMediaStreamTrack(publication.track);
-                if (participant.identity && mediaStreamTrack) {
-                    registerLocalMicVad(participant.identity, mediaStreamTrack, rawTrack);
+        if (publication.track.kind === window.LivekitClient.Track.Kind.Audio) {
+            if (participant === voiceState.currentRoom?.localParticipant) {
+                if (publication.source !== window.LivekitClient?.Track?.Source?.ScreenShareAudio) {
+                    bindLocalHardwareMuteMonitor(publication.track);
+                    const mediaStreamTrack = publication.track.processor?.processedTrack || publication.track.mediaStreamTrack;
+                    const rawTrack = getRawCaptureMediaStreamTrack(publication.track);
+                    if (participant.identity && mediaStreamTrack) {
+                        registerLocalMicVad(participant.identity, mediaStreamTrack, rawTrack);
+                    }
                 }
+            } else {
+                reconcileAudioRouting();
             }
             return;
         }
@@ -4049,88 +4240,106 @@ function handleTrackUnmuted(publication, participant) {
 }
 
 function handleParticipantConnected(participant) {
+    reconcileAudioRouting();
     if (isSyntheticIdentity(participant?.identity)) return;
-    if (dotnetHelper) {
-        try {
-            dotnetHelper.invokeMethodAsync('OnParticipantConnected', participant.identity);
-        } catch(e) {}
+    if (voiceState.dotnetHelper) {
+        invokeDotNetSafe('OnParticipantConnected', participant.identity);
+        scheduleRoomSnapshotSync();
     }
 }
 
 function handleParticipantDisconnected(participant) {
-    if (isCameraCompanionIdentity(participant?.identity)) {
-        const effectiveIdentity = getEffectiveParticipantIdentity(participant);
-        if (effectiveIdentity) {
-            unregisterPipVideoTrack(effectiveIdentity, 'camera');
-            clearParticipantVideoDom(effectiveIdentity, 'camera');
-            if (dotnetHelper) {
-                dotnetHelper.invokeMethodAsync('OnVideoTrackStateChanged', effectiveIdentity, 'camera', false).catch(() => {});
+    const isReconnecting = isRoomCurrentlyReconnecting();
+    if (participant && participant.identity) {
+        detachParticipantAudio(participant.identity);
+        if (!isReconnecting) {
+            unregisterPipVideoTrack(participant.identity);
+            clearParticipantVideoDom(participant.identity);
+            voiceState.mutedRemoteScreenAudio.delete(participant.identity);
+            invokeDotNetSafe('OnRemoteScreenAudioChanged', participant.identity, false);
+        }
+    }
+    if (isReconnecting) return;
+    reconcileAudioRouting();
+    if (isSyntheticIdentity(participant?.identity)) return;
+    if (voiceState.dotnetHelper) {
+        invokeDotNetSafe('OnParticipantDisconnected', participant.identity);
+        scheduleRoomSnapshotSync();
+    }
+}
+
+function handleRoomReconnected() {
+    voiceState.isRoomReconnecting = false;
+    if (!voiceState.currentRoom) return;
+    console.info('[Voice] LiveKit room reconnected — flushing capture FIFO and reconciling audio routing');
+    flushLocalCaptureFifoIfAvailable();
+    reconcileAudioRouting();
+    rebindRemoteAudioElementsPlayback(false);
+
+    if (!voiceState.isLocalSoftwareMuted && voiceState.currentRoom.localParticipant && window.LivekitClient?.Track) {
+        const micPub = toArray(voiceState.currentRoom.localParticipant.audioTrackPublications)
+            .find(p => p.source === window.LivekitClient.Track.Source.Microphone && p.track);
+        const rawMst = micPub?.track ? (getRawCaptureMediaStreamTrack(micPub.track) || micPub.track.mediaStreamTrack) : null;
+        if (!micPub || !micPub.track || !rawMst || rawMst.readyState === 'ended') {
+            console.info('[Voice] Local microphone publication missing or ended after full reconnect; re-publishing microphone');
+            setMicrophoneEnabled(true).catch(err => console.warn('[Voice] Post-reconnect mic recovery failed:', err));
+        } else {
+            bindLocalHardwareMuteMonitor(micPub.track);
+            const vadTrack = micPub.track.processor?.processedTrack || micPub.track.mediaStreamTrack;
+            if (voiceState.currentRoom.localParticipant.identity && vadTrack) {
+                registerLocalMicVad(voiceState.currentRoom.localParticipant.identity, vadTrack, rawMst);
             }
         }
-        return;
     }
-    if (participant && participant.identity) {
-        unregisterRemoteVoiceTrack(participant.identity);
-        detachParticipantAudio(participant.identity);
-        unregisterPipVideoTrack(participant.identity);
-        clearParticipantVideoDom(participant.identity);
-        _mutedRemoteScreenAudio.delete(participant.identity);
-        if (dotnetHelper) {
-            try {
-                dotnetHelper.invokeMethodAsync('OnRemoteScreenAudioChanged', participant.identity, false);
-            } catch(e) {}
-        }
-    }
-    if (isSyntheticIdentity(participant?.identity)) return;
-    if (dotnetHelper) {
-        try {
-             dotnetHelper.invokeMethodAsync('OnParticipantDisconnected', participant.identity);
-        } catch(e) {}
-    }
+
+    publishVoiceRoomSnapshot('OnRoomReconnectedAsync');
 }
 
 // Re-attach all active tracks to their DOM containers.
 // Called when the Chat component remounts (e.g. after navigating to another channel and back)
 // so that existing LiveKit tracks are connected to the freshly created DOM elements.
 export async function reattachAllTracks() {
-    if (!currentRoom) return;
+    if (voiceState.usingNativeMobileVoice) {
+        scheduleNativeMobileVideoSlotsSync();
+        return;
+    }
+    if (!voiceState.currentRoom) return;
+    const Kind = window.LivekitClient?.Track?.Kind;
 
-    if (currentRoom.localParticipant) {
-        const pubs = getParticipantTrackPublications(currentRoom.localParticipant);
+    if (voiceState.currentRoom.localParticipant) {
+        const pubs = getParticipantTrackPublications(voiceState.currentRoom.localParticipant);
         pubs.forEach(pub => {
-            if (pub.track) attachTrack(pub.track, currentRoom.localParticipant, pub);
+            if (pub.track && (!Kind || pub.track.kind === Kind.Video)) {
+                attachTrack(pub.track, voiceState.currentRoom.localParticipant, pub);
+            }
         });
     }
 
-    const remoteMap = currentRoom.remoteParticipants || currentRoom.participants;
-    if (remoteMap) {
-        let participants = typeof remoteMap.values === 'function'
-            ? Array.from(remoteMap.values())
-            : Object.values(remoteMap);
-        participants.forEach(p => {
-            const pubs = getParticipantTrackPublications(p);
-            pubs.forEach(pub => {
-                if (pub.track) attachTrack(pub.track, p, pub);
-            });
+    reconcileAudioRouting();
+    rebindRemoteAudioElementsPlayback(false);
+
+    getRemoteParticipantsIterable().forEach(p => {
+        getParticipantTrackPublications(p).forEach(pub => {
+            if (pub.track && (!Kind || pub.track.kind === Kind.Video)) {
+                attachTrack(pub.track, p, pub);
+            }
         });
-    }
+    });
 }
 
 export async function setRemoteVideoQuality(participantIdentity, qualityStr) {
-    if (!currentRoom || !participantIdentity) return;
-
-    const matchingParticipants = [];
-    if (currentRoom.remoteParticipants) {
-        const participantsArr = typeof currentRoom.remoteParticipants.values === 'function'
-            ? Array.from(currentRoom.remoteParticipants.values())
-            : Object.values(currentRoom.remoteParticipants);
-        for (const p of participantsArr) {
-            if (p && getEffectiveParticipantIdentity(p) === participantIdentity) {
-                matchingParticipants.push(p);
-            }
-        }
+    if (!participantIdentity) return;
+    if (voiceState.usingNativeMobileVoice) {
+        await getNativeVoicePlugin()?.setRemoteVideoQuality?.({
+            identity: participantIdentity,
+            quality: qualityStr || 'Auto'
+        })?.catch?.(() => {});
+        return;
     }
+    if (!voiceState.currentRoom) return;
 
+    const matchingParticipants = getRemoteParticipantsIterable()
+        .filter(p => p && getEffectiveParticipantIdentity(p) === participantIdentity);
     if (matchingParticipants.length === 0) return;
 
     let dims = null;
@@ -4141,15 +4350,9 @@ export async function setRemoteVideoQuality(participantIdentity, qualityStr) {
     else if (qualityStr === '360p') dims = { width: 640, height: 360 };
 
     for (const participant of matchingParticipants) {
-        let getPublications = typeof participant.videoTrackPublications?.values === 'function'
-            ? Array.from(participant.videoTrackPublications.values())
-            : (participant.videoTrackPublications ? Object.values(participant.videoTrackPublications) : []);
-
+        let getPublications = toArray(participant.videoTrackPublications);
         if (getPublications.length === 0 && participant.tracks) {
-            let allPubs = typeof participant.tracks.values === 'function'
-                ? Array.from(participant.tracks.values())
-                : Object.values(participant.tracks);
-            getPublications = allPubs.filter(p => p.kind === window.LivekitClient.Track.Kind.Video);
+            getPublications = toArray(participant.tracks).filter(p => p.kind === window.LivekitClient.Track.Kind.Video);
         }
 
         getPublications.forEach((pub) => {
@@ -4166,6 +4369,11 @@ export async function setRemoteVideoQuality(participantIdentity, qualityStr) {
 
 // Refresh video layouts and resume any paused streams without tearing down WebRTC media pipelines
 export function refreshVideoLayouts() {
+    if (voiceState.usingNativeMobileVoice) {
+        scheduleNativeMobileVideoSlotsSync();
+        return;
+    }
+    const hideStageVideos = isHostViewHiddenForStage() || isStageSuppressedByExternalPip();
     document.querySelectorAll('video.has-stream').forEach(v => {
         if (!v.isConnected) return;
         const stream = v.srcObject;
@@ -4178,6 +4386,13 @@ export function refreshVideoLayouts() {
         v.style.opacity = '1';
         v.muted = true;
         syncStageVideoAspectRatio(v);
+        const isStageVideo = !v.closest || !v.closest('#spokes-voice-pip-overlay');
+        if (hideStageVideos && isStageVideo) {
+            if (!v.paused && typeof v.pause === 'function') {
+                try { v.pause(); } catch (e) {}
+            }
+            return;
+        }
         if (v.paused) {
             v.play().catch(e => {
                 if (e?.name !== 'AbortError') {
@@ -4197,13 +4412,6 @@ function releaseWakeLock() {
 }
 window.addEventListener('beforeunload', releaseWakeLock);
 window.addEventListener('pagehide', releaseWakeLock);
-
-export async function isIOSDevice() {
-    if (isNativePlatform()) {
-        return getNativePlatform() === 'ios';
-    }
-    return false;
-}
 
 export async function promptIosVoiceIsolation() {
     let audioPlugin = getAudioSessionPlugin();
@@ -4235,6 +4443,17 @@ export function syncPipMetadata(payload) {
     updatePipCallState(payload || {});
 }
 
+export function syncSpeakingParticipants(channelId, speakerIds) {
+    const ids = Array.isArray(speakerIds) ? speakerIds : [];
+    if (typeof channelId === 'string' && channelId.length > 0) {
+        voiceState.activeVoiceChannelId = channelId;
+        if (typeof window !== 'undefined' && window.spokesVoiceSpeaking?.syncChannel) {
+            window.spokesVoiceSpeaking.syncChannel(channelId, ids);
+        }
+    }
+    updatePipSpeakingParticipants(ids);
+}
+
 export function setInAppPipActive(active) {
     setPipInAppActive(Boolean(active));
 }
@@ -4254,3 +4473,245 @@ export function closeOsPip() {
 export function isOsPipSupported() {
     return checkOsPipSupported();
 }
+
+// --- Full-Screen Remote Participant Pinch-to-Zoom & 90° Rotation ---
+
+function resolveFullscreenPrimarySource(identity) {
+    if (!identity) return 'camera';
+    if (voiceState.usingNativeMobileVoice) {
+        const sources = voiceState.nativeVideoTracks.get(identity);
+        return sources?.has('screenshare') ? 'screenshare' : 'camera';
+    }
+    const screenEl = document.getElementById(`participant-screen-${identity}`);
+    if (screenEl && screenEl.classList.contains('has-stream')) {
+        return 'screenshare';
+    }
+    return 'camera';
+}
+
+function resolveFullscreenTargetElement(identity) {
+    if (!identity) return null;
+    const source = resolveFullscreenPrimarySource(identity);
+    const screenEl = document.getElementById(`participant-screen-${identity}`);
+    const camEl = document.getElementById(`participant-video-${identity}`);
+    if (source === 'screenshare' && camEl) {
+        // Ensure corner webcam stays unzoomed while screen share is the primary zoom target
+        camEl.style.transform = 'translateZ(0)';
+        camEl.style.transition = '';
+    }
+    return source === 'screenshare' ? screenEl : camEl;
+}
+
+function resolveFullscreenAspectRatio(identity) {
+    if (!identity) return 0;
+    const source = resolveFullscreenPrimarySource(identity);
+    if (voiceState.usingNativeMobileVoice) {
+        const dims = voiceState.nativeVideoDims.get(`${identity}:${source}`)
+            || voiceState.nativeVideoDims.get(`${identity}:camera`);
+        if (dims && dims.width > 0 && dims.height > 0) {
+            return dims.width / dims.height;
+        }
+    }
+    const el = resolveFullscreenTargetElement(identity);
+    if (el && el.videoWidth > 0 && el.videoHeight > 0) {
+        return el.videoWidth / el.videoHeight;
+    }
+    const rectEl = document.getElementById(`participant-rect-${identity}`);
+    if (rectEl) {
+        const prop = source === 'screenshare' ? '--screen-aspect' : '--cam-aspect';
+        const val = parseFloat(getComputedStyle(rectEl).getPropertyValue(prop) || getComputedStyle(rectEl).getPropertyValue('--tile-video-aspect') || '0');
+        if (Number.isFinite(val) && val > 0.05 && val < 20) {
+            return val;
+        }
+    }
+    return 16 / 9;
+}
+
+function resetParticipantVideoTransform(identity, { screen = true, camera = true } = {}) {
+    if (!identity) return;
+    if (screen) {
+        const screenEl = document.getElementById(`participant-screen-${identity}`);
+        if (screenEl) {
+            screenEl.style.transform = 'translateZ(0)';
+            screenEl.style.transition = '';
+        }
+    }
+    if (camera) {
+        const camEl = document.getElementById(`participant-video-${identity}`);
+        if (camEl) {
+            camEl.style.transform = 'translateZ(0)';
+            camEl.style.transition = '';
+        }
+    }
+}
+
+function refreshParticipantFullscreenPrimaryTarget() {
+    if (!voiceState.fullscreenParticipantId || !voiceState.fullscreenGestureController) return;
+    const newSource = resolveFullscreenPrimarySource(voiceState.fullscreenParticipantId);
+    const prevSource = voiceState.fullscreenTransform.source;
+
+    if (prevSource && prevSource !== newSource) {
+        resetParticipantVideoTransform(voiceState.fullscreenParticipantId);
+        voiceState.fullscreenTransform.source = newSource;
+        voiceState.fullscreenGestureController.resetZoom(false);
+    } else {
+        voiceState.fullscreenTransform.source = newSource;
+        if (newSource === 'screenshare') {
+            resetParticipantVideoTransform(voiceState.fullscreenParticipantId, { screen: false, camera: true });
+        }
+        voiceState.fullscreenGestureController.updateTransform(false);
+    }
+    scheduleNativeMobileVideoSlotsSync();
+}
+
+export function enterParticipantFullscreen(participantId, dotNetObjRef) {
+    if (!participantId) return;
+    if (voiceState.fullscreenGestureController) {
+        exitParticipantFullscreen(false);
+    }
+
+    const containerEl = document.getElementById(`participant-rect-${participantId}`);
+    if (!containerEl) return;
+
+    voiceState.fullscreenParticipantId = participantId;
+    voiceState.fullscreenDotNetHelper = dotNetObjRef || null;
+    const primarySource = resolveFullscreenPrimarySource(participantId);
+    voiceState.fullscreenTransform = {
+        identity: participantId,
+        source: primarySource,
+        scale: 1,
+        panX: 0,
+        panY: 0,
+        rotationDeg: 0
+    };
+
+    try {
+        if (window.Capacitor?.Plugins?.StatusBar) {
+            window.Capacitor.Plugins.StatusBar.hide().catch(() => {});
+        }
+    } catch (e) {}
+
+    window.SpokesBridge?.backStack?.remove?.('voiceFullscreen', { popHistory: false });
+    window.SpokesBridge?.backStack?.push?.('voiceFullscreen', () => {
+        const helper = voiceState.fullscreenDotNetHelper;
+        exitParticipantFullscreen(false);
+        if (helper) {
+            helper.invokeMethodAsync('OnFullscreenBackRequested').catch(() => {});
+        }
+    }, { useHistoryGuard: true, source: 'voice-fullscreen' });
+
+    voiceState.fullscreenGestureController = new MediaZoomGestureController({
+        container: containerEl,
+        getTargetElement: () => resolveFullscreenTargetElement(participantId),
+        getContentAspectRatio: () => resolveFullscreenAspectRatio(participantId),
+        maxScale: 10,
+        canSwipeHorizontal: false,
+        enableSwipeDownClose: true,
+        onTransformChange: ({ scale, x, y, rotationDeg }) => {
+            voiceState.fullscreenTransform = {
+                identity: participantId,
+                source: resolveFullscreenPrimarySource(participantId),
+                scale,
+                panX: x,
+                panY: y,
+                rotationDeg
+            };
+            if (voiceState.usingNativeMobileVoice) {
+                scheduleNativeMobileVideoSlotsSync();
+            }
+        },
+        onZoomPercentChange: (percent) => {
+            if (voiceState.fullscreenDotNetHelper) {
+                voiceState.fullscreenDotNetHelper.invokeMethodAsync('OnFullscreenZoomChanged', percent).catch(() => {});
+            }
+        },
+        onSingleTap: () => {
+            if (voiceState.fullscreenDotNetHelper) {
+                voiceState.fullscreenDotNetHelper.invokeMethodAsync('OnFullscreenSingleTap').catch(() => {});
+            }
+        },
+        onSwipeDownClose: () => {
+            if (voiceState.fullscreenDotNetHelper) {
+                voiceState.fullscreenDotNetHelper.invokeMethodAsync('OnFullscreenExitRequested').catch(() => {});
+            }
+        },
+        onEscape: () => {
+            if (voiceState.fullscreenDotNetHelper) {
+                voiceState.fullscreenDotNetHelper.invokeMethodAsync('OnFullscreenEscapeRequested').catch(() => {});
+            }
+        }
+    });
+
+    scheduleNativeMobileVideoSlotsSync();
+}
+
+export function setParticipantFullscreenRotation(rotationDeg) {
+    if (!voiceState.fullscreenGestureController) return;
+    voiceState.fullscreenGestureController.setRotation(rotationDeg, true);
+    scheduleNativeMobileVideoSlotsSync();
+}
+
+export function resetParticipantFullscreenZoom() {
+    if (!voiceState.fullscreenGestureController) return;
+    voiceState.fullscreenGestureController.resetZoom(true);
+    scheduleNativeMobileVideoSlotsSync();
+}
+
+export function exitParticipantFullscreen(goBack = true) {
+    const prevId = voiceState.fullscreenParticipantId;
+    voiceState.fullscreenParticipantId = '';
+    voiceState.fullscreenDotNetHelper = null;
+    voiceState.fullscreenTransform = {
+        identity: '',
+        source: '',
+        scale: 1,
+        panX: 0,
+        panY: 0,
+        rotationDeg: 0
+    };
+
+    if (voiceState.fullscreenGestureController) {
+        voiceState.fullscreenGestureController.destroy(true);
+        voiceState.fullscreenGestureController = null;
+    }
+
+    if (prevId) {
+        resetParticipantVideoTransform(prevId);
+    }
+
+    window.SpokesBridge?.backStack?.remove?.('voiceFullscreen', { popHistory: Boolean(goBack) });
+
+    try {
+        if (window.Capacitor?.Plugins?.StatusBar) {
+            window.Capacitor.Plugins.StatusBar.show().catch(() => {});
+        }
+    } catch (e) {}
+
+    scheduleNativeMobileVideoSlotsSync();
+}
+
+
+configureScreenShareCallbacks({
+    isRoomConnected,
+    stopLivekitTrackCompletely,
+    clearParticipantVideoDom,
+    notifyHostVoiceState: () => notifyHostVoiceState(Boolean(voiceState.currentRoom), isEffectiveLocalMicMuted())
+});
+
+configureDirectLanCallbacks({
+    reconcileAudioRouting,
+    flushLocalCaptureFifoIfAvailable,
+    resolveSelectedMicLabel: resolveSelectedMicLabelForDirectAudio,
+    resolveSelectedSpeakerLabel: resolveSelectedSpeakerLabelForDirectAudio
+});
+
+configureNativeMobileCallbacks({
+    reportConnectingStage,
+    notifyHostVoiceState,
+    releaseNativeCallResources,
+    syncIosAudioSessionVideoMode,
+    updateAudioDevices,
+    refreshParticipantFullscreenPrimaryTarget,
+    clampCameraResolutionForCapabilities,
+    getCustomPreset
+});

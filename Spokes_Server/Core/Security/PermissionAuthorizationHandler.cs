@@ -24,20 +24,30 @@ public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionReq
     private readonly EmployeeRepository _employees;
     private readonly TeamRepository? _teams;
     private readonly CompanyProfileRepository? _companyProfile;
+    private readonly Spokes_Server.Core.Services.Security.SessionService? _sessionService;
 
     [ActivatorUtilitiesConstructor]
-    public PermissionAuthorizationHandler(HrContext hrContext, CompanyProfileRepository? companyProfile = null)
+    public PermissionAuthorizationHandler(
+        HrContext hrContext,
+        CompanyProfileRepository? companyProfile = null,
+        Spokes_Server.Core.Services.Security.SessionService? sessionService = null)
     {
         _employees = hrContext.Employees;
         _teams = hrContext.Teams;
         _companyProfile = companyProfile;
+        _sessionService = sessionService;
     }
 
-    internal PermissionAuthorizationHandler(EmployeeRepository employees, TeamRepository? teams = null, CompanyProfileRepository? companyProfile = null)
+    internal PermissionAuthorizationHandler(
+        EmployeeRepository employees,
+        TeamRepository? teams = null,
+        CompanyProfileRepository? companyProfile = null,
+        Spokes_Server.Core.Services.Security.SessionService? sessionService = null)
     {
         _employees = employees;
         _teams = teams;
         _companyProfile = companyProfile;
+        _sessionService = sessionService;
     }
 
     protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, PermissionRequirement requirement)
@@ -50,19 +60,21 @@ public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionReq
 
         var employeeIdClaim = context.User.FindFirst("EmployeeId");
 
-        // Headless document renderer uses scoped claim-based evaluation
-        if (employeeIdClaim?.Value == "system-renderer")
+        if (employeeIdClaim == null || string.IsNullOrWhiteSpace(employeeIdClaim.Value))
         {
-            if (context.User.IsInRole("Admin") || context.User.HasClaim(c => c.Type == "Permission" && c.Value == requirement.Permission)
-                || (requirement.Permission == AppPermissions.Purchases.ViewPOs &&
-                    context.User.HasClaim(c => c.Type == "Permission" && c.Value == AppPermissions.Purchases.ManagePOs)))
-            {
-                context.Succeed(requirement);
-            }
             return Task.CompletedTask;
         }
 
-        if (employeeIdClaim == null || string.IsNullOrWhiteSpace(employeeIdClaim.Value))
+        if (string.Equals(employeeIdClaim.Value, Spokes_Server.Core.Middleware.RenderTokenMiddleware.SystemRendererId, StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.CompletedTask;
+        }
+
+        var isDelegatedRenderSession =
+            context.User.HasClaim("RenderScope", Spokes_Server.Core.Middleware.RenderTokenMiddleware.DocumentExportScope) ||
+            context.User.HasClaim("Spokes_InternalRenderer", "true");
+        if (isDelegatedRenderSession &&
+            !Spokes_Server.Core.Middleware.RenderTokenMiddleware.IsAllowedDocumentExportPermission(requirement.Permission))
         {
             return Task.CompletedTask;
         }
@@ -72,27 +84,30 @@ public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionReq
 
         if (employee != null)
         {
+            if (_sessionService != null && !_sessionService.IsPrincipalSessionValid(context.User, employee.Id))
+            {
+                return Task.CompletedTask;
+            }
+
             if (!employee.IsActive || employee.IsBanned)
             {
                 return Task.CompletedTask;
             }
 
-            if (employee.IsSuspended && !AppPermissions.IsReadOnlyAllowed(requirement.Permission))
+            var allowSuspended = requirement.Permission != AppPermissions.Admin.RoleName &&
+                                 AppPermissions.IsReadOnlyAllowed(requirement.Permission);
+            if (employee.IsSuspended && !allowSuspended)
             {
                 return Task.CompletedTask;
             }
 
             var isAuthorized = requirement.Permission == AppPermissions.Admin.RoleName
-                ? (!employee.IsSuspended && employee.IsAdmin)
-                : (employee.IsSuspended
-                    ? HasUnderlyingPermission(employee, requirement.Permission)
-                    : employee.HasPermission(requirement.Permission));
+                ? employee.IsEffectiveAdmin
+                : employee.HasEffectivePermission(requirement.Permission, allowSuspended);
 
             if (!isAuthorized && requirement.Permission == AppPermissions.Purchases.ViewPOs)
             {
-                isAuthorized = employee.IsSuspended
-                    ? HasUnderlyingPermission(employee, AppPermissions.Purchases.ManagePOs)
-                    : employee.HasPermission(AppPermissions.Purchases.ManagePOs);
+                isAuthorized = employee.HasEffectivePermission(AppPermissions.Purchases.ManagePOs, allowSuspended);
             }
 
             if (!isAuthorized && requirement.Permission == AppPermissions.Timesheets.ViewReport)
@@ -107,18 +122,5 @@ public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionReq
         }
 
         return Task.CompletedTask;
-    }
-
-    private static bool HasUnderlyingPermission(Employee employee, string permission)
-    {
-        if (employee.IsAdmin) return true;
-
-        if (employee.PermissionGroupIds.Count > 0 &&
-            employee.PermissionGroups.Any(g => g != null && g.Permissions.Contains(permission)))
-        {
-            return true;
-        }
-
-        return employee.Permissions != null && employee.Permissions.Contains(permission);
     }
 }

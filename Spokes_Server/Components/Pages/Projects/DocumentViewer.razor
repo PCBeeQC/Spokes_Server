@@ -1,8 +1,10 @@
 @page "/projects/{ProjectId}/documents/{DocumentId}"
 @attribute [Authorize(Policy = AppPermissions.Projects.View)]
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Communication.Email
 @using Spokes_Server.Core.Services.Documents
 @using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Components.Pages.Email
 @inject Database Db
 @inject ISnackbar Snackbar
@@ -14,6 +16,7 @@
 @inject DocumentPdfService PdfService
 @inject MarkdownSanitizerService MarkdownSanitizer
 @inject ITimelineEventService TimelineEventService
+@inject FileUrlSigner FileUrls
 @implements IAsyncDisposable
 
 @if (_document != null)
@@ -66,8 +69,6 @@
 }
 else
 {
-    <PageTitle>@_document.Name - @_project.DisplayName</PageTitle>
-
     <div class="d-flex justify-space-between align-center flex-wrap gap-2 py-2 px-4 d-print-none" Style="position: sticky; top: 0; z-index: 99; background-color: var(--mud-palette-background);">
         <div>
             <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">Back to Project</MudButton>
@@ -93,7 +94,7 @@ else
                 @if (_document.Status == ProjectDocumentStatus.Final)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
-                    @if (_canEdit)
+                    @if (_canSendEmail)
                     {
                         <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
                             OnClick="SendByEmail">Send by Email</MudButton>
@@ -162,8 +163,9 @@ else
 
                 @if (DocumentBlockLibrary.GetAll().Any())
                 {
-                    <DocumentBlocksEditor Blocks="_document.Blocks" BlocksChanged="@(b => { _document.Blocks = b; SaveBlocks(); })"
-                        OnBlockAdded="OnBlockAdded" OnBlockRenamed="OnBlockRenamed" />
+                    <DocumentBlocksEditor Blocks="_document.Blocks" BlocksChanged="@(async b => { _document.Blocks = b; await SaveBlocks(); })"
+                        OnBlockAdded="OnBlockAdded" OnBlockRenamed="OnBlockRenamed"
+                        CloneCategory="projects" CloneContextId="@ProjectId" />
                 }
 
                 <MarkdownEditor @bind-Value="_editingBody" AvailableTags="GetAvailableTags()" />
@@ -189,8 +191,8 @@ else
     private Employee? _pm;
     private DocumentTemplate? _template;
 
-    private bool _isAdmin;
     private bool _canEdit;
+    private bool _canSendEmail;
     private bool _isEditing;
     private string _editingBody = "";
     private bool _needsPagination;
@@ -215,43 +217,68 @@ else
         catch { /* component already disposed or JS unavailable */ }
     }
 
-    protected override async Task OnInitializedAsync()
+    private string? _authorizedProjectId;
+    private string? _authorizedDocumentId;
+
+    protected override async Task OnParametersSetAsync()
     {
-        _document = Db.ProjectDocuments.GetById(DocumentId);
-        _project = Db.Projects.GetById(ProjectId);
+        if (!string.Equals(_authorizedProjectId, ProjectId, StringComparison.Ordinal) ||
+            !string.Equals(_authorizedDocumentId, DocumentId, StringComparison.Ordinal))
+        {
+            _document = null;
+            _project = null;
+            _pm = null;
+            _template = null;
+            _canEdit = false;
+            _canSendEmail = false;
+            _isEditing = false;
+            _authorizedProjectId = null;
+            _authorizedDocumentId = null;
+        }
+
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        var liveDocument = string.IsNullOrEmpty(DocumentId) ? null : Db.ProjectDocuments.GetById(DocumentId);
         _profile = Db.CompanyProfile.Get();
 
-        if (_project != null && !string.IsNullOrEmpty(_project.ProjectManagerId))
+        if (liveDocument == null || liveProject == null || !string.Equals(liveDocument.ProjectId, liveProject.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            _document = null;
+            _project = null;
+            Snackbar.Add("Document not found", Severity.Error);
+            Nav.NavigateTo($"/projects/{ProjectId}");
+            return;
+        }
+
+        if (emp == null || !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: false))
+        {
+            _document = null;
+            _project = null;
+            Nav.NavigateTo("/projects");
+            return;
+        }
+
+        _authorizedProjectId = liveProject.Id;
+        _authorizedDocumentId = liveDocument.Id;
+        _project = liveProject;
+        _document = liveDocument;
+        _canEdit = UserService.CanEditProject(emp, liveProject);
+        _canSendEmail = _canEdit &&
+                        !string.Equals(_profile?.Edition, "Family", StringComparison.OrdinalIgnoreCase) &&
+                        emp.HasPermission(AppPermissions.Email.Use);
+
+        if (!string.IsNullOrEmpty(_project.ProjectManagerId))
         {
             _pm = Db.Employees.GetById(_project.ProjectManagerId);
         }
 
-        if (_project != null && !string.IsNullOrEmpty(_project.DefaultTemplateId))
+        if (!string.IsNullOrEmpty(_project.DefaultTemplateId))
         {
             _template = Db.DocumentTemplates.GetById(_project.DefaultTemplateId);
         }
         if (_template == null)
         {
             _template = Db.DocumentTemplates.GetDefault();
-        }
-
-        var emp = await UserService.GetEmployeeAsync();
-        _isAdmin = emp?.IsAdmin ?? false;
-        _canEdit = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Projects.Edit));
-
-        if (_document == null || _project == null || !string.Equals(_document.ProjectId, _project.Id, StringComparison.OrdinalIgnoreCase))
-        {
-            _document = null;
-            Snackbar.Add("Document not found", Severity.Error);
-            Nav.NavigateTo($"/projects/{ProjectId}");
-            return;
-        }
-
-        if (!await UserService.CanViewProjectAsync(_project))
-        {
-            _document = null;
-            Nav.NavigateTo("/projects");
-            return;
         }
     }
 
@@ -336,60 +363,96 @@ else
 
         // Convert page break markers to force-break divs for pagination
         text = text.Replace("<!-- pagebreak -->", "\n\n<div class=\"force-break\"></div>\n\n");
-        return new MarkupString(MarkdownSanitizer.RenderSanitizedHtml(text));
+        var html = MarkdownSanitizer.RenderSanitizedHtml(text);
+        return new MarkupString(FileUrls.SignHtmlFileUrls(html));
+    }
+
+    private async Task<(Spokes_Server.Core.Models.HR.Employee Actor, Project Project, ProjectDocument Document)?> AuthorizeEditAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        var liveDocument = string.IsNullOrEmpty(DocumentId) ? null : Db.ProjectDocuments.GetById(DocumentId);
+        if (emp == null ||
+            liveProject == null ||
+            liveDocument == null ||
+            !string.Equals(liveDocument.ProjectId, liveProject.Id, StringComparison.OrdinalIgnoreCase) ||
+            !UserService.CanEditProject(emp, liveProject))
+        {
+            _canEdit = false;
+            _canSendEmail = false;
+            _isEditing = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+
+        return (emp, liveProject, liveDocument);
     }
 
     private async Task UpdateStatusAsync(string newStatus)
     {
-        if (_document == null || !_canEdit) return;
+        var auth = await AuthorizeEditAsync();
+        if (auth == null) return;
+        var liveDoc = auth.Value.Document;
+        var liveProject = auth.Value.Project;
 
         // Admin-only revert from Final to Draft
-        if (_document.Status == ProjectDocumentStatus.Final && newStatus == ProjectDocumentStatus.Draft && !_isAdmin)
+        if (liveDoc.Status == ProjectDocumentStatus.Final && newStatus == ProjectDocumentStatus.Draft && !auth.Value.Actor.IsEffectiveAdmin)
         {
             Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
             return;
         }
 
-        var oldStatus = _document.Status;
+        var oldStatus = liveDoc.Status;
 
         // When switching to Final, we freeze the current resolution
         if (oldStatus == ProjectDocumentStatus.Final && newStatus == ProjectDocumentStatus.Draft)
         {
-            if (!string.IsNullOrEmpty(_document.PdfPath) && System.IO.File.Exists(_document.PdfPath))
+            if (!string.IsNullOrEmpty(liveDoc.PdfPath) && System.IO.File.Exists(liveDoc.PdfPath))
             {
-                try { System.IO.File.Delete(_document.PdfPath); } catch { }
+                try { System.IO.File.Delete(liveDoc.PdfPath); } catch { }
             }
-            _document.PdfPath = "";
+            liveDoc.PdfPath = "";
         }
         else if (newStatus == ProjectDocumentStatus.Final && oldStatus == ProjectDocumentStatus.Draft)
         {
             // Calculate resolved body while status is still Draft
-            _document.ResolvedBody = GetResolvedBody();
-            _document.Status = newStatus; // apply status before PDF generation so headless browser renders the frozen body
-            Db.ProjectDocuments.Save(_document); // save to cache so puppeteer sees it
+            _document = liveDoc;
+            _project = liveProject;
+            _profile = Db.CompanyProfile.Get();
+            _pm = !string.IsNullOrEmpty(liveProject.ProjectManagerId) ? Db.Employees.GetById(liveProject.ProjectManagerId) : null;
+            liveDoc.ResolvedBody = GetResolvedBody();
+            liveDoc.Status = newStatus; // apply status before PDF generation so headless browser renders the frozen body
+            Db.ProjectDocuments.Save(liveDoc); // save to cache so puppeteer sees it
 
             Snackbar.Add("Generating PDF document...", Severity.Info);
-            _document.PdfPath = await PdfService.GenerateProjectDocumentPdfAsync(_document, ProjectId, Nav.BaseUri);
+            liveDoc.PdfPath = await PdfService.GenerateProjectDocumentPdfAsync(liveDoc, liveProject.Id, Nav.BaseUri, auth.Value.Actor.Id);
         }
 
-        _document.Status = newStatus;
-        _document.UpdatedAt = DateTime.UtcNow;
-        Db.ProjectDocuments.Save(_document);
-        TimelineEventService.SyncDocumentStatusTimelineEvent(_document, oldStatus, newStatus, null);
+        liveDoc.Status = newStatus;
+        liveDoc.UpdatedAt = DateTime.UtcNow;
+        Db.ProjectDocuments.Save(liveDoc);
+        _document = liveDoc;
+        TimelineEventService.SyncDocumentStatusTimelineEvent(liveDoc, oldStatus, newStatus, null);
         Snackbar.Add($"Status updated to {newStatus}", Severity.Success);
         
         await InvokeAsync(StateHasChanged);
     }
 
-    private void SaveEdits()
+    private async Task SaveEdits()
     {
-        if (_document == null || !_canEdit) return;
+        var auth = await AuthorizeEditAsync();
+        if (auth == null || _document == null) return;
 
-        _document.ResolvedBody = _editingBody;
-        _document.IsManualEdit = true;
-        _document.UpdatedAt = DateTime.UtcNow;
+        var liveDoc = auth.Value.Document;
+        liveDoc.IsConfidential = _document.IsConfidential;
+        liveDoc.IsLongFooter = _document.IsLongFooter;
+        liveDoc.Blocks = _document.Blocks;
+        liveDoc.ResolvedBody = _editingBody;
+        liveDoc.IsManualEdit = true;
+        liveDoc.UpdatedAt = DateTime.UtcNow;
 
-        Db.ProjectDocuments.Save(_document);
+        Db.ProjectDocuments.Save(liveDoc);
+        _document = liveDoc;
         _isEditing = false;
         _needsPagination = true;
         Snackbar.Add("Changes saved (Document is now delinked from template)", Severity.Info);
@@ -401,12 +464,17 @@ else
         _needsPagination = true;
     }
 
-    private void SaveBlocks()
+    private async Task SaveBlocks()
     {
-        if (_document == null || !_canEdit) return;
-        _document.IsManualEdit = true;
-        _document.UpdatedAt = DateTime.UtcNow;
-        Db.ProjectDocuments.Save(_document);
+        var auth = await AuthorizeEditAsync();
+        if (auth == null || _document == null) return;
+
+        var liveDoc = auth.Value.Document;
+        liveDoc.Blocks = _document.Blocks;
+        liveDoc.IsManualEdit = true;
+        liveDoc.UpdatedAt = DateTime.UtcNow;
+        Db.ProjectDocuments.Save(liveDoc);
+        _document = liveDoc;
     }
 
     private void OnBlockAdded(string blockName)
@@ -430,18 +498,25 @@ else
         }
     }
 
-    private void ResetToTemplate()
+    private async Task ResetToTemplate()
     {
-        if (_document == null || !_canEdit) return;
-        _document.IsManualEdit = false;
-        _document.UpdatedAt = DateTime.UtcNow;
-        Db.ProjectDocuments.Save(_document);
+        var auth = await AuthorizeEditAsync();
+        if (auth == null) return;
+
+        var liveDoc = auth.Value.Document;
+        liveDoc.IsManualEdit = false;
+        liveDoc.UpdatedAt = DateTime.UtcNow;
+        Db.ProjectDocuments.Save(liveDoc);
+        _document = liveDoc;
         Snackbar.Add("Document re-linked to template (manual edits discarded)", Severity.Warning);
+        _needsPagination = true;
     }
 
     private async Task StartEditing()
     {
-        if (_document == null || !_canEdit) return;
+        var auth = await AuthorizeEditAsync();
+        if (auth == null) return;
+        _document = auth.Value.Document;
 
         // Cleanup pagination first so Blazor can manage the edit UI DOM
         try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
@@ -466,21 +541,42 @@ else
 
     private async Task<bool> EnsurePdfExistsAsync()
     {
-        if (_document == null) return false;
-        if (PdfService.IsValidCachedPdf(_document.PdfPath))
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        var liveDoc = string.IsNullOrEmpty(DocumentId) ? null : Db.ProjectDocuments.GetById(DocumentId);
+        if (emp == null ||
+            liveProject == null ||
+            liveDoc == null ||
+            !string.Equals(liveDoc.ProjectId, liveProject.Id, StringComparison.OrdinalIgnoreCase) ||
+            !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: false))
+        {
+            Snackbar.Add("Access denied.", Severity.Error);
+            return false;
+        }
+
+        _document = liveDoc;
+        _project = liveProject;
+        _profile = Db.CompanyProfile.Get();
+        _pm = !string.IsNullOrEmpty(liveProject.ProjectManagerId) ? Db.Employees.GetById(liveProject.ProjectManagerId) : null;
+        if (PdfService.IsValidCachedPdf(liveDoc.PdfPath))
         {
             return true;
         }
 
         try
         {
-            if (string.IsNullOrEmpty(_document.ResolvedBody))
+            if (string.IsNullOrEmpty(liveDoc.ResolvedBody))
             {
-                _document.ResolvedBody = GetResolvedBody();
+                liveDoc.ResolvedBody = GetResolvedBody();
             }
             Snackbar.Add("Generating PDF document...", Severity.Info);
-            _document.PdfPath = await PdfService.GenerateProjectDocumentPdfAsync(_document, ProjectId, Nav.BaseUri);
-            Db.ProjectDocuments.Save(_document);
+            var pdfPath = await PdfService.GenerateProjectDocumentPdfAsync(liveDoc, liveProject.Id, Nav.BaseUri, emp.Id);
+            liveDoc.PdfPath = pdfPath;
+            if (UserService.CanEditProject(emp, liveProject))
+            {
+                Db.ProjectDocuments.Save(liveDoc);
+            }
+            _document = liveDoc;
             return true;
         }
         catch (Exception ex)
@@ -493,9 +589,16 @@ else
 
     private async Task SendByEmail()
     {
-        if (_document == null) return;
+        var auth = await AuthorizeEditAsync();
+        if (auth == null) return;
+        if (string.Equals(Db.CompanyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase) ||
+            !auth.Value.Actor.HasPermission(AppPermissions.Email.Use))
+        {
+            Snackbar.Add("Active Email.Use permission is required to send emails.", Severity.Error);
+            return;
+        }
 
-        if (!await EnsurePdfExistsAsync())
+        if (!await EnsurePdfExistsAsync() || _document == null)
         {
             return;
         }
@@ -506,9 +609,9 @@ else
             ["Subject"] = $"{_document.Name} from {_profile?.CompanyName}",
             ["Body"] = $"<p>Dear {_project?.Client?.ContactPersonName ?? "Client"},</p><p>Please find attached document: {_document.Name}.</p>",
             ["IsTemplate"] = true,
-            ["PreloadedFiles"] = new List<(string Path, string FileName)> 
-            { 
-                (_document.PdfPath, $"{_document.Name}.pdf") 
+            ["PreloadedDocumentAttachments"] = new List<OutboundDocumentAttachmentRef>
+            {
+                new(OutboundDocumentKind.ProjectDocument, _document.Id, $"{_document.Name}.pdf")
             }
         };
 
@@ -527,10 +630,7 @@ else
 
         try
         {
-            var bytes = await System.IO.File.ReadAllBytesAsync(_document.PdfPath);
-            var base64 = Convert.ToBase64String(bytes);
-            var dataUrl = $"data:application/pdf;base64,{base64}";
-            await JS.InvokeVoidAsync("window.openBase64InNewTab", dataUrl, $"{_document.Name}.pdf");
+            await JS.OpenPdfFileInNewTabAsync(_document.PdfPath, $"{_document.Name}.pdf");
         }
         catch (Exception ex)
         {

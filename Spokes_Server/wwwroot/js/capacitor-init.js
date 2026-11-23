@@ -1,3 +1,28 @@
+async function applyCapacitorStatusBarThemeFromStorage() {
+    if (window._spokesHostViewActive === false) return true;
+    const statusBar = window.Capacitor?.Plugins?.StatusBar;
+    if (!statusBar) return false;
+
+    let isDarkMode = true;
+    let cached = null;
+    try { cached = localStorage.getItem('spokes_is_dark_mode'); } catch (e) {}
+    if (cached !== null && cached !== undefined) {
+        isDarkMode = cached !== 'false';
+    } else if (window.Capacitor.Plugins.Preferences) {
+        try {
+            const res = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_is_dark_mode' });
+            if (res && res.value !== null && res.value !== undefined) {
+                isDarkMode = res.value !== 'false';
+                try { localStorage.setItem('spokes_is_dark_mode', res.value); } catch (e) {}
+            }
+        } catch (e) {}
+    }
+
+    await statusBar.setOverlaysWebView({ overlay: true });
+    await statusBar.setStyle({ style: isDarkMode ? 'DARK' : 'LIGHT' });
+    return true;
+}
+
 // --- FAST-BOOT STATUS BAR ---
 // Native MainActivity.java / AppDelegate.swift style the status bar before WebView load.
 // Sync user theme preference once StatusBar plugin is available without 10ms timer spam during parse.
@@ -5,33 +30,11 @@
     if (typeof window._spokesHostViewActive === 'undefined') {
         window._spokesHostViewActive = true;
     }
-    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
-        const applyStatusBar = async () => {
-            if (window._spokesHostViewActive === false) return true;
-            if (window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar) {
-                let isDarkMode = true;
-                let cached = null;
-                try { cached = localStorage.getItem('spokes_is_dark_mode'); } catch (e) {}
-                if (cached !== null && cached !== undefined) {
-                    isDarkMode = cached !== 'false';
-                } else if (window.Capacitor.Plugins.Preferences) {
-                    try {
-                        const res = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_is_dark_mode' });
-                        if (res && res.value !== null && res.value !== undefined) {
-                            isDarkMode = res.value !== 'false';
-                            try { localStorage.setItem('spokes_is_dark_mode', res.value); } catch (e) {}
-                        }
-                    } catch (e) {}
-                }
-                window.Capacitor.Plugins.StatusBar.setOverlaysWebView({ overlay: true }).catch(console.error);
-                window.Capacitor.Plugins.StatusBar.setStyle({ style: isDarkMode ? 'DARK' : 'LIGHT' }).catch(console.error);
-                return true;
-            }
-            return false;
-        };
-        applyStatusBar().then(applied => {
+    if (window.Capacitor?.isNativePlatform?.()) {
+        const tryApply = () => applyCapacitorStatusBarThemeFromStorage().catch(console.error);
+        tryApply().then(applied => {
             if (!applied && document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', () => { applyStatusBar(); }, { once: true });
+                document.addEventListener('DOMContentLoaded', () => { tryApply(); }, { once: true });
             }
         });
     }
@@ -40,7 +43,11 @@
 // Unified platform check
 window.checkIsCapacitorNative = function () { return window.isCapacitorNative(); };
 window.isCapacitorNative = function () {
-    return navigator.userAgent.includes("Capacitor") || Boolean(window.Capacitor?.isNativePlatform?.());
+    return navigator.userAgent.includes("Capacitor")
+        || Boolean(window.Capacitor?.isNativePlatform?.())
+        || Boolean(window.SpokesNative)
+        || Boolean(window.webkit?.messageHandlers?.SpokesNative_shell || window.webkit?.messageHandlers?.SpokesNative)
+        || (typeof window.location !== 'undefined' && typeof window.location.search === 'string' && window.location.search.includes('client=mobile'));
 };
 
 // Support dynamic theme toggling from Blazor
@@ -70,38 +77,45 @@ window.setCapacitorStatusBarStyle = async function (isDarkMode) {
 
 window.reapplyCapacitorStatusBarStyle = async function () {
     if (window.isCapacitorNative()) {
-        if (window._spokesHostViewActive === false) return;
         try {
-            let isDarkMode = true;
-            let cached = null;
-            try { cached = localStorage.getItem('spokes_is_dark_mode'); } catch (e) {}
-            if (cached !== null && cached !== undefined) {
-                isDarkMode = cached !== 'false';
-            } else if (window.Capacitor?.Plugins?.Preferences) {
-                const res = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_is_dark_mode' });
-                if (res && res.value !== null && res.value !== undefined) {
-                    isDarkMode = res.value !== 'false';
-                    try { localStorage.setItem('spokes_is_dark_mode', res.value); } catch (e) {}
-                }
-            }
-            if (window.Capacitor?.Plugins?.StatusBar) {
-                await window.Capacitor.Plugins.StatusBar.setOverlaysWebView({ overlay: true });
-                const style = isDarkMode ? 'DARK' : 'LIGHT';
-                await window.Capacitor.Plugins.StatusBar.setStyle({ style: style });
-            }
+            await applyCapacitorStatusBarThemeFromStorage();
         } catch (err) {
             console.error('[Capacitor-Init] Error reapplying StatusBar style:', err);
         }
     }
 };
 
-// Host-view activation primitive for pooled multi-server native sessions (Android & iOS).
-// Isolates presence focus, reconnect splash timers, and status-bar ownership per server WebView.
-window.spokesSetServerViewActive = function (isActive) {
+// Host-view activation primitive for pooled multi-server native sessions (Android, iOS & Electron Desktop).
+// Isolates presence focus, reconnect splash timers, and status-bar ownership per server view.
+window.spokesSetServerViewActive = function (isActive, meta) {
     const active = Boolean(isActive);
+    const hasEpoch = Boolean(meta && typeof meta.epoch === 'number' && Number.isFinite(meta.epoch));
+    if (hasEpoch) {
+        if (typeof window._spokesHostViewEpoch === 'number' && meta.epoch < window._spokesHostViewEpoch) {
+            return;
+        }
+        window._spokesHostViewEpoch = meta.epoch;
+    }
+    if (meta && meta.nativeShellLifecycle === true) {
+        window._spokesNativeShellLifecycle = true;
+    }
+
     const changed = window._spokesHostViewActive !== active;
     window._spokesHostViewActive = active;
     window._spokesHostViewExplicitlyActivated = active;
+    if (active) {
+        window._spokesPageUnloading = false;
+    }
+
+    try {
+        window.dispatchEvent(new CustomEvent('spokes:host-view-active-changed', {
+            detail: {
+                active: active,
+                nativeShellLifecycle: Boolean(window._spokesNativeShellLifecycle),
+                epoch: hasEpoch ? meta.epoch : null
+            }
+        }));
+    } catch (e) {}
 
     if (active) {
         window._spokesShareNavigating = false;
@@ -117,7 +131,9 @@ window.spokesSetServerViewActive = function (isActive) {
             window.reapplyCapacitorStatusBarStyle();
         }
         if (changed) {
-            if (typeof window.checkPendingShares === 'function') {
+            if (typeof window.spokesCheckPendingShare === 'function') {
+                try { window.spokesCheckPendingShare(); } catch (e) {}
+            } else if (typeof window.checkPendingShares === 'function') {
                 try { window.checkPendingShares(0); } catch (e) {}
             }
             if (typeof window.spokesCheckAppShortcuts === 'function') {
@@ -130,7 +146,7 @@ window.spokesSetServerViewActive = function (isActive) {
         }
     }
 
-    if (changed && typeof window._forceUpdateFocusState === 'function') {
+    if (typeof window._forceUpdateFocusState === 'function') {
         try { window._forceUpdateFocusState(); } catch (e) {}
     }
 };
@@ -149,26 +165,27 @@ window.spokesNavigateFromNative = async function (targetRoute) {
         return false;
     }
 
-    // Cross-origin navigation delegates to native multi-server session pool
+    // Cross-origin navigation delegates to native BridgeManager.openServer, which natively enforces saved-server membership
     if (parsed.origin !== window.location.origin &&
         parsed.origin !== 'capacitor://localhost' &&
         parsed.origin !== 'http://localhost') {
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            console.warn('[Capacitor-Init] Rejected non-HTTP(S) cross-origin navigation target.');
+            return false;
+        }
         if (typeof window.spokesNotifyServerSwitchAway === 'function') {
             try { window.spokesNotifyServerSwitchAway(); } catch (e) {}
         }
         const fullTargetUrl = parsed.toString();
-        if (window.SpokesNative && typeof window.SpokesNative.openServer === 'function') {
-            window.SpokesNative.openServer(fullTargetUrl);
-            return true;
-        }
         if (window.Capacitor?.Plugins?.BridgeManager?.openServer) {
             try {
                 await window.Capacitor.Plugins.BridgeManager.openServer({ url: fullTargetUrl });
                 return true;
-            } catch (e) {}
+            } catch (e) {
+                console.warn('[Capacitor-Init] BridgeManager.openServer rejected target:', e);
+            }
         }
-        window.location.href = fullTargetUrl;
-        return true;
+        return false;
     }
 
     const stripClientParam = (searchStr) => {
@@ -204,17 +221,44 @@ window.spokesNavigateFromNative = async function (targetRoute) {
 
     if (window.spokesDotNetRef && !window._blazorDisconnected) {
         window.spokesPendingNav = finalRoute;
+        window.pendingNotificationRoute = finalRoute;
         try {
             await window.spokesDotNetRef.invokeMethodAsync('NavigateTo', finalRoute);
-            window.spokesPendingNav = null;
-            window.pendingNotificationRoute = null;
+            if (window.spokesPendingNav === finalRoute) {
+                window.spokesPendingNav = null;
+            }
+            if (window.pendingNotificationRoute === finalRoute) {
+                window.pendingNotificationRoute = null;
+            }
             return true;
         } catch (e) {
             console.warn('[Capacitor-Init] In-circuit NavigateTo failed, queueing for circuit resume:', e);
+            // If completeCircuitConnected or a newer navigation already consumed/superseded this route, do not re-queue.
+            if (window.pendingNotificationRoute !== finalRoute) {
+                return false;
+            }
+            // If the circuit already reconnected before this rejection settled, retry once immediately.
+            if (window.spokesDotNetRef && !window._blazorDisconnected) {
+                try {
+                    await window.spokesDotNetRef.invokeMethodAsync('NavigateTo', finalRoute);
+                    if (window.spokesPendingNav === finalRoute) {
+                        window.spokesPendingNav = null;
+                    }
+                    if (window.pendingNotificationRoute === finalRoute) {
+                        window.pendingNotificationRoute = null;
+                    }
+                    return true;
+                } catch (retryErr) {
+                    console.warn('[Capacitor-Init] In-circuit NavigateTo retry failed, keeping queued for circuit resume:', retryErr);
+                    if (window.pendingNotificationRoute !== finalRoute) {
+                        return false;
+                    }
+                }
+            }
         }
     }
 
-    // Circuit is still booting or reconnecting: queue route for initializeNativePushListeners / onConnectionUp / reloadNow
+    // Circuit is still booting or reconnecting: queue route for initializeNativePushListeners / completeCircuitConnected / reloadNow
     window.spokesPendingNav = finalRoute;
     window.pendingNotificationRoute = finalRoute;
     if (window._blazorDisconnected && window.spokesResume && typeof window.spokesResume.onHostViewActivated === 'function') {
@@ -223,18 +267,7 @@ window.spokesNavigateFromNative = async function (targetRoute) {
     return true;
 };
 
-window.triggerHaptic = async function(style = 'LIGHT') {
-    try {
-        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Haptics) {
-            await window.Capacitor.Plugins.Haptics.impact({ style: style });
-        } else {
-            // Fallback for web
-            navigator.vibrate?.(style === 'LIGHT' ? 15 : 30);
-        }
-    } catch (err) {
-        console.warn('Haptics failed', err);
-    }
-};
+// window.triggerHaptic is provided by spokesbridge.js.
 
 window.initCapacitorEnv = async function () {
     if (window._capacitorInitCompleted) {
@@ -307,38 +340,135 @@ window.initCapacitorEnv = async function () {
                 // The auth-callback deep link is now handled entirely natively via AuthTabIntent.
                 // We no longer manually intercept appUrlOpen for auth-callbacks.
 
+                const isAndroidNativeBack = (() => {
+                    try {
+                        const capPlatform = typeof Capacitor.getPlatform === 'function' ? Capacitor.getPlatform() : null;
+                        if (capPlatform) return capPlatform === 'android';
+                    } catch (e) {}
+                    return Boolean(Capacitor.isNativePlatform && Capacitor.isNativePlatform()) &&
+                        /Android/i.test((typeof navigator !== 'undefined' && navigator.userAgent) || '');
+                })();
+                try {
+                    window.SpokesBridge?.backStack?.setNativeBackInterceptorActive?.(isAndroidNativeBack);
+                } catch (e) {}
+
                 // Register hardware back button listener for Android
                 window._capacitorBackButtonListener = await Capacitor.Plugins.App.addListener('backButton', () => {
-                    if (window._spokesHostViewActive === false) return;
-                    // 1. Close open dialogs or overlays if present
-                    const openDialog = document.querySelector('.mud-dialog-container');
-                    if (openDialog) {
-                        const closeBtn = openDialog.querySelector('button[aria-label="close"], button.mud-button-close, .mud-dialog-header button');
+                    const pathname = window.location.pathname || '/';
+                    const pathSegments = pathname.split('/').filter(Boolean);
+                    const historyLen = window.history ? window.history.length : 0;
+
+                    const recordBack = (action, extra) => {
+                        const info = Object.assign({
+                            action: action,
+                            pathname: pathname,
+                            historyLength: historyLen,
+                            hostViewActive: window._spokesHostViewActive !== false
+                        }, extra || {});
+                        console.log(`[Nav][AndroidBack] action=${info.action} path=${info.pathname} historyLen=${info.historyLength}` +
+                            (info.detail ? ` detail=${info.detail}` : ''));
+                        try { window.spokesPerf?.recordBackAction?.(info); } catch (e) {}
+                    };
+
+                    if (window._spokesHostViewActive === false) {
+                        recordBack('ignored-inactive-host');
+                        return;
+                    }
+
+                    // 1. Canonical unified back-dismissal stack (all MudDialogs including MediaViewerDialog,
+                    //    stacked dialogs, blocking modals, voiceFullscreen, MobileActionSheet, mobile emoji picker).
+                    const stackResult = window.SpokesBridge?.backStack?.handleBack?.();
+                    if (stackResult && stackResult.handled) {
+                        recordBack(stackResult.action || 'dismiss-overlay', { detail: stackResult.detail });
+                        return;
+                    }
+
+                    // 2. Dismiss open lightweight popup/menu click-away backdrop (LazyMudMenu, MessageBubble menu, EmojiPicker)
+                    const dismissiblePopups = document.querySelectorAll('[data-spokes-back-dismiss]');
+                    if (dismissiblePopups.length > 0) {
+                        const topPopup = dismissiblePopups[dismissiblePopups.length - 1];
+                        const popupType = (typeof topPopup.getAttribute === 'function' && topPopup.getAttribute('data-spokes-back-dismiss')) || 'popup';
+                        recordBack('dismiss-popup', { detail: popupType });
+                        topPopup.click();
+                        return;
+                    }
+
+                    // 3. Defensive safety net: if an unmanaged MudDialog is still in the DOM (e.g. circuit disconnected
+                    //    or mid-mount before SpokesDialogProvider registered), close it or swallow Back so it can NEVER
+                    //    fall through to exit the chat channel or minimize the app behind a visible modal.
+                    const openDialogs = document.querySelectorAll('.mud-dialog-container');
+                    if (openDialogs.length > 0) {
+                        const topDialog = openDialogs[openDialogs.length - 1];
+                        const closeBtn = topDialog.querySelector('button[aria-label="close"], button[aria-label="Close"], button.mud-button-close, .mud-dialog-header button');
                         if (closeBtn) {
+                            recordBack('close-dialog');
                             closeBtn.click();
                             return;
                         }
+                        const dialogBackdrop = topDialog.querySelector('.mud-overlay-dialog, .mud-overlay');
+                        if (dialogBackdrop) {
+                            recordBack('close-dialog-backdrop');
+                            dialogBackdrop.click();
+                            return;
+                        }
+                        recordBack('dialog-open-blocked');
+                        return;
                     }
 
-                    const pathSegments = window.location.pathname.split('/').filter(Boolean);
-                    
-                    // Level 1 pages have 0 or 1 path segment (e.g., /, /chat, /projects, /admin)
+                    // 4. Close open temporary navigation drawer overlay if present
+                    const drawerOverlay = document.querySelector('.mud-overlay-drawer');
+                    if (drawerOverlay) {
+                        recordBack('close-drawer');
+                        drawerOverlay.click();
+                        return;
+                    }
+
+                    // 5. DOM-first Chat Channel exit: when a chat channel is open on mobile, invoke the canonical
+                    // in-app GoBack button directly instead of relying on WebView history.length or delayed URL state.
+                    const inAppBack = document.getElementById('chat-mobile-back-btn');
+                    const inAppBackVisible = Boolean(inAppBack && inAppBack.offsetParent !== null);
+                    const channelOpenDom = Boolean(document.querySelector('.mud-main-content.chat-channel-open'));
+
+                    if (inAppBackVisible) {
+                        recordBack('chat-in-app-back', { detail: 'inAppBackBtn' });
+                        try { window.spokesChatDiagnostics?.startTransition('NativeBack', 'Client: Native backButton (chat)'); } catch (e) {}
+                        inAppBack.click();
+                        return;
+                    }
+
+                    if (channelOpenDom || (pathSegments[0] === 'chat' && pathSegments.length > 1)) {
+                        recordBack('chat-route-fallback', { detail: channelOpenDom ? 'channelOpenDom' : 'chatSubRoute' });
+                        try { window.spokesChatDiagnostics?.startTransition('NativeBack', 'Client: Native backButton (chat-fallback)'); } catch (e) {}
+                        if (typeof window.spokesNavigateFromNative === 'function') {
+                            window.spokesNavigateFromNative('/chat');
+                        } else {
+                            window.history.back();
+                        }
+                        return;
+                    }
+
+                    // 6. Level 1 root pages (0 or 1 path segment, e.g. /, /chat, /projects, /albums)
                     if (pathSegments.length <= 1) {
+                        recordBack('minimize-app');
                         if (typeof Capacitor.Plugins.App.minimizeApp === 'function') {
                             Capacitor.Plugins.App.minimizeApp();
                         } else {
                             Capacitor.Plugins.App.exitApp();
                         }
+                        return;
+                    }
+
+                    // 7. Other sub-pages (/albums/{id}, /projects/{id}, etc.)
+                    if (historyLen > 1) {
+                        recordBack('history-back');
+                        try { window.spokesChatDiagnostics?.startTransition('NativeBack', 'Client: Native backButton'); } catch (e) {}
+                        window.history.back();
+                    } else if (typeof window.spokesNavigateFromNative === 'function') {
+                        const parentRoute = '/' + pathSegments[0];
+                        recordBack('parent-route', { detail: parentRoute });
+                        window.spokesNavigateFromNative(parentRoute);
                     } else {
-                        // In chat channel: if there is no previous browser history entry (e.g. cold start from push), fallback to in-app back
-                        if (pathSegments[0] === 'chat' && window.history.length <= 1) {
-                            const inAppBack = document.getElementById('chat-mobile-back-btn');
-                            if (inAppBack) {
-                                inAppBack.click();
-                                return;
-                            }
-                        }
-                        try { window.spokesChatDiagnostics?.startTransition('NativeBack', 'Client: Native backButton'); } catch (e) {} // DIAG-TEMP
+                        recordBack('history-back-fallback');
                         window.history.back();
                     }
                 });
@@ -386,55 +516,43 @@ window.initCapacitorEnv = async function () {
                              if (!targetUrl.includes('client=mobile')) {
                                  targetUrl += (targetUrl.includes('?') ? '&' : '?') + 'client=mobile';
                              }
-                             const ensureCookies = async () => {
-                                 if (window.Capacitor.Plugins.CapacitorCookies) {
-                                     try { await window.Capacitor.Plugins.CapacitorCookies.getCookies(); } catch(e) {}
-                                 }
-                                 for (let i = 0; i < 20; i++) {
-                                     try {
-                                         let r = await window.fetch('/spokesapi/auth/current-session', { cache: 'no-store', redirect: 'manual' });
-                                         if (r.ok) {
-                                             let text = await r.text();
-                                             if (text.includes('sessionId')) return;
-                                         }
-                                     } catch(e) {}
-                                     await new Promise(res => setTimeout(res, 500));
-                                 }
-                             };
 
                              if (originUrl) {
-                                 let targetOrigin = originUrl.replace(/\/$/, '');
-                                 if (!targetOrigin.startsWith('http')) targetOrigin = 'https://' + targetOrigin;
-                                 const currentOrigin = window.location.origin.replace(/\/$/, '');
+                                 let targetOriginUrl;
+                                 try {
+                                     targetOriginUrl = new URL(originUrl);
+                                 } catch (e) {
+                                     targetOriginUrl = null;
+                                 }
+                                 if (!targetOriginUrl || (targetOriginUrl.protocol !== 'http:' && targetOriginUrl.protocol !== 'https:')) {
+                                     console.warn('[Capacitor-Init] Rejected notification with non-HTTP(S) originUrl');
+                                     return;
+                                 }
+                                 const targetOrigin = targetOriginUrl.origin.toLowerCase();
+                                 const currentOrigin = window.location.origin.toLowerCase();
                                  
                                  if (targetOrigin !== currentOrigin && targetOrigin !== 'capacitor://localhost' && targetOrigin !== 'http://localhost') {
+                                     let normalizedUrl;
+                                     try {
+                                         normalizedUrl = new URL(targetUrl, targetOrigin);
+                                     } catch (e) {
+                                         return;
+                                     }
+                                     if (normalizedUrl.origin.toLowerCase() !== targetOrigin) {
+                                         console.warn('[Capacitor-Init] Rejected mismatched notification targetUrl origin');
+                                         return;
+                                     }
                                      if (typeof window.spokesNotifyServerSwitchAway === 'function') {
                                          try { window.spokesNotifyServerSwitchAway(); } catch (e) {}
                                      }
-                                     const normalizedPath = targetUrl.startsWith('/') ? targetUrl : ('/' + targetUrl);
-                                     const fullTargetUrl = targetOrigin + normalizedPath;
-
-                                     if (window.SpokesNative && typeof window.SpokesNative.setServerUrl === 'function') {
-                                         window.SpokesNative.setServerUrl(targetOrigin);
-                                     } else if (window.Capacitor.Plugins.Preferences) {
-                                         try {
-                                             await window.Capacitor.Plugins.Preferences.set({ key: 'serverUrl', value: targetOrigin });
-                                         } catch(e) {}
-                                     }
-
-                                     if (window.SpokesNative && typeof window.SpokesNative.openServer === 'function') {
-                                         window.SpokesNative.openServer(fullTargetUrl);
-                                         return;
-                                     }
-                                     if (window.Capacitor.Plugins.BridgeManager) {
+                                     const fullTargetUrl = normalizedUrl.toString();
+                                     if (window.Capacitor?.Plugins?.BridgeManager?.openServer) {
                                          try {
                                              await window.Capacitor.Plugins.BridgeManager.openServer({ url: fullTargetUrl });
-                                             return;
-                                         } catch(e) { }
+                                         } catch(e) {
+                                             console.warn('[Capacitor-Init] Native openServer rejected notification target:', e);
+                                         }
                                      }
-                                     
-                                     await ensureCookies();
-                                     window.location.href = fullTargetUrl;
                                      return;
                                  }
                              }
@@ -449,12 +567,6 @@ window.initCapacitorEnv = async function () {
                 window._capacitorStatusBarStateListener = await Capacitor.Plugins.App.addListener('appStateChange', (state) => {
                     console.log('[Capacitor-Init] App state changed. isActive:', state.isActive);
                     if (state.isActive) {
-                        window.reapplyCapacitorStatusBarStyle();
-                    }
-                });
-
-                document.addEventListener('visibilitychange', () => {
-                    if (document.visibilityState === 'visible') {
                         window.reapplyCapacitorStatusBarStyle();
                     }
                 });
@@ -569,10 +681,45 @@ window.openSsoAuth = async function (url) {
             return;
         }
 
-        // 1. Fetch Config
+        // 0. Resolve stable device ID up front for challenge binding
+        let deviceId = '';
+        try {
+            if (window.pushNotifications?.getDeviceId) {
+                deviceId = await window.pushNotifications.getDeviceId();
+            }
+        } catch(e) {}
+        if (!deviceId) {
+            const origin = window.spokesAuth.getCanonicalOrigin();
+            if (origin && window.Capacitor?.Plugins?.Preferences) {
+                const devPrefKey = 'spokes_device_id::' + origin;
+                try {
+                    const existingDev = await window.Capacitor.Plugins.Preferences.get({ key: devPrefKey });
+                    deviceId = existingDev?.value || '';
+                } catch(e) {}
+                if (!deviceId) {
+                    deviceId = crypto.randomUUID ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+                    try { await window.Capacitor.Plugins.Preferences.set({ key: devPrefKey, value: deviceId }); } catch(e) {}
+                }
+            }
+        }
+        if (!deviceId) throw new Error('Device ID required for mobile authentication');
+
+        // 1. Fetch Config & Server-Bound OAuth State/Nonce Challenge
         const configRes = await fetch('/spokesapi/auth/mobile/config');
         if (!configRes.ok) throw new Error('Failed to fetch mobile auth config');
         const config = await configRes.json();
+
+        const challengeRes = await fetch('/spokesapi/auth/mobile/challenge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deviceId: deviceId }),
+            cache: 'no-store'
+        });
+        if (!challengeRes.ok) throw new Error('Failed to initialize mobile auth challenge');
+        const challengeData = await challengeRes.json();
+        if (!challengeData || !challengeData.state || !challengeData.nonce) {
+            throw new Error('Invalid mobile auth challenge response');
+        }
         
         // 2. Generate PKCE Challenge
         const verifier = window.spokesAuth.generateCodeVerifier();
@@ -581,32 +728,32 @@ window.openSsoAuth = async function (url) {
         // Store the verifier so it can be used for the PKCE exchange after login
         sessionStorage.setItem('spokes_pkce_verifier', verifier);
         
-        // 3. Build Auth URL using the discovered authorization endpoint
+        // 3. Build Auth URL using the discovered authorization endpoint and server challenge state/nonce
         const redirectUri = 'spokes://auth-callback';
-        const authUrl = `${config.authorizationEndpoint}?client_id=${config.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(config.scope)}&code_challenge=${challenge}&code_challenge_method=S256`;
+        const authUrl = `${config.authorizationEndpoint}?client_id=${encodeURIComponent(config.clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(config.scope)}&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256&state=${encodeURIComponent(challengeData.state)}&nonce=${encodeURIComponent(challengeData.nonce)}`;
         
         console.log('[Capacitor-Init] Calling SsoAuth.login via PKCE...');
         const result = await ssoPlugin.login({
             url: authUrl,
-            callbackScheme: 'spokes'
+            callbackScheme: 'spokes',
+            expectedState: challengeData.state
         });
 
         if (result && result.url) {
             console.log('[Capacitor-Init] SsoAuth.login resolved:', result.url);
+            if (!String(result.url).toLowerCase().startsWith(redirectUri)) {
+                throw new Error('Invalid OAuth callback URI');
+            }
             const urlObj = new URL(result.url);
             const code = urlObj.searchParams.get('code');
+            const returnedState = urlObj.searchParams.get('state');
+            if (!returnedState || returnedState !== challengeData.state) {
+                throw new Error('OAuth state mismatch');
+            }
             
             if (code) {
                 // 4. Exchange Code
                 console.log('[Capacitor-Init] Exchanging code...');
-                
-                // Get stable device ID (uses ANDROID_ID / iOS Keychain, survives reinstalls)
-                let deviceId = '';
-                try {
-                    if (window.pushNotifications?.getDeviceId) {
-                        deviceId = await window.pushNotifications.getDeviceId();
-                    }
-                } catch(e) {}
 
                 const exchangeRes = await fetch('/spokesapi/auth/mobile/exchange', {
                     method: 'POST',
@@ -615,7 +762,8 @@ window.openSsoAuth = async function (url) {
                         code: code,
                         codeVerifier: verifier,
                         redirectUri: redirectUri,
-                        deviceId: deviceId
+                        deviceId: deviceId,
+                        state: challengeData.state
                     })
                 });
                 
@@ -628,8 +776,14 @@ window.openSsoAuth = async function (url) {
                 
                 // 5. Save Token & Refresh Session
                 if (exchangeData.refreshToken) {
-                    const refreshKey = 'spokes_refresh_' + window.location.hostname;
-                    await window.Capacitor.Plugins.Preferences.set({key: refreshKey, value: exchangeData.refreshToken});
+                    const saved = window.spokesAuth.setRefreshToken
+                        ? await window.spokesAuth.setRefreshToken(exchangeData.refreshToken)
+                        : false;
+                    if (!saved) {
+                        const currentOrigin = window.spokesAuth.getCanonicalOrigin();
+                        if (!currentOrigin) throw new Error('Invalid server origin for token storage');
+                        await window.Capacitor.Plugins.Preferences.set({ key: 'spokes_refresh::' + currentOrigin, value: exchangeData.refreshToken });
+                    }
                     console.log('[Capacitor-Init] Token saved, refreshing session...');
                     if (window.spokesAuth.refreshSessionAsync) {
                         await window.spokesAuth.refreshSessionAsync();
@@ -644,7 +798,7 @@ window.openSsoAuth = async function (url) {
         }
     } catch (e) {
         console.error('[Capacitor-Init] openSsoAuth failed:', e);
-        if (e.message && (e.message.includes('cancelled') || e.message.includes('Canceled'))) {
+        if (e && typeof e.message === 'string' && /cancel/i.test(e.message)) {
             console.log('[Capacitor-Init] User cancelled auth session.');
             return;
         }
@@ -709,35 +863,13 @@ window.openSsoLogout = async function (url) {
     // Caller handles navigation after this returns
 };
 
-window.spokesCopyText = async function (text) {
-    if (window.isCapacitorNative()) {
-        try {
-            await Capacitor.Plugins.Clipboard.write({ string: text });
-            return;
-        } catch (e) {
-            console.error('[Capacitor-Init] Native clipboard write failed:', e);
-            throw e;
+// Notify the native mobile outer shell (Android/iOS) whenever Blazor's navigation drawer opens/closes.
+window.spokesNotifyNavDrawerOpen = function (isOpen) {
+    try {
+        if (window.SpokesNative && typeof window.SpokesNative.setNavDrawerOpen === 'function') {
+            window.SpokesNative.setNavDrawerOpen(Boolean(isOpen));
         }
-    }
-    
-    // Fallback to web clipboard
-    if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-    } else {
-        // Ultimate fallback for older webviews without secure context
-        var textArea = document.createElement('textarea');
-        textArea.value = text;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-            var res = document.execCommand('copy');
-            if (!res) throw new Error('execCommand copy failed');
-        } finally {
-            textArea.remove();
-        }
-    }
+    } catch (e) {}
 };
+
+// window.spokesCopyText is provided by spokesbridge.js.

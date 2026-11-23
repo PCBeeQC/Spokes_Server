@@ -81,8 +81,9 @@ public class CalendarReminderBackgroundService : BackgroundService
         var pushDecision = scope.ServiceProvider.GetService<IPushDecisionService>();
 
         var notificationQueue = scope.ServiceProvider.GetService<NotificationQueueService>();
+        var teams = scope.ServiceProvider.GetService<TeamRepository>()?.GetAll();
 
-        var now = GetCurrentCalendarTime(companyProfileRepo);
+        var now = TimeZoneHelper.GetCompanyTime(companyProfileRepo);
         var minDate = now.Date.AddDays(-1);
         var maxDate = now.Date.AddDays(60);
 
@@ -93,12 +94,12 @@ public class CalendarReminderBackgroundService : BackgroundService
         if (events.Count == 0) return Task.CompletedTask;
 
         var employees = hrContext.Employees.GetAll()
-            .Where(e => e.IsActive)
+            .Where(e => CalendarService.HasCalendarViewAccess(e) || CalendarService.HasCalendarAdminOverride(e))
             .ToDictionary(e => e.Id, e => e);
 
         foreach (var evt in events)
         {
-            var recipientIds = ResolveRecipients(evt, employees.Values);
+            var recipientIds = ResolveRecipients(evt, employees.Values, teams);
 
             foreach (var userId in recipientIds)
             {
@@ -191,14 +192,15 @@ public class CalendarReminderBackgroundService : BackgroundService
                 Category = NotificationCategories.Calendar,
                 ThreadId = reminderTag,
                 ServerName = serverName,
-                Sound = sound
+                Sound = sound,
+                SourceEventId = evt.Id
             };
 
             SafeDispatchNotificationAsync(() => webPush.SendNotificationDirectAsync(request), "calendar reminder web push");
 
             if (tier == PresenceTier.DesktopOnly && notificationQueue != null)
             {
-                notificationQueue.EnqueueDelayedMobilePush(new DelayedMobileNotification(request, reminderTag, "/planning/calendar", "Calendar", TimeSpan.FromMinutes(1)));
+                notificationQueue.EnqueueDelayedMobilePush(new DelayedMobileNotification(request, evt.Id, evt.Id, "Calendar", TimeSpan.FromMinutes(1)));
             }
         }
         catch (Exception pushEx)
@@ -207,7 +209,7 @@ public class CalendarReminderBackgroundService : BackgroundService
         }
     }
 
-    private static HashSet<string> ResolveRecipients(CalendarEvent evt, IEnumerable<Employee> activeEmployees)
+    private static HashSet<string> ResolveRecipients(CalendarEvent evt, IEnumerable<Employee> activeEmployees, IEnumerable<Team>? teams = null)
     {
         var recipientIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -235,6 +237,19 @@ public class CalendarReminderBackgroundService : BackgroundService
                     recipientIds.Add(emp.Id);
                 }
             }
+
+            if (teams != null)
+            {
+                foreach (var team in teams)
+                {
+                    if (!string.IsNullOrEmpty(team.Id)
+                        && invitedTeams.Contains(team.Id)
+                        && !string.IsNullOrEmpty(team.LeaderId))
+                    {
+                        recipientIds.Add(team.LeaderId);
+                    }
+                }
+            }
         }
 
         if (evt.IsCompanyWide)
@@ -250,23 +265,7 @@ public class CalendarReminderBackgroundService : BackgroundService
 
     public static string FormatReminderTimeDescription(CalendarEvent evt, CalendarReminder reminder)
     {
-        string timingStr;
-        if (reminder.Value == 0)
-        {
-            timingStr = evt.IsAllDay ? "Today (All Day)" : $"Starts now ({evt.Start:t} – {evt.End:t})";
-        }
-        else
-        {
-            var reminderDisplay = reminder.ToDurationString();
-            if (evt.IsAllDay)
-            {
-                timingStr = $"Starts in {reminderDisplay} ({evt.Start:MMM d})";
-            }
-            else
-            {
-                timingStr = $"Starts in {reminderDisplay} ({evt.Start:t} – {evt.End:t})";
-            }
-        }
+        var timingStr = CalendarNotificationService.FormatTimeDescription(evt, reminder);
 
         if (!string.IsNullOrWhiteSpace(evt.Location))
         {
@@ -289,23 +288,6 @@ public class CalendarReminderBackgroundService : BackgroundService
         return evt.Start - offset;
     }
 
-    private static DateTime GetCurrentCalendarTime(CompanyProfileRepository companyProfileRepo)
-    {
-        return TimeZoneHelper.GetCompanyTime(companyProfileRepo);
-    }
-
-    internal Task SafeDispatchNotificationAsync(Func<Task> routeAction, string operation)
-    {
-        return Task.Run(async () =>
-        {
-            try
-            {
-                await routeAction();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to dispatch {Operation} in background", operation);
-            }
-        });
-    }
+    internal Task SafeDispatchNotificationAsync(Func<Task> routeAction, string operation) =>
+        NotificationDispatchHelper.SafeDispatchAsync(routeAction, operation, _logger, LogLevel.Warning);
 }

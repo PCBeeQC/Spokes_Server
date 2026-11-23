@@ -21,7 +21,6 @@ public record BackupUploadProgress(long BytesTransferred, long TotalBytes, doubl
 public enum RemoteUploadState
 {
     Idle,
-    Pending,
     Uploading,
     Success,
     Failed
@@ -37,16 +36,7 @@ public class DestinationUploadStatus
     public string? ErrorMessage { get; set; }
     public DateTime? LastCompletedAt { get; set; }
 
-    public string FormattedProgress
-    {
-        get
-        {
-            if (TotalBytes <= 0) return $"{Percent:F0}%";
-            var transferredMb = BytesTransferred / (1024.0 * 1024.0);
-            var totalMb = TotalBytes / (1024.0 * 1024.0);
-            return $"{transferredMb:F1} MB / {totalMb:F1} MB ({Percent:F0}%)";
-        }
-    }
+    public string FormattedProgress => BackupFormatHelper.FormatTransferProgress(BytesTransferred, TotalBytes, Percent);
 }
 
 public record BackupUploadResult(bool Success, string? DestinationId, string? ErrorMessage = null, long SizeBytes = 0)
@@ -57,9 +47,7 @@ public record BackupUploadResult(bool Success, string? DestinationId, string? Er
 
 public record RemoteBackupItem(string Id, string FileName, long SizeBytes, DateTime CreatedAtUtc, string DestinationType)
 {
-    public string FormattedSize => SizeBytes < 1024 * 1024
-        ? $"{SizeBytes / 1024.0:F1} KB"
-        : $"{SizeBytes / (1024.0 * 1024.0):F1} MB";
+    public string FormattedSize => BackupFormatHelper.FormatKilobyteOrMegabyteSize(SizeBytes);
 }
 
 public record TestConnectionResult(bool Success, string Message)
@@ -77,5 +65,65 @@ public interface IBackupDestinationProvider
     Task DeleteBackupAsync(string remoteFileId, CancellationToken cancellationToken = default);
     Task PruneBackupsAsync(int retentionCount, CancellationToken cancellationToken = default);
     Task<TestConnectionResult> TestConnectionAsync(CancellationToken cancellationToken = default);
+}
+
+internal static class BackupFormatHelper
+{
+    public static string FormatTransferProgress(long bytes, long totalBytes, double percent)
+    {
+        if (totalBytes <= 0) return $"{percent:F0}%";
+        var transferredMb = bytes / (1024.0 * 1024.0);
+        var totalMb = totalBytes / (1024.0 * 1024.0);
+        return $"{transferredMb:F1} MB / {totalMb:F1} MB ({percent:F0}%)";
+    }
+
+    public static string FormatKilobyteOrMegabyteSize(long sizeBytes) => sizeBytes < 1024 * 1024
+        ? $"{sizeBytes / 1024.0:F1} KB"
+        : $"{sizeBytes / (1024.0 * 1024.0):F1} MB";
+
+    public static string FormatBackupSize(long sizeBytes) => sizeBytes < 1024
+        ? $"{sizeBytes} B"
+        : FormatKilobyteOrMegabyteSize(sizeBytes);
+}
+
+internal static class BackupDestinationPruneHelper
+{
+    public static string ResolveCredential(Spokes_Server.Core.Services.Security.EncryptionService encryptionService, string? value) =>
+        string.IsNullOrEmpty(value)
+            ? string.Empty
+            : (encryptionService.TryDecrypt(value, out var decrypted) ? decrypted : value);
+
+    public static Spokes_Server.Core.Services.Security.EncryptionService ResolveEncryptionService(
+        Spokes_Server.Core.Services.Security.EncryptionService? encryptionService,
+        Spokes_Server.Core.Data.Repositories.Core.CompanyProfileRepository? profiles,
+        Microsoft.Extensions.Configuration.IConfiguration? configuration) =>
+        encryptionService ?? profiles?.EncryptionService ?? new Spokes_Server.Core.Services.Security.EncryptionService(configuration);
+    public static async Task PruneScheduledBackupsAsync(
+        IBackupDestinationProvider provider,
+        int retentionCount,
+        Microsoft.Extensions.Logging.ILogger? logger,
+        string logTag,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var backups = await provider.ListBackupsAsync(cancellationToken);
+            var scheduled = backups
+                .Where(b => !b.FileName.Contains("_Manual_", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (scheduled.Count > retentionCount)
+            {
+                foreach (var old in scheduled.Skip(retentionCount))
+                {
+                    await provider.DeleteBackupAsync(old.Id, cancellationToken);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex, "[{LogTag}] Pruning failed", logTag);
+        }
+    }
 }
 

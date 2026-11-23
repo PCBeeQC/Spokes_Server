@@ -29,6 +29,7 @@ public class ConfigureOpenIdConnectOptionsTests : IDisposable
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_tempDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
         _persistence = new DiskPersistenceService(mockLogger.Object);

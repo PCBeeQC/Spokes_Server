@@ -1,5 +1,7 @@
+@implements IBackDismissHandler
 @inject BackupService BackupSvc
 @inject ILogger<RestoreBackupDialog> Logger
+@inject Spokes_Server.Core.Services.Identity.UserService UserService
 
 <MudDialog>
     <DialogContent>
@@ -14,7 +16,7 @@
                 @if (ExistingBackup != null)
                 {
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
-                        @Loc["Size:"] @FormatFileSize(ExistingBackup.SizeBytes) • @Loc["Created:"] @ExistingBackup.CreatedAt.ToString("g")
+                        @Loc["Size:"] @FileHelper.FormatBytes(ExistingBackup.SizeBytes) • @Loc["Created:"] @ExistingBackup.CreatedAt.ToString("g")
                     </MudText>
                 }
                 <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-2">
@@ -66,8 +68,6 @@
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public IBrowserFile? File { get; set; }
     [Parameter] public BackupFileInfo? ExistingBackup { get; set; }
-    [Parameter] public string? BackupPath { get; set; }
-    [Parameter] public string? BackupName { get; set; }
 
     private enum State { Confirming, Uploading, Restoring, Error }
     private State CurrentState = State.Confirming;
@@ -78,12 +78,41 @@
     private string ErrorMessage = "";
 
     private string EffectiveBackupName =>
-        File?.Name ?? ExistingBackup?.FileName ?? BackupName ?? "backup";
+        File?.Name ?? ExistingBackup?.FileName ?? "backup";
+
+    public Task<BackDismissAction> OnBackRequestedAsync() =>
+        Task.FromResult(CurrentState is State.Uploading or State.Restoring
+            ? BackDismissAction.Block
+            : BackDismissAction.DefaultCancel);
+
+    private async Task<bool> EnsureAuthorizedAdminAsync()
+    {
+        var caller = await UserService.GetEmployeeAsync();
+        if (caller is { IsActiveUnsuspended: true } && caller.IsEffectiveAdmin)
+        {
+            return true;
+        }
+
+        ErrorMessage = Loc["Administrator access is required."].Value;
+        CurrentState = State.Error;
+        return false;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await EnsureAuthorizedAdminAsync();
+    }
 
     private void Close() => MudDialog.Cancel();
 
     private async Task StartRestore()
     {
+        if (!await EnsureAuthorizedAdminAsync())
+        {
+            StateHasChanged();
+            return;
+        }
+
         string? targetFilePath = null;
         bool isTempFile = false;
 
@@ -122,7 +151,7 @@
             }
             else
             {
-                targetFilePath = ExistingBackup?.FilePath ?? BackupPath;
+                targetFilePath = ExistingBackup?.FilePath;
             }
 
             if (string.IsNullOrEmpty(targetFilePath) || !System.IO.File.Exists(targetFilePath))
@@ -174,13 +203,5 @@
             CurrentState = State.Error;
             StateHasChanged();
         }
-    }
-
-    private static string FormatFileSize(long bytes)
-    {
-        if (bytes < 1024) return $"{bytes} B";
-        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
-        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
-        return $"{bytes / (1024.0 * 1024 * 1024):F2} GB";
     }
 }

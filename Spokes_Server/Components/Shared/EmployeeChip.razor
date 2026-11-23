@@ -4,13 +4,6 @@
 @{
     var emp = Employee ?? (!string.IsNullOrEmpty(UserId) ? EmployeeRepo.GetById(UserId) : null);
     var displayName = emp?.FullName ?? Text ?? Loc["Unknown"].Value;
-    var avatarFontSize = Size switch
-    {
-        Size.Small => "0.625rem",
-        Size.Medium => "0.75rem",
-        Size.Large => "1rem",
-        _ => "0.625rem"
-    };
     var avatarSize = Size switch
     {
         Size.Large => Size.Medium,
@@ -18,55 +11,27 @@
     };
 }
 
-@if (OnClose.HasDelegate)
-{
-    <MudChip T="string"
-             Size="@Size"
-             Color="@Color"
-             Variant="@Variant"
-             OnClose="@HandleClose"
-             Disabled="@Disabled"
-             Class="@Class"
-             Style="@Style"
-             Value="@(emp?.Id ?? UserId ?? displayName)">
-        <AvatarContent>
-            @if (emp != null)
-            {
-                <EmployeeAvatar Employee="@emp"
-                                Size="@avatarSize"
-                                FontSize="@avatarFontSize"
-                                ShowPresence="false" />
-            }
-        </AvatarContent>
-        <ChildContent>
-            @displayName
-        </ChildContent>
-    </MudChip>
-}
-else
-{
-    <MudChip T="string"
-             Size="@Size"
-             Color="@Color"
-             Variant="@Variant"
-             Disabled="@Disabled"
-             Class="@Class"
-             Style="@Style"
-             Value="@(emp?.Id ?? UserId ?? displayName)">
-        <AvatarContent>
-            @if (emp != null)
-            {
-                <EmployeeAvatar Employee="@emp"
-                                Size="@avatarSize"
-                                FontSize="@avatarFontSize"
-                                ShowPresence="false" />
-            }
-        </AvatarContent>
-        <ChildContent>
-            @displayName
-        </ChildContent>
-    </MudChip>
-}
+<MudChip T="string"
+         Size="@Size"
+         Color="@Color"
+         Variant="@Variant"
+         OnClose="@(OnClose.HasDelegate ? EventCallback.Factory.Create<MudChip<string>>(this, HandleClose) : default)"
+         Disabled="@Disabled"
+         Class="@Class"
+         Style="@Style"
+         Value="@(emp?.Id ?? UserId ?? displayName)">
+    <AvatarContent>
+        @if (emp != null)
+        {
+            <EmployeeAvatar Employee="@emp"
+                            Size="@avatarSize"
+                            ShowPresence="false" />
+        }
+    </AvatarContent>
+    <ChildContent>
+        @displayName
+    </ChildContent>
+</MudChip>
 
 @code {
     [Parameter] public Employee? Employee { get; set; }

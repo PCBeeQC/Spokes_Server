@@ -8,6 +8,7 @@ using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Accounting;
 using Spokes_Server.Core.Services.Accounting.InvoiceExtraction;
 using Spokes_Server.Tests;
@@ -20,12 +21,21 @@ public class SmartPoMatchingEngineTests : TestDataTestBase
     private readonly ServiceProvider _serviceProvider;
     private readonly Database _db;
     private readonly SmartPoMatchingEngine _matchingEngine;
+    private static readonly Employee PoActor = new()
+    {
+        Id = "po-buyer",
+        FirstName = "PO",
+        LastName = "Buyer",
+        IsActive = true,
+        IsAdmin = true
+    };
 
     public SmartPoMatchingEngineTests()
     {
         var services = new ServiceCollection();
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
         services.AddLogging(b => b.AddConsole());
         services.AddSingleton<EncryptionService>();
@@ -61,7 +71,7 @@ public class SmartPoMatchingEngineTests : TestDataTestBase
             TotalAmount = 100m
         };
 
-        var result = _matchingEngine.FindMatch(invoice);
+        var result = _matchingEngine.FindMatch(invoice, actor: PoActor);
 
         Assert.NotNull(result.MatchedPo);
         Assert.Equal(po.Id, result.MatchedPo.Id);
@@ -88,7 +98,7 @@ public class SmartPoMatchingEngineTests : TestDataTestBase
             TotalAmount = 50m
         };
 
-        var result = _matchingEngine.FindMatch(invoice);
+        var result = _matchingEngine.FindMatch(invoice, actor: PoActor);
 
         Assert.NotNull(result.MatchedPo);
         Assert.Equal(po.Id, result.MatchedPo.Id);
@@ -123,7 +133,7 @@ public class SmartPoMatchingEngineTests : TestDataTestBase
             TotalAmount = 450m
         };
 
-        var result = _matchingEngine.FindMatch(invoice, supplier.Id);
+        var result = _matchingEngine.FindMatch(invoice, supplier.Id, PoActor);
 
         Assert.NotNull(result.MatchedPo);
         Assert.Equal(po.Id, result.MatchedPo.Id);
@@ -140,7 +150,7 @@ public class SmartPoMatchingEngineTests : TestDataTestBase
             TotalAmount = 9999m
         };
 
-        var result = _matchingEngine.FindMatch(invoice);
+        var result = _matchingEngine.FindMatch(invoice, actor: PoActor);
 
         Assert.Null(result.MatchedPo);
         Assert.Equal("None", result.Confidence);

@@ -16,7 +16,7 @@
                 <MudItem xs="12" sm="6">
                     <MudTextField @bind-Value="Inbox.Name"
                                   Label="@Loc["Virtual Inbox Name"]"
-                                  Placeholder="e.g. Support, Sales, Billing"
+                                  Placeholder="@Loc["e.g. Support, Sales, Billing"]"
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
                                   Required="true" />
@@ -116,13 +116,13 @@
                                MultiSelection="true"
                                SelectedValues="_selectedIdentityIds"
                                SelectedValuesChanged="OnSelectedIdentitiesChanged"
-                               ToStringFunc="@(id => AvailableIdentities.FirstOrDefault(x => x.Id == id)?.DisplayLabel ?? id)"
+                               ToStringFunc="@(id => AvailableIdentities.FirstOrDefault(x => x.Id == id)?.FormattedFrom ?? id)"
                                Label="@Loc["Linked Sending Identities"]"
                                Variant="Variant.Outlined"
                                Margin="Margin.Dense">
                         @foreach (var identity in AvailableIdentities)
                         {
-                            <MudSelectItem T="string" Value="@identity.Id">@identity.DisplayLabel</MudSelectItem>
+                            <MudSelectItem T="string" Value="@identity.Id">@identity.FormattedFrom</MudSelectItem>
                         }
                     </MudSelect>
 
@@ -144,7 +144,7 @@
                                             <MudRadio T="string" Value="@identity.Id" Color="Color.Primary" Dense="true">
                                                 <div class="d-flex align-center gap-2 flex-wrap">
                                                     <MudText Typo="Typo.body2" Style="@(isDefault ? "font-weight: 600;" : "")">
-                                                        @identity.DisplayLabel
+                                                        @identity.FormattedFrom
                                                     </MudText>
                                                     @if (isDefault)
                                                     {
@@ -205,7 +205,12 @@
     protected override async Task OnInitializedAsync()
     {
         var currentUser = await UserService.GetEmployeeAsync();
-        if (currentUser == null || !currentUser.IsActive || currentUser.IsBanned || currentUser.IsSuspended)
+        var edition = Db.CompanyProfile.Get()?.Edition;
+        if (currentUser == null ||
+            !currentUser.IsActive ||
+            currentUser.IsBanned ||
+            currentUser.IsSuspended ||
+            string.Equals(edition, "Family", StringComparison.OrdinalIgnoreCase))
         {
             Snackbar.Add(Loc["You do not have permission to manage Virtual Inboxes."].Value, Severity.Error);
             MudDialog?.Cancel();
@@ -223,36 +228,50 @@
 
             var sourceAccounts = AvailableAccounts.Count > 0 ? AvailableAccounts : Db.EmailAccounts.GetAll();
             AvailableAccounts = sourceAccounts
-                .Where(a => a.IsServerManaged || string.Equals(a.Id, Inbox.AccountId, StringComparison.OrdinalIgnoreCase))
+                .Where(a => a.IsServerManaged && !a.IsArchived)
                 .ToList();
 
             var sourceIdentities = AvailableIdentities.Count > 0 ? AvailableIdentities : Db.EmailSendingIdentities.GetAll();
             AvailableIdentities = sourceIdentities
-                .Where(i => i.IsServerManaged ||
-                            string.Equals(i.Id, Inbox.DefaultIdentityId, StringComparison.OrdinalIgnoreCase) ||
-                            (Inbox.LinkedIdentityIds != null && Inbox.LinkedIdentityIds.Contains(i.Id, StringComparer.OrdinalIgnoreCase)))
+                .Where(i => i.IsServerManaged)
                 .ToList();
         }
         else
         {
+            if (!currentUser.HasPermission(AppPermissions.Email.Use))
+            {
+                Snackbar.Add(Loc["You do not have permission to manage Virtual Inboxes."].Value, Severity.Error);
+                MudDialog?.Cancel();
+                return;
+            }
+
             var accessibleAccounts = EmailInboxService.GetAccessibleRealInboxes(currentUser);
             var accessibleAccountIds = accessibleAccounts.Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             AvailableAccounts = AvailableAccounts.Count > 0
-                ? AvailableAccounts.Where(a => accessibleAccountIds.Contains(a.Id) || string.Equals(a.Id, Inbox.AccountId, StringComparison.OrdinalIgnoreCase)).ToList()
+                ? AvailableAccounts.Where(a => accessibleAccountIds.Contains(a.Id) && !a.IsArchived).ToList()
                 : accessibleAccounts;
 
             var permittedIdentities = EmailInboxService.GetPermittedIdentities(currentUser);
             var permittedIdentityIds = permittedIdentities.Select(i => i.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             AvailableIdentities = AvailableIdentities.Count > 0
-                ? AvailableIdentities.Where(i => permittedIdentityIds.Contains(i.Id) ||
-                                                 string.Equals(i.Id, Inbox.DefaultIdentityId, StringComparison.OrdinalIgnoreCase) ||
-                                                 (Inbox.LinkedIdentityIds != null && Inbox.LinkedIdentityIds.Contains(i.Id, StringComparer.OrdinalIgnoreCase))).ToList()
+                ? AvailableIdentities.Where(i => permittedIdentityIds.Contains(i.Id)).ToList()
                 : permittedIdentities;
         }
 
-        if (string.IsNullOrEmpty(Inbox.AccountId) && AvailableAccounts.Count > 0)
+        if (string.IsNullOrEmpty(Inbox.AccountId) ||
+            !AvailableAccounts.Any(a => string.Equals(a.Id, Inbox.AccountId, StringComparison.OrdinalIgnoreCase)))
         {
-            Inbox.AccountId = AvailableAccounts[0].Id;
+            Inbox.AccountId = AvailableAccounts.FirstOrDefault()?.Id ?? string.Empty;
+        }
+
+        var validIdentityIds = AvailableIdentities.Select(i => i.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Inbox.LinkedIdentityIds = (Inbox.LinkedIdentityIds ?? [])
+            .Where(id => validIdentityIds.Contains(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (!string.IsNullOrEmpty(Inbox.DefaultIdentityId) && !validIdentityIds.Contains(Inbox.DefaultIdentityId))
+        {
+            Inbox.DefaultIdentityId = null;
         }
 
         LoadDetectedAddresses();
@@ -338,7 +357,7 @@
         }
     }
 
-    private void Save()
+    private async Task Save()
     {
         if (!string.IsNullOrWhiteSpace(_newTargetAddress))
         {
@@ -361,6 +380,67 @@
         {
             Snackbar.Add(Loc["Please add at least one filtered email address or @domain."].Value, Severity.Warning);
             return;
+        }
+
+        var currentUser = await UserService.GetEmployeeAsync();
+        var edition = Db.CompanyProfile.Get()?.Edition;
+        if (currentUser is not { IsActiveUnsuspended: true } ||
+            string.Equals(edition, "Family", StringComparison.OrdinalIgnoreCase))
+        {
+            Snackbar.Add(Loc["You do not have permission to manage Virtual Inboxes."].Value, Severity.Error);
+            return;
+        }
+
+        if (Inbox.IsServerManaged)
+        {
+            if (!(currentUser.IsAdmin || currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
+            {
+                Snackbar.Add(Loc["You do not have permission to manage server Virtual Inboxes."].Value, Severity.Error);
+                return;
+            }
+
+            var serverAccount = Db.EmailAccounts.GetById(Inbox.AccountId);
+            if (serverAccount is not { IsServerManaged: true, IsArchived: false })
+            {
+                Snackbar.Add(Loc["Selected Source Real Inbox is no longer accessible."].Value, Severity.Error);
+                return;
+            }
+
+            bool allServerIdentities = Inbox.LinkedIdentityIds.All(id => Db.EmailSendingIdentities.GetById(id) is { IsServerManaged: true }) &&
+                                       (string.IsNullOrWhiteSpace(Inbox.DefaultIdentityId) ||
+                                        Db.EmailSendingIdentities.GetById(Inbox.DefaultIdentityId) is { IsServerManaged: true });
+            if (!allServerIdentities)
+            {
+                Snackbar.Add(Loc["Selected Sending Identity is no longer authorized."].Value, Severity.Error);
+                return;
+            }
+        }
+        else
+        {
+            if (!currentUser.HasPermission(AppPermissions.Email.Use) ||
+                !string.Equals(Inbox.OwnerEmployeeId, currentUser.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                Snackbar.Add(Loc["You do not have permission to manage this Virtual Inbox."].Value, Severity.Error);
+                return;
+            }
+
+            var accessibleAccounts = EmailInboxService.GetAccessibleRealInboxes(currentUser);
+            if (!accessibleAccounts.Any(a => string.Equals(a.Id, Inbox.AccountId, StringComparison.OrdinalIgnoreCase)))
+            {
+                Snackbar.Add(Loc["Selected Source Real Inbox is no longer accessible."].Value, Severity.Error);
+                return;
+            }
+
+            var permittedIdentityIds = EmailInboxService.GetPermittedIdentities(currentUser)
+                .Select(i => i.Id)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            bool allPermittedIdentities = Inbox.LinkedIdentityIds.All(id => permittedIdentityIds.Contains(id)) &&
+                                          (string.IsNullOrWhiteSpace(Inbox.DefaultIdentityId) || permittedIdentityIds.Contains(Inbox.DefaultIdentityId));
+            if (!allPermittedIdentities)
+            {
+                Snackbar.Add(Loc["Selected Sending Identity is no longer authorized."].Value, Severity.Error);
+                return;
+            }
         }
 
         MudDialog.Close(DialogResult.Ok(Inbox));

@@ -23,6 +23,7 @@ public class CasdoorConfigTemplateGenerator
     {
         var dbPath = System.IO.Path.Combine(dataPath, "casdoor.db");
         return $@"appname = casdoor
+httpaddr = 127.0.0.1
 httpport = 8000
 runmode = {runmode}
 SessionOn = true

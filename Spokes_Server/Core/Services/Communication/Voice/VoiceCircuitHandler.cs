@@ -28,7 +28,17 @@ public class VoiceCircuitHandler : CircuitHandler
         // We DO NOT instantly disconnect the user here anymore. 
         // Backgrounded tabs (like iOS Safari or Chrome throttled tabs) will drop the SignalR connection,
         // but their WebRTC stream is exempt from background throttling and continues flawlessly!
-        // We let the LiveKit Watchdog (VoiceStateSyncService) manage their real presence.
+        // We let the LiveKit Watchdog (VoiceStateSyncService) manage their real presence, while
+        // clearing any stuck local speaking indicator so the sidebar never freezes green.
+        try
+        {
+            _globalVoiceService.ClearLocalSpeakingOnCircuitDown();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[VoiceCircuitHandler] Error clearing local speaking on connection down: {Message}", ex.Message);
+        }
+
         return base.OnConnectionDownAsync(circuit, cancellationToken);
     }
 

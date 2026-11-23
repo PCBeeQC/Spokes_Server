@@ -25,6 +25,7 @@ public class CommunicationContextTests : TestDataTestBase
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());
@@ -49,7 +50,6 @@ public class CommunicationContextTests : TestDataTestBase
         Assert.NotNull(_context.ChatCategories);
         Assert.NotNull(_context.ChatMessages);
         Assert.NotNull(_context.ChatReadStates);
-        Assert.NotNull(_context.ClientStates);
         Assert.NotNull(_context.ReportedMessages);
         Assert.NotNull(_context.Albums);
         Assert.NotNull(_context.EmailAccounts);
@@ -100,7 +100,6 @@ public class CommunicationContextTests : TestDataTestBase
             _context.ChatCategories,
             _context.ChatMessages,
             _context.ChatReadStates,
-            _context.ClientStates,
             _context.ReportedMessages,
             _context.Albums,
             _context.EmailFolders,

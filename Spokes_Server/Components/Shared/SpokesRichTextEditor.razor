@@ -10,11 +10,9 @@
 @code {
     [Parameter] public string? Value { get; set; }
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
-    [Parameter] public string? Label { get; set; }
     [Parameter] public string Class { get; set; } = "";
     [Parameter] public bool ReadOnly { get; set; }
     [Parameter] public string Placeholder { get; set; } = "";
-    [Parameter] public bool Immediate { get; set; } = true;
     [Parameter] public bool ShowToolbar { get; set; } = true;
     [Parameter] public bool Borderless { get; set; } = false;
 
@@ -71,24 +69,6 @@
                 await ValueChanged.InvokeAsync(html);
             }
         }
-    }
-
-    public async Task SetHtml(string html)
-    {
-        _currentValue = html ?? "";
-        if (_isInitialized)
-        {
-            await JS.InvokeVoidAsync("window.spokesQuill.setHtml", _editorId, _currentValue);
-        }
-    }
-
-    public async Task<string> GetHtml()
-    {
-        if (_isInitialized)
-        {
-            return await JS.InvokeAsync<string>("window.spokesQuill.getHtml", _editorId);
-        }
-        return _currentValue;
     }
 
     public async ValueTask DisposeAsync()

@@ -1,9 +1,5 @@
 @using Spokes_Server.Core.Data.Repositories.HR
-@using Spokes_Server.Core.Services.Identity
-@using Spokes_Server.Core.Services.Security
 @inject TeamRepository TeamRepo
-@inject UserService UserService
-@inject IUserPrivacyService PrivacyService
 
 <div class="d-flex flex-column gap-2 @Class" style="@Style">
     <TeamAutocomplete Label="@Label"

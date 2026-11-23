@@ -23,4 +23,11 @@ public interface IFileKeyResolver
         Employee user,
         string? tokenEncryptionKey = null,
         HttpContext? httpContext = null);
+
+    FileKeyResolutionResult ResolveDownloadKey(
+        string contextId,
+        Employee user,
+        string? tokenEncryptionKey,
+        HttpContext? httpContext,
+        string? fileName) => ResolveDownloadKey(contextId, user, tokenEncryptionKey, httpContext);
 }

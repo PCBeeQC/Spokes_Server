@@ -1,0 +1,146 @@
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Identity
+@inject IAccountingMigrationService MigrationService
+@inject UserService UserService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<MudStack Spacing="3">
+    @* Unified Import Hub Callout *@
+    <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+        <div class="d-flex flex-wrap align-center justify-space-between gap-3">
+            <div>
+                <MudText Typo="Typo.subtitle1"><b>@BizLoc["Unified Data Import & Cutover Hub"]</b></MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    @BizLoc["All data imports — Sage 50 exports (.txt / .imp), Chart of Accounts, Clients, Suppliers, Employees, Payroll YTD CSV, Projects, Open AR/AP Invoices & Bills, and Clockify Timesheets — are now unified in one place with an interactive review and filtering dialog."]
+                </MudText>
+            </div>
+            @if (_isEffectiveAdmin)
+            {
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.FactCheck"
+                           OnClick="@(() => Nav.NavigateTo("/admin/data-migration"))">
+                    @BizLoc["Open Unified Data Import Hub"]
+                </MudButton>
+            }
+        </div>
+    </MudPaper>
+
+    @* Executed Migration Batches & 1-Click Rollback *@
+    <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+        <MudText Typo="Typo.subtitle1" Class="mb-2"><b>@BizLoc["Migration Cutover History & Rollback"]</b></MudText>
+        <MudTable Items="@_history" Dense="true" Hover="true" Outlined="true" Elevation="0">
+            <HeaderContent>
+                <MudTh>@BizLoc["Batch #"]</MudTh>
+                <MudTh>@BizLoc["Executed At (UTC)"]</MudTh>
+                <MudTh>@BizLoc["Cutover Date"]</MudTh>
+                <MudTh>@BizLoc["Mode / Format"]</MudTh>
+                <MudTh>@BizLoc["Summary"]</MudTh>
+                <MudTh>@BizLoc["3900 Residual"]</MudTh>
+                <MudTh>@BizLoc["Status"]</MudTh>
+                <MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate Context="b">
+                <MudTd><b>@b.BatchNumber</b></MudTd>
+                <MudTd>@b.ExecutedAtUtc.ToString("yyyy-MM-dd HH:mm")</MudTd>
+                <MudTd>@b.AsOfDate.ToString("yyyy-MM-dd")</MudTd>
+                <MudTd>@($"{b.Mode} · {b.DetectedFormat}")</MudTd>
+                <MudTd>
+                    @($"{b.CreatedEmployeeIds.Count} Emp · {b.CreatedSupplierIds.Count} Dir · {b.CreatedProjectIds.Count} Proj · {b.CreatedInvoiceIds.Count} AR · {b.CreatedBillIds.Count} AP · {b.CreatedJournalEntryIds.Count} JE · {b.CreatedPayRunIds.Count} YTD")
+                </MudTd>
+                <MudTd>@b.ResidualClearingBalance3900.ToString("N2")</MudTd>
+                <MudTd>
+                    <MudChip T="string"
+                             Size="Size.Small"
+                             Color="@(b.Status == AccountingMigrationBatchStatus.Applied ? Color.Success : Color.Default)"
+                             Variant="Variant.Outlined">
+                        @b.Status
+                    </MudChip>
+                </MudTd>
+                <MudTd>
+                    @if (_isEffectiveAdmin && b.Status == AccountingMigrationBatchStatus.Applied)
+                    {
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Error"
+                                   Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Undo"
+                                   OnClick="@(() => ConfirmRollback(b))">
+                            @BizLoc["Rollback"]
+                        </MudButton>
+                    }
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-2">
+                    @BizLoc["No migration cutovers executed yet."]
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudPaper>
+</MudStack>
+
+@code {
+    [Parameter] public EventCallback OnMigrationCommitted { get; set; }
+
+    private List<AccountingMigrationBatch> _history = [];
+    private bool _isEffectiveAdmin;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var currentUser = await UserService.GetEmployeeAsync();
+        _isEffectiveAdmin = currentUser is { IsActiveUnsuspended: true } && currentUser.IsEffectiveAdmin;
+        RefreshHistory();
+    }
+
+    private void RefreshHistory()
+    {
+        _history = MigrationService.GetMigrationHistory();
+    }
+
+    private async Task ConfirmRollback(AccountingMigrationBatch batch)
+    {
+        var liveUser = await UserService.GetEmployeeAsync();
+        if (liveUser is not { IsActiveUnsuspended: true } || !liveUser.IsEffectiveAdmin)
+        {
+            _isEffectiveAdmin = false;
+            Snackbar.Add(BizLoc["Only an active Global Administrator may roll back migration batches."].Value, Severity.Error);
+            return;
+        }
+
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            BizLoc["Confirm Migration Rollback"].Value,
+            string.Format(
+                BizLoc["Roll back migration batch {0}? This deletes the opening journal entries, un-paid invoices/bills, created employees, suppliers, projects, GL accounts, and payroll YTD seed runs created by this batch."].Value,
+                batch.BatchNumber),
+            yesText: BizLoc["Rollback"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirmed != true) return;
+
+        liveUser = await UserService.GetEmployeeAsync();
+        if (liveUser is not { IsActiveUnsuspended: true } || !liveUser.IsEffectiveAdmin)
+        {
+            _isEffectiveAdmin = false;
+            Snackbar.Add(BizLoc["Only an active Global Administrator may roll back migration batches."].Value, Severity.Error);
+            return;
+        }
+
+        try
+        {
+            var userName = !string.IsNullOrWhiteSpace(liveUser.FullName) ? liveUser.FullName : liveUser.Email;
+            MigrationService.RollbackMigrationBatch(batch.Id, userName, liveUser);
+            RefreshHistory();
+            Snackbar.Add(string.Format(BizLoc["Rolled back migration batch {0}."].Value, batch.BatchNumber), Severity.Info);
+
+            if (OnMigrationCommitted.HasDelegate)
+                await OnMigrationCommitted.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"{BizLoc["Rollback failed"].Value}: {ex.Message}", Severity.Error);
+        }
+    }
+}

@@ -55,29 +55,14 @@
             }
 
             @* 2. Provider Setup Instructions Alert *@
-            @if (ActiveProviderPreset != null && !string.IsNullOrWhiteSpace(ActiveProviderPreset.InstructionsText))
-            {
-                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                    <div class="d-flex flex-column gap-1">
-                        <span>@Loc[ActiveProviderPreset.InstructionsText]</span>
-                        @if (!string.IsNullOrWhiteSpace(ActiveProviderPreset.HelpUrl))
-                        {
-                            <div>
-                                <MudLink Href="@ActiveProviderPreset.HelpUrl" Target="_blank" Typo="Typo.caption" Style="font-weight: 600;">
-                                    @( !string.IsNullOrWhiteSpace(ActiveProviderPreset.HelpLinkLabel) ? Loc[ActiveProviderPreset.HelpLinkLabel].Value : ActiveProviderPreset.HelpUrl )
-                                </MudLink>
-                            </div>
-                        }
-                    </div>
-                </MudAlert>
-            }
+            <EmailProviderInstructionsAlert Preset="@ActiveProviderPreset" />
 
             @* 3. Essential Mailbox Fields (Inbox Name, Sender Display Name, Email Address, Password) *@
             <MudGrid Spacing="2">
                 <MudItem xs="12" sm="6">
                     <MudTextField @bind-Value="Account.Name"
                                   Label="@Loc["Inbox Name (UI Label)"]"
-                                  Placeholder="e.g. Work Email, Support Mailbox"
+                                  Placeholder="@Loc["e.g. Work Email, Support Mailbox"]"
                                   HelperText="@Loc["Only visible inside Spokes to organize your sidebar"]"
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
@@ -86,7 +71,7 @@
                 <MudItem xs="12" sm="6">
                     <MudTextField @bind-Value="_senderDisplayName"
                                   Label="@Loc["Sender Display Name"]"
-                                  Placeholder="e.g. Jane Doe"
+                                  Placeholder="@Loc["e.g. Jane Doe"]"
                                   HelperText="@Loc["Shown to recipients when you send emails"]"
                                   Adornment="Adornment.End"
                                   AdornmentIcon="@Icons.Material.Filled.Sync"
@@ -229,6 +214,7 @@
     private string _plainPassword = string.Empty;
     private string _senderDisplayName = string.Empty;
     private string _defaultSenderDisplayName = string.Empty;
+    private string _fallbackDomain = "example.com";
     private bool _isTesting;
     private bool _isSaving;
 
@@ -273,7 +259,7 @@
             {
                 return $"you@{ActiveProviderPreset.DefaultDomain}";
             }
-            return "you@company.com";
+            return $"you@{_fallbackDomain}";
         }
     }
 
@@ -302,7 +288,14 @@
 
     protected override void OnInitialized()
     {
-        var settings = Db.CompanyProfile.GetEmailSettings();
+        if (!string.IsNullOrEmpty(Account.EncryptedPassword) && !EncryptionService.CanDecrypt(Account.EncryptedPassword))
+        {
+            Account.EncryptedPassword = string.Empty;
+        }
+
+        var profile = Db.CompanyProfile.Get();
+        _fallbackDomain = profile.GetPrimaryDomainOrDefault("example.com");
+        var settings = profile.EmailSettings ?? new EmailServerSettings();
         var userId = CurrentUserId ?? Account.OwnerEmployeeId ?? string.Empty;
         var userTeamIds = EmailInboxService.GetUserTeamIds(userId);
         _incomingServers = (settings.IncomingServers ?? [])

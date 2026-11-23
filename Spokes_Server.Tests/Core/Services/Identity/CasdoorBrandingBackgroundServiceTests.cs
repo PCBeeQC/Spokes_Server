@@ -26,7 +26,7 @@ public class CasdoorBrandingBackgroundServiceTests : TestDataTestBase
 
     public CasdoorBrandingBackgroundServiceTests()
     {
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataPath };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataPath , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
         _companyProfiles = new CompanyProfileRepository(_persistence, _config);

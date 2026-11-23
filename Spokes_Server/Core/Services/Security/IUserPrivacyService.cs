@@ -11,7 +11,8 @@ public enum AddContactStatus
     AlreadyConnected = 2,
     RateLimited = 3,
     SelfContactDisallowed = 4,
-    DiscoveryDisabled = 5
+    DiscoveryDisabled = 5,
+    Forbidden = 6
 }
 
 public record AddContactResult(AddContactStatus Status, Employee? Contact = null, string? Message = null);
@@ -21,6 +22,7 @@ public interface IUserPrivacyService
     PrivacyConfig GetPrivacyConfig();
     bool CanViewDirectory(Employee? caller);
     bool CanDiscoverUser(Employee? caller, Employee target);
+    bool CanViewUserEmail(Employee? caller, Employee? target);
     List<Employee> FilterDiscoverableEmployees(Employee? caller, IEnumerable<Employee> candidates);
     List<Team> FilterDiscoverableTeams(Employee? caller, IEnumerable<Team> teams);
     Task<IEnumerable<Employee>> SearchDiscoverableEmployeesAsync(
@@ -34,7 +36,6 @@ public interface IUserPrivacyService
     List<Employee> GetConnectedContacts(Employee caller);
 
     bool CanCreatePublicChannels(Employee? employee);
-    bool CanAccessPublicChannels(Employee? employee);
     bool CanAccessPublicChannel(ChatChannel? channel, Employee? employee);
     bool ShouldHideMemberList(ChatChannel? channel, Employee? viewer);
     bool CanReactInChannel(ChatChannel? channel, Employee? employee);

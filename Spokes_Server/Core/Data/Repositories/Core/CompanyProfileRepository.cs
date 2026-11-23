@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -20,9 +19,6 @@ namespace Spokes_Server.Core.Data.Repositories.Core;
 
 public class CompanyProfileRepository : JsonRepository<CompanyProfile>
 {
-    private const string EncryptedV2Prefix = "v2:";
-    private static readonly JsonSerializerOptions WriteIndentedOptions = new() { WriteIndented = true };
-
     private sealed record BackupCredentialSlot(
         string Section,
         string Property,
@@ -44,8 +40,7 @@ public class CompanyProfileRepository : JsonRepository<CompanyProfile>
         new("Sftp", "Password", b => b.Sftp.Password, (b, v) => b.Sftp.Password = v)
     ];
 
-    private readonly EncryptionService _encryptionService;
-    private readonly ConcurrentDictionary<string, (string Plaintext, string Ciphertext)> _credentialCipherCache = new(StringComparer.Ordinal);
+    private readonly EncryptedFieldCipherCache _cipherCache;
     private readonly AsyncLocal<bool> _suppressRaiseOnLoaded = new();
 
     [ActivatorUtilitiesConstructor]
@@ -56,7 +51,7 @@ public class CompanyProfileRepository : JsonRepository<CompanyProfile>
         ILogger<CompanyProfileRepository>? logger = null)
         : base(writer, Path.Combine(config["DataPath"] ?? "Data", "Settings"), "company.json", logger)
     {
-        _encryptionService = encryptionService ?? new EncryptionService(config);
+        _cipherCache = new EncryptedFieldCipherCache(encryptionService ?? new EncryptionService(config));
     }
 
     public CompanyProfileRepository(DiskPersistenceService writer, IConfiguration config)
@@ -72,7 +67,7 @@ public class CompanyProfileRepository : JsonRepository<CompanyProfile>
     {
     }
 
-    internal EncryptionService EncryptionService => _encryptionService;
+    internal EncryptionService EncryptionService => _cipherCache.EncryptionService;
 
     protected override string GetFilePath(CompanyProfile item) =>
         Path.Combine(_basePath, "company.json");
@@ -125,15 +120,6 @@ public class CompanyProfileRepository : JsonRepository<CompanyProfile>
         RaiseOnSaved(item);
     }
 
-    public override void SaveBatch(IEnumerable<CompanyProfile> items)
-    {
-        ArgumentNullException.ThrowIfNull(items);
-        foreach (var item in items)
-        {
-            Save(item);
-        }
-    }
-
     private bool DecryptLoadedCredentials(BackupConfig backup)
     {
         bool needsMigrationWrite = false;
@@ -141,27 +127,12 @@ public class CompanyProfileRepository : JsonRepository<CompanyProfile>
         foreach (var slot in BackupCredentialSlots)
         {
             var raw = slot.Getter(backup);
-            if (string.IsNullOrEmpty(raw))
-            {
-                _credentialCipherCache.TryRemove(slot.CacheKey, out _);
-                continue;
-            }
-
-            if (_encryptionService.TryDecrypt(raw, out var decrypted))
+            if (_cipherCache.TryDecryptLoaded(slot.CacheKey, raw, out var decrypted, out var slotNeedsMigration))
             {
                 slot.Setter(backup, decrypted);
-                if (raw.StartsWith(EncryptedV2Prefix, StringComparison.Ordinal))
-                {
-                    _credentialCipherCache[slot.CacheKey] = (decrypted, raw);
-                }
-                else
-                {
-                    needsMigrationWrite = true;
-                }
             }
-            else if (!raw.StartsWith(EncryptedV2Prefix, StringComparison.Ordinal))
+            if (slotNeedsMigration)
             {
-                // Legacy unencrypted plaintext on disk: preserve in memory and schedule encrypted migration
                 needsMigrationWrite = true;
             }
         }
@@ -178,18 +149,10 @@ public class CompanyProfileRepository : JsonRepository<CompanyProfile>
 
         foreach (var slot in BackupCredentialSlots)
         {
-            var current = slot.Getter(backup);
-            if (string.IsNullOrEmpty(current))
+            var normalized = _cipherCache.NormalizeInMemory(slot.CacheKey, slot.Getter(backup));
+            if (!string.Equals(normalized, slot.Getter(backup), StringComparison.Ordinal))
             {
-                _credentialCipherCache.TryRemove(slot.CacheKey, out _);
-                continue;
-            }
-
-            if (current.StartsWith(EncryptedV2Prefix, StringComparison.Ordinal) &&
-                _encryptionService.TryDecrypt(current, out var decrypted))
-            {
-                slot.Setter(backup, decrypted);
-                _credentialCipherCache[slot.CacheKey] = (decrypted, current);
+                slot.Setter(backup, normalized);
             }
         }
     }
@@ -204,41 +167,13 @@ public class CompanyProfileRepository : JsonRepository<CompanyProfile>
                 if (backupObj[slot.Section] is JsonObject sectionObj)
                 {
                     var currentValue = slot.Getter(item.Backup);
-                    sectionObj[slot.Property] = EncryptCredentialForDisk(slot.CacheKey, currentValue);
+                    sectionObj[slot.Property] = _cipherCache.EncryptForDisk(slot.CacheKey, currentValue);
                 }
             }
         }
 
-        var utf8Bytes = JsonSerializer.SerializeToUtf8Bytes(rootNode, WriteIndentedOptions);
+        var utf8Bytes = JsonSerializer.SerializeToUtf8Bytes(rootNode, EncryptedFieldCipherCache.WriteIndentedOptions);
         _writer.QueueWriteBytes(GetFilePath(item), utf8Bytes);
-    }
-
-    private string EncryptCredentialForDisk(string cacheKey, string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            _credentialCipherCache.TryRemove(cacheKey, out _);
-            return string.Empty;
-        }
-
-        if (value.StartsWith(EncryptedV2Prefix, StringComparison.Ordinal))
-        {
-            if (_encryptionService.TryDecrypt(value, out var decrypted))
-            {
-                _credentialCipherCache[cacheKey] = (decrypted, value);
-            }
-            return value;
-        }
-
-        if (_credentialCipherCache.TryGetValue(cacheKey, out var cached) &&
-            string.Equals(cached.Plaintext, value, StringComparison.Ordinal))
-        {
-            return cached.Ciphertext;
-        }
-
-        var encrypted = _encryptionService.Encrypt(value);
-        _credentialCipherCache[cacheKey] = (value, encrypted);
-        return encrypted;
     }
 
     /// <summary>

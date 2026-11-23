@@ -16,6 +16,7 @@ using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Communication.Chat;
+using Spokes_Server.Core.Services.Licensing;
 using Spokes_Server.Core.Services.Storage;
 using Xunit;
 
@@ -35,6 +36,7 @@ public class GifSearchServiceTests : IDisposable
 
         var configMock = new Mock<IConfiguration>();
         configMock.Setup(c => c["DataPath"]).Returns(_tempDir);
+        configMock.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var persistence = new Mock<DiskPersistenceService>(Mock.Of<ILogger<DiskPersistenceService>>());
         _profileRepo = new CompanyProfileRepository(persistence.Object, configMock.Object);
@@ -62,7 +64,7 @@ public class GifSearchServiceTests : IDisposable
     {
         var mockFactory = new Mock<IHttpClientFactory>();
         var options = Options.Create(new SpokesOptions());
-        var service = new GifSearchService(mockFactory.Object, options, _profileRepo, _serverConfigs, _loggerMock.Object);
+        var service = new GifSearchService(mockFactory.Object, new SpokesRelayClient(mockFactory.Object, options), _profileRepo, _serverConfigs, _loggerMock.Object);
 
         var result = await service.SearchGifsAsync(query!);
 
@@ -80,7 +82,7 @@ public class GifSearchServiceTests : IDisposable
 
         var mockFactory = new Mock<IHttpClientFactory>();
         var options = Options.Create(new SpokesOptions());
-        var service = new GifSearchService(mockFactory.Object, options, _profileRepo, _serverConfigs, _loggerMock.Object);
+        var service = new GifSearchService(mockFactory.Object, new SpokesRelayClient(mockFactory.Object, options), _profileRepo, _serverConfigs, _loggerMock.Object);
 
         var result = await service.SearchGifsAsync("cat");
 
@@ -98,7 +100,7 @@ public class GifSearchServiceTests : IDisposable
 
         var mockFactory = new Mock<IHttpClientFactory>();
         var options = Options.Create(new SpokesOptions());
-        var service = new GifSearchService(mockFactory.Object, options, _profileRepo, _serverConfigs, _loggerMock.Object);
+        var service = new GifSearchService(mockFactory.Object, new SpokesRelayClient(mockFactory.Object, options), _profileRepo, _serverConfigs, _loggerMock.Object);
 
         var result = await service.SearchGifsAsync("party");
 
@@ -159,7 +161,7 @@ public class GifSearchServiceTests : IDisposable
             PushRelayKey = "test-relay-key-xyz"
         });
 
-        var service = new GifSearchService(mockFactory.Object, options, _profileRepo, _serverConfigs, _loggerMock.Object);
+        var service = new GifSearchService(mockFactory.Object, new SpokesRelayClient(mockFactory.Object, options), _profileRepo, _serverConfigs, _loggerMock.Object);
 
         var result = await service.SearchGifsAsync("celebrate");
 
@@ -208,7 +210,7 @@ public class GifSearchServiceTests : IDisposable
         mockFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
 
         var options = Options.Create(new SpokesOptions());
-        var service = new GifSearchService(mockFactory.Object, options, _profileRepo, _serverConfigs, _loggerMock.Object);
+        var service = new GifSearchService(mockFactory.Object, new SpokesRelayClient(mockFactory.Object, options), _profileRepo, _serverConfigs, _loggerMock.Object);
 
         var result = await service.SearchGifsAsync("party");
 
@@ -332,7 +334,7 @@ public class GifSearchServiceTests : IDisposable
             GifRelayUrl = "https://push.spokes.sh/api/relay-gif"
         });
 
-        var service = new GifSearchService(mockFactory.Object, options, _profileRepo, _serverConfigs, _loggerMock.Object);
+        var service = new GifSearchService(mockFactory.Object, new SpokesRelayClient(mockFactory.Object, options), _profileRepo, _serverConfigs, _loggerMock.Object);
 
         await service.SearchGifsAsync("  around    the    corner  ");
 

@@ -122,7 +122,7 @@ public class ConfigureOpenIdConnectOptions : IConfigureNamedOptions<OpenIdConnec
         options.RequireHttpsMetadata = false;
 
         HttpMessageHandler handler = systemConfig.ProviderType == IdpType.BuiltInCasdoor
-            ? new CasdoorLoopbackHandler(options.Authority)
+            ? new CasdoorLoopbackHandler()
             : new HttpClientHandler();
 
         options.BackchannelHttpHandler = handler;

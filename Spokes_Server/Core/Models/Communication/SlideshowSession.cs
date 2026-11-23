@@ -116,7 +116,10 @@ public class SlideshowSession
 /// </summary>
 public interface ISlideshowFileBridge
 {
-    Microsoft.AspNetCore.Mvc.IActionResult GetMedia(string mediaId, bool thumb);
+    System.Threading.Tasks.Task<Microsoft.AspNetCore.Mvc.IActionResult> GetMediaAsync(
+        string mediaId,
+        bool thumb,
+        System.Threading.CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -129,6 +132,52 @@ public class SlideshowStagePayload
     public string AlbumTitle { get; set; } = string.Empty;
     public int InitialIndex { get; set; }
     public List<SlideshowMediaItem> Items { get; set; } = [];
+
+    /// <summary>
+    /// Builds a tokenized stage payload for broadcasting or opening a slideshow album session.
+    /// </summary>
+    public static SlideshowStagePayload Create(
+        string sessionId,
+        string tvSecret,
+        Album album,
+        int initialIndex = 0,
+        Func<string, string, string>? tokenizeUrl = null)
+    {
+        var items = new List<SlideshowMediaItem>(album.Media.Count);
+        foreach (var media in album.Media)
+        {
+            string baseUrl = $"/spokesapi/slideshow/{sessionId}/media/{media.Id}";
+            string url = tokenizeUrl != null ? tokenizeUrl(baseUrl, tvSecret) : baseUrl;
+            bool isVideoWithoutThumb = media.ContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase) && !media.HasServerThumbnail;
+            string thumbUrl = isVideoWithoutThumb
+                ? string.Empty
+                : (tokenizeUrl != null ? tokenizeUrl($"{baseUrl}/thumb", tvSecret) : $"{baseUrl}/thumb");
+
+            items.Add(new SlideshowMediaItem
+            {
+                Id = media.Id,
+                FileName = media.FileName,
+                Url = url,
+                ThumbnailUrl = thumbUrl,
+                ContentType = media.ContentType,
+                ImageWidth = media.ImageWidth,
+                ImageHeight = media.ImageHeight,
+                DurationSeconds = media.DurationSeconds,
+                AddedAt = media.AddedAt,
+                AddedByUserName = string.Empty,
+                FileSizeBytes = media.FileSizeBytes
+            });
+        }
+
+        return new SlideshowStagePayload
+        {
+            SessionId = sessionId,
+            AlbumId = album.Id,
+            AlbumTitle = album.Title,
+            InitialIndex = Math.Clamp(initialIndex, 0, Math.Max(0, items.Count - 1)),
+            Items = items
+        };
+    }
 }
 
 /// <summary>

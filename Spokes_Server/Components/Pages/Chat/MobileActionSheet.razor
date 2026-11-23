@@ -8,59 +8,10 @@
         </div>
     </div>
 }
-
-<style>
-    .action-sheet-backdrop {
-        position: absolute;
-        inset: 0;
-        background: rgba(0,0,0,0.4);
-        z-index: 9998;
-        animation: fadeIn 0.2s ease;
-    }
-
-    .action-sheet {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: var(--mud-palette-background);
-        border-radius: 24px 24px 0 0;
-        z-index: 9999;
-        padding: 8px 0 env(safe-area-inset-bottom, 16px) 0;
-        animation: slideUp 0.25s ease;
-        box-shadow: 0 -4px 24px rgba(0,0,0,0.2);
-        max-height: 85vh;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .action-sheet-content {
-        flex: 1;
-        overflow-y: auto;
-        overscroll-behavior: contain;
-        padding: 0 16px 16px 16px;
-    }
-
-    .action-sheet-handle {
-        width: 36px;
-        height: 4px;
-        border-radius: 2px;
-        background: var(--mud-palette-text-disabled);
-        margin: 4px auto 8px;
-    }
-
-
-
-    @@keyframes slideUp {
-        from { transform: translateY(100%); }
-        to { transform: translateY(0); }
-    }
-
-    @@keyframes fadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
-    }
-</style>
+@{
+    _lastRenderedOpen = IsOpen;
+    _hasRenderedOnce = true;
+}
 
 @implements IAsyncDisposable
 @inject IJSRuntime JS
@@ -74,71 +25,130 @@
     private IJSObjectReference? _module;
     private DotNetObjectReference<MobileActionSheet>? _objRef;
     private bool _wasOpen;
+    private bool _closedByBack;
+    private bool _isRegisteredOnBackStack;
+    private bool _lastRenderedOpen;
+    private bool _hasRenderedOnce;
     private string _sheetId = "action-sheet-" + Guid.NewGuid().ToString("N");
+
+    protected override bool ShouldRender() => !_hasRenderedOnce || IsOpen || _lastRenderedOpen;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
-        {
-            try
-            {
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", $"./{Assets.Bypassed("Components/Pages/Chat/MobileActionSheet.razor.js")}");
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex, "[MobileActionSheet] Error loading JS");
-            }
-        }
-
         if (IsOpen && !_wasOpen)
         {
             _wasOpen = true;
+            _closedByBack = false;
             _objRef ??= DotNetObjectReference.Create(this);
-            if (_module != null)
+
+            // Register on the unified back stack immediately (before the 50ms swipe-init delay)
+            // so even rapid Back swipes dismiss the action sheet cleanly.
+            await RegisterBackStackAsync();
+
+            if (_module == null)
+            {
+                try
+                {
+                    _module = await JS.InvokeAsync<IJSObjectReference>("import", $"./{Assets.Bypassed("Components/Pages/Chat/MobileActionSheet.razor.js")}");
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "[MobileActionSheet] Error loading JS");
+                }
+            }
+
+            if (_module != null && IsOpen)
             {
                 // Slight delay to allow DOM to render the element before querying it
                 await Task.Delay(50);
-                await _module.InvokeVoidAsync("initSwipeToDismiss", _sheetId, _objRef);
-                await _module.InvokeVoidAsync("initHistoryState", _objRef);
+                if (IsOpen)
+                {
+                    try
+                    {
+                        await _module.InvokeVoidAsync("initSwipeToDismiss", _sheetId, _objRef);
+                    }
+                    catch (JSDisconnectedException) { }
+                    catch (TaskCanceledException) { }
+                    catch (ObjectDisposedException) { }
+                }
             }
         }
         else if (!IsOpen && _wasOpen)
         {
             _wasOpen = false;
+            var popHistory = !_closedByBack;
+            _closedByBack = false;
+            await UnregisterBackStackAsync(popHistory);
         }
     }
 
     [JSInvokable]
     public async Task CloseSheet()
     {
-        if (_module != null)
-        {
-            try { await _module.InvokeVoidAsync("cleanupHistoryState", true); } catch { }
-        }
+        _closedByBack = false;
+        await UnregisterBackStackAsync(popHistory: true);
         await OnClose.InvokeAsync();
     }
 
     [JSInvokable]
-    public async Task HandleBack()
+    public async Task<bool> HandleBack()
     {
-        if (_module != null)
-        {
-            try { await _module.InvokeVoidAsync("cleanupHistoryState", false); } catch { }
-        }
+        _closedByBack = true;
+        await UnregisterBackStackAsync(popHistory: false);
         await OnClose.InvokeAsync();
+        return true;
+    }
+
+    private async Task RegisterBackStackAsync()
+    {
+        if (_objRef == null) return;
+        _isRegisteredOnBackStack = true;
+        try
+        {
+            await JS.InvokeVoidAsync(
+                "SpokesBridge.backStack.registerServerEntry",
+                "mobileActionSheet",
+                _objRef,
+                nameof(HandleBack),
+                new { useHistoryGuard = true, source = "action-sheet", keepUntilRemoved = true });
+        }
+        catch (JSDisconnectedException) { }
+        catch (TaskCanceledException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+        catch (JSException) { }
+    }
+
+    private async Task UnregisterBackStackAsync(bool popHistory)
+    {
+        if (!_isRegisteredOnBackStack) return;
+        _isRegisteredOnBackStack = false;
+        try
+        {
+            await JS.InvokeVoidAsync(
+                "SpokesBridge.backStack.remove",
+                "mobileActionSheet",
+                new { popHistory });
+        }
+        catch (JSDisconnectedException) { }
+        catch (TaskCanceledException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+        catch (JSException) { }
     }
 
     public async ValueTask DisposeAsync()
     {
+        await UnregisterBackStackAsync(popHistory: false);
         _objRef?.Dispose();
         if (_module != null)
         {
-            try 
-            { 
-                await _module.InvokeVoidAsync("cleanupHistoryState", false);
-                await _module.DisposeAsync(); 
+            try
+            {
+                await _module.DisposeAsync();
             }
             catch (JSDisconnectedException) { /* Circuit already gone */ }
+            catch (TaskCanceledException) { }
         }
     }
 }

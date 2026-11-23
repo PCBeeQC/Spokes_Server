@@ -11,29 +11,9 @@ public class LightboxMediaItem
     public DateTime? AddedAt { get; set; }
     public long FileSizeBytes { get; set; }
     public bool HasServerThumbnail { get; set; }
+    public bool IsEncrypted { get; set; }
 
     [JsonIgnore]
-    public string ThumbnailUrl
-    {
-        get
-        {
-            if (!HasServerThumbnail || string.IsNullOrWhiteSpace(FilePath)) 
-                return FilePath;
-                
-            if (FilePath.StartsWith("/spokesapi/files/"))
-            {
-                return FilePath.Replace("/spokesapi/files/", "/spokesapi/files/thumb/");
-            }
-            if (FilePath.StartsWith("/internal/attachments/"))
-            {
-                return FilePath.Replace("/internal/attachments/", "/internal/attachments/thumb/");
-            }
-            if (FilePath.StartsWith("/spokesapi/attachments/"))
-            {
-                return FilePath.Replace("/spokesapi/attachments/", "/spokesapi/attachments/thumb/");
-            }
-            
-            return FilePath;
-        }
-    }
+    public string ThumbnailUrl =>
+        Spokes_Server.Core.Helpers.FileHelper.BuildThumbnailUrl(FilePath, HasServerThumbnail);
 }

@@ -4,10 +4,12 @@ using Moq;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Projects;
@@ -38,7 +40,7 @@ public class FileAccessProvidersTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), "Spokes_Test_FileAccess_" + Guid.NewGuid().ToString());
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir } };
+        var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -61,88 +63,6 @@ public class FileAccessProvidersTests : IDisposable
                 try { Directory.Delete(_testDataDir, true); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
             }
         }
-
-        #region Category Properties Tests
-
-        [Fact]
-        public void ProjectFileAccessProvider_Category_ReturnsProjects()
-        {
-            var provider = new ProjectFileAccessProvider(_projects, _teams);
-            Assert.Equal("projects", provider.Category);
-        }
-
-        [Fact]
-        public void ExpenseFileAccessProvider_Category_ReturnsExpenses()
-        {
-            var provider = new ExpenseFileAccessProvider(_expenseReports);
-            Assert.Equal("expenses", provider.Category);
-        }
-
-        [Fact]
-        public void BillFileAccessProvider_Category_ReturnsBills()
-        {
-            var provider = new BillFileAccessProvider();
-            Assert.Equal("bills", provider.Category);
-        }
-
-        [Fact]
-        public void ChatFileAccessProvider_Category_ReturnsChat()
-        {
-            var provider = new ChatFileAccessProvider(new Mock<IChatChannelAccessService>().Object);
-            Assert.Equal("chat", provider.Category);
-        }
-
-        [Fact]
-        public void RecurringCostFileAccessProvider_Category_ReturnsRecurringCosts()
-        {
-            var provider = new RecurringCostFileAccessProvider();
-            Assert.Equal("recurringcosts", provider.Category);
-        }
-
-        [Fact]
-        public void ProjectNoteFileAccessProvider_Category_ReturnsProjectNotes()
-        {
-            var provider = new ProjectNoteFileAccessProvider(_projects, _teams);
-            Assert.Equal("projectnotes", provider.Category);
-        }
-
-        [Fact]
-        public void AvatarFileAccessProvider_Category_ReturnsAvatars()
-        {
-            var provider = new AvatarFileAccessProvider();
-            Assert.Equal("avatars", provider.Category);
-        }
-
-        [Fact]
-        public void SignatureFileAccessProvider_Category_ReturnsSignatures()
-        {
-            var provider = new SignatureFileAccessProvider();
-            Assert.Equal("signatures", provider.Category);
-        }
-
-        [Fact]
-        public void AlbumFileAccessProvider_Category_ReturnsAlbums()
-        {
-            var provider = new AlbumFileAccessProvider(_albums, new Mock<IChatChannelAccessService>().Object);
-            Assert.Equal("albums", provider.Category);
-        }
-
-        [Fact]
-        public void TempFileAccessProvider_Category_ReturnsTemp()
-        {
-            var provider = new TempFileAccessProvider();
-            Assert.Equal("temp", provider.Category);
-        }
-
-        [Fact]
-        public void EmailFileAccessProvider_Category_ReturnsEmail()
-        {
-            var provider = new EmailFileAccessProvider();
-            Assert.Equal("email", provider.Category);
-        }
-
-
-        #endregion
 
         #region AvatarFileAccessProvider Tests
 
@@ -181,18 +101,42 @@ public class FileAccessProvidersTests : IDisposable
         }
 
         [Fact]
-        public void SignatureFileAccessProvider_ReturnsTrueForFinance()
+        public void SignatureFileAccessProvider_DeniesWildcardAndScopesBusinessContext()
         {
             var provider = new SignatureFileAccessProvider();
             var financeUser = new Employee
             {
                 Id = "finance-1",
+                IsActive = true,
                 IsAdmin = false,
                 Permissions = new List<string> { AppPermissions.Finance.AccessAccounting }
             };
+            var businessDocViewer = new Employee
+            {
+                Id = "doc-viewer-1",
+                IsActive = true,
+                IsAdmin = false,
+                Permissions = new List<string> { AppPermissions.BusinessDocuments.View }
+            };
+            var ownerUser = new Employee
+            {
+                Id = "other-user-id",
+                IsActive = true,
+                IsAdmin = false
+            };
+            var adminUser = new Employee
+            {
+                Id = "admin-1",
+                IsActive = true,
+                IsAdmin = true
+            };
 
-            var result = provider.CanAccess(financeUser, "other-user-id");
-            Assert.True(result);
+            Assert.False(provider.CanAccess(financeUser, "other-user-id"));
+            Assert.False(provider.CanAccess(businessDocViewer, "other-user-id"));
+            Assert.True(provider.CanAccess(ownerUser, "other-user-id"));
+            Assert.True(provider.CanAccess(adminUser, "other-user-id"));
+            Assert.True(provider.CanAccess(businessDocViewer, "business"));
+            Assert.False(provider.CanAccess(financeUser, "business"));
         }
 
         [Fact]
@@ -233,7 +177,6 @@ public class FileAccessProvidersTests : IDisposable
         [InlineData(AppPermissions.Purchases.ViewBills)]
         [InlineData(AppPermissions.Purchases.ManageBills)]
         [InlineData(AppPermissions.Purchases.ApproveBills)]
-        [InlineData(AppPermissions.Purchases.ViewPOs)]
         public void BillFileAccessProvider_ReturnsTrueForPurchasesPermissions(string permission)
         {
             var provider = new BillFileAccessProvider();
@@ -241,6 +184,16 @@ public class FileAccessProvidersTests : IDisposable
 
             var result = provider.CanAccess(user, "any-bill");
             Assert.True(result);
+        }
+
+        [Fact]
+        public void BillFileAccessProvider_ReturnsFalseForViewPOsOnly()
+        {
+            var provider = new BillFileAccessProvider();
+            var user = new Employee { Id = "purchaser-po", IsAdmin = false, Permissions = new List<string> { AppPermissions.Purchases.ViewPOs } };
+
+            var result = provider.CanAccess(user, "any-bill");
+            Assert.False(result);
         }
 
         [Fact]
@@ -325,8 +278,14 @@ public class FileAccessProvidersTests : IDisposable
         {
             var provider = new ExpenseFileAccessProvider(_expenseReports);
             var admin = new Employee { Id = "admin", IsAdmin = true };
+            _expenseReports.Save(new ExpenseReport
+            {
+                Id = "e1",
+                EmployeeId = "user-1",
+                DateSubmitted = DateTime.Today
+            });
 
-            var result = provider.CanAccess(admin, "non-existent-report");
+            var result = provider.CanAccess(admin, "e1");
             Assert.True(result);
         }
 
@@ -340,8 +299,14 @@ public class FileAccessProvidersTests : IDisposable
                 IsAdmin = false,
                 Permissions = new List<string> { AppPermissions.Finance.AccessAccounting }
             };
+            _expenseReports.Save(new ExpenseReport
+            {
+                Id = "e1",
+                EmployeeId = "user-1",
+                DateSubmitted = DateTime.Today
+            });
 
-            var result = provider.CanAccess(financeUser, "non-existent-report");
+            var result = provider.CanAccess(financeUser, "e1");
             Assert.True(result);
         }
 
@@ -350,9 +315,42 @@ public class FileAccessProvidersTests : IDisposable
         {
             var provider = new ExpenseFileAccessProvider(_expenseReports);
             var user = new Employee { Id = "user-1", IsAdmin = false, Permissions = new List<string>() };
+            var admin = new Employee { Id = "admin", IsAdmin = true };
+            var financeUser = new Employee
+            {
+                Id = "finance-1",
+                IsAdmin = false,
+                Permissions = [AppPermissions.Finance.AccessAccounting]
+            };
 
-            var result = provider.CanAccess(user, "non-existent-report");
-            Assert.False(result);
+            Assert.False(provider.CanAccess(user, "non-existent-report"));
+            Assert.False(provider.CanAccess(admin, "non-existent-report"));
+            Assert.False(provider.CanAccess(financeUser, "non-existent-report"));
+        }
+
+        [Fact]
+        public void ExpenseFileAccessProvider_DeniesDraftReportToNonOwnerAdminAndFinance_AllowsOwner()
+        {
+            var provider = new ExpenseFileAccessProvider(_expenseReports);
+            var owner = new Employee { Id = "owner-draft", IsActive = true };
+            var admin = new Employee { Id = "admin", IsAdmin = true, IsActive = true };
+            var financeUser = new Employee
+            {
+                Id = "finance-1",
+                IsActive = true,
+                Permissions = [AppPermissions.Finance.AccessAccounting]
+            };
+
+            _expenseReports.Save(new ExpenseReport
+            {
+                Id = "e-draft",
+                EmployeeId = owner.Id,
+                DateSubmitted = null
+            });
+
+            Assert.True(provider.CanAccess(owner, "e-draft"));
+            Assert.False(provider.CanAccess(admin, "e-draft"));
+            Assert.False(provider.CanAccess(financeUser, "e-draft"));
         }
 
         #endregion
@@ -605,11 +603,10 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void ChatFileAccessProvider_ReturnsTrueForAdmin_WhenChannelInAccessibleList()
         {
-            var chatServiceMock = new Mock<IChatChannelAccessService>();
-            chatServiceMock.Setup(s => s.GetChannelsForUser("admin"))
-                .Returns(new List<ChatChannel> { new ChatChannel { Id = "admin-accessible-channel" } });
+            var chatAuthMock = new Mock<IChatAuthorizationService>();
+            chatAuthMock.Setup(s => s.CanUserAccessChannel("admin-accessible-channel", "admin")).Returns(true);
 
-            var provider = new ChatFileAccessProvider(chatServiceMock.Object);
+            var provider = new ChatFileAccessProvider(chatAuthMock.Object);
             var admin = new Employee { Id = "admin", IsAdmin = true };
 
             var result = provider.CanAccess(admin, "admin-accessible-channel");
@@ -619,11 +616,10 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void ChatFileAccessProvider_ReturnsFalseForAdmin_WhenChannelNotInAccessibleList()
         {
-            var chatServiceMock = new Mock<IChatChannelAccessService>();
-            chatServiceMock.Setup(s => s.GetChannelsForUser("admin"))
-                .Returns(new List<ChatChannel> { new ChatChannel { Id = "general-channel" } });
+            var chatAuthMock = new Mock<IChatAuthorizationService>();
+            chatAuthMock.Setup(s => s.CanUserAccessChannel("private-dm-channel", "admin")).Returns(false);
 
-            var provider = new ChatFileAccessProvider(chatServiceMock.Object);
+            var provider = new ChatFileAccessProvider(chatAuthMock.Object);
             var admin = new Employee { Id = "admin", IsAdmin = true };
 
             var result = provider.CanAccess(admin, "private-dm-channel");
@@ -633,12 +629,11 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void ChatFileAccessProvider_ReturnsTrueForParticipants()
         {
-            var chatServiceMock = new Mock<IChatChannelAccessService>();
-            chatServiceMock.Setup(s => s.GetChannelsForUser(It.IsAny<string>()))
-                .Returns((string uid) => _channels.GetDirectChannelsForUser(uid).Concat(_channels.GetChannelsForUser(uid, new List<string>(), new List<string>())).ToList());
+            var employees = new EmployeeRepository(_persistence, _config);
+            var chatAuth = new ChatAuthorizationService(_channels, _projects, _teams, employees);
 
-            var provider = new ChatFileAccessProvider(chatServiceMock.Object);
-            var user = new Employee { Id = "user-1" };
+            var provider = new ChatFileAccessProvider(chatAuth, _channels);
+            var user = new Employee { Id = "user-1", Permissions = [AppPermissions.Chat.Use] };
             var channel = new ChatChannel { Id = "c1", ParticipantIds = new List<string> { "user-1" }, ChannelType = ChatChannelType.Direct };
             _channels.Save(channel);
 
@@ -649,12 +644,11 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void ChatFileAccessProvider_ReturnsTrueForGeneralChannel()
         {
-            var chatServiceMock = new Mock<IChatChannelAccessService>();
-            chatServiceMock.Setup(s => s.GetChannelsForUser(It.IsAny<string>()))
-                .Returns((string uid) => _channels.GetDirectChannelsForUser(uid).Concat(_channels.GetChannelsForUser(uid, new List<string>(), new List<string>())).ToList());
+            var employees = new EmployeeRepository(_persistence, _config);
+            var chatAuth = new ChatAuthorizationService(_channels, _projects, _teams, employees);
 
-            var provider = new ChatFileAccessProvider(chatServiceMock.Object);
-            var user = new Employee { Id = "user-stranger" };
+            var provider = new ChatFileAccessProvider(chatAuth, _channels);
+            var user = new Employee { Id = "user-stranger", Permissions = [AppPermissions.Chat.Use] };
             var channel = new ChatChannel { Id = "c2", ChannelType = ChatChannelType.General };
             _channels.Save(channel);
 
@@ -665,14 +659,10 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void ChatFileAccessProvider_ReturnsFalseForUserNotInChannel()
         {
-            var chatServiceMock = new Mock<IChatChannelAccessService>();
-            chatServiceMock.Setup(s => s.GetChannelsForUser("user-1"))
-                .Returns(new List<ChatChannel>
-                {
-                    new ChatChannel { Id = "channel-other" }
-                });
+            var chatAuthMock = new Mock<IChatAuthorizationService>();
+            chatAuthMock.Setup(s => s.CanUserAccessChannel("target-channel", "user-1")).Returns(false);
 
-            var provider = new ChatFileAccessProvider(chatServiceMock.Object);
+            var provider = new ChatFileAccessProvider(chatAuthMock.Object);
             var user = new Employee { Id = "user-1", IsAdmin = false };
 
             var result = provider.CanAccess(user, "target-channel");
@@ -686,14 +676,11 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void AlbumFileAccessProvider_ReturnsTrueForChannelMembersAndFalseForNonMembers()
         {
-            var mockChatAccess = new Mock<IChatChannelAccessService>();
+            var mockChatAuth = new Mock<IChatAuthorizationService>();
+            mockChatAuth.Setup(s => s.CanUserAccessChannel("chan-shared", "user-in-channel")).Returns(true);
+            mockChatAuth.Setup(s => s.CanUserAccessChannel("other-chan", "other-user")).Returns(true);
 
-            mockChatAccess.Setup(s => s.GetUsersForChannel("chan-shared"))
-                .Returns(new List<string> { "user-in-channel" });
-            mockChatAccess.Setup(s => s.GetUsersForChannel("other-chan"))
-                .Returns(new List<string> { "other-user" });
-
-            var provider = new AlbumFileAccessProvider(_albums, mockChatAccess.Object);
+            var provider = new AlbumFileAccessProvider(_albums, mockChatAuth.Object);
 
             var album = new Album
             {
@@ -705,23 +692,23 @@ public class FileAccessProvidersTests : IDisposable
             _albums.Save(album);
 
             // Owner access
-            Assert.True(provider.CanAccess(new Employee { Id = "user-owner" }, "album-1"));
+            Assert.True(provider.CanAccess(new Employee { Id = "user-owner", Permissions = [AppPermissions.Albums.View] }, "album-1"));
 
             // Contributor access
-            Assert.True(provider.CanAccess(new Employee { Id = "user-contrib" }, "album-1"));
+            Assert.True(provider.CanAccess(new Employee { Id = "user-contrib", Permissions = [AppPermissions.Albums.View] }, "album-1"));
 
-            // Channel member access
-            Assert.True(provider.CanAccess(new Employee { Id = "user-in-channel" }, "album-1"));
+            // Channel member access (O(1) direct auth check without scanning all employees)
+            Assert.True(provider.CanAccess(new Employee { Id = "user-in-channel", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] }, "album-1"));
 
             // Non-member access denied
-            Assert.False(provider.CanAccess(new Employee { Id = "user-outsider" }, "album-1"));
+            Assert.False(provider.CanAccess(new Employee { Id = "user-outsider", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] }, "album-1"));
         }
 
         [Fact]
         public void AlbumFileAccessProvider_ReturnsFalseWhenAlbumDoesNotExist()
         {
-            var mockChatAccess = new Mock<IChatChannelAccessService>();
-            var provider = new AlbumFileAccessProvider(_albums, mockChatAccess.Object);
+            var mockChatAuth = new Mock<IChatAuthorizationService>();
+            var provider = new AlbumFileAccessProvider(_albums, mockChatAuth.Object);
             var user = new Employee { Id = "user-1", IsAdmin = false };
 
             var result = provider.CanAccess(user, "non-existent-album");
@@ -731,11 +718,10 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void AlbumFileAccessProvider_CanUpload_ReturnsTrueForOwnerAndContributor_FalseForChannelMembersAndOutsiders()
         {
-            var mockChatAccess = new Mock<IChatChannelAccessService>();
-            mockChatAccess.Setup(s => s.GetUsersForChannel("chan-shared"))
-                .Returns(new List<string> { "user-in-channel" });
+            var mockChatAuth = new Mock<IChatAuthorizationService>();
+            mockChatAuth.Setup(s => s.CanUserAccessChannel("chan-shared", "user-in-channel")).Returns(true);
 
-            var provider = new AlbumFileAccessProvider(_albums, mockChatAccess.Object);
+            var provider = new AlbumFileAccessProvider(_albums, mockChatAuth.Object);
 
             var album = new Album
             {
@@ -747,19 +733,19 @@ public class FileAccessProvidersTests : IDisposable
             _albums.Save(album);
 
             // Owner can upload
-            Assert.True(provider.CanUpload(new Employee { Id = "user-owner" }, "album-upload-test"));
+            Assert.True(provider.CanUpload(new Employee { Id = "user-owner", Permissions = [AppPermissions.Albums.View] }, "album-upload-test"));
 
             // Contributor can upload
-            Assert.True(provider.CanUpload(new Employee { Id = "user-contrib" }, "album-upload-test"));
+            Assert.True(provider.CanUpload(new Employee { Id = "user-contrib", Permissions = [AppPermissions.Albums.View] }, "album-upload-test"));
 
             // Channel member CANNOT upload (read-only access)
-            Assert.False(provider.CanUpload(new Employee { Id = "user-in-channel" }, "album-upload-test"));
+            Assert.False(provider.CanUpload(new Employee { Id = "user-in-channel", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] }, "album-upload-test"));
 
             // Outsider CANNOT upload
-            Assert.False(provider.CanUpload(new Employee { Id = "user-outsider" }, "album-upload-test"));
+            Assert.False(provider.CanUpload(new Employee { Id = "user-outsider", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] }, "album-upload-test"));
 
             // Non-existent album
-            Assert.False(provider.CanUpload(new Employee { Id = "user-owner" }, "non-existent-album"));
+            Assert.False(provider.CanUpload(new Employee { Id = "user-owner", Permissions = [AppPermissions.Albums.View] }, "non-existent-album"));
         }
 
         #endregion
@@ -839,11 +825,22 @@ public class FileAccessProvidersTests : IDisposable
 
         #region EmailFileAccessProvider Tests
 
+        private static Mock<IEmailInboxService> CreateOwnerAwareEmailInboxMock()
+        {
+            var mock = new Mock<IEmailInboxService>();
+            mock.Setup(s => s.CanUserAccessEmailMessage(It.IsAny<Employee>(), It.IsAny<string>(), It.IsAny<string>()))
+                .Returns((Employee u, string acctId, string _) =>
+                    FileAccessPermissionHelper.IsReadableUser(u) &&
+                    FileAccessPermissionHelper.HasAssignedPermission(u, AppPermissions.Email.Use) &&
+                    (u.IsAdmin || u.Id.Equals(acctId, StringComparison.OrdinalIgnoreCase)));
+            return mock;
+        }
+
         [Fact]
         public void EmailFileAccessProvider_RequiresAccountAndMessageScopingForNonBillInbox_AndNeverAllowsUploads()
         {
-            var provider = new EmailFileAccessProvider();
-            var employee = new Employee { Id = "emp1", IsActive = true, IsSuspended = false, IsBanned = false, IsAdmin = false };
+            var provider = new EmailFileAccessProvider(CreateOwnerAwareEmailInboxMock().Object);
+            var employee = new Employee { Id = "emp1", IsActive = true, IsSuspended = false, IsBanned = false, IsAdmin = false, Permissions = new List<string> { AppPermissions.Email.Use } };
 
             // Bare accountId without ":messageId" must be rejected for non-bill-inbox reads
             Assert.False(provider.CanAccess(employee, "emp1"));
@@ -859,7 +856,7 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void EmailFileAccessProvider_ReturnsTrueForAdminWithScopedContext_AndFalseForUpload()
         {
-            var provider = new EmailFileAccessProvider();
+            var provider = new EmailFileAccessProvider(CreateOwnerAwareEmailInboxMock().Object);
             var admin = new Employee { Id = "admin1", IsActive = true, IsSuspended = false, IsBanned = false, IsAdmin = true };
 
             Assert.False(provider.CanAccess(admin, "emp2"));
@@ -870,7 +867,7 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void EmailFileAccessProvider_ReturnsFalseForOtherEmployee()
         {
-            var provider = new EmailFileAccessProvider();
+            var provider = new EmailFileAccessProvider(CreateOwnerAwareEmailInboxMock().Object);
             var employee = new Employee { Id = "emp1", IsActive = true, IsSuspended = false, IsBanned = false, IsAdmin = false };
 
             Assert.False(provider.CanAccess(employee, "emp2:msg1"));
@@ -897,7 +894,7 @@ public class FileAccessProvidersTests : IDisposable
         [InlineData(true, false, true)]   // Banned
         public void EmailFileAccessProvider_ReturnsFalseForInactiveOrBannedEmployee(bool isActive, bool isSuspended, bool isBanned)
         {
-            var provider = new EmailFileAccessProvider();
+            var provider = new EmailFileAccessProvider(CreateOwnerAwareEmailInboxMock().Object);
             var employee = new Employee { Id = "emp1", IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
 
             Assert.False(provider.CanAccess(employee, "emp1:msg1"));
@@ -907,17 +904,37 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void EmailFileAccessProvider_AllowsReadOnlyForSuspendedEmployee()
         {
-            var provider = new EmailFileAccessProvider();
-            var employee = new Employee { Id = "emp1", IsActive = true, IsSuspended = true, IsBanned = false };
+            var provider = new EmailFileAccessProvider(CreateOwnerAwareEmailInboxMock().Object);
+            var employee = new Employee { Id = "emp1", IsActive = true, IsSuspended = true, IsBanned = false, Permissions = new List<string> { AppPermissions.Email.Use } };
 
             Assert.True(provider.CanAccess(employee, "emp1:msg1"));
             Assert.False(provider.CanUpload(employee, "emp1:msg1"));
         }
 
         [Fact]
+        public void EmailFileAccessProvider_DeniesUserWithoutEmailUsePermission_AndDeniesFamilyEdition()
+        {
+            var profile = new CompanyProfile { Edition = "Business" };
+            var profileRepo = new CompanyProfileRepository(_persistence, _config);
+            profileRepo.Save(profile);
+
+            var provider = new EmailFileAccessProvider(CreateOwnerAwareEmailInboxMock().Object, companyProfile: profileRepo);
+            var noEmailUser = new Employee { Id = "emp1", IsActive = true, Permissions = new List<string>() };
+            var emailUser = new Employee { Id = "emp1", IsActive = true, Permissions = new List<string> { AppPermissions.Email.Use } };
+
+            Assert.False(provider.CanAccess(noEmailUser, "emp1:msg1"));
+            Assert.True(provider.CanAccess(emailUser, "emp1:msg1"));
+
+            profile.Edition = "Family";
+            profileRepo.Save(profile);
+
+            Assert.False(provider.CanAccess(emailUser, "emp1:msg1"));
+        }
+
+        [Fact]
         public void EmailFileAccessProvider_ReturnsFalseForNullUserOrContext()
         {
-            var provider = new EmailFileAccessProvider();
+            var provider = new EmailFileAccessProvider(new Mock<IEmailInboxService>().Object);
             var employee = new Employee { Id = "emp1", IsActive = true };
 
             Assert.False(provider.CanAccess(null!, "emp1:msg1"));
@@ -933,7 +950,7 @@ public class FileAccessProvidersTests : IDisposable
         [InlineData(AppPermissions.Purchases.ApproveBills)]
         public void EmailFileAccessProvider_ReturnsTrueForAccountingPermissions_WhenContextIsSystemEmployeeId(string permission)
         {
-            var provider = new EmailFileAccessProvider();
+            var provider = new EmailFileAccessProvider(new Mock<IEmailInboxService>().Object);
             var employee = new Employee
             {
                 Id = "acct-user",
@@ -952,7 +969,7 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void EmailFileAccessProvider_ReturnsFalseForAccountingPermissions_WhenContextIsNotSystemEmployeeId()
         {
-            var provider = new EmailFileAccessProvider();
+            var provider = new EmailFileAccessProvider(CreateOwnerAwareEmailInboxMock().Object);
             var employee = new Employee
             {
                 Id = "acct-user",
@@ -971,7 +988,7 @@ public class FileAccessProvidersTests : IDisposable
         [Fact]
         public void EmailFileAccessProvider_ReturnsFalseForRegularEmployeeWithoutPermissions_WhenContextIsSystemEmployeeId()
         {
-            var provider = new EmailFileAccessProvider();
+            var provider = new EmailFileAccessProvider(new Mock<IEmailInboxService>().Object);
             var employee = new Employee
             {
                 Id = "regular-user",
@@ -1002,6 +1019,7 @@ public class FileAccessProvidersTests : IDisposable
 
             var mockChatAccess = new Mock<IChatChannelAccessService>();
             mockChatAccess.Setup(s => s.GetChannelsForUser("u1")).Returns(new List<ChatChannel> { new() { Id = "chan-status" } });
+            var chatAuth = new ChatAuthorizationService(_channels, _projects, _teams, new EmployeeRepository(_persistence, _config));
 
             var user = new Employee { Id = "u1", IsAdmin = true, IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned };
 
@@ -1010,8 +1028,8 @@ public class FileAccessProvidersTests : IDisposable
             var expense = new ExpenseFileAccessProvider(_expenseReports);
             var bill = new BillFileAccessProvider();
             var recurring = new RecurringCostFileAccessProvider();
-            var album = new AlbumFileAccessProvider(_albums, mockChatAccess.Object);
-            var chat = new ChatFileAccessProvider(mockChatAccess.Object, _channels);
+            var album = new AlbumFileAccessProvider(_albums, chatAuth, _channels);
+            var chat = new ChatFileAccessProvider(chatAuth, _channels);
             var proj = new ProjectFileAccessProvider(_projects, _teams);
             var note = new ProjectNoteFileAccessProvider(_projects, _teams);
 
@@ -1045,6 +1063,7 @@ public class FileAccessProvidersTests : IDisposable
 
             var mockChatAccess = new Mock<IChatChannelAccessService>();
             mockChatAccess.Setup(s => s.GetChannelsForUser("u_susp")).Returns(new List<ChatChannel> { new() { Id = "chan-susp" } });
+            var chatAuth = new ChatAuthorizationService(_channels, _projects, _teams, new EmployeeRepository(_persistence, _config));
 
             var suspendedUser = new Employee
             {
@@ -1058,7 +1077,9 @@ public class FileAccessProvidersTests : IDisposable
                     AppPermissions.Projects.Edit,
                     AppPermissions.Finance.AccessAccounting,
                     AppPermissions.Finance.AccessExpenses,
-                    AppPermissions.Purchases.ManageBills
+                    AppPermissions.Purchases.ManageBills,
+                    AppPermissions.Albums.View,
+                    AppPermissions.Chat.Use
                 }
             };
 
@@ -1067,8 +1088,8 @@ public class FileAccessProvidersTests : IDisposable
             var expense = new ExpenseFileAccessProvider(_expenseReports);
             var bill = new BillFileAccessProvider();
             var recurring = new RecurringCostFileAccessProvider();
-            var album = new AlbumFileAccessProvider(_albums, mockChatAccess.Object);
-            var chat = new ChatFileAccessProvider(mockChatAccess.Object, _channels);
+            var album = new AlbumFileAccessProvider(_albums, chatAuth, _channels);
+            var chat = new ChatFileAccessProvider(chatAuth, _channels);
             var proj = new ProjectFileAccessProvider(_projects, _teams);
             var note = new ProjectNoteFileAccessProvider(_projects, _teams);
 
@@ -1116,13 +1137,10 @@ public class FileAccessProvidersTests : IDisposable
             _channels.Save(archivedChannel);
             _channels.Save(announceChannel);
 
-            var mockChatAccess = new Mock<IChatChannelAccessService>();
-            mockChatAccess.Setup(s => s.GetChannelsForUser(It.IsAny<string>()))
-                .Returns(new List<ChatChannel> { normalChannel, archivedChannel, announceChannel });
-
-            var provider = new ChatFileAccessProvider(mockChatAccess.Object, _channels);
-            var regularMember = new Employee { Id = "u-reader", IsActive = true };
-            var allowedPoster = new Employee { Id = "u-poster", IsActive = true };
+            var chatAuth = new ChatAuthorizationService(_channels, _projects, _teams, new EmployeeRepository(_persistence, _config));
+            var provider = new ChatFileAccessProvider(chatAuth, _channels);
+            var regularMember = new Employee { Id = "u-reader", IsActive = true, Permissions = [AppPermissions.Chat.Use] };
+            var allowedPoster = new Employee { Id = "u-poster", IsActive = true, Permissions = [AppPermissions.Chat.Use] };
 
             Assert.True(provider.CanUpload(regularMember, "c-normal"));
             Assert.False(provider.CanUpload(regularMember, "c-archived"));
@@ -1183,8 +1201,8 @@ public class FileAccessProvidersTests : IDisposable
             Assert.False(avatar.CanUpload(user, "u2"));
 
             Assert.True(sig.CanUpload(user, "u1"));
-            // Finance user can READ u2's signature for PDFs, but CANNOT upload/overwrite u2's signature
-            Assert.True(sig.CanAccess(user, "u2"));
+            // Finance/project wildcard access to another user's personal signature is denied (#116)
+            Assert.False(sig.CanAccess(user, "u2"));
             Assert.False(sig.CanUpload(user, "u2"));
 
             Assert.False(proj.CanUpload(user, "p-rw"));

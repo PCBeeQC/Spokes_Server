@@ -32,7 +32,7 @@ public class UserServiceTests : IDisposable
             _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_User_{Guid.NewGuid()}");
             Directory.CreateDirectory(_testDataDir);
 
-            Dictionary<string, string?> configDict = new() { { "DataPath", _testDataDir } };
+            Dictionary<string, string?> configDict = new() { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
             _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -45,7 +45,6 @@ public class UserServiceTests : IDisposable
 
             _service = new UserService(_mockAuth.Object, _employees, _openIdAccounts, _companyProfiles, _teams);
         }
-
 
         public void Dispose()
         {
@@ -121,34 +120,15 @@ public class UserServiceTests : IDisposable
             Assert.True(await _service.IsAdminAsync());
         }
 
-        [Fact]
-        public async Task IsAdminAsync_ReturnsFalse_WhenAdminIsInactive()
+        [Theory]
+        [InlineData("admin-inactive", false, false, false)]
+        [InlineData("admin-suspended", true, true, false)]
+        [InlineData("admin-banned", true, false, true)]
+        public async Task IsAdminAsync_ReturnsFalse_WhenAdminIsNotEligible(string empId, bool isActive, bool isSuspended, bool isBanned)
         {
-            var sub = "admin-inactive-sub";
-            _employees.Save(new Employee { Id = "admin-inactive", IsAdmin = true, IsActive = false });
-            _openIdAccounts.Save(new OpenIdAccount { Sub = sub, LinkedEmployeeId = "admin-inactive" });
-            SetupUser(sub);
-
-            Assert.False(await _service.IsAdminAsync());
-        }
-
-        [Fact]
-        public async Task IsAdminAsync_ReturnsFalse_WhenAdminIsSuspended()
-        {
-            var sub = "admin-suspended-sub";
-            _employees.Save(new Employee { Id = "admin-suspended", IsAdmin = true, IsActive = true, IsSuspended = true });
-            _openIdAccounts.Save(new OpenIdAccount { Sub = sub, LinkedEmployeeId = "admin-suspended" });
-            SetupUser(sub);
-
-            Assert.False(await _service.IsAdminAsync());
-        }
-
-        [Fact]
-        public async Task IsAdminAsync_ReturnsFalse_WhenAdminIsBanned()
-        {
-            var sub = "admin-banned-sub";
-            _employees.Save(new Employee { Id = "admin-banned", IsAdmin = true, IsActive = true, IsBanned = true });
-            _openIdAccounts.Save(new OpenIdAccount { Sub = sub, LinkedEmployeeId = "admin-banned" });
+            var sub = $"{empId}-sub";
+            _employees.Save(new Employee { Id = empId, IsAdmin = true, IsActive = isActive, IsSuspended = isSuspended, IsBanned = isBanned });
+            _openIdAccounts.Save(new OpenIdAccount { Sub = sub, LinkedEmployeeId = empId });
             SetupUser(sub);
 
             Assert.False(await _service.IsAdminAsync());
@@ -196,10 +176,11 @@ public class UserServiceTests : IDisposable
         }
 
         [Fact]
-        public async Task GetEmployeeAsync_HeadlessRenderer_WithInternalClaim_ReturnsSystemVirtualEmployee()
+        public async Task GetEmployeeAsync_HeadlessRendererOrSystemRenderer_EvenWithInternalClaim_ReturnsNull()
         {
             var identity = new ClaimsIdentity([
                 new Claim("sub", "headless-renderer"),
+                new Claim("EmployeeId", "system-renderer"),
                 new Claim("Spokes_InternalRenderer", "true")
             ], "test");
             var user = new ClaimsPrincipal(identity);
@@ -207,41 +188,37 @@ public class UserServiceTests : IDisposable
                      .ReturnsAsync(new AuthenticationState(user));
 
             var result = await _service.GetEmployeeAsync();
-
-            Assert.NotNull(result);
-            Assert.Equal("system-renderer", result.Id);
-            Assert.Equal("System", result.FirstName);
-            Assert.Equal("Renderer", result.LastName);
-            Assert.Equal("renderer@system.local", result.Email);
-            Assert.False(result.IsAdmin);
-            Assert.True(result.IsActive);
-            Assert.True(result.IsSystem);
-            Assert.Contains(AppPermissions.Projects.View, result.Permissions);
-            Assert.Contains(AppPermissions.Purchases.ViewPOs, result.Permissions);
-            Assert.DoesNotContain(AppPermissions.Purchases.ManagePOs, result.Permissions);
-            Assert.Contains(AppPermissions.BusinessDocuments.View, result.Permissions);
+            Assert.Null(result);
         }
 
         [Fact]
-        public void GetEmployee_HeadlessRenderer_WithPermissionClaims_PopulatesPermissionsFromClaims()
+        public void GetEmployee_DelegatedInternalRenderer_ResolvesInitiatingRealEmployee()
         {
+            var initiator = new Employee
+            {
+                Id = "emp-delegated-renderer",
+                FirstName = "Alice",
+                LastName = "Engineer",
+                IsActive = true,
+                Permissions = [AppPermissions.Projects.View]
+            };
+            _employees.Save(initiator);
+
             var identity = new ClaimsIdentity([
-                new Claim("sub", "headless-renderer"),
+                new Claim(ClaimTypes.NameIdentifier, initiator.Id),
+                new Claim("sub", initiator.Id),
+                new Claim("EmployeeId", initiator.Id),
                 new Claim("Spokes_InternalRenderer", "true"),
-                new Claim("Permission", AppPermissions.Projects.View),
-                new Claim("Permission", AppPermissions.Purchases.ViewPOs)
+                new Claim("RenderScope", "DocumentExport")
             ], "test");
             var user = new ClaimsPrincipal(identity);
 
             var result = _service.GetEmployee(user);
 
             Assert.NotNull(result);
-            Assert.False(result.IsAdmin);
-            Assert.True(result.IsSystem);
-            Assert.Equal(2, result.Permissions.Count);
+            Assert.Equal(initiator.Id, result.Id);
+            Assert.False(result.IsSystem);
             Assert.Contains(AppPermissions.Projects.View, result.Permissions);
-            Assert.Contains(AppPermissions.Purchases.ViewPOs, result.Permissions);
-            Assert.DoesNotContain(AppPermissions.Purchases.ManagePOs, result.Permissions);
         }
 
         [Fact]
@@ -345,13 +322,6 @@ public class UserServiceTests : IDisposable
             var updatedAccount = _openIdAccounts.GetBySub(sub);
             Assert.NotNull(updatedAccount);
             Assert.Equal(emp.Id, updatedAccount.LinkedEmployeeId);
-        }
-
-        [Fact]
-        public void GetBySub_ReturnsNull_WhenNoOpenIdAccountMatches()
-        {
-            var result = _service.GetBySub("non-existent-sub");
-            Assert.Null(result);
         }
 
         [Fact]
@@ -560,7 +530,6 @@ public class UserServiceTests : IDisposable
             Assert.True(result);
         }
 
-
         [Fact]
         public void ProvisionOrSyncOidcUser_EmptySub_ThrowsArgumentException()
         {
@@ -707,7 +676,7 @@ public class UserServiceTests : IDisposable
                 new Claim("email", victim.Email)
             ], "Cookies"));
 
-            Assert.Null(_service.GetCurrentUser(unlinkedPrincipal));
+            Assert.Null(_service.GetEmployee(unlinkedPrincipal));
         }
 
         [Fact]
@@ -882,5 +851,138 @@ public class UserServiceTests : IDisposable
             Assert.False(globalKeystore.IsUserUnlocked(emp.Id));
             Assert.Contains("sess-ban-q1", bannedSessions);
             Assert.Empty(revokedSessions);
+        }
+
+        [Fact]
+        public void ProvisionOrSyncOidcUser_BlankName_FallsBackToEmailLocalPart()
+        {
+            var service = new UserService(_mockAuth.Object, _employees, _openIdAccounts, _companyProfiles, _teams);
+
+            var result = service.ProvisionOrSyncOidcUser("oidc-sub-blank", "   ", "alex.mercer@example.com");
+
+            Assert.NotNull(result.Employee);
+            Assert.Equal("alex.mercer", result.Employee!.FirstName);
+            Assert.Equal(string.Empty, result.Employee.LastName);
+            var account = _openIdAccounts.GetBySub("oidc-sub-blank");
+            Assert.NotNull(account);
+            Assert.Equal("alex.mercer", account!.Name);
+        }
+
+        [Fact]
+        public async Task GetEmployeeAsync_WhenSessionRevokedOrExpired_ClearsCacheAndReturnsNull()
+        {
+            const string empId = "emp-sess-reval";
+            const string sessionId = "sess-reval-1";
+            _employees.Save(new Employee { Id = empId, FirstName = "Live", LastName = "Session", IsActive = true });
+
+            var deviceSessions = new DeviceSessionRepository(_persistence, _config);
+            var session = new DeviceSession
+            {
+                Id = sessionId,
+                EmployeeId = empId,
+                ExpiresAt = DateTime.UtcNow.AddHours(2)
+            };
+            deviceSessions.Save(session);
+
+            var principal = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("EmployeeId", empId),
+                new Claim("SessionId", sessionId)
+            ], "TestCookie"));
+            var mockAuth = new Mock<AuthenticationStateProvider>();
+            mockAuth.Setup(a => a.GetAuthenticationStateAsync()).ReturnsAsync(new AuthenticationState(principal));
+
+            var sessionService = new Spokes_Server.Core.Services.Security.SessionService(deviceSessions, _employees);
+            var service = new UserService(mockAuth.Object, _employees, _openIdAccounts, _companyProfiles, _teams, sessionService: sessionService);
+
+            Assert.NotNull(await service.GetEmployeeAsync());
+
+            // Revoke the session -> cached lookup must now reject without returning stale employee
+            session.RevokedAt = DateTime.UtcNow;
+            deviceSessions.Save(session);
+            Assert.Null(await service.GetEmployeeAsync());
+
+            // Expired session on a fresh service must also return null
+            var expiredSession = new DeviceSession
+            {
+                Id = "sess-reval-expired",
+                EmployeeId = empId,
+                ExpiresAt = DateTime.UtcNow.AddMinutes(-5)
+            };
+            deviceSessions.Save(expiredSession);
+
+            var expiredPrincipal = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("EmployeeId", empId),
+                new Claim("SessionId", expiredSession.Id)
+            ], "TestCookie"));
+            var mockExpiredAuth = new Mock<AuthenticationStateProvider>();
+            mockExpiredAuth.Setup(a => a.GetAuthenticationStateAsync()).ReturnsAsync(new AuthenticationState(expiredPrincipal));
+            var expiredService = new UserService(mockExpiredAuth.Object, _employees, _openIdAccounts, _companyProfiles, _teams, sessionService: sessionService);
+
+            Assert.Null(await expiredService.GetEmployeeAsync());
+        }
+
+        [Fact]
+        public async Task GetEmployeeAsync_WhenEmployeeDeleted_DoesNotReturnStaleCachedEmployee()
+        {
+            const string empId = "emp-deleted-1";
+            _employees.Save(new Employee { Id = empId, FirstName = "Going", LastName = "Soon", IsActive = true });
+
+            var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("EmployeeId", empId)], "TestCookie"));
+            _mockAuth.Setup(a => a.GetAuthenticationStateAsync()).ReturnsAsync(new AuthenticationState(principal));
+
+            Assert.NotNull(await _service.GetEmployeeAsync());
+
+            _employees.Delete(empId);
+            Assert.Null(await _service.GetEmployeeAsync());
+        }
+
+        [Fact]
+        public void ProvisionOrSyncOidcUser_GrantsAdminOnlyWhenEmployeeRepositoryIsCompletelyEmpty()
+        {
+            // First ever employee on an empty server receives IsAdmin = true
+            var firstResult = _service.ProvisionOrSyncOidcUser("sub-first-ever", "First Admin", "first@example.com");
+            Assert.NotNull(firstResult.Employee);
+            Assert.True(firstResult.Employee!.IsAdmin);
+
+            // Second employee receives IsAdmin = false
+            var secondResult = _service.ProvisionOrSyncOidcUser("sub-second", "Second User", "second@example.com");
+            Assert.NotNull(secondResult.Employee);
+            Assert.False(secondResult.Employee!.IsAdmin);
+
+            // Even if existing admin loses IsAdmin flag leaving zero admins on a populated server,
+            // a new first-time OIDC user must NOT be escalated to IsAdmin
+            firstResult.Employee.IsAdmin = false;
+            _employees.Save(firstResult.Employee);
+
+            var thirdResult = _service.ProvisionOrSyncOidcUser("sub-third-zero-admins", "Third User", "third@example.com");
+            Assert.NotNull(thirdResult.Employee);
+            Assert.False(thirdResult.Employee!.IsAdmin);
+        }
+
+        [Fact]
+        public void IsSoleActiveAdmin_And_SetUserActiveState_ProtectLastActiveAdminInvariant()
+        {
+            var admin1 = new Employee { Id = "emp-sole-admin-1", FirstName = "Sole", LastName = "Admin", IsActive = true, IsAdmin = true };
+            var regular = new Employee { Id = "emp-sole-reg-1", FirstName = "Regular", LastName = "User", IsActive = true, IsAdmin = false };
+            _employees.Save(admin1);
+            _employees.Save(regular);
+
+            Assert.True(UserService.IsSoleActiveAdmin(_employees, admin1.Id));
+            Assert.False(UserService.IsSoleActiveAdmin(_employees, regular.Id));
+
+            // Cannot deactivate the sole active administrator
+            Assert.Throws<InvalidOperationException>(() => _service.SetUserActiveState(admin1.Id, isActive: false));
+            Assert.True(_employees.GetById(admin1.Id)!.IsActive);
+
+            // Adding a second active admin allows deactivating admin1
+            var admin2 = new Employee { Id = "emp-sole-admin-2", FirstName = "Second", LastName = "Admin", IsActive = true, IsAdmin = true };
+            _employees.Save(admin2);
+
+            Assert.False(UserService.IsSoleActiveAdmin(_employees, admin1.Id));
+            _service.SetUserActiveState(admin1.Id, isActive: false);
+            Assert.False(_employees.GetById(admin1.Id)!.IsActive);
+            Assert.True(UserService.IsSoleActiveAdmin(_employees, admin2.Id));
         }
     }

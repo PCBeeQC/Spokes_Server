@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Storage;
 
 namespace Spokes_Server.Core.Services.Communication.Email;
 
@@ -46,29 +48,141 @@ public class EmailInboxService : IEmailInboxService
         _idleService = idleService;
     }
 
-    public HashSet<string> GetUserTeamIds(string employeeId)
-    {
-        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (string.IsNullOrWhiteSpace(employeeId)) return result;
+    public HashSet<string> GetUserTeamIds(string employeeId) =>
+        TeamRepository.GetUserTeamIds(_teams, employeeId, string.IsNullOrWhiteSpace(employeeId) ? null : _employees?.GetById(employeeId));
 
-        var emp = _employees?.GetById(employeeId);
-        if (emp != null && !string.IsNullOrWhiteSpace(emp.TeamId))
+    public List<EmailInbox> GetManageableInboxesForSettings(string employeeId)
+    {
+        if (string.IsNullOrWhiteSpace(employeeId) || _inboxes == null) return [];
+
+        return _inboxes.GetAll()
+            .Where(i => !i.IsServerManaged &&
+                        !string.IsNullOrWhiteSpace(i.OwnerEmployeeId) &&
+                        string.Equals(i.OwnerEmployeeId, employeeId, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(i => i.SortOrder)
+            .ThenBy(i => i.Name)
+            .ToList();
+    }
+
+    private bool IsVirtualInboxBackingAccountAuthorized(EmailInbox inbox)
+    {
+        if (_accounts == null) return true;
+
+        var account = _accounts.GetById(inbox.AccountId);
+        if (account == null || account.IsArchived) return false;
+
+        if (inbox.IsServerManaged)
         {
-            result.Add(emp.TeamId);
+            return account.IsServerManaged;
         }
 
-        if (_teams != null)
+        if (string.IsNullOrWhiteSpace(inbox.OwnerEmployeeId)) return false;
+
+        if (_employees?.GetById(inbox.OwnerEmployeeId) is { } ownerEmp &&
+            (!ownerEmp.IsActive || ownerEmp.IsBanned))
         {
-            foreach (var team in _teams.GetAll())
+            return false;
+        }
+
+        return account.CanUserAccess(inbox.OwnerEmployeeId, GetUserTeamIds(inbox.OwnerEmployeeId));
+    }
+
+    private bool IsIdentitySourceBackingAuthorized(EmailSendingIdentity identity)
+    {
+        if (identity.SourceType == EmailIdentitySourceType.VirtualInbox &&
+            !string.IsNullOrWhiteSpace(identity.SourceInboxId))
+        {
+            var sourceInbox = _inboxes?.GetById(identity.SourceInboxId);
+            return sourceInbox != null && IsVirtualInboxBackingAccountAuthorized(sourceInbox);
+        }
+
+        return true;
+    }
+
+    private bool IsFamilyEdition() =>
+        string.Equals(_companyProfile?.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase);
+
+    private bool IsEmployeeEligibleForIdentities(string employeeId)
+    {
+        if (string.IsNullOrWhiteSpace(employeeId) || IsFamilyEdition()) return false;
+
+        if (_employees != null)
+        {
+            var emp = _employees.GetById(employeeId);
+            if (emp == null || !emp.IsActive || emp.IsBanned || emp.IsSuspended || !FileAccessPermissionHelper.HasAssignedPermission(emp, AppPermissions.Email.Use))
             {
-                if (string.Equals(team.LeaderId, employeeId, StringComparison.OrdinalIgnoreCase))
-                {
-                    result.Add(team.Id);
-                }
+                return false;
             }
         }
 
-        return result;
+        return true;
+    }
+
+    private bool IsEmployeeEligibleForEmailRead(string employeeId)
+    {
+        if (string.IsNullOrWhiteSpace(employeeId) || IsFamilyEdition()) return false;
+
+        if (_employees != null)
+        {
+            var emp = _employees.GetById(employeeId);
+            return FileAccessPermissionHelper.HasAssignedPermission(emp, AppPermissions.Email.Use);
+        }
+
+        return true;
+    }
+
+    private EmailFolder? GetPrimaryRootInboxFolder(string accountId)
+    {
+        if (string.IsNullOrWhiteSpace(accountId) || _folders == null) return null;
+
+        var folders = _folders.GetByAccount(accountId);
+        return folders.FirstOrDefault(f => f.IsInbox && string.IsNullOrEmpty(f.ParentPath))
+               ?? folders.FirstOrDefault(f => string.IsNullOrEmpty(f.ParentPath) && f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+    }
+
+    public bool IsPrimaryRootInboxMessage(EmailMessage message)
+    {
+        if (message == null || string.IsNullOrWhiteSpace(message.AccountId) || string.IsNullOrWhiteSpace(message.FolderPath))
+            return false;
+
+        var rootInbox = GetPrimaryRootInboxFolder(message.AccountId);
+        if (rootInbox != null)
+        {
+            return string.Equals(message.FolderPath, rootInbox.Path, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return string.Equals(message.FolderPath.Trim(), "INBOX", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Returns true if a mailbox (real account or virtual inbox backing account) may legitimately
+    /// reference and store copies/drafts for the given sending identity via LinkedIdentityIds / DefaultIdentityId.
+    /// Prevents admins from binding a user's private unshared personal OutgoingServer identity into
+    /// a server-managed or third-party mailbox so Sent copies cannot leak into shared storage.
+    /// </summary>
+    public static bool CanMailboxLinkIdentity(
+        EmailSendingIdentity? identity,
+        bool mailboxIsServerManaged,
+        string? mailboxOwnerEmployeeId,
+        IReadOnlyCollection<string>? mailboxOwnerTeamIds = null)
+    {
+        if (identity == null) return false;
+
+        if (identity.IsServerManaged)
+        {
+            return mailboxIsServerManaged ||
+                   (!string.IsNullOrWhiteSpace(mailboxOwnerEmployeeId) &&
+                    identity.CanUserAccess(mailboxOwnerEmployeeId, mailboxOwnerTeamIds));
+        }
+
+        if (!mailboxIsServerManaged &&
+            !string.IsNullOrWhiteSpace(mailboxOwnerEmployeeId) &&
+            string.Equals(mailboxOwnerEmployeeId, identity.OwnerEmployeeId, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return (identity.AllowedUserIds?.Count > 0) || (identity.AllowedTeamIds?.Count > 0);
     }
 
     public List<EmailInbox> GetAccessibleInboxes(Employee employee) =>
@@ -76,14 +190,11 @@ public class EmailInboxService : IEmailInboxService
 
     public List<EmailInbox> GetAccessibleInboxes(string employeeId)
     {
-        if (string.IsNullOrWhiteSpace(employeeId) || _inboxes == null) return [];
+        if (string.IsNullOrWhiteSpace(employeeId) || _inboxes == null || !IsEmployeeEligibleForEmailRead(employeeId)) return [];
         var teamIds = GetUserTeamIds(employeeId);
-        var archivedAccountIds = _accounts != null
-            ? _accounts.GetAll().Where(a => a.IsArchived).Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase)
-            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         return _inboxes.GetAccessibleForUser(employeeId, teamIds)
-            .Where(i => !archivedAccountIds.Contains(i.AccountId))
+            .Where(IsVirtualInboxBackingAccountAuthorized)
             .OrderBy(i => i.SortOrder)
             .ThenBy(i => i.Name)
             .ToList();
@@ -94,7 +205,7 @@ public class EmailInboxService : IEmailInboxService
 
     public List<EmailAccount> GetAccessibleRealInboxes(string employeeId, bool includeArchived = false)
     {
-        if (string.IsNullOrWhiteSpace(employeeId) || _accounts == null) return [];
+        if (string.IsNullOrWhiteSpace(employeeId) || _accounts == null || !IsEmployeeEligibleForEmailRead(employeeId)) return [];
         var teamIds = GetUserTeamIds(employeeId);
 
         return _accounts.GetAccessibleForUser(employeeId, teamIds, includeArchived);
@@ -105,7 +216,7 @@ public class EmailInboxService : IEmailInboxService
 
     public List<EmailAccount> GetAccessibleArchivedRealInboxes(string employeeId)
     {
-        if (string.IsNullOrWhiteSpace(employeeId) || _accounts == null) return [];
+        if (string.IsNullOrWhiteSpace(employeeId) || _accounts == null || !IsEmployeeEligibleForEmailRead(employeeId)) return [];
         var teamIds = GetUserTeamIds(employeeId);
 
         return _accounts.GetArchivedAccessibleForUser(employeeId, teamIds);
@@ -116,7 +227,7 @@ public class EmailInboxService : IEmailInboxService
 
     public List<EmailAccount> GetAccessibleAccounts(string employeeId, bool includeArchived = false)
     {
-        if (string.IsNullOrWhiteSpace(employeeId) || _accounts == null) return [];
+        if (string.IsNullOrWhiteSpace(employeeId) || _accounts == null || !IsEmployeeEligibleForEmailRead(employeeId)) return [];
 
         var teamIds = GetUserTeamIds(employeeId);
         var inboxes = GetAccessibleInboxes(employeeId);
@@ -128,6 +239,42 @@ public class EmailInboxService : IEmailInboxService
         return _accounts.GetAll()
             .Where(a => (includeArchived || !a.IsArchived) && accountIds.Contains(a.Id))
             .ToList();
+    }
+
+    public bool HasWebmailConsumers(EmailAccount account) =>
+        HasWebmailConsumers(account, _inboxes);
+
+    /// <summary>
+    /// Returns true when the mailbox has at least one Webmail (/email) consumer:
+    /// either it is a personal employee mailbox, or it is shared directly with users/teams,
+    /// or it hosts at least one Virtual Inbox accessible in Webmail.
+    /// Server-managed Real Inboxes used exclusively by automated services (e.g., Company Bill Inbox)
+    /// return false so full-mailbox Webmail sync does not download historical read messages.
+    /// </summary>
+    public static bool HasWebmailConsumers(EmailAccount? account, EmailInboxRepository? inboxes = null)
+    {
+        if (account == null)
+        {
+            return false;
+        }
+
+        if (!account.IsServerManaged)
+        {
+            return true;
+        }
+
+        if ((account.AllowedUserIds?.Count > 0) || (account.AllowedTeamIds?.Count > 0))
+        {
+            return true;
+        }
+
+        if (inboxes != null)
+        {
+            return inboxes.GetByAccount(account.Id)
+                .Any(i => !i.IsServerManaged || (i.AllowedUserIds?.Count > 0) || (i.AllowedTeamIds?.Count > 0));
+        }
+
+        return false;
     }
 
     public Func<MessageMetadata, bool>? GetMetadataFilterForInbox(EmailInbox inbox)
@@ -168,9 +315,7 @@ public class EmailInboxService : IEmailInboxService
 
         var account = _accounts?.GetById(accountId);
         var accountEmail = account?.EmailAddress?.Trim().ToLowerInvariant();
-        var folders = _folders.GetByAccount(accountId);
-        var inboxFolder = folders.FirstOrDefault(f => f.IsInbox)
-                          ?? folders.FirstOrDefault(f => f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+        var inboxFolder = GetPrimaryRootInboxFolder(accountId);
         if (inboxFolder == null) return [];
 
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -272,9 +417,7 @@ public class EmailInboxService : IEmailInboxService
             return _messages.GetUnreadCount(inbox.AccountId, folderPath, filter);
         }
 
-        var folders = _folders.GetByAccount(inbox.AccountId);
-        var inboxFolder = folders.FirstOrDefault(f => f.IsInbox)
-                          ?? folders.FirstOrDefault(f => f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+        var inboxFolder = GetPrimaryRootInboxFolder(inbox.AccountId);
         if (inboxFolder == null) return 0;
 
         return _messages.GetUnreadCount(inbox.AccountId, inboxFolder.Path, filter);
@@ -288,20 +431,18 @@ public class EmailInboxService : IEmailInboxService
             return _messages.GetUnreadCount(accountId, folderPath);
         }
 
-        var folders = _folders.GetByAccount(accountId);
-        var inboxFolder = folders.FirstOrDefault(f => f.IsInbox)
-                          ?? folders.FirstOrDefault(f => f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+        var inboxFolder = GetPrimaryRootInboxFolder(accountId);
         if (inboxFolder == null) return 0;
 
         return _messages.GetUnreadCount(accountId, inboxFolder.Path);
     }
 
     public int GetTotalUnreadCountForUser(string employeeId) =>
-        GetUnreadCountForUserCore(employeeId, sinceUtc: null);
+        !IsEmployeeEligibleForEmailRead(employeeId) ? 0 : GetUnreadCountForUserCore(employeeId, sinceUtc: null);
 
     public int GetUnseenUnreadCountForUser(string employeeId)
     {
-        if (string.IsNullOrWhiteSpace(employeeId)) return 0;
+        if (!IsEmployeeEligibleForEmailRead(employeeId)) return 0;
         var employee = _employees?.GetById(employeeId);
         return GetUnreadCountForUserCore(employeeId, employee?.LastEmailVisitedAt);
     }
@@ -330,97 +471,71 @@ public class EmailInboxService : IEmailInboxService
         _employees.Save(employee);
     }
 
-    private int GetUnreadCountForUserCore(string employeeId, DateTimeOffset? sinceUtc)
+    private IEnumerable<MessageMetadata> EnumerateAccessibleUnreadInboxMetadata(string employeeId)
     {
         var realInboxes = GetAccessibleRealInboxes(employeeId);
         var virtualInboxes = GetAccessibleInboxes(employeeId);
-        if (realInboxes.Count == 0 && virtualInboxes.Count == 0) return 0;
-
-        var unreadMessageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (realInboxes.Count == 0 && virtualInboxes.Count == 0) yield break;
 
         foreach (var account in realInboxes)
         {
-            var folders = _folders.GetByAccount(account.Id);
-            var inboxFolder = folders.FirstOrDefault(f => f.IsInbox)
-                              ?? folders.FirstOrDefault(f => f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+            var inboxFolder = GetPrimaryRootInboxFolder(account.Id);
             if (inboxFolder == null) continue;
 
             foreach (var meta in _messages.GetFolderMetadata(account.Id, inboxFolder.Path))
             {
-                if (!meta.IsRead && (!sinceUtc.HasValue || meta.Date > sinceUtc.Value))
+                if (!meta.IsRead)
                 {
-                    unreadMessageIds.Add(meta.Id);
+                    yield return meta;
                 }
             }
         }
 
         foreach (var inbox in virtualInboxes)
         {
-            var folders = _folders.GetByAccount(inbox.AccountId);
-            var inboxFolder = folders.FirstOrDefault(f => f.IsInbox)
-                              ?? folders.FirstOrDefault(f => f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+            var inboxFolder = GetPrimaryRootInboxFolder(inbox.AccountId);
             if (inboxFolder == null) continue;
 
             var filter = GetMetadataFilterForInbox(inbox);
             foreach (var meta in _messages.GetFolderMetadata(inbox.AccountId, inboxFolder.Path))
             {
-                if (!meta.IsRead && (!sinceUtc.HasValue || meta.Date > sinceUtc.Value) && (filter == null || filter(meta)))
+                if (!meta.IsRead && (filter == null || filter(meta)))
                 {
-                    unreadMessageIds.Add(meta.Id);
+                    yield return meta;
                 }
             }
         }
+    }
 
+    private int GetUnreadCountForUserCore(string employeeId, DateTimeOffset? sinceUtc)
+    {
+        var unreadMessageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var meta in EnumerateAccessibleUnreadInboxMetadata(employeeId))
+        {
+            if (!sinceUtc.HasValue || meta.Date > sinceUtc.Value)
+            {
+                unreadMessageIds.Add(meta.Id);
+            }
+        }
         return unreadMessageIds.Count;
     }
 
     private DateTimeOffset? GetLatestUnreadInboxMessageDate(string employeeId)
     {
-        var realInboxes = GetAccessibleRealInboxes(employeeId);
-        var virtualInboxes = GetAccessibleInboxes(employeeId);
         DateTimeOffset? latest = null;
-
-        foreach (var account in realInboxes)
+        foreach (var meta in EnumerateAccessibleUnreadInboxMetadata(employeeId))
         {
-            var folders = _folders.GetByAccount(account.Id);
-            var inboxFolder = folders.FirstOrDefault(f => f.IsInbox)
-                              ?? folders.FirstOrDefault(f => f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
-            if (inboxFolder == null) continue;
-
-            foreach (var meta in _messages.GetFolderMetadata(account.Id, inboxFolder.Path))
+            if (!latest.HasValue || meta.Date > latest.Value)
             {
-                if (!meta.IsRead && (!latest.HasValue || meta.Date > latest.Value))
-                {
-                    latest = meta.Date;
-                }
+                latest = meta.Date;
             }
         }
-
-        foreach (var inbox in virtualInboxes)
-        {
-            var folders = _folders.GetByAccount(inbox.AccountId);
-            var inboxFolder = folders.FirstOrDefault(f => f.IsInbox)
-                              ?? folders.FirstOrDefault(f => f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
-            if (inboxFolder == null) continue;
-
-            var filter = GetMetadataFilterForInbox(inbox);
-            foreach (var meta in _messages.GetFolderMetadata(inbox.AccountId, inboxFolder.Path))
-            {
-                if (!meta.IsRead && (filter == null || filter(meta)) && (!latest.HasValue || meta.Date > latest.Value))
-                {
-                    latest = meta.Date;
-                }
-            }
-        }
-
         return latest;
     }
 
     public List<EmailMessage> GetInboxMessages(EmailInbox inbox, int count = 50, DateTime? beforeDateUtc = null)
     {
-        var folders = _folders.GetByAccount(inbox.AccountId);
-        var inboxFolder = folders.FirstOrDefault(f => f.IsInbox)
-                          ?? folders.FirstOrDefault(f => f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+        var inboxFolder = GetPrimaryRootInboxFolder(inbox.AccountId);
         if (inboxFolder == null) return [];
 
         var filter = GetMetadataFilterForInbox(inbox);
@@ -432,9 +547,7 @@ public class EmailInboxService : IEmailInboxService
     public List<EmailMessage> GetRealInboxMessages(string accountId, int count = 50, DateTime? beforeDateUtc = null)
     {
         if (string.IsNullOrWhiteSpace(accountId)) return [];
-        var folders = _folders.GetByAccount(accountId);
-        var inboxFolder = folders.FirstOrDefault(f => f.IsInbox)
-                          ?? folders.FirstOrDefault(f => f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+        var inboxFolder = GetPrimaryRootInboxFolder(accountId);
         if (inboxFolder == null) return [];
 
         return beforeDateUtc.HasValue
@@ -601,78 +714,34 @@ public class EmailInboxService : IEmailInboxService
         return identity;
     }
 
-    public EmailSendingIdentity EnsureVirtualInboxSendingIdentity(EmailInbox inbox, string outgoingServerConfigId, string? displayName = null)
+    private static void AddMailboxLinkedIdentities(
+        Dictionary<string, EmailSendingIdentity> target,
+        IReadOnlyDictionary<string, EmailSendingIdentity> allIdentitiesById,
+        bool mailboxIsServerManaged,
+        string? mailboxOwnerEmployeeId,
+        string? defaultIdentityId,
+        IEnumerable<string>? linkedIdentityIds,
+        string? autoCreatedIdentityId = null)
     {
-        if (inbox == null) throw new ArgumentNullException(nameof(inbox));
-
-        var primaryAddr = inbox.PrimaryAddress ?? string.Empty;
-        var (localUser, domain) = SplitEmailAddress(primaryAddr);
-
-        var settings = _companyProfile?.Get()?.EmailSettings;
-        var sendingServer = settings?.SendingServers?.FirstOrDefault(s => string.Equals(s.Id, outgoingServerConfigId, StringComparison.OrdinalIgnoreCase));
-        if (string.IsNullOrWhiteSpace(domain) && sendingServer != null && !string.IsNullOrWhiteSpace(sendingServer.Domain))
+        void TryAdd(string? identityId)
         {
-            domain = sendingServer.Domain.Trim().TrimStart('@').ToLowerInvariant();
-        }
-        if (string.IsNullOrWhiteSpace(localUser) && !string.IsNullOrWhiteSpace(inbox.Name))
-        {
-            localUser = inbox.Name.Trim().ToLowerInvariant().Replace(' ', '.');
-        }
-
-        var existing = _identities.GetAll().FirstOrDefault(i =>
-            i.SourceType == EmailIdentitySourceType.VirtualInbox &&
-            string.Equals(i.SourceInboxId, inbox.Id, StringComparison.OrdinalIgnoreCase));
-
-        var resolvedDisplayName = !string.IsNullOrWhiteSpace(displayName)
-            ? displayName.Trim()
-            : (!string.IsNullOrWhiteSpace(inbox.Name) ? inbox.Name.Trim() : $"{localUser}@{domain}");
-
-        if (existing == null)
-        {
-            existing = new EmailSendingIdentity
+            if (!string.IsNullOrWhiteSpace(identityId) &&
+                allIdentitiesById.TryGetValue(identityId, out var identity) &&
+                CanMailboxLinkIdentity(identity, mailboxIsServerManaged, mailboxOwnerEmployeeId))
             {
-                OwnerEmployeeId = inbox.OwnerEmployeeId,
-                IsServerManaged = inbox.IsServerManaged,
-                SourceType = EmailIdentitySourceType.VirtualInbox,
-                SourceInboxId = inbox.Id,
-                SourceAccountId = inbox.AccountId,
-                SendingServerConfigId = outgoingServerConfigId,
-                DisplayName = resolvedDisplayName,
-                Username = localUser,
-                Domain = domain,
-                AllowedUserIds = new List<string>(inbox.AllowedUserIds ?? []),
-                AllowedTeamIds = new List<string>(inbox.AllowedTeamIds ?? [])
-            };
-        }
-        else
-        {
-            existing.OwnerEmployeeId = inbox.OwnerEmployeeId;
-            existing.IsServerManaged = inbox.IsServerManaged;
-            existing.SourceType = EmailIdentitySourceType.VirtualInbox;
-            existing.SourceInboxId = inbox.Id;
-            existing.SourceAccountId = inbox.AccountId;
-            existing.SendingServerConfigId = outgoingServerConfigId;
-            existing.DisplayName = resolvedDisplayName;
-            if (!string.IsNullOrWhiteSpace(localUser)) existing.Username = localUser;
-            if (!string.IsNullOrWhiteSpace(domain)) existing.Domain = domain;
-            existing.AllowedUserIds = new List<string>(inbox.AllowedUserIds ?? []);
-            existing.AllowedTeamIds = new List<string>(inbox.AllowedTeamIds ?? []);
+                target[identity.Id] = identity;
+            }
         }
 
-        _identities.Save(existing);
-
-        inbox.LinkedIdentityIds ??= [];
-        if (!inbox.LinkedIdentityIds.Contains(existing.Id, StringComparer.OrdinalIgnoreCase))
+        TryAdd(defaultIdentityId);
+        TryAdd(autoCreatedIdentityId);
+        if (linkedIdentityIds != null)
         {
-            inbox.LinkedIdentityIds.Add(existing.Id);
+            foreach (var linkedId in linkedIdentityIds)
+            {
+                TryAdd(linkedId);
+            }
         }
-        if (string.IsNullOrWhiteSpace(inbox.DefaultIdentityId))
-        {
-            inbox.DefaultIdentityId = existing.Id;
-        }
-        _inboxes.Save(inbox);
-
-        return existing;
     }
 
     public List<EmailSendingIdentity> GetPermittedIdentities(Employee employee, EmailInbox? inbox = null, IEnumerable<string>? replyReceivingAddresses = null, EmailAccount? realInbox = null) =>
@@ -680,15 +749,30 @@ public class EmailInboxService : IEmailInboxService
 
     public List<EmailSendingIdentity> GetPermittedIdentities(string employeeId, EmailInbox? inbox = null, IEnumerable<string>? replyReceivingAddresses = null, EmailAccount? realInbox = null)
     {
+        if (!IsEmployeeEligibleForIdentities(employeeId))
+        {
+            return [];
+        }
+
         var teamIds = GetUserTeamIds(employeeId);
         var archivedAccountIds = _accounts != null
             ? _accounts.GetAll().Where(a => a.IsArchived).Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var allIdentities = _identities.GetAll()
-            .Where(i => string.IsNullOrWhiteSpace(i.SourceAccountId) || !archivedAccountIds.Contains(i.SourceAccountId))
+            .Where(i => (string.IsNullOrWhiteSpace(i.SourceAccountId) || !archivedAccountIds.Contains(i.SourceAccountId)) &&
+                        IsIdentitySourceBackingAuthorized(i))
             .ToList();
+        var allIdentitiesById = new Dictionary<string, EmailSendingIdentity>(StringComparer.OrdinalIgnoreCase);
+        foreach (var identity in allIdentities)
+        {
+            if (!string.IsNullOrWhiteSpace(identity.Id) && !allIdentitiesById.ContainsKey(identity.Id))
+            {
+                allIdentitiesById[identity.Id] = identity;
+            }
+        }
         var userAccessibleIdentities = _identities.GetAccessibleForUser(employeeId, teamIds)
-            .Where(i => string.IsNullOrWhiteSpace(i.SourceAccountId) || !archivedAccountIds.Contains(i.SourceAccountId))
+            .Where(i => (string.IsNullOrWhiteSpace(i.SourceAccountId) || !archivedAccountIds.Contains(i.SourceAccountId)) &&
+                        IsIdentitySourceBackingAuthorized(i))
             .ToList();
 
         if (inbox == null && realInbox == null)
@@ -700,27 +784,35 @@ public class EmailInboxService : IEmailInboxService
             var accessibleInboxIds = accessibleInboxes.Select(i => i.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var accessibleRealInboxIds = accessibleRealInboxes.Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            var linkedIds = accessibleInboxes
-                .Where(i => i.LinkedIdentityIds != null)
-                .SelectMany(i => i.LinkedIdentityIds)
-                .Concat(accessibleInboxes.Where(i => !string.IsNullOrWhiteSpace(i.DefaultIdentityId)).Select(i => i.DefaultIdentityId!))
-                .Concat(accessibleRealInboxes.Where(a => a.LinkedIdentityIds != null).SelectMany(a => a.LinkedIdentityIds))
-                .Concat(accessibleRealInboxes.Where(a => !string.IsNullOrWhiteSpace(a.DefaultIdentityId)).Select(a => a.DefaultIdentityId!))
-                .Concat(accessibleRealInboxes.Where(a => !string.IsNullOrWhiteSpace(a.AutoCreatedIdentityId)).Select(a => a.AutoCreatedIdentityId!))
-                .Concat(allIdentities
-                    .Where(i => i.SourceType == EmailIdentitySourceType.VirtualInbox &&
-                                !string.IsNullOrWhiteSpace(i.SourceInboxId) &&
-                                accessibleInboxIds.Contains(i.SourceInboxId))
-                    .Select(i => i.Id))
-                .Concat(allIdentities
-                    .Where(i => i.SourceType == EmailIdentitySourceType.RealInbox &&
-                                !string.IsNullOrWhiteSpace(i.SourceAccountId) &&
-                                accessibleRealInboxIds.Contains(i.SourceAccountId))
-                    .Select(i => i.Id))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var aggregated = new Dictionary<string, EmailSendingIdentity>(StringComparer.OrdinalIgnoreCase);
 
-            return allIdentities
-                .Where(id => linkedIds.Contains(id.Id) || id.CanUserAccess(employeeId, teamIds))
+            foreach (var accessibleInbox in accessibleInboxes)
+            {
+                AddMailboxLinkedIdentities(aggregated, allIdentitiesById, accessibleInbox.IsServerManaged, accessibleInbox.OwnerEmployeeId,
+                    accessibleInbox.DefaultIdentityId, accessibleInbox.LinkedIdentityIds);
+            }
+
+            foreach (var accessibleRealInbox in accessibleRealInboxes)
+            {
+                AddMailboxLinkedIdentities(aggregated, allIdentitiesById, accessibleRealInbox.IsServerManaged, accessibleRealInbox.OwnerEmployeeId,
+                    accessibleRealInbox.DefaultIdentityId, accessibleRealInbox.LinkedIdentityIds, accessibleRealInbox.AutoCreatedIdentityId);
+            }
+
+            foreach (var identity in allIdentities)
+            {
+                if ((identity.SourceType == EmailIdentitySourceType.VirtualInbox &&
+                     !string.IsNullOrWhiteSpace(identity.SourceInboxId) &&
+                     accessibleInboxIds.Contains(identity.SourceInboxId)) ||
+                    (identity.SourceType == EmailIdentitySourceType.RealInbox &&
+                     !string.IsNullOrWhiteSpace(identity.SourceAccountId) &&
+                     accessibleRealInboxIds.Contains(identity.SourceAccountId)) ||
+                    identity.CanUserAccess(employeeId, teamIds))
+                {
+                    aggregated[identity.Id] = identity;
+                }
+            }
+
+            return aggregated.Values
                 .OrderBy(id => id.DisplayName)
                 .ThenBy(id => id.EmailAddress)
                 .ToList();
@@ -728,23 +820,11 @@ public class EmailInboxService : IEmailInboxService
 
         var result = new Dictionary<string, EmailSendingIdentity>(StringComparer.OrdinalIgnoreCase);
 
-        // 1. Process Virtual Inbox if specified and accessible to the user (takes precedence for virtual inboxes)
-        if (inbox != null && inbox.CanUserAccess(employeeId, teamIds))
+        // 1. Process Virtual Inbox if specified, accessible to the user, and its backing account is authorized
+        if (inbox != null && IsVirtualInboxBackingAccountAuthorized(inbox) && inbox.CanUserAccess(employeeId, teamIds))
         {
-            if (!string.IsNullOrWhiteSpace(inbox.DefaultIdentityId))
-            {
-                var def = allIdentities.FirstOrDefault(i => string.Equals(i.Id, inbox.DefaultIdentityId, StringComparison.OrdinalIgnoreCase));
-                if (def != null) result[def.Id] = def;
-            }
-
-            if (inbox.LinkedIdentityIds != null)
-            {
-                foreach (var linkedId in inbox.LinkedIdentityIds)
-                {
-                    var found = allIdentities.FirstOrDefault(i => string.Equals(i.Id, linkedId, StringComparison.OrdinalIgnoreCase));
-                    if (found != null) result[found.Id] = found;
-                }
-            }
+            AddMailboxLinkedIdentities(result, allIdentitiesById, inbox.IsServerManaged, inbox.OwnerEmployeeId,
+                inbox.DefaultIdentityId, inbox.LinkedIdentityIds);
 
             var inboxSourceIdentities = allIdentities.Where(i =>
                 i.SourceType == EmailIdentitySourceType.VirtualInbox &&
@@ -756,86 +836,25 @@ public class EmailInboxService : IEmailInboxService
 
             if (inbox.AllowDomainMatchedPersonalIdentity)
             {
-                var allowedDomains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                if (inbox.TargetAddresses != null)
-                {
-                    foreach (var addr in inbox.TargetAddresses)
-                    {
-                        var dom = ExtractDomain(addr);
-                        if (!string.IsNullOrEmpty(dom)) allowedDomains.Add(dom);
-                    }
-                }
-
-                if (replyReceivingAddresses != null)
-                {
-                    foreach (var addr in replyReceivingAddresses)
-                    {
-                        var dom = ExtractDomain(addr);
-                        if (!string.IsNullOrEmpty(dom)) allowedDomains.Add(dom);
-                    }
-                }
-
-                foreach (var personalId in userAccessibleIdentities)
-                {
-                    if (allowedDomains.Count == 0 || allowedDomains.Contains(personalId.EffectiveDomain))
-                    {
-                        result[personalId.Id] = personalId;
-                    }
-                }
+                var mailboxDomains = (inbox.TargetAddresses ?? []).Select(ExtractDomain);
+                AddDomainMatchedPersonalIdentities(result, userAccessibleIdentities, mailboxDomains, replyReceivingAddresses);
             }
         }
 
         // 2. Process Real Inbox if specified and accessible to the user
         if (realInbox != null)
         {
-            if (realInbox.CanUserAccess(employeeId, teamIds))
+            if (!realInbox.IsArchived && realInbox.CanUserAccess(employeeId, teamIds))
             {
-                if (!string.IsNullOrWhiteSpace(realInbox.DefaultIdentityId))
-                {
-                    var def = allIdentities.FirstOrDefault(i => string.Equals(i.Id, realInbox.DefaultIdentityId, StringComparison.OrdinalIgnoreCase));
-                    if (def != null) result[def.Id] = def;
-                }
-
-                if (!string.IsNullOrWhiteSpace(realInbox.AutoCreatedIdentityId))
-                {
-                    var autoId = allIdentities.FirstOrDefault(i => string.Equals(i.Id, realInbox.AutoCreatedIdentityId, StringComparison.OrdinalIgnoreCase));
-                    if (autoId != null) result[autoId.Id] = autoId;
-                }
-
-                if (realInbox.LinkedIdentityIds != null)
-                {
-                    foreach (var linkedId in realInbox.LinkedIdentityIds)
-                    {
-                        var found = allIdentities.FirstOrDefault(i => string.Equals(i.Id, linkedId, StringComparison.OrdinalIgnoreCase));
-                        if (found != null) result[found.Id] = found;
-                    }
-                }
+                AddMailboxLinkedIdentities(result, allIdentitiesById, realInbox.IsServerManaged, realInbox.OwnerEmployeeId,
+                    realInbox.DefaultIdentityId, realInbox.LinkedIdentityIds, realInbox.AutoCreatedIdentityId);
 
                 if (realInbox.AllowDomainMatchedPersonalIdentity && inbox == null)
                 {
-                    var allowedDomains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    if (!string.IsNullOrWhiteSpace(realInbox.PrimaryDomain))
-                    {
-                        allowedDomains.Add(realInbox.PrimaryDomain);
-                    }
-
-                    if (replyReceivingAddresses != null)
-                    {
-                        foreach (var addr in replyReceivingAddresses)
-                        {
-                            var dom = ExtractDomain(addr);
-                            if (!string.IsNullOrEmpty(dom)) allowedDomains.Add(dom);
-                        }
-                    }
-
-                    foreach (var personalId in userAccessibleIdentities)
-                    {
-                        if (allowedDomains.Count == 0 || allowedDomains.Contains(personalId.EffectiveDomain))
-                        {
-                            result[personalId.Id] = personalId;
-                        }
-                    }
+                    var mailboxDomains = !string.IsNullOrWhiteSpace(realInbox.PrimaryDomain)
+                        ? new[] { realInbox.PrimaryDomain }
+                        : Array.Empty<string>();
+                    AddDomainMatchedPersonalIdentities(result, userAccessibleIdentities, mailboxDomains, replyReceivingAddresses);
                 }
             }
         }
@@ -868,10 +887,13 @@ public class EmailInboxService : IEmailInboxService
         if (string.IsNullOrWhiteSpace(employeeId) || identity == null || string.IsNullOrWhiteSpace(identity.Id))
             return false;
 
+        if (!IsEmployeeEligibleForIdentities(employeeId))
+            return false;
+
         if (!string.IsNullOrWhiteSpace(inboxId))
         {
             var inbox = _inboxes?.GetById(inboxId);
-            if (inbox == null || !inbox.CanUserAccess(employeeId, GetUserTeamIds(employeeId)))
+            if (inbox == null || !IsVirtualInboxBackingAccountAuthorized(inbox) || !inbox.CanUserAccess(employeeId, GetUserTeamIds(employeeId)))
             {
                 return false;
             }
@@ -977,13 +999,26 @@ public class EmailInboxService : IEmailInboxService
 
     public List<string> GetAuthorizedEmployeeIdsForMessage(EmailMessage message)
     {
+        if (message == null || IsFamilyEdition())
+            return [];
+
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var account = _accounts?.GetById(message.AccountId);
-        var allEmployees = (_employees?.GetAll() ?? []).Where(e => e.IsActive && !e.IsSuspended && !e.IsBanned).ToList();
+        if (account is { IsArchived: true })
+            return [];
+
+        var allEmployees = (_employees?.GetAll() ?? [])
+            .Where(e => e.IsActive && !e.IsSuspended && !e.IsBanned &&
+                        FileAccessPermissionHelper.HasAssignedPermission(e, AppPermissions.Email.Use))
+            .ToList();
 
         if (account != null)
         {
-            if (!account.IsServerManaged && !string.IsNullOrWhiteSpace(account.OwnerEmployeeId))
+            if (!account.IsServerManaged &&
+                !string.IsNullOrWhiteSpace(account.OwnerEmployeeId) &&
+                (_employees == null ||
+                 (_employees.GetById(account.OwnerEmployeeId) is { IsSuspended: false } ownerEmp &&
+                  FileAccessPermissionHelper.HasAssignedPermission(ownerEmp, AppPermissions.Email.Use))))
             {
                 result.Add(account.OwnerEmployeeId);
             }
@@ -998,18 +1033,26 @@ public class EmailInboxService : IEmailInboxService
             }
         }
 
-        var accountInboxes = _inboxes?.GetByAccount(message.AccountId) ?? [];
-
-        foreach (var inbox in accountInboxes)
+        if (IsLocalDraftMessage(message) || IsPrimaryRootInboxMessage(message))
         {
-            if (DoesMessageMatchInbox(message, inbox))
+            var accountInboxes = _inboxes?.GetByAccount(message.AccountId) ?? [];
+
+            foreach (var inbox in accountInboxes)
             {
-                foreach (var emp in allEmployees)
+                if (!IsVirtualInboxBackingAccountAuthorized(inbox))
                 {
-                    var teamIds = GetUserTeamIds(emp.Id);
-                    if (inbox.CanUserAccess(emp.Id, teamIds))
+                    continue;
+                }
+
+                if (DoesMessageMatchInbox(message, inbox))
+                {
+                    foreach (var emp in allEmployees)
                     {
-                        result.Add(emp.Id);
+                        var teamIds = GetUserTeamIds(emp.Id);
+                        if (inbox.CanUserAccess(emp.Id, teamIds))
+                        {
+                            result.Add(emp.Id);
+                        }
                     }
                 }
             }
@@ -1028,7 +1071,13 @@ public class EmailInboxService : IEmailInboxService
     private static bool IsLocalDraftMessage(EmailMessage msg) =>
         string.Equals(msg.FolderPath, "LocalDrafts", StringComparison.OrdinalIgnoreCase);
 
-    private static bool CanEmployeeAccessLocalDraft(EmailMessage draft, string employeeId, EmailAccount? account, string accountId)
+    public bool CanEmployeeAccessLocalDraft(EmailMessage draft, string employeeId)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        return CanEmployeeAccessLocalDraft(draft, employeeId, _accounts?.GetById(draft.AccountId), draft.AccountId);
+    }
+
+    public static bool CanEmployeeAccessLocalDraft(EmailMessage draft, string employeeId, EmailAccount? account, string accountId)
     {
         if (string.IsNullOrWhiteSpace(employeeId))
             return false;
@@ -1051,16 +1100,36 @@ public class EmailInboxService : IEmailInboxService
 
     public bool CanUserAccessEmailMessage(Employee user, string accountId, string messageId)
     {
-        if (user == null || !user.IsActive || user.IsSuspended || user.IsBanned)
+        if (!FileAccessPermissionHelper.IsReadableUser(user))
             return false;
 
-        return CanUserAccessEmailMessage(user.Id, accountId, messageId, user.IsAdmin);
+        return CanUserAccessEmailMessageCore(user.Id, user, user.IsAdmin, accountId, messageId);
     }
 
-    public bool CanUserAccessEmailMessage(string employeeId, string accountId, string messageId, bool isAdmin = false)
+    public bool CanUserAccessEmailMessage(string employeeId, string accountId, string messageId, bool isAdmin = false) =>
+        CanUserAccessEmailMessageCore(employeeId, suppliedUser: null, isAdmin, accountId, messageId);
+
+    private bool CanUserAccessEmailMessageCore(string employeeId, Employee? suppliedUser, bool isAdminHint, string accountId, string messageId)
     {
-        if (string.IsNullOrWhiteSpace(employeeId) || string.IsNullOrWhiteSpace(accountId))
+        if (IsFamilyEdition() || string.IsNullOrWhiteSpace(employeeId) || string.IsNullOrWhiteSpace(accountId))
             return false;
+
+        var persistedUser = _employees?.GetById(employeeId);
+        if (_employees != null && persistedUser == null && suppliedUser == null)
+        {
+            return false;
+        }
+
+        var effectiveUser = persistedUser ?? suppliedUser;
+        if (effectiveUser != null && !FileAccessPermissionHelper.IsReadableUser(effectiveUser))
+        {
+            return false;
+        }
+
+        bool isEffectiveAdmin = effectiveUser?.IsAdmin ?? isAdminHint;
+        bool hasEmailUsePermission = effectiveUser != null
+            ? FileAccessPermissionHelper.HasAssignedPermission(effectiveUser, AppPermissions.Email.Use)
+            : (isAdminHint || _employees == null);
 
         var account = _accounts?.GetById(accountId);
         var teamIds = GetUserTeamIds(employeeId);
@@ -1071,7 +1140,7 @@ public class EmailInboxService : IEmailInboxService
         {
             if (account.IsServerManaged)
             {
-                hasFullRealInboxAccess = isAdmin || account.CanUserAccess(employeeId, teamIds);
+                hasFullRealInboxAccess = isEffectiveAdmin || account.CanUserAccess(employeeId, teamIds);
             }
             else
             {
@@ -1080,7 +1149,7 @@ public class EmailInboxService : IEmailInboxService
         }
         else
         {
-            hasFullRealInboxAccess = isAdmin || string.Equals(employeeId, accountId, StringComparison.OrdinalIgnoreCase);
+            hasFullRealInboxAccess = isEffectiveAdmin || string.Equals(employeeId, accountId, StringComparison.OrdinalIgnoreCase);
         }
 
         var msg = !string.IsNullOrWhiteSpace(messageId)
@@ -1091,28 +1160,58 @@ public class EmailInboxService : IEmailInboxService
         // on shared or server-managed accounts cannot read or download attachments from another user's unsent draft.
         if (msg != null && IsLocalDraftMessage(msg))
         {
-            if (!CanEmployeeAccessLocalDraft(msg, employeeId, account, accountId))
+            if (!hasEmailUsePermission || !CanEmployeeAccessLocalDraft(msg, employeeId, account, accountId))
             {
                 return false;
             }
         }
 
-        if (hasFullRealInboxAccess)
+        if (hasFullRealInboxAccess && hasEmailUsePermission)
         {
             return true;
         }
 
-        // Check Virtual Inbox access on this account
-        var virtualInboxes = GetAccessibleInboxes(employeeId)
-            .Where(i => string.Equals(i.AccountId, accountId, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        // Check Company Bill Inbox access on the bound server-managed account (never personal mailboxes)
+        var billInboxSettings = _companyProfile?.GetAccounting()?.BillInbox;
+        if (billInboxSettings != null &&
+            !string.IsNullOrWhiteSpace(billInboxSettings.AccountId) &&
+            string.Equals(billInboxSettings.AccountId.Trim(), accountId, StringComparison.OrdinalIgnoreCase) &&
+            (string.Equals(accountId, CompanyBillInboxConstants.SystemEmployeeId, StringComparison.OrdinalIgnoreCase) ||
+             account is { IsServerManaged: true }))
+        {
+            bool hasBillPermission = isEffectiveAdmin || (effectiveUser != null &&
+                (FileAccessPermissionHelper.HasAssignedPermission(effectiveUser, AppPermissions.Finance.AccessAccounting) ||
+                 FileAccessPermissionHelper.HasAssignedPermission(effectiveUser, AppPermissions.Purchases.ViewBills) ||
+                 FileAccessPermissionHelper.HasAssignedPermission(effectiveUser, AppPermissions.Purchases.ManageBills) ||
+                 FileAccessPermissionHelper.HasAssignedPermission(effectiveUser, AppPermissions.Purchases.ApproveBills)));
 
-        if (virtualInboxes.Count == 0)
+            if (hasBillPermission && (msg == null || !IsLocalDraftMessage(msg)))
+            {
+                if (string.IsNullOrWhiteSpace(billInboxSettings.InboxId))
+                {
+                    return true;
+                }
+
+                var billVirtualInbox = _inboxes?.GetById(billInboxSettings.InboxId.Trim());
+                if (billVirtualInbox is { IsServerManaged: true } && msg != null && DoesMessageMatchInbox(msg, billVirtualInbox))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (!hasEmailUsePermission || _inboxes == null)
         {
             return false;
         }
 
-        if (msg == null)
+        // Check Virtual Inbox access on this account
+        var virtualInboxes = _inboxes.GetAccessibleForUser(employeeId, teamIds)
+            .Where(i => IsVirtualInboxBackingAccountAuthorized(i) &&
+                        string.Equals(i.AccountId, accountId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (virtualInboxes.Count == 0 || msg == null)
         {
             return false;
         }
@@ -1122,14 +1221,46 @@ public class EmailInboxService : IEmailInboxService
             return CanEmployeeAccessLocalDraft(msg, employeeId, account, accountId);
         }
 
-        return virtualInboxes.Any(inbox => DoesMessageMatchInbox(msg, inbox));
+        return IsPrimaryRootInboxMessage(msg) &&
+               virtualInboxes.Any(inbox => DoesMessageMatchInbox(msg, inbox));
     }
 
-    public void SetRealInboxArchived(string accountId, bool isArchived)
+    private void AuthorizeEntityMutationCaller(string? callerEmployeeId, bool isServerManagedEntity, string? ownerEmployeeId)
+    {
+        if (_employees == null && string.IsNullOrWhiteSpace(callerEmployeeId))
+        {
+            return;
+        }
+
+        var caller = !string.IsNullOrWhiteSpace(callerEmployeeId) ? _employees?.GetById(callerEmployeeId) : null;
+        if (caller == null || !caller.IsActive || caller.IsBanned || caller.IsSuspended)
+        {
+            throw new UnauthorizedAccessException("Active non-suspended account required to modify email settings.");
+        }
+
+        if (isServerManagedEntity)
+        {
+            if (!caller.IsAdmin && !caller.HasPermission(AppPermissions.Admin.ManageSettings))
+            {
+                throw new UnauthorizedAccessException("Admin or ManageSettings permission is required to modify server-managed email configuration.");
+            }
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(ownerEmployeeId) ||
+            !string.Equals(caller.Id, ownerEmployeeId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException("Only the owner may modify this personal email entity.");
+        }
+    }
+
+    public void SetRealInboxArchived(string accountId, bool isArchived, string? callerEmployeeId = null)
     {
         if (string.IsNullOrWhiteSpace(accountId) || _accounts == null) return;
         var account = _accounts.GetById(accountId);
         if (account == null) return;
+
+        AuthorizeEntityMutationCaller(callerEmployeeId, account.IsServerManaged, account.OwnerEmployeeId);
 
         account.IsArchived = isArchived;
         account.ArchivedAt = isArchived ? DateTime.UtcNow : null;
@@ -1143,19 +1274,27 @@ public class EmailInboxService : IEmailInboxService
         _syncStateService?.NotifyUnreadCountChanged(accountId);
     }
 
-    public void DeleteRealInbox(string accountId)
+    public void DeleteRealInbox(string accountId, string? callerEmployeeId = null)
     {
         if (string.IsNullOrWhiteSpace(accountId)) return;
 
-        _idleService?.StopWatchingAccount(accountId);
-
         var account = _accounts?.GetById(accountId);
+        if (account != null)
+        {
+            AuthorizeEntityMutationCaller(callerEmployeeId, account.IsServerManaged, account.OwnerEmployeeId);
+        }
+        else if (!string.IsNullOrWhiteSpace(callerEmployeeId))
+        {
+            AuthorizeEntityMutationCaller(callerEmployeeId, isServerManagedEntity: true, ownerEmployeeId: null);
+        }
+
+        _idleService?.StopWatchingAccount(accountId);
 
         if (_inboxes != null)
         {
             foreach (var inbox in _inboxes.GetByAccount(accountId).ToList())
             {
-                DeleteVirtualInbox(inbox.Id);
+                DeleteVirtualInboxCore(inbox.Id);
             }
         }
 
@@ -1170,7 +1309,7 @@ public class EmailInboxService : IEmailInboxService
 
             foreach (var identityId in identitiesToDelete)
             {
-                DeleteSendingIdentity(identityId);
+                DeleteSendingIdentityCore(identityId);
             }
         }
 
@@ -1180,10 +1319,25 @@ public class EmailInboxService : IEmailInboxService
         _syncStateService?.RemoveAccount(accountId);
     }
 
-    public void DeleteVirtualInbox(string inboxId)
+    public void DeleteVirtualInbox(string inboxId, string? callerEmployeeId = null)
     {
         if (string.IsNullOrWhiteSpace(inboxId)) return;
 
+        var inbox = _inboxes?.GetById(inboxId);
+        if (inbox != null)
+        {
+            AuthorizeEntityMutationCaller(callerEmployeeId, inbox.IsServerManaged, inbox.OwnerEmployeeId);
+        }
+        else if (!string.IsNullOrWhiteSpace(callerEmployeeId))
+        {
+            AuthorizeEntityMutationCaller(callerEmployeeId, isServerManagedEntity: true, ownerEmployeeId: null);
+        }
+
+        DeleteVirtualInboxCore(inboxId);
+    }
+
+    private void DeleteVirtualInboxCore(string inboxId)
+    {
         var inbox = _inboxes?.GetById(inboxId);
 
         if (_identities != null)
@@ -1196,7 +1350,7 @@ public class EmailInboxService : IEmailInboxService
 
             foreach (var identityId in sourcedIdentities)
             {
-                DeleteSendingIdentity(identityId);
+                DeleteSendingIdentityCore(identityId);
             }
         }
 
@@ -1208,24 +1362,81 @@ public class EmailInboxService : IEmailInboxService
         }
     }
 
-    public void DeleteSendingIdentity(string identityId)
+    public void DeleteSendingIdentity(string identityId, string? callerEmployeeId = null)
     {
         if (string.IsNullOrWhiteSpace(identityId)) return;
 
+        var identity = _identities?.GetById(identityId);
+        if (identity != null)
+        {
+            AuthorizeEntityMutationCaller(callerEmployeeId, identity.IsServerManaged, identity.OwnerEmployeeId);
+        }
+        else if (!string.IsNullOrWhiteSpace(callerEmployeeId))
+        {
+            AuthorizeEntityMutationCaller(callerEmployeeId, isServerManagedEntity: true, ownerEmployeeId: null);
+        }
+
+        DeleteSendingIdentityCore(identityId);
+    }
+
+    private static void AddDomainMatchedPersonalIdentities(
+        Dictionary<string, EmailSendingIdentity> result,
+        List<EmailSendingIdentity> userAccessibleIdentities,
+        IEnumerable<string> mailboxDomains,
+        IEnumerable<string>? replyReceivingAddresses)
+    {
+        var allowedDomains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dom in mailboxDomains)
+        {
+            if (!string.IsNullOrWhiteSpace(dom)) allowedDomains.Add(dom);
+        }
+
+        if (replyReceivingAddresses != null)
+        {
+            foreach (var addr in replyReceivingAddresses)
+            {
+                var dom = ExtractDomain(addr);
+                if (!string.IsNullOrEmpty(dom)) allowedDomains.Add(dom);
+            }
+        }
+
+        foreach (var personalId in userAccessibleIdentities)
+        {
+            if (allowedDomains.Count == 0 || allowedDomains.Contains(personalId.EffectiveDomain))
+            {
+                result[personalId.Id] = personalId;
+            }
+        }
+    }
+
+    private static bool UnlinkIdentityReferences(
+        string identityId,
+        List<string>? linkedIdentityIds,
+        ref string? defaultIdentityId)
+    {
+        bool modified = false;
+        if (linkedIdentityIds != null && linkedIdentityIds.RemoveAll(id => string.Equals(id, identityId, StringComparison.OrdinalIgnoreCase)) > 0)
+        {
+            modified = true;
+        }
+        if (string.Equals(defaultIdentityId, identityId, StringComparison.OrdinalIgnoreCase))
+        {
+            defaultIdentityId = linkedIdentityIds?.FirstOrDefault();
+            modified = true;
+        }
+        return modified;
+    }
+
+    private void DeleteSendingIdentityCore(string identityId)
+    {
         if (_accounts != null)
         {
             foreach (var acc in _accounts.GetAll().ToList())
             {
-                bool modified = false;
-                if (acc.LinkedIdentityIds != null && acc.LinkedIdentityIds.RemoveAll(id => string.Equals(id, identityId, StringComparison.OrdinalIgnoreCase)) > 0)
-                {
-                    modified = true;
-                }
-                if (string.Equals(acc.DefaultIdentityId, identityId, StringComparison.OrdinalIgnoreCase))
-                {
-                    acc.DefaultIdentityId = acc.LinkedIdentityIds?.FirstOrDefault();
-                    modified = true;
-                }
+                var defaultId = acc.DefaultIdentityId;
+                bool modified = UnlinkIdentityReferences(identityId, acc.LinkedIdentityIds, ref defaultId);
+                acc.DefaultIdentityId = defaultId;
                 if (string.Equals(acc.AutoCreatedIdentityId, identityId, StringComparison.OrdinalIgnoreCase))
                 {
                     acc.AutoCreatedIdentityId = null;
@@ -1242,18 +1453,10 @@ public class EmailInboxService : IEmailInboxService
         {
             foreach (var inbox in _inboxes.GetAll().ToList())
             {
-                bool modified = false;
-                if (inbox.LinkedIdentityIds != null && inbox.LinkedIdentityIds.RemoveAll(id => string.Equals(id, identityId, StringComparison.OrdinalIgnoreCase)) > 0)
+                var defaultId = inbox.DefaultIdentityId;
+                if (UnlinkIdentityReferences(identityId, inbox.LinkedIdentityIds, ref defaultId))
                 {
-                    modified = true;
-                }
-                if (string.Equals(inbox.DefaultIdentityId, identityId, StringComparison.OrdinalIgnoreCase))
-                {
-                    inbox.DefaultIdentityId = inbox.LinkedIdentityIds?.FirstOrDefault();
-                    modified = true;
-                }
-                if (modified)
-                {
+                    inbox.DefaultIdentityId = defaultId;
                     _inboxes.Save(inbox);
                 }
             }

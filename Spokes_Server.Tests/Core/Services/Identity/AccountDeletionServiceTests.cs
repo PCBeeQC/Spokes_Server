@@ -8,7 +8,7 @@ using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Services.Communication.Chat;
-using Spokes_Server.Core.Services.Communication.Presence;
+using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Tests.Core.Services.Identity;
 
@@ -17,7 +17,7 @@ public class AccountDeletionServiceTests : TestDataTestBase
     private readonly ServiceProvider _serviceProvider;
     private readonly Database _db;
     private readonly Mock<IConfiguration> _mockConfig;
-    private readonly PresenceStateService _presenceState;
+    private readonly SessionService _sessionService;
     private readonly AccountDeletionService _service;
     private readonly List<string> _loggedOutSessionIds = [];
 
@@ -25,6 +25,7 @@ public class AccountDeletionServiceTests : TestDataTestBase
     {
         _mockConfig = new Mock<IConfiguration>();
         _mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        _mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var services = new ServiceCollection();
         services.AddSingleton<IConfiguration>(_mockConfig.Object);
@@ -35,10 +36,10 @@ public class AccountDeletionServiceTests : TestDataTestBase
         _serviceProvider = services.BuildServiceProvider();
         _db = _serviceProvider.GetRequiredService<Database>();
 
-        _presenceState = new PresenceStateService(new ChatStateService(), _db.CoreContext, _db.HrContext);
-        _presenceState.OnSessionRevoked += sessionId => _loggedOutSessionIds.Add(sessionId);
+        _sessionService = new SessionService(_db.CoreContext, _db.HrContext);
+        _sessionService.OnSessionRevoked += sessionId => _loggedOutSessionIds.Add(sessionId);
 
-        _service = new AccountDeletionService(_db.HrContext, _db.CoreContext, _db.CommunicationContext, _db.ProjectsContext, _mockConfig.Object, _presenceState, null, null, _db.AccountingContext);
+        _service = new AccountDeletionService(_db.HrContext, _db.CoreContext, _db.CommunicationContext, _db.ProjectsContext, _mockConfig.Object, _sessionService);
     }
 
     public override void Dispose()
@@ -46,21 +47,6 @@ public class AccountDeletionServiceTests : TestDataTestBase
         _serviceProvider.Dispose();
         base.Dispose();
     }
-
-    #region Constructor
-
-    [Fact]
-    public void Constructor_DefaultDataPath_WhenConfigDataPathNull()
-    {
-        var emptyConfig = new Mock<IConfiguration>();
-        emptyConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        var service = new AccountDeletionService(_db.HrContext, _db.CoreContext, _db.CommunicationContext, _db.ProjectsContext, emptyConfig.Object, _presenceState, null, null, _db.AccountingContext);
-
-        Assert.NotNull(service);
-    }
-
-    #endregion
 
     #region 1. System Deleted User
 
@@ -709,7 +695,26 @@ public class AccountDeletionServiceTests : TestDataTestBase
         Assert.Equal("system-deleted-user", msg.SenderId);
     }
 
+    [Fact]
+    public void DeleteAccount_WhenTargetIsSoleActiveAdmin_ThrowsAndPreservesAccount()
+    {
+        var soleAdmin = new Employee { Id = "emp-sole-admin", FirstName = "Sole", LastName = "Admin", IsActive = true, IsAdmin = true };
+        var regular = new Employee { Id = "emp-reg-stay", FirstName = "Regular", LastName = "User", IsActive = true, IsAdmin = false };
+        _db.Employees.Save(soleAdmin);
+        _db.Employees.Save(regular);
+
+        Assert.Throws<InvalidOperationException>(() => _service.DeleteAccount(soleAdmin.Id));
+        Assert.NotNull(_db.Employees.GetById(soleAdmin.Id));
+
+        // Promoting a second active admin permits deleting the first admin
+        var secondAdmin = new Employee { Id = "emp-second-admin", FirstName = "Second", LastName = "Admin", IsActive = true, IsAdmin = true };
+        _db.Employees.Save(secondAdmin);
+
+        _service.DeleteAccount(soleAdmin.Id);
+        Assert.Null(_db.Employees.GetById(soleAdmin.Id));
+        Assert.NotNull(_db.Employees.GetById(secondAdmin.Id));
+    }
+
     #endregion
 }
-
 

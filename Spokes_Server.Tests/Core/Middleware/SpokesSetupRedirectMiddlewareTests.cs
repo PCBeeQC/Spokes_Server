@@ -27,6 +27,7 @@ public class SpokesSetupRedirectMiddlewareTests : TestDataTestBase
     {
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
         _persistence = new DiskPersistenceService(mockLogger.Object);
@@ -289,16 +290,34 @@ public class SpokesSetupRedirectMiddlewareTests : TestDataTestBase
     }
 
     [Fact]
-    public void SpokesTheme_ConfiguresRobotoTypography()
+    public async Task WhenSetupComplete_NonHtmlSetupRoute_Returns403JsonWithoutCallingNext()
     {
+        // Arrange
+        var config = _systemConfigRepo.Get();
+        config.IsSetupComplete = true;
+        _systemConfigRepo.Save(config);
+
+        bool nextCalled = false;
+        var pipeline = BuildSetupPipeline(_ => nextCalled = true);
+
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/setup";
+        context.Request.Headers.Accept = "application/json";
+        context.Response.Body = new MemoryStream();
+        context.RequestServices = _serviceProvider;
+
         // Act
-        var theme = SpokesTheme.CreateTheme();
+        await pipeline(context);
 
         // Assert
-        Assert.NotNull(theme);
-        Assert.NotNull(theme.Typography.Default.FontFamily);
-        Assert.Contains("Roboto", theme.Typography.Default.FontFamily);
-        Assert.Equal("Roboto", theme.Typography.Default.FontFamily[0]);
+        Assert.False(nextCalled);
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.Equal("no-store", context.Response.Headers.CacheControl.ToString());
+        context.Response.Body.Position = 0;
+        using var doc = await JsonDocument.ParseAsync(context.Response.Body);
+        Assert.False(doc.RootElement.GetProperty("isSuccess").GetBoolean());
+        Assert.Equal("SETUP_ALREADY_COMPLETE", doc.RootElement.GetProperty("code").GetString());
     }
 }
 

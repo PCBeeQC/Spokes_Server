@@ -1,4 +1,12 @@
+using System;
+using Spokes_Server.Core.Services.Maintenance.Destinations;
+
 namespace Spokes_Server.Core.Configuration;
+
+public interface IBackupDestinationConfig
+{
+    bool IsEnabled { get; set; }
+}
 
 public class BackupConfig
 {
@@ -31,16 +39,27 @@ public class BackupConfig
 
     private SftpDestinationConfig _sftp = new();
     public SftpDestinationConfig Sftp { get => _sftp ??= new(); set => _sftp = value ?? new(); }
+
+    public IBackupDestinationConfig GetDestinationConfig(BackupDestinationType type) => type switch
+    {
+        BackupDestinationType.LocalMount => SecondaryMount,
+        BackupDestinationType.S3 => S3,
+        BackupDestinationType.GoogleDrive => GoogleDrive,
+        BackupDestinationType.GitHub => GitHub,
+        BackupDestinationType.WebDav => WebDav,
+        BackupDestinationType.Sftp => Sftp,
+        _ => throw new ArgumentOutOfRangeException(nameof(type), type, null)
+    };
 }
 
-public class LocalMountDestinationConfig
+public class LocalMountDestinationConfig : IBackupDestinationConfig
 {
     public bool IsEnabled { get; set; }
     public string MountPath { get; set; } = string.Empty;
     public int RetentionCount { get; set; } = 5;
 }
 
-public class S3DestinationConfig
+public class S3DestinationConfig : IBackupDestinationConfig
 {
     public bool IsEnabled { get; set; }
     public string Endpoint { get; set; } = string.Empty; // e.g. https://<accountid>.r2.cloudflarestorage.com or http://minio:9000
@@ -53,16 +72,15 @@ public class S3DestinationConfig
     public int RetentionCount { get; set; } = 5;
 }
 
-public class GoogleDriveDestinationConfig
+public class GoogleDriveDestinationConfig : IBackupDestinationConfig
 {
     public bool IsEnabled { get; set; }
     public string RefreshToken { get; set; } = string.Empty;
     public string TargetFolderName { get; set; } = "Spokes Backups";
-    public string? AccountEmail { get; set; }
     public int RetentionCount { get; set; } = 5;
 }
 
-public class GitHubDestinationConfig
+public class GitHubDestinationConfig : IBackupDestinationConfig
 {
     public bool IsEnabled { get; set; }
     public string PersonalAccessToken { get; set; } = string.Empty;
@@ -71,7 +89,7 @@ public class GitHubDestinationConfig
     public string? AccountUsername { get; set; }
 }
 
-public class WebDavDestinationConfig
+public class WebDavDestinationConfig : IBackupDestinationConfig
 {
     public bool IsEnabled { get; set; }
     public string ServerUrl { get; set; } = string.Empty; // e.g. https://nextcloud.example.com/remote.php/dav/files/user/backups/
@@ -80,7 +98,7 @@ public class WebDavDestinationConfig
     public int RetentionCount { get; set; } = 5;
 }
 
-public class SftpDestinationConfig
+public class SftpDestinationConfig : IBackupDestinationConfig
 {
     public bool IsEnabled { get; set; }
     public string Host { get; set; } = string.Empty;

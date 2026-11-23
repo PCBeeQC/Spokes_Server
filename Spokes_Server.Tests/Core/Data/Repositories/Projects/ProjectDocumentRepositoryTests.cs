@@ -144,6 +144,7 @@ public class ProjectDocumentRepositoryTests : RepositoryTestBase
         
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(emptyDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         var emptyRepo = new ProjectDocumentRepository(_writer, mockConfig.Object, _mockLogger.Object);
 
         // Act & Assert

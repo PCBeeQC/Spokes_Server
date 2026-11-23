@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
@@ -28,6 +29,7 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());
@@ -59,7 +61,7 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
             ProjectId = project.Id,
             Status = "Paid",
             Date = DateTime.Today.AddDays(-20),
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Id = "line-prepay-1", Description = "Deposit 1", Quantity = 1, UnitPrice = 1000m, IsPrepayment = true }
             }
@@ -74,7 +76,7 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
             ProjectId = project.Id,
             Status = "Paid",
             Date = DateTime.Today.AddDays(-10),
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Id = "line-credit-used", Description = "Credit", Quantity = 1, UnitPrice = -300m, IsCreditUsed = true, SourceId = "line-prepay-1" }
             }
@@ -88,7 +90,7 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
             InvoiceNumber = "INV-003",
             ProjectId = project.Id,
             Status = "Draft",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Id = "line-current-applied", Quantity = 1, UnitPrice = -200m, IsCreditUsed = true, SourceId = "line-prepay-1" }
             }
@@ -155,7 +157,7 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
         {
             Id = "po-1",
             Date = DateTime.Today,
-            Items = new List<PoItem>
+            LineItems = new List<PoItem>
             {
                 new() { Id = "po-item-1", ProjectId = project.Id, Description = "Hardware", Quantity = 2, UnitPrice = 50m }
             }
@@ -228,6 +230,12 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
 
         var request = new BillingSubmissionRequest
         {
+            Actor = new Employee
+            {
+                Id = "emp-billing",
+                IsActive = true,
+                Permissions = [AppPermissions.Finance.AccessAccounting, AppPermissions.Finance.ApproveInvoices]
+            },
             Invoice = invoice,
             LaborGroups = new List<BillingLaborGroup> { laborGroup },
             AcceptedQuotes = new List<Quote> { quote },
@@ -275,7 +283,7 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
             ProjectId = project.Id,
             Status = "Paid",
             Date = DateTime.Today.AddDays(-5),
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Id = "line-prepay-clamp", Description = "Deposit", Quantity = 1, UnitPrice = 400m, IsPrepayment = true }
             }
@@ -297,6 +305,12 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
 
         var request = new BillingSubmissionRequest
         {
+            Actor = new Employee
+            {
+                Id = "emp-billing",
+                IsActive = true,
+                Permissions = [AppPermissions.Finance.AccessAccounting, AppPermissions.Finance.ApproveInvoices]
+            },
             Invoice = targetInvoice,
             LaborGroups = new List<BillingLaborGroup>(),
             AcceptedQuotes = new List<Quote>(),

@@ -1,0 +1,426 @@
+@using System.IO
+@using System.Text
+@using Microsoft.AspNetCore.Components.Forms
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Components.Shared
+@inject Database Db
+@inject IBankReconciliationService ReconciliationService
+@inject IFinancialAccountService FinancialAccountService
+@inject IJurisdictionTemplateService JurisdictionService
+@inject ISnackbar Snackbar
+@inject UserService UserService
+@using Spokes_Server.Core.Constants
+
+<MudGrid Spacing="3">
+    @* Left / Top Panel: Import & Statement Selector *@
+    <MudItem xs="12" md="4">
+        <MudPaper Class="pa-4 mb-3" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-2">@BizLoc["Import Bank Statement"]</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-3">
+                @BizLoc["Upload OFX, QFX, or CSV bank statements to automatically match deposits and payments against Spokes."]
+            </MudText>
+
+            <FinancialAccountSelect @bind-Value="_bankGlAccountCode"
+                                    Label="@BizLoc["Financial Account"]"
+                                    Variant="Variant.Outlined"
+                                    Margin="Margin.Dense" />
+
+            <div class="mt-3">
+                @if (_canWriteAccounting)
+                {
+                    <MudButton HtmlTag="label"
+                               Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               FullWidth="true"
+                               StartIcon="@Icons.Material.Filled.UploadFile">
+                        @BizLoc["Upload Statement (.OFX / .QFX / .CSV)"]
+                        <InputFile OnChange="OnStatementFileSelected" accept=".ofx,.qfx,.csv,.xml" hidden />
+                    </MudButton>
+                }
+            </div>
+        </MudPaper>
+
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.subtitle1" Class="mb-2"><b>@BizLoc["Statements"] (@_statements.Count)</b></MudText>
+            @if (_statements.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    @BizLoc["No bank statements imported yet."]
+                </MudText>
+            }
+            else
+            {
+                <MudList T="string" SelectedValue="@_selectedStatement?.Id" Dense="true">
+                    @foreach (var stmt in _statements)
+                    {
+                        var matchedCount = stmt.Lines.Count(l => l.IsMatchedOrCategorized);
+                        <MudListItem Value="@stmt.Id" OnClick="@(() => SelectStatement(stmt))">
+                            <div class="d-flex justify-space-between align-center">
+                                <div>
+                                    <MudText Typo="Typo.body2"><b>@stmt.StatementName</b> — @FinancialAccountService.GetDisplayLabelByGlCode(stmt.GlAccountCode)</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @stmt.StartDate.ToString("yyyy-MM-dd") → @stmt.EndDate.ToString("yyyy-MM-dd") · @matchedCount/@stmt.Lines.Count @BizLoc["matched"]
+                                    </MudText>
+                                </div>
+                                <MudChip T="string" Size="Size.Small" Color="@(stmt.Status == BankStatementStatus.Reconciled ? Color.Success : Color.Warning)">
+                                    @stmt.Status
+                                </MudChip>
+                            </div>
+                        </MudListItem>
+                    }
+                </MudList>
+            }
+        </MudPaper>
+    </MudItem>
+
+    @* Right Panel: Statement Lines & Reconciliation Workbench *@
+    <MudItem xs="12" md="8">
+        @if (_selectedStatement == null)
+        {
+            <MudPaper Class="pa-6 d-flex flex-column align-center justify-center" Elevation="0" Outlined="true" Style="min-height: 320px;">
+                <MudIcon Icon="@Icons.Material.Filled.AccountBalance" Size="Size.Large" Color="Color.Secondary" Class="mb-2" />
+                <MudText Typo="Typo.h6">@BizLoc["Select or Import a Bank Statement"]</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    @BizLoc["Upload an OFX, QFX, or CSV statement to reconcile bank transactions with Invoices, Bills, Expenses, and Pay Runs."]
+                </MudText>
+            </MudPaper>
+        }
+        else
+        {
+            <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-3">
+                    <div>
+                        <MudText Typo="Typo.h6">
+                            @_selectedStatement.StatementName — @FinancialAccountService.GetDisplayLabelByGlCode(_selectedStatement.GlAccountCode)
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @_selectedStatement.StartDate.ToString("yyyy-MM-dd") → @_selectedStatement.EndDate.ToString("yyyy-MM-dd")
+                            · @BizLoc["Out-of-Balance Diff:"]
+                            <b style="color: @(Math.Abs(_selectedStatement.OutOfBalanceDifference) <= 0.01m ? "var(--mud-palette-success)" : "var(--mud-palette-warning)");">
+                                @_selectedStatement.OutOfBalanceDifference.ToString("C2")
+                            </b>
+                        </MudText>
+                    </div>
+                    <div class="d-flex align-center gap-2">
+                        @if (_selectedStatement.Status != BankStatementStatus.Reconciled && _canWriteAccounting)
+                        {
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Info"
+                                       Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.AutoFixHigh"
+                                       OnClick="RunAutoMatch">
+                                @BizLoc["Run Auto-Match"]
+                            </MudButton>
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Success"
+                                       Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Lock"
+                                       Disabled="@(!_selectedStatement.IsReadyToReconcile)"
+                                       OnClick="FinalizeSelectedStatement">
+                                @BizLoc["Finalize Reconciliation"]
+                            </MudButton>
+                        }
+                        else if (_selectedStatement.Status == BankStatementStatus.Reconciled)
+                        {
+                            <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.Verified">
+                                @BizLoc["Reconciled"]
+                            </MudChip>
+                        }
+                    </div>
+                </div>
+
+                @if (_selectedStatement.Status != BankStatementStatus.Reconciled && _canWriteAccounting)
+                {
+                    <MudGrid Spacing="2" Class="mb-3 align-center">
+                        <MudItem xs="12" sm="4">
+                            <MudNumericField T="decimal"
+                                             Value="_selectedStatement.OpeningBalance"
+                                             ValueChanged="@(async (decimal v) => await UpdateOpeningBalanceAsync(v))"
+                                             Label="@BizLoc["Opening Balance"]"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Format="N2"
+                                             Adornment="Adornment.Start"
+                                             AdornmentIcon="@Icons.Material.Filled.AttachMoney" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudNumericField T="decimal"
+                                             Value="_selectedStatement.ClosingBalance"
+                                             ValueChanged="@(async (decimal v) => await UpdateClosingBalanceAsync(v))"
+                                             Label="@BizLoc["Closing Balance"]"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Format="N2"
+                                             Adornment="Adornment.Start"
+                                             AdornmentIcon="@Icons.Material.Filled.AttachMoney" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudCheckBox T="bool" @bind-Value="_includeSalesTaxOnDirectPost" Dense="true" Color="Color.Primary"
+                                         Label="@BizLoc["Extract Sales Tax on Direct Categorization"]" />
+                        </MudItem>
+                    </MudGrid>
+                }
+
+                <MudTable Items="@_selectedStatement.Lines" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh Style="width: 105px;">@BizLoc["Date"]</MudTh>
+                        <MudTh>@BizLoc["Bank Description"]</MudTh>
+                        <MudTh Style="text-align: right; width: 120px;">@BizLoc["Amount"]</MudTh>
+                        <MudTh Style="width: 120px;">@Loc["Status"]</MudTh>
+                        <MudTh>@BizLoc["Matched Record / Category"]</MudTh>
+                        <MudTh Style="text-align: right; min-width: 240px;">@Loc["Actions"]</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="line">
+                        <MudTd DataLabel="@BizLoc["Date"]">@line.Date.ToString("yyyy-MM-dd")</MudTd>
+                        <MudTd DataLabel="@BizLoc["Bank Description"]">
+                            <MudText Typo="Typo.body2"><b>@line.Description</b></MudText>
+                            @if (!string.IsNullOrWhiteSpace(line.Payee) && line.Payee != line.Description)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@line.Payee</MudText>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="@BizLoc["Amount"]" Style="text-align: right; font-weight: 700;">
+                            <MudText Color="@(line.Amount >= 0 ? Color.Success : Color.Error)" Typo="Typo.body2">
+                                <b>@line.Amount.ToString("C2")</b>
+                            </MudText>
+                        </MudTd>
+                        <MudTd DataLabel="@Loc["Status"]">
+                            <MudChip T="string" Size="Size.Small" Color="@GetMatchColor(line.MatchStatus)">
+                                @line.MatchStatus
+                            </MudChip>
+                        </MudTd>
+                        <MudTd DataLabel="@BizLoc["Matched Record / Category"]">
+                            @if (!string.IsNullOrWhiteSpace(line.MatchedDocumentSummary))
+                            {
+                                <MudText Typo="Typo.caption">@line.MatchedDocumentSummary</MudText>
+                            }
+                            else if (_selectedStatement.Status != BankStatementStatus.Reconciled && _canWriteAccounting)
+                            {
+                                <div style="min-width: 200px;">
+                                    <GlAccountSelect Value="@GetTargetGlForLine(line)"
+                                                     ValueChanged="@((string? v) => SetTargetGlForLine(line, v))"
+                                                     Dense="true"
+                                                     Margin="Margin.Dense"
+                                                     Variant="Variant.Outlined"
+                                                     Placeholder="@(line.Amount < 0 ? BizLoc["Bank Fees"].Value : BizLoc["Misc. Income"].Value)" />
+                                </div>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="@Loc["Actions"]" Style="text-align: right; white-space: nowrap;">
+                            @if (_selectedStatement.Status != BankStatementStatus.Reconciled && _canWriteAccounting)
+                            {
+                                @if (!line.IsMatchedOrCategorized)
+                                {
+                                    <div class="d-flex justify-end align-center gap-1">
+                                        @{
+                                            var candidates = ReconciliationService.GetCandidatesForLine(_selectedStatement, line, _currentUser);
+                                        }
+                                        @if (candidates.Count > 0)
+                                        {
+                                            <MudMenu Label="@BizLoc["Match"]" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Dense="true">
+                                                @foreach (var cand in candidates.Take(5))
+                                                {
+                                                    <MudMenuItem OnClick="@(() => MatchToCandidate(line, cand))">
+                                                        @cand.Summary (@cand.SignedBankMovement.ToString("C2"))
+                                                    </MudMenuItem>
+                                                }
+                                            </MudMenu>
+                                        }
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Primary"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => PostDirectCategorization(line))">
+                                            @BizLoc["Categorize & Post"]
+                                        </MudButton>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.LinkOff"
+                                                   Size="Size.Small"
+                                                   Color="Color.Warning"
+                                                   OnClick="@(() => Unmatch(line))" />
+                                }
+                            }
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudPaper>
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    private string? _bankGlAccountCode = "1020";
+    private List<BankStatement> _statements = [];
+    private BankStatement? _selectedStatement;
+    private bool _includeSalesTaxOnDirectPost;
+    private bool _canWriteAccounting;
+    private Spokes_Server.Core.Models.HR.Employee? _currentUser;
+    private readonly Dictionary<string, string> _selectedGlByLineId = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canWriteAccounting = _currentUser?.IsActiveUnsuspended == true &&
+                              _currentUser.HasPermission(AppPermissions.Finance.AccessAccounting);
+        JurisdictionService.EnsureChartOfAccountsSeeded();
+        _bankGlAccountCode = FinancialAccountService.ResolveDefaultGlCodeForMethod(null);
+        LoadStatements();
+    }
+
+    private async Task<bool> EnsureCanWriteAccountingAsync()
+    {
+        var liveUser = await UserService.GetEmployeeAsync();
+        _currentUser = liveUser ?? await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canWriteAccounting = liveUser?.IsActiveUnsuspended == true &&
+                              liveUser.HasPermission(AppPermissions.Finance.AccessAccounting);
+        if (_canWriteAccounting) return true;
+        Snackbar.Add("You do not have permission to modify accounting records.", Severity.Warning);
+        StateHasChanged();
+        return false;
+    }
+
+    private void LoadStatements()
+    {
+        _statements = Db.BankStatements?.GetAll().ToList() ?? [];
+        if (_selectedStatement != null)
+        {
+            _selectedStatement = _statements.FirstOrDefault(s => s.Id == _selectedStatement.Id) ?? _statements.FirstOrDefault();
+        }
+        else
+        {
+            _selectedStatement = _statements.FirstOrDefault();
+        }
+    }
+
+    private void SelectStatement(BankStatement statement)
+    {
+        _selectedStatement = statement;
+    }
+
+    private async Task UpdateOpeningBalanceAsync(decimal value)
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync())
+        {
+            LoadStatements();
+            return;
+        }
+        _selectedStatement.OpeningBalance = value;
+        Db.BankStatements?.Save(_selectedStatement);
+    }
+
+    private async Task UpdateClosingBalanceAsync(decimal value)
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync())
+        {
+            LoadStatements();
+            return;
+        }
+        _selectedStatement.ClosingBalance = value;
+        Db.BankStatements?.Save(_selectedStatement);
+    }
+
+    private string GetTargetGlForLine(BankTransactionLine line)
+    {
+        if (_selectedGlByLineId.TryGetValue(line.Id, out var code) && !string.IsNullOrWhiteSpace(code))
+            return code;
+        return line.Amount < 0
+            ? (Db.GlAccounts?.GetBySystemRole(GlSystemRole.BankChargesAndInterest)?.Code ?? "5800")
+            : (Db.GlAccounts?.GetBySystemRole(GlSystemRole.InterestAndOtherIncome)?.Code ?? "4800");
+    }
+
+    private void SetTargetGlForLine(BankTransactionLine line, string? code)
+    {
+        if (!string.IsNullOrWhiteSpace(code))
+            _selectedGlByLineId[line.Id] = code;
+    }
+
+    private async Task OnStatementFileSelected(InputFileChangeEventArgs e)
+    {
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        var file = e.File;
+        if (file == null) return;
+        try
+        {
+            await using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            var content = await reader.ReadToEndAsync();
+            var statement = ReconciliationService.ImportAndAutoMatch(content, file.Name, _bankGlAccountCode ?? "1020", actor: _currentUser);
+            LoadStatements();
+            _selectedStatement = _statements.FirstOrDefault(s => s.Id == statement.Id);
+            Snackbar.Add(BizLoc["Bank statement imported and auto-matched."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"{BizLoc["Failed to import statement:"].Value} {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task RunAutoMatch()
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        var matched = ReconciliationService.AutoMatchStatement(_selectedStatement, _currentUser);
+        Db.BankStatements?.Save(_selectedStatement);
+        LoadStatements();
+        Snackbar.Add(string.Format(BizLoc["Auto-match complete ({0} matched)."].Value, matched), Severity.Info);
+    }
+
+    private async Task MatchToCandidate(BankTransactionLine line, BankMatchCandidate candidate)
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        ReconciliationService.MatchLineToJournalEntry(_selectedStatement, line.Id, candidate.Entry.Id, actor: _currentUser);
+        LoadStatements();
+        Snackbar.Add(BizLoc["Transaction matched to journal entry."].Value, Severity.Success);
+    }
+
+    private async Task PostDirectCategorization(BankTransactionLine line)
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        var offsetCode = GetTargetGlForLine(line);
+        ReconciliationService.CategorizeUnmatchedLineDirect(_selectedStatement, line.Id, offsetCode, line.Description, _includeSalesTaxOnDirectPost, actor: _currentUser);
+        LoadStatements();
+        Snackbar.Add(BizLoc["Journal entry posted and transaction reconciled."].Value, Severity.Success);
+    }
+
+    private async Task Unmatch(BankTransactionLine line)
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        ReconciliationService.UnmatchLine(_selectedStatement, line.Id, _currentUser);
+        LoadStatements();
+    }
+
+    private async Task FinalizeSelectedStatement()
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        try
+        {
+            ReconciliationService.ReconcileAndLockStatement(_selectedStatement, _currentUser!.FullName, _currentUser);
+            LoadStatements();
+            Snackbar.Add(BizLoc["Bank statement reconciliation finalized and locked."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Warning);
+        }
+    }
+
+    private static Color GetMatchColor(string status) => status switch
+    {
+        BankLineMatchStatus.AutoMatched or BankLineMatchStatus.ManuallyMatched or BankLineMatchStatus.CategorizedDirect => Color.Success,
+        BankLineMatchStatus.Excluded => Color.Default,
+        _ => Color.Warning
+    };
+}

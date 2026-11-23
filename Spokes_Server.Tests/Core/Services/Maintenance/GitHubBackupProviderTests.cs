@@ -34,7 +34,8 @@ public class GitHubBackupProviderTests : IDisposable
 
         var configDict = new Dictionary<string, string?>
         {
-            ["DataPath"] = _testDir
+            ["DataPath"] = _testDir,
+            ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"
         };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
@@ -226,7 +227,7 @@ public class GitHubBackupProviderTests : IDisposable
                                  !f.EndsWith("modified.json", StringComparison.OrdinalIgnoreCase));
         var profileRelPath = profilePath != null ? Path.GetRelativePath(_testDir, profilePath).Replace('\\', '/') : "company_profile.json";
         var profileSha = profilePath != null
-            ? await GitHubBackupProvider.ComputeGitBlobSha1Async(profilePath)
+            ? await GitHubBackupProvider.ComputeLocalUploadSha1Async(profilePath, profileRelPath)
             : "none";
 
         int blobsUploaded = 0;
@@ -540,7 +541,7 @@ public class GitHubBackupProviderTests : IDisposable
 
         var profilePath = Directory.GetFiles(_testDir, "company.json", SearchOption.AllDirectories).First();
         var profileRelPath = Path.GetRelativePath(_testDir, profilePath).Replace('\\', '/');
-        var profileSha = await GitHubBackupProvider.ComputeGitBlobSha1Async(profilePath);
+        var profileSha = await GitHubBackupProvider.ComputeLocalUploadSha1Async(profilePath, profileRelPath);
 
         bool subtreeQueried = false;
         int treesCreated = 0;
@@ -789,5 +790,123 @@ public class GitHubBackupProviderTests : IDisposable
 
         var migratedDiskJson = await File.ReadAllTextAsync(companyJsonPath);
         Assert.DoesNotContain("ghp_legacy_plaintext_token", migratedDiskJson);
+    }
+
+    [Fact]
+    public async Task UploadAsync_CompanySettingsJson_RedactsAllBackupCredentialsAndMasterPasswordWithoutMutatingDisk()
+    {
+        var archivePath = Path.Combine(_testDir, "Backups", "Spokes_Backup_Redact.zip");
+        Directory.CreateDirectory(Path.GetDirectoryName(archivePath)!);
+        await File.WriteAllTextAsync(archivePath, "zip-placeholder");
+
+        var profile = _profiles.Get();
+        profile.CompanyName = "Acme Corp";
+        profile.PublicChannelMasterPassword = "legacy-channel-master-secret";
+        profile.Backup.GitHub.IsEnabled = true;
+        profile.Backup.GitHub.PersonalAccessToken = "ghp_redact_pat_12345";
+        profile.Backup.GitHub.Repository = "acme/backups";
+        profile.Backup.S3.AccessKey = "AKIA_REDACT_KEY";
+        profile.Backup.S3.SecretKey = "s3_redact_secret";
+        profile.Backup.GoogleDrive.RefreshToken = "1//gdrive_redact_token";
+        profile.Backup.WebDav.Username = "webdav_redact_user";
+        profile.Backup.WebDav.Password = "webdav_redact_pass";
+        profile.Backup.Sftp.Username = "sftp_redact_user";
+        profile.Backup.Sftp.Password = "sftp_redact_pass";
+        _profiles.Save(profile);
+        await _persistence.FlushAllAsync();
+
+        var companyJsonPath = Directory.GetFiles(_testDir, "company.json", SearchOption.AllDirectories).First();
+        var originalDiskJson = await File.ReadAllTextAsync(companyJsonPath);
+        Assert.Contains("v2:", originalDiskJson);
+
+        string? capturedTreeJson = null;
+        var factory = CreateMockHttpClientFactory(async (req, ct) =>
+        {
+            var url = req.RequestUri!.ToString();
+            if (req.Method == HttpMethod.Get && url == "https://api.github.com/repos/acme/backups")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"default_branch\":\"main\",\"permissions\":{\"push\":true}}", Encoding.UTF8, "application/json")
+                };
+            }
+            if (req.Method == HttpMethod.Get && url == "https://api.github.com/repos/acme/backups/git/ref/heads/main")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"object\":{\"sha\":\"head-sha-1\"}}", Encoding.UTF8, "application/json")
+                };
+            }
+            if (req.Method == HttpMethod.Get && url == "https://api.github.com/repos/acme/backups/git/trees/head-sha-1?recursive=1")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"tree\":[]}", Encoding.UTF8, "application/json")
+                };
+            }
+            if (req.Method == HttpMethod.Post && url == "https://api.github.com/repos/acme/backups/git/trees")
+            {
+                capturedTreeJson = await req.Content!.ReadAsStringAsync(ct);
+                return new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = new StringContent("{\"sha\":\"new-tree-sha-1\"}", Encoding.UTF8, "application/json")
+                };
+            }
+            if (req.Method == HttpMethod.Post && url == "https://api.github.com/repos/acme/backups/git/commits")
+            {
+                return new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = new StringContent("{\"sha\":\"new-commit-sha-1\"}", Encoding.UTF8, "application/json")
+                };
+            }
+            if (req.Method == HttpMethod.Patch && url == "https://api.github.com/repos/acme/backups/git/refs/heads/main")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"ref\":\"refs/heads/main\"}", Encoding.UTF8, "application/json")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var provider = new GitHubBackupProvider(_profiles, factory, _config)
+        {
+            BlobPostPacingDelay = TimeSpan.Zero
+        };
+        var result = await provider.UploadAsync(archivePath, "Spokes_Backup_Redact.zip");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(capturedTreeJson);
+
+        using var treeDoc = JsonDocument.Parse(capturedTreeJson!);
+        var settingsEntry = treeDoc.RootElement.GetProperty("tree").EnumerateArray()
+            .First(e => string.Equals(e.GetProperty("path").GetString(), "Settings/company.json", StringComparison.OrdinalIgnoreCase));
+        var uploadedContent = settingsEntry.GetProperty("content").GetString()!;
+
+        Assert.Contains("Acme Corp", uploadedContent);
+        Assert.DoesNotContain("v2:", uploadedContent);
+        Assert.DoesNotContain("ghp_redact_pat_12345", uploadedContent);
+        Assert.DoesNotContain("AKIA_REDACT_KEY", uploadedContent);
+        Assert.DoesNotContain("s3_redact_secret", uploadedContent);
+        Assert.DoesNotContain("gdrive_redact_token", uploadedContent);
+        Assert.DoesNotContain("webdav_redact", uploadedContent);
+        Assert.DoesNotContain("sftp_redact", uploadedContent);
+        Assert.DoesNotContain("legacy-channel-master-secret", uploadedContent);
+
+        using var uploadedCompanyDoc = JsonDocument.Parse(uploadedContent);
+        Assert.Equal(string.Empty, uploadedCompanyDoc.RootElement.GetProperty("PublicChannelMasterPassword").GetString());
+        Assert.Equal(string.Empty, uploadedCompanyDoc.RootElement.GetProperty("Chat").GetProperty("PublicChannelMasterPassword").GetString());
+        var backupNode = uploadedCompanyDoc.RootElement.GetProperty("Backup");
+        Assert.Equal(string.Empty, backupNode.GetProperty("GitHub").GetProperty("PersonalAccessToken").GetString());
+        Assert.Equal(string.Empty, backupNode.GetProperty("S3").GetProperty("AccessKey").GetString());
+        Assert.Equal(string.Empty, backupNode.GetProperty("S3").GetProperty("SecretKey").GetString());
+        Assert.Equal(string.Empty, backupNode.GetProperty("GoogleDrive").GetProperty("RefreshToken").GetString());
+        Assert.Equal(string.Empty, backupNode.GetProperty("WebDav").GetProperty("Username").GetString());
+        Assert.Equal(string.Empty, backupNode.GetProperty("WebDav").GetProperty("Password").GetString());
+        Assert.Equal(string.Empty, backupNode.GetProperty("Sftp").GetProperty("Username").GetString());
+        Assert.Equal(string.Empty, backupNode.GetProperty("Sftp").GetProperty("Password").GetString());
+
+        // Local company.json on disk must remain untouched with its encrypted secrets
+        Assert.Equal(originalDiskJson, await File.ReadAllTextAsync(companyJsonPath));
     }
 }

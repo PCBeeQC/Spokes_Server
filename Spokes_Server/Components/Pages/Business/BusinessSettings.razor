@@ -1,0 +1,865 @@
+@page "/business/settings"
+@attribute [Authorize(Policy = AppPermissions.Business.ManageSettings)]
+@implements IDisposable
+@using System.IO
+@using Spokes_Server.Components.Pages.Admin.Features
+@using Spokes_Server.Components.Pages.Business.Features
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Components.Dialogs
+@using Spokes_Server.Components.Dialogs.Accounting
+@using Spokes_Server.Components.Dialogs.Projects
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Projects
+@inject Database Db
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@inject IFileService FileService
+@inject UserService UserService
+
+<PageTitle>@BizLoc["Business Settings"]</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.False" Class="pa-4 px-md-6 pb-16">
+    <MudText Typo="Typo.h4" GutterBottom="true">@BizLoc["Business Settings"]</MudText>
+    <div class="mb-6">
+        <MudMenu Label="@GetActiveTabName()" StartIcon="@GetActiveTabIcon()" EndIcon="@Icons.Material.Filled.KeyboardArrowDown" Variant="Variant.Outlined" Color="Color.Default" FullWidth="true" AnchorOrigin="Origin.BottomCenter" TransformOrigin="Origin.TopCenter" MaxHeight="800">
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(0))" Icon="@Icons.Material.Filled.ListAlt">@BizLoc["Tasks & Rate Cards"]</MudMenuItem>
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(1))" Icon="@Icons.Material.Filled.Description">@BizLoc["Documents & Templates"]</MudMenuItem>
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(2))" Icon="@Icons.Material.Filled.Palette">@BizLoc["Project Statuses"]</MudMenuItem>
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(3))" Icon="@Icons.Material.Filled.Schedule">@BizLoc["Timesheets & Overtime"]</MudMenuItem>
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(5))" Icon="@Icons.Material.Filled.AccountBalanceWallet">@BizLoc["Banking & Financial Accounts"]</MudMenuItem>
+            <MudMenuItem OnClick="@(() => UpdateActiveTab(4))" Icon="@Icons.Material.Filled.AccountBalance">@BizLoc["Accounting, Tax & Jurisdiction"]</MudMenuItem>
+        </MudMenu>
+    </div>
+
+    @* 0. TASKS & RATE CARDS *@
+    @if (activeTabIndex == 0)
+    {
+        <MudStack Spacing="4">
+            <SettingsCard Title="@BizLoc["Task Definitions"]"
+                          Icon="@Icons.Material.Filled.WorkOutline"
+                          Description="@BizLoc["Define default work types, sub-tasks, and standard hourly rates for quotes and timesheets."]">
+                <ChildContent>
+                    <WorkTypesList />
+                </ChildContent>
+            </SettingsCard>
+
+            <SettingsCard Title="@BizLoc["Rate Cards"]"
+                          Icon="@Icons.Material.Filled.PriceChange"
+                          Description="@BizLoc["Configure client-specific or specialized billing rate cards overriding default task rates."]">
+                <ChildContent>
+                    <RateCardsList />
+                </ChildContent>
+            </SettingsCard>
+        </MudStack>
+    }
+
+    @* 1. DOCUMENTS & TEMPLATES *@
+    else if (activeTabIndex == 1)
+    {
+        <MudStack Spacing="4">
+            <SettingsCard Title="@BizLoc["Document Templates"]"
+                          Icon="@Icons.Material.Filled.Description"
+                          Description="@BizLoc["Create templates for different languages (e.g. French Invoice, English PO)."]">
+                <HeaderActions>
+                    <div class="d-flex align-center gap-2">
+                        @if (_canManageSettings)
+                        {
+                            <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                       OnClick="CreateTemplate">@BizLoc["New Template"]</MudButton>
+                            <ApiFileUpload 
+                                Category="temp" 
+                                ContextId="@_templateTempCtx" 
+                                OnUploadCompleted="HandleTemplateUploaded">
+                                <CustomContent>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small" StartIcon="@Icons.Material.Filled.UploadFile">
+                                        @Loc["Import"]
+                                    </MudButton>
+                                </CustomContent>
+                            </ApiFileUpload>
+                        }
+                    </div>
+                </HeaderActions>
+                <ChildContent>
+                    <div class="overflow-x-auto">
+                        <MudTable Items="@Templates" Breakpoint="Breakpoint.None" Hover="true" Elevation="0" Outlined="true" Bordered="true" Striped="true" Class="mt-2">
+                            <HeaderContent>
+                                <MudTh Style="min-width: 250px;">@Loc["Name"]</MudTh>
+                                <MudTh Style="min-width: 150px;">@BizLoc["Language"]</MudTh>
+                                <MudTh Style="width: 100px;">@BizLoc["Default"]</MudTh>
+                                <MudTh Style="width: 160px;">@Loc["Actions"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>@context.Name</MudTd>
+                                <MudTd>@context.LanguageCode.ToUpper()</MudTd>
+                                <MudTd>
+                                    @if (context.IsDefault)
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" />
+                                    }
+                                </MudTd>
+                                <MudTd>
+                                    @if (_canManageSettings)
+                                    {
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" OnClick="@(() => EditTemplate(context))" />
+                                    }
+                                    <MudIconButton Icon="@Icons.Material.Filled.Download" Color="Color.Info" title="Export JSON"
+                                                   OnClick="@(() => ExportTemplate(context))" />
+                                    @if (_canManageSettings && !context.IsDefault)
+                                    {
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error"
+                                                       OnClick="@(() => DeleteTemplate(context))" />
+                                    }
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    </div>
+                </ChildContent>
+            </SettingsCard>
+
+            <SettingsCard Title="@BizLoc["Terms & Conditions"]"
+                          Icon="@Icons.Material.Filled.Gavel"
+                          Description="@BizLoc["Manage reusable terms and conditions presets for quotes and templates."]">
+                <HeaderActions>
+                    @if (_canManageSettings)
+                    {
+                        <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   OnClick="CreateTermsAndConditions">@BizLoc["New Terms & Conditions"]</MudButton>
+                    }
+                </HeaderActions>
+                <ChildContent>
+                    <div class="overflow-x-auto">
+                        <MudTable Items="@TermsList" Breakpoint="Breakpoint.None" Hover="true" Elevation="0" Outlined="true" Bordered="true" Striped="true" Class="mt-2">
+                            <HeaderContent>
+                                <MudTh Style="min-width: 220px;">@Loc["Name"]</MudTh>
+                                <MudTh Style="min-width: 320px;">@Loc["Preview"]</MudTh>
+                                <MudTh Style="width: 100px;">@BizLoc["Default"]</MudTh>
+                                <MudTh Style="width: 120px;">@Loc["Actions"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>
+                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                                </MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.body2" Class="text-truncate" Style="max-width: 450px; color: var(--mud-palette-text-secondary);">
+                                        @GetTermsPreview(context.Content)
+                                    </MudText>
+                                </MudTd>
+                                <MudTd>
+                                    @if (context.IsDefault)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">@BizLoc["Default"]</MudChip>
+                                    }
+                                </MudTd>
+                                <MudTd>
+                                    @if (_canManageSettings)
+                                    {
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => EditTermsAndConditions(context))" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteTermsAndConditions(context))" />
+                                    }
+                                </MudTd>
+                            </RowTemplate>
+                            <NoRecordsContent>
+                                <MudText Typo="Typo.body2" Class="pa-4 text-center" Color="Color.Secondary">
+                                    @BizLoc["No terms and conditions created yet."]
+                                </MudText>
+                            </NoRecordsContent>
+                        </MudTable>
+                    </div>
+                </ChildContent>
+            </SettingsCard>
+
+            <SettingsCard Title="@BizLoc["Standard Documents"]"
+                          Icon="@Icons.Material.Filled.Article"
+                          Description="@BizLoc["Manage standard block-based document templates (Contracts, NDAs, Policies, and Project Reports)."]">
+                <HeaderActions>
+                    @if (_canManageSettings)
+                    {
+                        <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   OnClick="CreateStandardDocument">@BizLoc["Create Template"]</MudButton>
+                    }
+                </HeaderActions>
+                <ChildContent>
+                    <div class="overflow-x-auto">
+                        <MudTable Items="@StandardDocs" Breakpoint="Breakpoint.None" Hover="true" Elevation="0" Outlined="true" Bordered="true" Striped="true" Class="mt-2">
+                            <HeaderContent>
+                                <MudTh Style="min-width: 220px;">@Loc["Name"]</MudTh>
+                                <MudTh Style="min-width: 280px;">@Loc["Description"]</MudTh>
+                                <MudTh Style="width: 160px;">@BizLoc["Updated"]</MudTh>
+                                <MudTh Style="width: 120px;">@Loc["Actions"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>
+                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@context.Name</MudText>
+                                </MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">@context.Description</MudText>
+                                </MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.caption">@context.UpdatedAt.ToLocalTime().ToString("g")</MudText>
+                                </MudTd>
+                                <MudTd>
+                                    @if (_canManageSettings)
+                                    {
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => EditStandardDocument(context))" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteStandardDocument(context))" />
+                                    }
+                                </MudTd>
+                            </RowTemplate>
+                            <NoRecordsContent>
+                                <MudText Typo="Typo.body2" Class="pa-4 text-center" Color="Color.Secondary">
+                                    @BizLoc["No standard documents found."]
+                                </MudText>
+                            </NoRecordsContent>
+                        </MudTable>
+                    </div>
+                </ChildContent>
+            </SettingsCard>
+        </MudStack>
+    }
+
+    @* 2. PROJECT STATUSES *@
+    else if (activeTabIndex == 2)
+    {
+        <MudStack Spacing="4">
+            <SettingsCard Title="@BizLoc["Project Statuses"]"
+                          Icon="@Icons.Material.Filled.Palette"
+                          Description="@BizLoc["Configure the statuses available for projects and their display colors."]">
+                <div class="overflow-x-auto">
+                    <MudTable Items="@Profile.ProjectStatuses" Breakpoint="Breakpoint.None" Hover="true" Dense="true" Outlined="true" Bordered="true" Striped="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh Style="min-width: 220px;">@BizLoc["Status Name"]</MudTh>
+                            <MudTh Style="min-width: 150px;">@Loc["Color"]</MudTh>
+                            <MudTh Style="min-width: 150px;">@BizLoc["System Mapping"]</MudTh>
+                            <MudTh Style="width: 120px;">@Loc["Preview"]</MudTh>
+                            <MudTh Style="width: 80px;">@Loc["Actions"]</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" @bind-Value="context.Name" Label="@Loc["Name"]" Margin="Margin.Dense"
+                                              Disabled="@(!_canManageSettings)" Required="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudSelect ShrinkLabel="true" Variant="Variant.Outlined" @bind-Value="context.Color" Label="@Loc["Color"]" Dense="true" Margin="Margin.Dense"
+                                           Disabled="@(!_canManageSettings)" Style="width: 150px;">
+                                    @foreach (var colorName in Enum.GetNames(typeof(Color)))
+                                    {
+                                        <MudSelectItem Value="@colorName">@colorName</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudTd>
+                            <MudTd>
+                                <MudSelect ShrinkLabel="true" Variant="Variant.Outlined" @bind-Value="context.SystemMapping" Label="@BizLoc["System Type"]" Dense="true" Margin="Margin.Dense"
+                                           Disabled="@(!_canManageSettings)" Style="width: 150px;">
+                                    @foreach (var type in SystemStatusMappings.All)
+                                    {
+                                        <MudSelectItem Value="@type">@type</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudTd>
+                            <MudTd>
+                                @{
+                                    Color chipColor = Color.Default;
+                                    Enum.TryParse(context.Color, out chipColor);
+                                }
+                                <MudChip T="string" Color="@chipColor" Size="Size.Small">@context.Name</MudChip>
+                            </MudTd>
+                            <MudTd>
+                                @if (_canManageSettings)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                                   OnClick="@(() => RemoveStatus(context))" />
+                                }
+                            </MudTd>
+                        </RowTemplate>
+                        <FooterContent>
+                            @if (_canManageSettings)
+                            {
+                                <MudTd colspan="5">
+                                    <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddStatus" Color="Color.Primary">
+                                        @BizLoc["Add Status"]</MudButton>
+                                </MudTd>
+                            }
+                        </FooterContent>
+                    </MudTable>
+                </div>
+            </SettingsCard>
+        </MudStack>
+    }
+
+    @* 3. TIMESHEETS & OVERTIME *@
+    else if (activeTabIndex == 3)
+    {
+        <MudStack Spacing="4">
+            @* --- Card 1: HR & Overtime --- *@
+            <SettingsCard Title="@BizLoc["HR & Overtime"]"
+                          Icon="@Icons.Material.Filled.MoreTime"
+                          Description="@BizLoc["Configure how employee hour banks and overtime thresholds are calculated."]">
+                <SettingsSwitchRow Title="@BizLoc["Enable Hour Bank"]"
+                                   Description="@BizLoc["Track banked hours that employees can redeem or cash out."]"
+                                   Value="Profile.HRConfig.EnableHourBank"
+                                   ValueChanged="@(async (bool v) => { Profile.HRConfig.EnableHourBank = v; await SaveSettings(); })" />
+                <MudDivider Class="my-3" />
+                <MudGrid>
+                    <MudItem xs="12" sm="6">
+                        <MudSelect T="string" ShrinkLabel="true" Disabled="@(!_canManageSettings)" Value="Profile.HRConfig.OvertimeCalculationMode" ValueChanged="@(async (string v) => { Profile.HRConfig.OvertimeCalculationMode = v; await SaveSettings(); })" Label="@BizLoc["Overtime Calculation Mode"]" Variant="Variant.Outlined" Margin="Margin.Dense">
+                            <MudSelectItem Value="@("Weekly")">@BizLoc["Weekly (Default)"]</MudSelectItem>
+                            <MudSelectItem Value="@("Daily")">@BizLoc["Daily"]</MudSelectItem>
+                            <MudSelectItem Value="@("None")">@BizLoc["None (Disabled)"]</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    @if (Profile.HRConfig.OvertimeCalculationMode == "Daily")
+                    {
+                        <MudItem xs="12" sm="6">
+                            <MudNumericField T="decimal" ShrinkLabel="true" Disabled="@(!_canManageSettings)" Value="Profile.HRConfig.DailyOvertimeThreshold" ValueChanged="@(async (decimal v) => { Profile.HRConfig.DailyOvertimeThreshold = v; await SaveSettings(); })" Label="@BizLoc["Daily Overtime Threshold (Hours)"]" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" Max="24" Step="0.5m" />
+                        </MudItem>
+                    }
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="decimal" ShrinkLabel="true" Disabled="@(!_canManageSettings)" Value="Profile.HRConfig.MaxBankableHours" ValueChanged="@(async (decimal v) => { Profile.HRConfig.MaxBankableHours = v; await SaveSettings(); })" Label="@BizLoc["Max Bankable Hours (0 for unlimited)"]" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" Step="1" />
+                    </MudItem>
+                </MudGrid>
+            </SettingsCard>
+
+            @* --- Card 2: Features --- *@
+            <SettingsCard Title="@BizLoc["Features"]"
+                          Icon="@Icons.Material.Filled.Extension"
+                          Description="@BizLoc["Enable or disable optional timesheet modules for your organization."]">
+                <SettingsSwitchRow Title="@BizLoc["Enable Weekly Plan"]"
+                                   Description="@BizLoc["When disabled, the weekly plan widget is hidden from employee timesheets and the Team Planning page is hidden from managers."]"
+                                   Value="Profile.TimesheetConfig.EnableWeeklyPlan"
+                                   ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.EnableWeeklyPlan = v; await SaveSettings(); })" />
+            </SettingsCard>
+
+            @* --- Card 3: Approval Workflow --- *@
+            <SettingsCard Title="@BizLoc["Approval Workflow"]"
+                          Icon="@Icons.Material.Filled.FactCheck"
+                          Description="@BizLoc["Require manager approval before timesheets are finalized."]">
+                <SettingsSwitchRow Title="@BizLoc["Require Timesheet Approval"]"
+                                   Description="@BizLoc["When enabled, employees must submit timesheets for manager approval. Approved timesheets become read-only."]"
+                                   Value="Profile.TimesheetConfig.RequireApproval"
+                                   ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.RequireApproval = v; await SaveSettings(); })" />
+            </SettingsCard>
+
+            @* --- Card 4: Timesheet Locking --- *@
+            <SettingsCard Title="@BizLoc["Timesheet Locking"]"
+                          Icon="@Icons.Material.Filled.LockClock"
+                          Description="@BizLoc["Automatically lock timesheets after a set number of days to prevent edits to finalized periods."]">
+                <SettingsSwitchRow Title="@BizLoc["Enable Automatic Timesheet Locking"]"
+                                   Description="@BizLoc["Prevent employees and managers from modifying entries older than the cutoff threshold."]"
+                                   Value="Profile.TimesheetConfig.EnableTimesheetLocking"
+                                   ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.EnableTimesheetLocking = v; await SaveSettings(); })" />
+                @if (Profile.TimesheetConfig.EnableTimesheetLocking)
+                {
+                    <MudDivider Class="my-3" />
+                    <div style="max-width: 320px;">
+                        <MudNumericField T="int" ShrinkLabel="true" Disabled="@(!_canManageSettings)" Value="Profile.TimesheetConfig.LockTimesheetsOlderThanDays" ValueChanged="@(async (int v) => { Profile.TimesheetConfig.LockTimesheetsOlderThanDays = v; await SaveSettings(); })" Label="@BizLoc["Lock timesheets older than (days)"]" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" Max="365" />
+                    </div>
+                }
+            </SettingsCard>
+
+            @* --- Card 5: Required Fields --- *@
+            <SettingsCard Title="@BizLoc["Required Fields"]"
+                          Icon="@Icons.Material.Filled.Rule"
+                          Description="@BizLoc["Control which fields employees must fill in when logging time."]">
+                <MudStack Spacing="1">
+                    <SettingsSwitchRow Title="@BizLoc["Require Project"]"
+                                       Description="@BizLoc["Employees must select a project when recording hours."]"
+                                       Value="Profile.TimesheetConfig.RequireProject"
+                                       ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.RequireProject = v; await SaveSettings(); })" />
+                    <MudDivider />
+                    <SettingsSwitchRow Title="@BizLoc["Require Task"]"
+                                       Description="@BizLoc["Employees must select a project task when recording hours."]"
+                                       Value="Profile.TimesheetConfig.RequireTask"
+                                       ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.RequireTask = v; await SaveSettings(); })" />
+                    <MudDivider />
+                    <SettingsSwitchRow Title="@BizLoc["Require Note"]"
+                                       Description="@BizLoc["Employees must include a text description when recording hours."]"
+                                       Value="Profile.TimesheetConfig.RequireNote"
+                                       ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.RequireNote = v; await SaveSettings(); })" />
+                </MudStack>
+            </SettingsCard>
+
+            @* --- Card 6: Time Rounding --- *@
+            <SettingsCard Title="@BizLoc["Time Rounding"]"
+                          Icon="@Icons.Material.Filled.AvTimer"
+                          Description="@BizLoc["Round time entries in reports and exports. Raw timesheet data is not modified."]">
+                <SettingsSwitchRow Title="@BizLoc["Enable Time Rounding"]"
+                                   Description="@BizLoc["Automatically round reported durations according to your configured interval and direction."]"
+                                   Value="Profile.TimesheetConfig.EnableRounding"
+                                   ValueChanged="@(async (bool v) => { Profile.TimesheetConfig.EnableRounding = v; await SaveSettings(); })" />
+                @if (Profile.TimesheetConfig.EnableRounding)
+                {
+                    <MudDivider Class="my-3" />
+                    <MudGrid>
+                        <MudItem xs="12" sm="6">
+                            <MudSelect T="int" ShrinkLabel="true" Disabled="@(!_canManageSettings)" Value="Profile.TimesheetConfig.RoundingIntervalMinutes" ValueChanged="@(async (int v) => { Profile.TimesheetConfig.RoundingIntervalMinutes = v; await SaveSettings(); })" Label="@BizLoc["Rounding Interval"]" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
+                                <MudSelectItem Value="5">@BizLoc["5 minutes"]</MudSelectItem>
+                                <MudSelectItem Value="6">@BizLoc["6 minutes"]</MudSelectItem>
+                                <MudSelectItem Value="15">@BizLoc["15 minutes"]</MudSelectItem>
+                                <MudSelectItem Value="30">@BizLoc["30 minutes"]</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudSelect T="string" ShrinkLabel="true" Disabled="@(!_canManageSettings)" Value="Profile.TimesheetConfig.RoundingDirection" ValueChanged="@(async (string v) => { Profile.TimesheetConfig.RoundingDirection = v; await SaveSettings(); })" Label="@BizLoc["Rounding Direction"]" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
+                                <MudSelectItem Value="@("Nearest")">@BizLoc["Nearest"]</MudSelectItem>
+                                <MudSelectItem Value="@("Up")">@BizLoc["Round up"]</MudSelectItem>
+                                <MudSelectItem Value="@("Down")">@BizLoc["Round down"]</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                    </MudGrid>
+                }
+            </SettingsCard>
+        </MudStack>
+    }
+
+    @* 4. ACCOUNTING, TAX & JURISDICTION *@
+    else if (activeTabIndex == 4)
+    {
+        <JurisdictionTemplateEditor Profile="@Profile" OnSaved="SaveSettings" />
+    }
+
+    @* 5. BANKING & FINANCIAL ACCOUNTS *@
+    else if (activeTabIndex == 5)
+    {
+        <BankingSettingsTab />
+    }
+
+    @if (activeTabIndex is 2 or 3 && _canManageSettings)
+    {
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Save"
+                   Size="Size.Large"
+                   DropShadow="true"
+                   OnClick="SaveSettings"
+                   Disabled="@(_isSaving || !_canManageSettings)"
+                   Class="rounded-pill px-5"
+                   Style="position: fixed; bottom: calc(24px + var(--safe-area-bottom, 0px)); right: 24px; z-index: 1000; box-shadow: 0 4px 20px rgba(0,0,0,0.25);">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                <span>@Loc["Saving..."]</span>
+            }
+            else
+            {
+                <span>@Loc["Save Settings"]</span>
+            }
+        </MudButton>
+    }
+</MudContainer>
+
+@code {
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+
+    private CompanyProfile Profile = new();
+    private List<DocumentTemplate> Templates = [];
+    private List<TermsAndConditions> TermsList = [];
+    private List<StandardDocument> StandardDocs = [];
+    private Employee? _currentUser;
+    private bool _canManageSettings;
+    private int activeTabIndex = 0;
+    private bool _isSaving;
+    private bool _isDisposed;
+    private readonly string _templateTempCtx = Guid.NewGuid().ToString("N");
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshPermissionsAsync();
+        Profile = Db.CompanyProfile.Get();
+        RefreshTemplates();
+        RefreshTermsList();
+        RefreshStandardDocuments();
+        Db.CompanyProfile.OnSaved += HandleCompanyProfileUpdated;
+        Db.CompanyProfile.OnLoaded += HandleCompanyProfileLoaded;
+    }
+
+    private async Task RefreshPermissionsAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        _canManageSettings = _currentUser is { IsActiveUnsuspended: true }
+            && _currentUser.HasPermission(AppPermissions.Business.ManageSettings);
+    }
+
+    private async Task<bool> AuthorizeSettingsMutationAsync()
+    {
+        await RefreshPermissionsAsync();
+        if (_canManageSettings)
+            return true;
+
+        Snackbar.Add(Loc["Your account is read-only or lacks permission to modify business settings."].Value, Severity.Error);
+        return false;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(Tab))
+        {
+            activeTabIndex = Tab.ToLowerInvariant() switch
+            {
+                "tasks" or "definitions" or "rate-cards" => 0,
+                "documents" or "templates" or "terms" or "standard-documents" => 1,
+                "statuses" => 2,
+                "timesheets" => 3,
+                "accounting" or "jurisdiction" or "tax" => 4,
+                "banking" or "accounts" or "financial-accounts" => 5,
+                _ => 0
+            };
+        }
+    }
+
+    private void HandleCompanyProfileUpdated(CompanyProfile updated)
+    {
+        if (_isDisposed) return;
+        _ = InvokeAsync(() =>
+        {
+            Profile = updated;
+            StateHasChanged();
+        });
+    }
+
+    private void HandleCompanyProfileLoaded()
+    {
+        if (_isDisposed) return;
+        _ = InvokeAsync(() =>
+        {
+            Profile = Db.CompanyProfile.Get();
+            StateHasChanged();
+        });
+    }
+
+    private string GetActiveTabName() => activeTabIndex switch
+    {
+        0 => BizLoc["Tasks & Rate Cards"].Value,
+        1 => BizLoc["Documents & Templates"].Value,
+        2 => BizLoc["Project Statuses"].Value,
+        3 => BizLoc["Timesheets & Overtime"].Value,
+        4 => BizLoc["Accounting, Tax & Jurisdiction"].Value,
+        5 => BizLoc["Banking & Financial Accounts"].Value,
+        _ => BizLoc["Tasks & Rate Cards"].Value
+    };
+
+    private string GetActiveTabIcon() => activeTabIndex switch
+    {
+        0 => Icons.Material.Filled.ListAlt,
+        1 => Icons.Material.Filled.Description,
+        2 => Icons.Material.Filled.Palette,
+        3 => Icons.Material.Filled.Schedule,
+        4 => Icons.Material.Filled.AccountBalance,
+        5 => Icons.Material.Filled.AccountBalanceWallet,
+        _ => Icons.Material.Filled.ListAlt
+    };
+
+    private void UpdateActiveTab(int index)
+    {
+        if (_isDisposed) return;
+
+        activeTabIndex = index;
+
+        if (!Nav.Uri.Contains("/business/settings", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var tabName = index switch
+        {
+            0 => "tasks",
+            1 => "documents",
+            2 => "statuses",
+            3 => "timesheets",
+            4 => "accounting",
+            5 => "banking",
+            _ => "tasks"
+        };
+
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+
+    private async Task SaveSettings()
+    {
+        if (_isSaving) return;
+        _isSaving = true;
+        StateHasChanged();
+        try
+        {
+            if (!await AuthorizeSettingsMutationAsync())
+            {
+                Profile = Db.CompanyProfile.Get();
+                return;
+            }
+            Db.CompanyProfile.Save(Profile);
+            Snackbar.Add(Loc["Settings saved successfully."].Value, Severity.Success);
+        }
+        finally
+        {
+            _isSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    // --- Document Templates ---
+    private void RefreshTemplates() => Templates = Db.DocumentTemplates.GetAll().OrderBy(t => t.Name).ToList();
+
+    private async Task CreateTemplate()
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+        var t = new DocumentTemplate { Name = "New Template" };
+        await EditTemplate(t);
+    }
+
+    private async Task EditTemplate(DocumentTemplate t)
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+
+        var parameters = new DialogParameters { ["Template"] = t };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+
+        var dialog = await DialogService.ShowAsync<TemplateEditorDialog>("Edit Template", parameters, options);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is DocumentTemplate updated)
+        {
+            if (!await AuthorizeSettingsMutationAsync()) return;
+            if (updated.IsDefault)
+            {
+                foreach (var other in Templates.Where(x => x.Id != updated.Id && x.IsDefault))
+                {
+                    other.IsDefault = false;
+                    Db.DocumentTemplates.Save(other);
+                }
+            }
+
+            Db.DocumentTemplates.Save(updated);
+            RefreshTemplates();
+        }
+    }
+
+    private async Task DeleteTemplate(DocumentTemplate t)
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+        Db.DocumentTemplates.Delete(t.Id);
+        RefreshTemplates();
+    }
+
+    private async Task ExportTemplate(DocumentTemplate t)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(t, new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true
+        });
+        var fileName = $"{t.Name.Replace(" ", "_")}_Template.json";
+        await JS.InvokeVoidAsync("downloadFile", fileName, "application/json", json);
+    }
+
+    private async Task HandleTemplateUploaded(List<ApiFileUpload.UploadResult> results)
+    {
+        if (results == null || results.Count == 0) return;
+
+        if (!await AuthorizeSettingsMutationAsync())
+        {
+            FileService.CleanTempContext(_templateTempCtx);
+            return;
+        }
+
+        var result = results.First();
+        if (!FileService.TryResolveScopedFileName(result.FilePath, "temp", _templateTempCtx, out var safeName))
+        {
+            return;
+        }
+
+        try
+        {
+            using var stream = FileService.OpenRead("temp", _templateTempCtx, safeName);
+            if (stream == null) return;
+            using var reader = new StreamReader(stream);
+            var json = reader.ReadToEnd();
+            var t = System.Text.Json.JsonSerializer.Deserialize<DocumentTemplate>(json);
+
+            if (t != null)
+            {
+                t.Id = Guid.NewGuid().ToString();
+                t.Name += " (Imported)";
+                t.IsDefault = false;
+                Db.DocumentTemplates.Save(t);
+                RefreshTemplates();
+                Snackbar.Add("Template Imported", Severity.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Import Failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            FileService.CleanTempContext(_templateTempCtx);
+            StateHasChanged();
+        }
+    }
+
+    // --- Terms & Conditions ---
+    private void RefreshTermsList() => TermsList = Db.TermsAndConditions.GetAll().OrderBy(t => t.Name).ToList();
+
+    private async Task CreateTermsAndConditions()
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+        var item = new TermsAndConditions { Name = "New Terms & Conditions" };
+        var parameters = new DialogParameters { ["Item"] = item, ["IsNew"] = true };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<TermsAndConditionsDialog>(BizLoc["New Terms & Conditions"].Value, parameters, options);
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled)
+        {
+            RefreshTermsList();
+        }
+    }
+
+    private async Task EditTermsAndConditions(TermsAndConditions terms)
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+        var cloned = new TermsAndConditions
+        {
+            Id = terms.Id,
+            Name = terms.Name,
+            Content = terms.Content,
+            IsDefault = terms.IsDefault,
+            CreatedAt = terms.CreatedAt,
+            UpdatedAt = terms.UpdatedAt
+        };
+        var parameters = new DialogParameters { ["Item"] = cloned, ["IsNew"] = false };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var title = string.Format(BizLoc["Edit {0}"].Value, terms.Name);
+        var dialog = await DialogService.ShowAsync<TermsAndConditionsDialog>(title, parameters, options);
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled)
+        {
+            RefreshTermsList();
+        }
+    }
+
+    private async Task DeleteTermsAndConditions(TermsAndConditions terms)
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+        var inUse = Templates.Where(t => t.DefaultTermsAndConditionsId == terms.Id).ToList();
+        string message = inUse.Any()
+            ? $"This preset is used by {inUse.Count} template(s) ({string.Join(", ", inUse.Select(x => x.Name))}). Are you sure you want to delete '{terms.Name}'?"
+            : $"Are you sure you want to delete '{terms.Name}'?";
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            "Delete Terms & Conditions",
+            message,
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirm == true)
+        {
+            if (!await AuthorizeSettingsMutationAsync()) return;
+            Db.TermsAndConditions.Delete(terms.Id);
+            foreach (var t in inUse)
+            {
+                t.DefaultTermsAndConditionsId = string.Empty;
+                Db.DocumentTemplates.Save(t);
+            }
+            RefreshTermsList();
+            Snackbar.Add("Terms & Conditions deleted", Severity.Success);
+        }
+    }
+
+    private string GetTermsPreview(string? markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown)) return string.Empty;
+        var flat = System.Text.RegularExpressions.Regex.Replace(markdown, @"[#*_\[\]\(\)\n\r]", " ").Trim();
+        return flat.Length > 100 ? flat.Substring(0, 100) + "..." : flat;
+    }
+
+    // --- Standard Documents ---
+    private void RefreshStandardDocuments() => StandardDocs = Db.StandardDocuments.GetAll().OrderBy(d => d.Name).ToList();
+
+    private async Task CreateStandardDocument()
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+        var parameters = new DialogParameters { ["IsNew"] = true, ["Document"] = new StandardDocument() };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+
+        var dialog = await DialogService.ShowAsync<StandardDocumentDialog>("Create Document", parameters, options);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false })
+        {
+            RefreshStandardDocuments();
+        }
+    }
+
+    private async Task EditStandardDocument(StandardDocument doc)
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+        var cloned = new StandardDocument
+        {
+            Id = doc.Id,
+            Name = doc.Name,
+            Description = doc.Description,
+            Body = doc.Body,
+            IsConfidential = doc.IsConfidential,
+            Blocks = doc.Blocks.Select(b => new DocumentBlockInstance
+            {
+                Type = b.Type,
+                Name = b.Name,
+                Properties = new Dictionary<string, string>(b.Properties)
+            }).ToList(),
+            CreatedAt = doc.CreatedAt,
+            UpdatedAt = doc.UpdatedAt
+        };
+
+        var parameters = new DialogParameters { ["IsNew"] = false, ["Document"] = cloned };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+
+        var dialog = await DialogService.ShowAsync<StandardDocumentDialog>("Edit Document", parameters, options);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false })
+        {
+            RefreshStandardDocuments();
+        }
+    }
+
+    private async Task DeleteStandardDocument(StandardDocument doc)
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+        bool? confirm = await DialogService.ShowMessageBoxAsync(
+            "Delete Template",
+            $"Are you sure you want to delete '{doc.Name}'? This document template will no longer be available for new projects.",
+            yesText: "Delete", cancelText: "Cancel");
+
+        if (confirm == true)
+        {
+            if (!await AuthorizeSettingsMutationAsync()) return;
+            Db.StandardDocuments.Delete(doc.Id);
+            RefreshStandardDocuments();
+            Snackbar.Add("Standard document deleted", Severity.Info);
+        }
+    }
+
+    // --- Project Statuses ---
+    private async Task AddStatus()
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+        Profile.ProjectStatuses.Add(new ProjectStatusConfig { Name = "New Status", Color = "Default" });
+    }
+
+    private async Task RemoveStatus(ProjectStatusConfig status)
+    {
+        if (!await AuthorizeSettingsMutationAsync()) return;
+        Profile.ProjectStatuses.Remove(status);
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        Db.CompanyProfile.OnSaved -= HandleCompanyProfileUpdated;
+        Db.CompanyProfile.OnLoaded -= HandleCompanyProfileLoaded;
+    }
+}

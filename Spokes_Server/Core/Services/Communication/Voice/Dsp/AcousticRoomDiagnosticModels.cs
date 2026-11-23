@@ -59,7 +59,10 @@ public sealed record ParticipantRoomDspTelemetry(
     double AchievedBleedSuppressionDb,
     double PostDspResidualDbFs,
     double ClientProcessingDelayMs = 0.0,
-    double ServerToClientDelayMs = 0.0);
+    double ServerToClientDelayMs = 0.0,
+    double PeakRawInputDbFs = -100.0,
+    int ClippedSampleCount = 0,
+    double AppliedMakeupGainDb = 0.0);
 
 /// <summary>
 /// Compact 250ms timeline bucket capturing room activity, gate transitions, and anomalies for agent debugging.

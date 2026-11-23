@@ -1,0 +1,301 @@
+@using Spokes_Server.Components.Dialogs.Accounting
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@inject IFinancialAccountService FinancialAccountService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject UserService UserService
+
+<MudStack Spacing="4">
+    <SettingsCard Title="@BizLoc["Banking & Financial Accounts"]"
+                  Icon="@Icons.Material.Filled.AccountBalanceWallet"
+                  Description="@BizLoc["Configure your real-world bank accounts, credit cards, lines of credit, payment processors, and loans. Spokes automatically manages the double-entry General Ledger in the background."]">
+        <HeaderActions>
+            <div class="d-flex align-center gap-2 flex-wrap">
+                <MudSwitch T="bool"
+                           @bind-Value="_showArchived"
+                           @bind-Value:after="LoadAccounts"
+                           Color="Color.Default"
+                           Size="Size.Small"
+                           Label="@BizLoc["Show Archived"]" />
+                @if (_canManage)
+                {
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="AddAccountAsync">
+                        @BizLoc["Add Financial Account"]
+                    </MudButton>
+                }
+            </div>
+        </HeaderActions>
+
+        <ChildContent>
+            <div class="overflow-x-auto">
+                <MudTable Items="@_accounts" Breakpoint="Breakpoint.None" Hover="true" Dense="true" Outlined="true" Bordered="true" Striped="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh Style="min-width: 240px;">@BizLoc["Account"]</MudTh>
+                        <MudTh Style="min-width: 150px;">@BizLoc["Type"]</MudTh>
+                        <MudTh Style="width: 90px;">@BizLoc["Currency"]</MudTh>
+                        <MudTh Style="min-width: 170px; text-align: right;">@BizLoc["Book Balance"]</MudTh>
+                        <MudTh Style="min-width: 180px;">@BizLoc["Credit Limit / Available"]</MudTh>
+                        <MudTh Style="min-width: 150px;">@BizLoc["Defaults"]</MudTh>
+                        <MudTh Style="width: 140px; text-align: right;">@Loc["Actions"]</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="acct">
+                        @{
+                            var balance = _balances.TryGetValue(acct.Id, out var b) ? b : 0m;
+                            var isLiability = FinancialAccountType.IsLiabilityType(acct.AccountType);
+                            var availableCredit = ComputeAvailableCredit(acct, balance);
+                            var balanceColor = GetBalanceColor(acct, balance);
+                        }
+                        <MudTd>
+                            <div class="d-flex align-center gap-2">
+                                <MudIcon Icon="@FinancialAccountSelect.GetTypeIcon(acct.AccountType)"
+                                         Color="@(acct.IsActive ? FinancialAccountSelect.GetTypeColor(acct.AccountType) : Color.Default)"
+                                         Size="Size.Small" />
+                                <div>
+                                    <MudText Typo="Typo.body2" Style="@(acct.IsActive ? "font-weight: 600;" : "text-decoration: line-through; opacity: 0.7;")">
+                                        @acct.Name
+                                        @if (!string.IsNullOrWhiteSpace(acct.Last4Digits))
+                                        {
+                                            <span class="mud-text-secondary"> •••• @acct.Last4Digits</span>
+                                        }
+                                    </MudText>
+                                    @if (!string.IsNullOrWhiteSpace(acct.InstitutionName))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@acct.InstitutionName</MudText>
+                                    }
+                                </div>
+                            </div>
+                        </MudTd>
+                        <MudTd>
+                            <div class="d-flex align-center gap-1 flex-wrap">
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@FinancialAccountSelect.GetTypeColor(acct.AccountType)">
+                                    @GetTypeLabel(acct.AccountType)
+                                </MudChip>
+                                @if (acct.HasAttachedCreditLine)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info" Icon="@Icons.Material.Filled.CreditScore">
+                                        @BizLoc["+ Credit Line"]
+                                    </MudChip>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd><b>@acct.Currency</b></MudTd>
+                        <MudTd Style="text-align: right; white-space: nowrap;">
+                            <MudText Typo="Typo.body2" Color="@balanceColor" Style="font-weight: 700;">
+                                @balance.ToString("C2")
+                            </MudText>
+                            @if (isLiability && balance > 0m)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@BizLoc["Balance owing"]</MudText>
+                            }
+                            else if (acct.HasAttachedCreditLine && balance < 0m)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Info">@BizLoc["Credit line drawn"]</MudText>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            @if (acct.CreditLimit is > 0m)
+                            {
+                                <MudText Typo="Typo.body2">@acct.CreditLimit.Value.ToString("C0") @BizLoc["limit"]</MudText>
+                                @if (availableCredit.HasValue)
+                                {
+                                    <MudText Typo="Typo.caption" Color="@(availableCredit.Value >= 0m ? Color.Success : Color.Error)">
+                                        @availableCredit.Value.ToString("C0") @BizLoc["available"]
+                                    </MudText>
+                                }
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <div class="d-flex flex-wrap gap-1">
+                                @if (!acct.IsActive)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Default">@BizLoc["Archived"]</MudChip>
+                                }
+                                else
+                                {
+                                    @if (acct.IsDefaultOperating)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled">@BizLoc["Default Operating"]</MudChip>
+                                    }
+                                    @if (acct.IsDefaultCreditCard)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">@BizLoc["Default Card"]</MudChip>
+                                    }
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd Style="text-align: right; white-space: nowrap;">
+                            <MudTooltip Text="@BizLoc["Reconcile Statements"]">
+                                <MudIconButton Icon="@Icons.Material.Filled.FactCheck"
+                                               Size="Size.Small"
+                                               Color="Color.Info"
+                                               OnClick="@(() => Nav.NavigateTo("/business/accounting?tab=BankReconciliation"))" />
+                            </MudTooltip>
+                            @if (_canManage)
+                            {
+                                <MudTooltip Text="@Loc["Edit"]">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => EditAccountAsync(acct))" />
+                                </MudTooltip>
+                                @if (acct.IsActive)
+                                {
+                                    <MudTooltip Text="@BizLoc["Archive"]">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Archive"
+                                                       Size="Size.Small"
+                                                       Color="Color.Warning"
+                                                       OnClick="@(() => ArchiveAccount(acct))" />
+                                    </MudTooltip>
+                                }
+                                else
+                                {
+                                    <MudTooltip Text="@BizLoc["Restore"]">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
+                                                       Size="Size.Small"
+                                                       Color="Color.Success"
+                                                       OnClick="@(() => RestoreAccount(acct))" />
+                                    </MudTooltip>
+                                }
+                            }
+                        </MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Class="pa-4 text-center" Color="Color.Secondary">
+                            @BizLoc["No financial accounts configured yet."]
+                        </MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            </div>
+        </ChildContent>
+    </SettingsCard>
+</MudStack>
+
+@code {
+    private List<FinancialAccount> _accounts = [];
+    private Dictionary<string, decimal> _balances = new(StringComparer.OrdinalIgnoreCase);
+    private bool _showArchived;
+    private bool _canManage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await UserService.GetEmployeeAsync();
+        _canManage = user is { IsActiveUnsuspended: true } &&
+            (user.HasPermission(AppPermissions.Business.ManageSettings) || user.HasPermission(AppPermissions.Finance.AccessAccounting));
+        LoadAccounts();
+    }
+
+    private void LoadAccounts()
+    {
+        _accounts = FinancialAccountService.GetAllAccounts(includeArchived: _showArchived);
+        _balances = FinancialAccountService.GetLiveBalances();
+    }
+
+    private async Task AddAccountAsync()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<FinancialAccountDialog>(BizLoc["Add Financial Account"].Value, options);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            LoadAccounts();
+        }
+    }
+
+    private async Task EditAccountAsync(FinancialAccount account)
+    {
+        var parameters = new DialogParameters<FinancialAccountDialog>
+        {
+            { x => x.ExistingAccount, account }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<FinancialAccountDialog>(BizLoc["Edit Financial Account"].Value, parameters, options);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            LoadAccounts();
+        }
+    }
+
+    private void ArchiveAccount(FinancialAccount account)
+    {
+        var result = FinancialAccountService.ArchiveAccount(account.Id);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error ?? BizLoc["Could not archive account."].Value, Severity.Warning);
+            return;
+        }
+        Snackbar.Add(BizLoc["Account archived."].Value, Severity.Info);
+        LoadAccounts();
+    }
+
+    private void RestoreAccount(FinancialAccount account)
+    {
+        var result = FinancialAccountService.RestoreAccount(account.Id);
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error ?? BizLoc["Could not restore account."].Value, Severity.Warning);
+            return;
+        }
+        Snackbar.Add(BizLoc["Account restored."].Value, Severity.Success);
+        LoadAccounts();
+    }
+
+    private static decimal? ComputeAvailableCredit(FinancialAccount acct, decimal balance)
+    {
+        if (acct.CreditLimit is not > 0m) return null;
+        if (acct.HasAttachedCreditLine)
+        {
+            // Asset account: positive cash + credit limit; negative balance draws against limit
+            return balance + acct.CreditLimit.Value;
+        }
+        if (FinancialAccountType.IsLiabilityType(acct.AccountType))
+        {
+            // Liability account: positive balance is amount owed
+            return acct.CreditLimit.Value - balance;
+        }
+        return null;
+    }
+
+    private static Color GetBalanceColor(FinancialAccount acct, decimal balance)
+    {
+        if (FinancialAccountType.IsLiabilityType(acct.AccountType))
+        {
+            if (acct.CreditLimit is > 0m && balance > acct.CreditLimit.Value) return Color.Error;
+            return balance > 0m ? Color.Warning : Color.Success;
+        }
+
+        if (balance < 0m)
+        {
+            if (acct.HasAttachedCreditLine && Math.Abs(balance) <= acct.CreditLimit!.Value)
+            {
+                return Color.Info;
+            }
+            return Color.Error;
+        }
+
+        return Color.Default;
+    }
+
+    private string GetTypeLabel(string? accountType) => accountType switch
+    {
+        FinancialAccountType.Chequing => BizLoc["Chequing"].Value,
+        FinancialAccountType.Savings => BizLoc["Savings"].Value,
+        FinancialAccountType.CreditCard => BizLoc["Credit Card"].Value,
+        FinancialAccountType.LineOfCredit => BizLoc["Line of Credit"].Value,
+        FinancialAccountType.PaymentProcessor => BizLoc["Payment Processor"].Value,
+        FinancialAccountType.Loan => BizLoc["Loan / Financing"].Value,
+        FinancialAccountType.CashOnHand => BizLoc["Cash on Hand"].Value,
+        _ => accountType ?? string.Empty
+    };
+}

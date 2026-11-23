@@ -1,24 +1,21 @@
 namespace Spokes_Server.Core.Services.Accounting.InvoiceExtraction;
 
 using System;
-using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
 
 /// <summary>
 /// Extracts invoice details from Factur-X / ZUGFeRD / UN/CEFACT Cross Industry Invoice (CII) XML.
 /// </summary>
-public class FacturXInvoiceExtractor : IElectronicInvoiceExtractor
+public class FacturXInvoiceExtractor : ElectronicInvoiceExtractorBase
 {
-    public bool CanExtract(string xmlContent)
+    public override bool CanExtract(string xmlContent)
     {
         if (string.IsNullOrWhiteSpace(xmlContent)) return false;
-        return xmlContent.Contains("CrossIndustryInvoice", StringComparison.OrdinalIgnoreCase) ||
-               xmlContent.Contains("rsm:CrossIndustryInvoice", StringComparison.OrdinalIgnoreCase);
+        return xmlContent.Contains("CrossIndustryInvoice", StringComparison.OrdinalIgnoreCase);
     }
 
-    public ExtractedInvoiceData? Extract(string xmlContent)
+    public override ExtractedInvoiceData? Extract(string xmlContent)
     {
         if (string.IsNullOrWhiteSpace(xmlContent)) return null;
 
@@ -150,16 +147,7 @@ public class FacturXInvoiceExtractor : IElectronicInvoiceExtractor
                         result.PaidAmount = ParseDecimal(FindElement(monetarySummation, "TotalPrepaidAmount")?.Value);
                         result.BalanceDue = ParseDecimal(FindElement(monetarySummation, "DuePayableAmount")?.Value);
 
-                        if (result.TotalAmount == 0)
-                        {
-                            result.TotalAmount = result.BalanceDue != 0 && result.PaidAmount != 0
-                                ? result.BalanceDue + result.PaidAmount
-                                : result.BalanceDue;
-                        }
-                        if (result.BalanceDue == 0 && result.TotalAmount > 0 && result.PaidAmount > 0 && result.TotalAmount > result.PaidAmount)
-                        {
-                            result.BalanceDue = result.TotalAmount - result.PaidAmount;
-                        }
+                        NormalizeBalanceAmounts(result);
                     }
 
                     // Taxes breakdown (TPS / TVQ / GST / VAT)
@@ -182,14 +170,7 @@ public class FacturXInvoiceExtractor : IElectronicInvoiceExtractor
                     }
 
                     // Fallback to standard Canadian/Quebec breakdown if taxes not itemized
-                    if (result.TpsAmount == 0 && result.TvqAmount == 0 && result.TaxAmount > 0 && result.SubTotal > 0)
-                    {
-                        if (Math.Abs(result.TaxAmount - (result.SubTotal * 0.14975m)) <= 0.05m)
-                        {
-                            result.TpsAmount = Math.Round(result.SubTotal * 0.05m, 2, MidpointRounding.AwayFromZero);
-                            result.TvqAmount = Math.Round(result.SubTotal * 0.09975m, 2, MidpointRounding.AwayFromZero);
-                        }
-                    }
+                    ApplyCanadianTaxBreakdownFallback(result);
 
                     // Payment Terms / Due Date
                     var paymentTerms = FindElement(settlement, "SpecifiedTradePaymentTerms");
@@ -262,22 +243,7 @@ public class FacturXInvoiceExtractor : IElectronicInvoiceExtractor
             }
 
             // Fallback calculations if amounts are partially populated
-            if (result.TotalAmount == 0 && result.SubTotal != 0)
-            {
-                result.TotalAmount = result.SubTotal + result.TaxAmount;
-            }
-            if (result.TaxAmount == 0 && (result.TpsAmount != 0 || result.TvqAmount != 0))
-            {
-                result.TaxAmount = result.TpsAmount + result.TvqAmount;
-            }
-            if (result.DueDate == null && result.InvoiceDate.HasValue)
-            {
-                result.DueDate = result.InvoiceDate.Value.AddDays(30);
-            }
-            if (result.IsCreditNote || result.TotalAmount < 0)
-            {
-                UniversalDocumentClassifier.ApplyCreditNoteNormalization(result, result.ClassificationReason ?? "CII Credit Note");
-            }
+            ApplyFallbackTotalsAndCreditNote(result, "CII Credit Note");
 
             return result;
         }
@@ -287,46 +253,8 @@ public class FacturXInvoiceExtractor : IElectronicInvoiceExtractor
         }
     }
 
-    private static XElement? FindElement(XContainer container, string localName)
-    {
-        return container.Elements().FirstOrDefault(e => e.Name.LocalName.Equals(localName, StringComparison.OrdinalIgnoreCase));
-    }
+    private static readonly string[] CiiDateFormats =
+        ["yyyyMMdd", "yyyy-MM-dd", "yyyyMMddTHHmmss", "yyyy-MM-ddTHH:mm:ss"];
 
-    private static IEnumerable<XElement> FindElements(XContainer container, string localName)
-    {
-        return container.Elements().Where(e => e.Name.LocalName.Equals(localName, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static decimal ParseDecimal(string? value, decimal defaultValue = 0m)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return defaultValue;
-        if (decimal.TryParse(value.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out var result))
-        {
-            return result;
-        }
-        if (decimal.TryParse(value.Trim(), NumberStyles.Any, CultureInfo.CurrentCulture, out result))
-        {
-            return result;
-        }
-        return defaultValue;
-    }
-
-    private static DateTime? ParseCiiDate(string dateStr)
-    {
-        if (string.IsNullOrWhiteSpace(dateStr)) return null;
-
-        // Common CII formats: 102 (yyyyMMdd), yyyy-MM-dd, yyyyMMddTHHmmss
-        string[] formats = ["yyyyMMdd", "yyyy-MM-dd", "yyyyMMddTHHmmss", "yyyy-MM-ddTHH:mm:ss"];
-        if (DateTime.TryParseExact(dateStr, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-        {
-            return dt;
-        }
-
-        if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt))
-        {
-            return dt;
-        }
-
-        return null;
-    }
+    private static DateTime? ParseCiiDate(string dateStr) => ParseDate(dateStr, CiiDateFormats);
 }

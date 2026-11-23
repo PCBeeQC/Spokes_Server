@@ -1,4 +1,3 @@
-@inject ICryptoService Crypto
 @inject ScopedKeystoreService ScopedKeystore
 @inject IJSRuntime JS
 @inject IDialogService DialogService
@@ -81,7 +80,7 @@ else if (!ScopedKeystore.IsUnlocked)
                     }
                 </div>
             }
-            else
+            else if (EffectiveUser is { IsActiveUnsuspended: true })
             {
                 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4 text-center px-4" Style="max-width: 440px;">
                     @(string.IsNullOrEmpty(SetupText) ? Loc["This channel is encrypted. You must set up your secure Chat Vault password before you can view these messages."] : SetupText)
@@ -92,6 +91,12 @@ else if (!ScopedKeystore.IsUnlocked)
                         @(string.IsNullOrEmpty(SetupButtonText) ? Loc["Set Up Vault Password"] : SetupButtonText)
                     </MudButton>
                 </div>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4 text-center px-4" Style="max-width: 440px;">
+                    @Loc["Secure Vault setup is unavailable while your account is suspended or restricted."]
+                </MudText>
             }
         </div>
     }
@@ -139,13 +144,15 @@ else if (!ScopedKeystore.IsUnlocked)
 
     private async Task UnlockVaultAsync()
     {
-        if (EffectiveUser == null || string.IsNullOrWhiteSpace(_vaultPassword) || string.IsNullOrEmpty(EffectiveUser.EncryptedPrivateKey)) return;
+        if (EffectiveUser == null || string.IsNullOrWhiteSpace(_vaultPassword)) return;
+        var liveUser = Db.Employees.GetById(EffectiveUser.Id) ?? EffectiveUser;
+        if (!liveUser.IsActive || liveUser.IsBanned || string.IsNullOrEmpty(liveUser.EncryptedPrivateKey)) return;
 
         _isUnlocking = true;
         _hasVaultError = false;
         try
         {
-            var unlocked = await ScopedKeystore.UnlockWithPasswordAsync(JS, EffectiveUser, _vaultPassword, rememberDevice: true);
+            var unlocked = await ScopedKeystore.UnlockWithPasswordAsync(JS, liveUser, _vaultPassword, rememberDevice: !liveUser.IsSuspended);
             if (unlocked)
             {
                 _vaultPassword = "";
@@ -166,12 +173,15 @@ else if (!ScopedKeystore.IsUnlocked)
     private async Task OpenSecureChatSettingsAsync()
     {
         if (EffectiveUser == null) return;
-        var parameters = new DialogParameters { ["Employee"] = EffectiveUser };
+        var liveUser = Db.Employees.GetById(EffectiveUser.Id);
+        if (liveUser is not { IsActive: true, IsSuspended: false, IsBanned: false }) return;
+
+        var parameters = new DialogParameters { ["Employee"] = liveUser };
         var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
         var dialog = await DialogService.ShowAsync<SecureChatSettingsDialog>(Loc["Secure Chat Settings"].Value, parameters, options);
         var result = await dialog.Result;
 
-        _resolvedUser = Db.Employees.GetById(EffectiveUser.Id);
+        _resolvedUser = Db.Employees.GetById(liveUser.Id);
         if (result != null && !result.Canceled)
         {
             await OnSetupCompleted.InvokeAsync();

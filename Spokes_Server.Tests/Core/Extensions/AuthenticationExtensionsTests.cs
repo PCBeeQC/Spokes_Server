@@ -49,7 +49,7 @@ public class AuthenticationExtensionsTests : IDisposable
         Directory.CreateDirectory(_testDir);
 
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testDir })
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"})
             .Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -124,13 +124,15 @@ public class AuthenticationExtensionsTests : IDisposable
 
     private async Task<(CookieValidatePrincipalContext ValidateContext, DefaultHttpContext HttpContext)> ValidateCookiePrincipalAsync(
         IEnumerable<Claim> claims,
-        string requestPath = "/")
+        string requestPath = "/",
+        string httpMethod = "GET")
     {
         var httpContext = new DefaultHttpContext
         {
             RequestServices = _serviceProvider
         };
         httpContext.Request.Path = requestPath;
+        httpContext.Request.Method = httpMethod;
 
         var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
         var scheme = new AuthenticationScheme(
@@ -347,29 +349,71 @@ public class AuthenticationExtensionsTests : IDisposable
     }
 
     [Fact]
-    public async Task OnValidatePrincipal_SystemRenderer_RequiresInternalRendererClaim()
+    public async Task OnValidatePrincipal_RejectsSystemRenderer_AndConfinesDelegatedHeadlessSessionToReadOnlyTransport()
     {
         _sessionRepo.Save(new DeviceSession
         {
-            Id = "sess-render",
+            Id = "sess-render-legacy",
             EmployeeId = "system-renderer",
             ExpiresAt = DateTime.UtcNow.AddMinutes(5)
         });
 
-        var (forgedCtx, _) = await ValidateCookiePrincipalAsync(
+        var (legacyForbidCtx, _) = await ValidateCookiePrincipalAsync(
         [
             new Claim("EmployeeId", "system-renderer"),
-            new Claim("SessionId", "sess-render")
+            new Claim("SessionId", "sess-render-legacy"),
+            new Claim("Spokes_InternalRenderer", "true"),
+            new Claim("RenderScope", "DocumentExport")
         ], "/projects/p1/quotes/q1");
-        Assert.Null(forgedCtx.Principal);
+        Assert.Null(legacyForbidCtx.Principal);
 
-        var (validCtx, _) = await ValidateCookiePrincipalAsync(
+        _employeeRepo.Save(new Employee
+        {
+            Id = "emp-render-auth",
+            FirstName = "Renderer",
+            IsActive = true
+        });
+        _sessionRepo.Save(new DeviceSession
+        {
+            Id = "sess-render-delegated",
+            EmployeeId = "emp-render-auth",
+            DeviceName = Spokes_Server.Core.Middleware.RenderTokenMiddleware.HeadlessRendererName,
+            ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+        });
+
+        Claim[] delegatedClaims =
         [
-            new Claim("EmployeeId", "system-renderer"),
-            new Claim("SessionId", "sess-render"),
-            new Claim("Spokes_InternalRenderer", "true")
-        ], "/projects/p1/quotes/q1");
-        Assert.NotNull(validCtx.Principal);
+            new Claim("EmployeeId", "emp-render-auth"),
+            new Claim("SessionId", "sess-render-delegated"),
+            new Claim("Spokes_InternalRenderer", "true"),
+            new Claim("RenderScope", "DocumentExport")
+        ];
+
+        var (validGetCtx, _) = await ValidateCookiePrincipalAsync(delegatedClaims, "/projects/p1/quotes/q1", "GET");
+        Assert.NotNull(validGetCtx.Principal);
+
+        var (validBlazorPostCtx, _) = await ValidateCookiePrincipalAsync(delegatedClaims, "/_blazor/negotiate", "POST");
+        Assert.NotNull(validBlazorPostCtx.Principal);
+
+        var (blockedMutatingPostCtx, _) = await ValidateCookiePrincipalAsync(delegatedClaims, "/spokesapi/mutating", "POST");
+        Assert.Null(blockedMutatingPostCtx.Principal);
+
+        // Non-headless DeviceSession claiming RenderScope/Spokes_InternalRenderer must be rejected
+        _sessionRepo.Save(new DeviceSession
+        {
+            Id = "sess-regular-hijack",
+            EmployeeId = "emp-render-auth",
+            DeviceName = "Chrome Desktop",
+            ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+        });
+        var (mismatchedSessionCtx, _) = await ValidateCookiePrincipalAsync(
+        [
+            new Claim("EmployeeId", "emp-render-auth"),
+            new Claim("SessionId", "sess-regular-hijack"),
+            new Claim("Spokes_InternalRenderer", "true"),
+            new Claim("RenderScope", "DocumentExport")
+        ], "/projects/p1/quotes/q1", "GET");
+        Assert.Null(mismatchedSessionCtx.Principal);
     }
 
     [Fact]

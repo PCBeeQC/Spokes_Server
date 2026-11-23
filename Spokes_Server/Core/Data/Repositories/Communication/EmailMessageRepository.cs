@@ -175,20 +175,34 @@ public class EmailMessageRepository
         }
     }
 
-    public virtual EmailMessage? GetById(string accountId, string messageId) =>
-        GetByIdOrLoad(accountId, messageId);
-
-    public virtual EmailMessage? GetById(string messageId)
+    public virtual EmailMessage? GetById(string accountId, string messageId)
     {
-        if (_cache.TryGetValue(messageId, out var item)) return item;
+        if (TryGetCachedMessage(accountId, messageId, out var item)) return item;
+
+        var path = Path.Combine(_basePath, accountId, "Messages", $"{messageId}.json");
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            return DeserializeAndCacheMessage(File.ReadAllText(path));
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[EmailMessageRepo] Error loading email {Id}", messageId);
+            return null;
+        }
+    }
+
+    private string? ResolveAccountId(string messageId)
+    {
+        if (_cache.TryGetValue(messageId, out var item)) return item.AccountId;
 
         foreach (var kvp in _indices)
         {
             var meta = kvp.Value.Messages.Values.FirstOrDefault(m => m.Id == messageId);
             if (meta != null)
             {
-                var accountId = kvp.Key.Split(':')[0];
-                return GetByIdOrLoad(accountId, messageId);
+                return kvp.Key.Split(':')[0];
             }
         }
 
@@ -200,7 +214,7 @@ public class EmailMessageRepository
                 var candidatePath = Path.Combine(accDir, "Messages", $"{messageId}.json");
                 if (File.Exists(candidatePath))
                 {
-                    return GetByIdOrLoad(accId, messageId);
+                    return accId;
                 }
             }
         }
@@ -208,68 +222,83 @@ public class EmailMessageRepository
         return null;
     }
 
-    public virtual void Delete(string accountId, string messageId)
+    public virtual EmailMessage? GetById(string messageId)
     {
-        _cache.TryRemove(messageId, out _);
-        var path = Path.Combine(_basePath, accountId, "Messages", $"{messageId}.json");
-        try
-        {
-            if (File.Exists(path)) File.Delete(path);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Failed to immediately delete email message file {Path}", path);
-        }
-        _writer.QueueDelete(path);
+        if (_cache.TryGetValue(messageId, out var item)) return item;
 
+        var accountId = ResolveAccountId(messageId);
+        return accountId != null ? GetById(accountId, messageId) : null;
+    }
+
+    public virtual void Delete(string accountId, string messageId) =>
+        DeleteMany(accountId, [messageId]);
+
+    public virtual int DeleteMany(string accountId, IEnumerable<string> messageIds)
+    {
+        if (string.IsNullOrWhiteSpace(accountId) || messageIds == null)
+        {
+            return 0;
+        }
+
+        var idsToRemove = messageIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (idsToRemove.Count == 0)
+        {
+            return 0;
+        }
+
+        foreach (var messageId in idsToRemove)
+        {
+            _cache.TryRemove(messageId, out _);
+            var path = Path.Combine(_basePath, accountId, "Messages", $"{messageId}.json");
+            try
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to immediately delete email message file {Path}", path);
+            }
+            _writer.QueueDelete(path);
+        }
+
+        bool indexChanged = false;
         var prefix = $"{accountId}:";
         foreach (var kvp in _indices)
         {
-            if (kvp.Key.StartsWith(prefix, StringComparison.Ordinal))
+            if (!kvp.Key.StartsWith(prefix, StringComparison.Ordinal))
             {
-                var index = kvp.Value;
-                var uidToRemove = index.Messages.FirstOrDefault(x => x.Value.Id == messageId).Key;
-                if (uidToRemove != 0)
+                continue;
+            }
+
+            var index = kvp.Value;
+            foreach (var entry in index.Messages)
+            {
+                if (idsToRemove.Contains(entry.Value.Id))
                 {
-                    index.Messages.TryRemove(uidToRemove, out _);
-                    SaveIndex(accountId);
-                    break;
+                    if (index.Messages.TryRemove(entry.Key, out _))
+                    {
+                        indexChanged = true;
+                    }
                 }
             }
         }
+
+        if (indexChanged)
+        {
+            SaveIndex(accountId);
+        }
+
+        return idsToRemove.Count;
     }
 
     public virtual void Delete(string messageId)
     {
-        if (_cache.TryGetValue(messageId, out var cached))
+        var accountId = ResolveAccountId(messageId);
+        if (accountId != null)
         {
-            Delete(cached.AccountId, messageId);
-            return;
-        }
-
-        foreach (var kvp in _indices)
-        {
-            var meta = kvp.Value.Messages.Values.FirstOrDefault(m => m.Id == messageId);
-            if (meta != null)
-            {
-                var accountId = kvp.Key.Split(':')[0];
-                Delete(accountId, messageId);
-                return;
-            }
-        }
-
-        if (Directory.Exists(_basePath))
-        {
-            foreach (var accDir in Directory.GetDirectories(_basePath))
-            {
-                var accId = Path.GetFileName(accDir);
-                var candidatePath = Path.Combine(accDir, "Messages", $"{messageId}.json");
-                if (File.Exists(candidatePath))
-                {
-                    Delete(accId, messageId);
-                    return;
-                }
-            }
+            Delete(accountId, messageId);
         }
     }
 
@@ -330,7 +359,7 @@ public class EmailMessageRepository
                 {
                     if (seenIds.Add(meta.Id))
                     {
-                        var msg = GetByIdOrLoad(accountId, meta.Id);
+                        var msg = GetById(accountId, meta.Id);
                         if (msg != null) results.Add(msg);
                     }
                 }
@@ -345,7 +374,7 @@ public class EmailMessageRepository
                 var id = Path.GetFileNameWithoutExtension(file);
                 if (seenIds.Add(id))
                 {
-                    var msg = GetByIdOrLoad(accountId, id);
+                    var msg = GetById(accountId, id);
                     if (msg != null) results.Add(msg);
                 }
             }
@@ -394,18 +423,6 @@ public class EmailMessageRepository
         return folderIndex.Messages.TryAdd(uid, placeholder);
     }
 
-    public EmailMessage? GetByUid(string accountId, string folderPath, uint uid)
-    {
-        if (_indices.TryGetValue($"{accountId}:{folderPath}", out var index))
-        {
-            if (index.Messages.TryGetValue(uid, out var meta))
-            {
-                return GetByIdOrLoad(accountId, meta.Id);
-            }
-        }
-        return null;
-    }
-
     public virtual EmailMessage? GetByUniqueId(string accountId, uint uniqueId)
     {
         if (uniqueId == 0) return null;
@@ -420,7 +437,7 @@ public class EmailMessageRepository
             {
                 if (kvp.Value.Messages.TryGetValue(uniqueId, out var meta))
                 {
-                    return GetByIdOrLoad(accountId, meta.Id);
+                    return GetById(accountId, meta.Id);
                 }
             }
         }
@@ -444,7 +461,7 @@ public class EmailMessageRepository
                 var meta = kvp.Value.Messages.Values.FirstOrDefault(m => m.GlobalMessageId == globalMessageId);
                 if (meta != null)
                 {
-                    var msg = GetByIdOrLoad(accountId, meta.Id);
+                    var msg = GetById(accountId, meta.Id);
                     if (msg != null) results.Add(msg);
                 }
             }
@@ -452,74 +469,48 @@ public class EmailMessageRepository
         return results;
     }
 
-    public EmailMessage? GetByIdOrLoad(string accountId, string id)
+    private bool TryGetCachedMessage(string accountId, string id, out EmailMessage? item)
     {
-        if (_cache.TryGetValue(id, out var item))
+        if (_cache.TryGetValue(id, out var cached))
         {
-            if (string.IsNullOrEmpty(accountId) || item.AccountId == accountId)
-                return item;
-            return null;
+            item = string.IsNullOrEmpty(accountId) || cached.AccountId == accountId ? cached : null;
+            return true;
         }
-
-        var path = Path.Combine(_basePath, accountId, "Messages", $"{id}.json");
-        if (File.Exists(path))
-        {
-            try
-            {
-                var json = File.ReadAllText(path);
-                item = JsonSerializer.Deserialize<EmailMessage>(json);
-                if (item != null)
-                {
-                    _cache[item.Id] = item;
-                    if (_cache.Count > 5000)
-                    {
-                        var keyToRemove = _cache.Keys.FirstOrDefault();
-                        if (keyToRemove != null) _cache.TryRemove(keyToRemove, out _);
-                    }
-                    return item;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "[EmailMessageRepo] Error loading email {Id}", id);
-            }
-        }
-        return null;
+        item = null;
+        return false;
     }
 
-    public async Task<EmailMessage?> GetByIdOrLoadAsync(string accountId, string id, CancellationToken cancellationToken = default)
+    private EmailMessage? DeserializeAndCacheMessage(string json)
     {
-        if (_cache.TryGetValue(id, out var item))
+        var item = JsonSerializer.Deserialize<EmailMessage>(json);
+        if (item == null) return null;
+
+        _cache[item.Id] = item;
+        if (_cache.Count > 5000)
         {
-            if (string.IsNullOrEmpty(accountId) || item.AccountId == accountId)
-                return item;
-            return null;
+            var keyToRemove = _cache.Keys.FirstOrDefault();
+            if (keyToRemove != null) _cache.TryRemove(keyToRemove, out _);
         }
+        return item;
+    }
+
+    private async Task<EmailMessage?> GetByIdOrLoadAsync(string accountId, string id, CancellationToken cancellationToken = default)
+    {
+        if (TryGetCachedMessage(accountId, id, out var item)) return item;
 
         var path = Path.Combine(_basePath, accountId, "Messages", $"{id}.json");
-        if (File.Exists(path))
+        if (!File.Exists(path)) return null;
+
+        try
         {
-            try
-            {
-                var json = await File.ReadAllTextAsync(path, cancellationToken);
-                item = JsonSerializer.Deserialize<EmailMessage>(json);
-                if (item != null)
-                {
-                    _cache[item.Id] = item;
-                    if (_cache.Count > 5000)
-                    {
-                        var keyToRemove = _cache.Keys.FirstOrDefault();
-                        if (keyToRemove != null) _cache.TryRemove(keyToRemove, out _);
-                    }
-                    return item;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "[EmailMessageRepo] Error loading email {Id}", id);
-            }
+            var json = await File.ReadAllTextAsync(path, cancellationToken);
+            return DeserializeAndCacheMessage(json);
         }
-        return null;
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[EmailMessageRepo] Error loading email {Id}", id);
+            return null;
+        }
     }
 
     public IReadOnlyCollection<MessageMetadata> GetFolderMetadata(string accountId, string folderPath)
@@ -539,7 +530,7 @@ public class EmailMessageRepository
             var metas = filter != null ? index.Messages.Values.Where(filter) : index.Messages.Values;
             foreach (var meta in metas)
             {
-                var msg = GetByIdOrLoad(accountId, meta.Id);
+                var msg = GetById(accountId, meta.Id);
                 if (msg != null) results.Add(msg);
             }
             return results;
@@ -612,7 +603,7 @@ public class EmailMessageRepository
             var results = new List<EmailMessage>();
             foreach (var meta in topMetas)
             {
-                var msg = GetByIdOrLoad(accountId, meta.Id);
+                var msg = GetById(accountId, meta.Id);
                 if (msg != null) results.Add(msg);
             }
             return results;
@@ -620,55 +611,19 @@ public class EmailMessageRepository
         return new List<EmailMessage>();
     }
 
-    public List<EmailMessage> GetUnreadByFolderRecent(string accountId, string folderPath, int count = 10, Func<MessageMetadata, bool>? filter = null)
-    {
-        if (_indices.TryGetValue($"{accountId}:{folderPath}", out var index))
-        {
-            var source = filter != null
-                ? index.Messages.Values.Where(m => !m.IsRead && filter(m))
-                : index.Messages.Values.Where(m => !m.IsRead);
+    public List<EmailMessage> GetUnreadByFolderRecent(string accountId, string folderPath, int count = 10, Func<MessageMetadata, bool>? filter = null) =>
+        GetByFolderRecent(
+            accountId,
+            folderPath,
+            count,
+            filter != null ? m => !m.IsRead && filter(m) : static m => !m.IsRead);
 
-            var unreadMetas = source
-                .OrderByDescending(m => m.Date)
-                .ThenByDescending(m => m.UniqueId)
-                .Take(count)
-                .ToList();
-
-            var results = new List<EmailMessage>();
-            foreach (var meta in unreadMetas)
-            {
-                var msg = GetByIdOrLoad(accountId, meta.Id);
-                if (msg != null) results.Add(msg);
-            }
-            return results;
-        }
-        return new List<EmailMessage>();
-    }
-
-    public List<EmailMessage> GetByFolderBeforeDate(string accountId, string folderPath, DateTime beforeDate, int count = 30, Func<MessageMetadata, bool>? filter = null)
-    {
-        if (_indices.TryGetValue($"{accountId}:{folderPath}", out var index))
-        {
-            var source = filter != null
-                ? index.Messages.Values.Where(m => m.Date < beforeDate && filter(m))
-                : index.Messages.Values.Where(m => m.Date < beforeDate);
-
-            var olderMetas = source
-               .OrderByDescending(m => m.Date)
-               .ThenByDescending(m => m.UniqueId)
-               .Take(count)
-               .ToList();
-
-            var results = new List<EmailMessage>();
-            foreach (var meta in olderMetas)
-            {
-                var msg = GetByIdOrLoad(accountId, meta.Id);
-                if (msg != null) results.Add(msg);
-            }
-            return results;
-        }
-        return new List<EmailMessage>();
-    }
+    public List<EmailMessage> GetByFolderBeforeDate(string accountId, string folderPath, DateTime beforeDate, int count = 30, Func<MessageMetadata, bool>? filter = null) =>
+        GetByFolderRecent(
+            accountId,
+            folderPath,
+            count,
+            filter != null ? m => m.Date < beforeDate && filter(m) : m => m.Date < beforeDate);
 
     public List<EmailMessage> GetRecentAcrossFolders(
         IEnumerable<(string AccountId, string FolderPath, Func<MessageMetadata, bool>? FolderFilter)> folderScopes,
@@ -712,7 +667,7 @@ public class EmailMessageRepository
             if (!string.IsNullOrWhiteSpace(meta.GlobalMessageId) && !seenGlobalIds.Add($"{accountId}:{meta.GlobalMessageId}"))
                 continue;
 
-            var msg = GetByIdOrLoad(accountId, meta.Id);
+            var msg = GetById(accountId, meta.Id);
             if (msg != null)
             {
                 results.Add(msg);
@@ -736,7 +691,7 @@ public class EmailMessageRepository
                     return false;
                 }
 
-                var msg = GetByIdOrLoad(accountId, meta.Id);
+                var msg = GetById(accountId, meta.Id);
                 if (msg != null)
                 {
                     msg.IsRead = isRead;
@@ -798,16 +753,7 @@ public class EmailMessageRepository
             var meta = item.Meta;
             var id = meta.Id;
 
-            EmailMessage? msg = null;
-            if (_cache.TryGetValue(id, out var cachedMsg))
-            {
-                msg = cachedMsg;
-            }
-
-            if (msg == null)
-            {
-                msg = await GetByIdOrLoadAsync(accountId, id, cancellationToken);
-            }
+            var msg = await GetByIdOrLoadAsync(accountId, id, cancellationToken);
 
             if (msg != null)
             {

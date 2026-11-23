@@ -1,3 +1,4 @@
+using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Core;
@@ -8,6 +9,10 @@ namespace Spokes_Server.Tests.Core.Data.Repositories.Accounting;
 
 public class PurchaseOrderRepositoryTests : RepositoryTestFixture<PurchaseOrderRepository>
 {
+    public PurchaseOrderRepositoryTests()
+        : base((writer, config) => new PurchaseOrderRepository(writer, config, new SequenceService(config)))
+    {
+    }
     [Fact]
     public void Save_GeneratesSequentialPoNumberIfMissing()
     {

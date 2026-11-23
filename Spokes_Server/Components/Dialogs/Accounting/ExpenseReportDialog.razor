@@ -1,5 +1,10 @@
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.Security
 @inject Database Db
 @inject IDialogService DialogService
+@inject UserService UserService
+@inject FileUrlSigner FileUrls
 
 <MudDialog>
     <DialogContent>
@@ -29,7 +34,7 @@
                             <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column my-expense-item-card" Style="border-radius: 12px;">
                                 <MudCardContent Class="pa-3 flex-grow-1">
                                     <div class="d-flex justify-space-between align-start mb-1">
-                                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@(Db.Projects.GetById(context.ProjectId)?.Name ?? "No Project")</MudText>
+                                        <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@GetProjectName(context.ProjectId)</MudText>
                                         <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Date.ToShortDateString()</MudText>
                                     </div>
                                     <MudText Typo="Typo.body2" Class="mb-2" Style="min-height: 40px;">@context.Description</MudText>
@@ -41,7 +46,7 @@
                                         </div>
                                         @if (!string.IsNullOrEmpty(context.ReceiptPath))
                                         {
-                                            <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Default" Href="@context.ReceiptPath" Target="_blank" title="View Receipt" />
+                                            <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Default" Href="@FileUrls.SignUrl(context.ReceiptPath)" Target="_blank" title="View Receipt" />
                                         }
                                     </div>
                                 </MudCardContent>
@@ -89,7 +94,24 @@
     [Parameter] public ExpenseReport Report { get; set; } = default!;
     [Parameter] public bool IsReadOnly { get; set; }
 
+    private Employee? _currentUser;
+
     private DateTime? date { get => Report.DateCreated; set => Report.DateCreated = value ?? DateTime.Today; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+    }
+
+    private string GetProjectName(string? projectId)
+    {
+        if (string.IsNullOrWhiteSpace(projectId)) return "No Project";
+        var proj = Db.Projects.GetById(projectId);
+        if (proj == null) return "No Project";
+        bool canSee = ProjectAccessHelper.CanAccessProjectForContribution(_currentUser, proj, Db.Teams, allowSuspended: true) ||
+                      (IsReadOnly && ProjectAccessHelper.CanAccess(_currentUser, proj, Db.Teams, allowAccountingFinancialRead: true));
+        return canSee ? proj.Name : "Restricted Project";
+    }
 
     private Task AddItem() => OpenItemDialog(new ExpenseItem(), true);
 

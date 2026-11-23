@@ -10,10 +10,22 @@ public record WriteJob(string FilePath, byte[]? Data, bool IsDelete, bool IsDire
 public class DiskPersistenceService : BackgroundService
 {
     private readonly Channel<WriteJob> _queue;
+    private readonly SemaphoreSlim _drainLock = new(1, 1);
     private readonly ILogger<DiskPersistenceService> _logger;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly IStorageHealthNotifier? _storageHealth;
     private readonly IStoragePersistenceLogger? _systemLog;
+    private volatile RepositoryFileCascade? _fileCascade;
+
+    public void AttachFileCascade(RepositoryFileCascade cascade)
+    {
+        _fileCascade = cascade ?? throw new ArgumentNullException(nameof(cascade));
+    }
+
+    internal void NotifyEntityDeleted(IHasAssociatedFiles entity)
+    {
+        _fileCascade?.HandleEntityDeleted(entity);
+    }
 
     public DiskPersistenceService(ILogger<DiskPersistenceService> logger)
         : this(logger, null, null)
@@ -56,95 +68,46 @@ public class DiskPersistenceService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Process until token is cancelled
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            // Wait for an item, but don't throw if channel is completed
-            if (await _queue.Reader.WaitToReadAsync(stoppingToken))
+            // Process until token is cancelled
+            while (!stoppingToken.IsCancellationRequested)
             {
-                while (_queue.Reader.TryRead(out var job))
+                // Wait for an item, but don't throw if channel is completed
+                if (await _queue.Reader.WaitToReadAsync(stoppingToken))
                 {
-                    await ProcessJob(job);
+                    await DrainQueueAsync();
                 }
             }
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+        }
 
         // FLUSH ON EXIT: Process remaining items
-        while (_queue.Reader.TryRead(out var job))
-        {
-            await ProcessJob(job);
-        }
+        await DrainQueueAsync();
     }
 
-    public async Task FlushAllAsync()
+    public Task FlushAllAsync() => DrainQueueAsync();
+
+    private async Task DrainQueueAsync()
     {
-        while (_queue.Reader.TryRead(out var job))
+        await _drainLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            await ProcessJob(job);
+            while (_queue.Reader.TryRead(out var job))
+            {
+                await ProcessJob(job).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _drainLock.Release();
         }
     }
 
     [Obsolete("Prefer FlushAllAsync() to avoid blocking thread pool threads.")]
-    public void FlushAll()
-    {
-        while (_queue.Reader.TryRead(out var job))
-        {
-            ProcessJobSync(job);
-        }
-    }
-
-    private void ProcessJobSync(WriteJob job)
-    {
-        string? tempPath = null;
-        try
-        {
-            if (job.IsDelete)
-            {
-                if (job.IsDirectory)
-                {
-                    if (Directory.Exists(job.FilePath)) Directory.Delete(job.FilePath, true);
-                }
-                else
-                {
-                    if (File.Exists(job.FilePath)) File.Delete(job.FilePath);
-                }
-            }
-            else
-            {
-                var dir = Path.GetDirectoryName(job.FilePath);
-                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-                tempPath = job.FilePath + ".tmp";
-                using (var stream = File.Create(tempPath))
-                {
-                    stream.Write(job.Data);
-                }
-
-                File.Move(tempPath, job.FilePath, overwrite: true);
-                tempPath = null;
-            }
-
-            _storageHealth?.RecordPersistenceSuccess();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to persist file: {Path}", job.FilePath);
-            _storageHealth?.RecordPersistenceFailure();
-            _systemLog?.LogError("Storage", $"Failed to persist file {job.FilePath}: {ex.Message}", ex.ToString());
-
-            if (tempPath != null)
-            {
-                try
-                {
-                    if (File.Exists(tempPath)) File.Delete(tempPath);
-                }
-                catch (Exception cleanupEx)
-                {
-                    _systemLog?.Log("Storage", "Warning", $"Failed to delete temp file {tempPath}: {cleanupEx.Message}");
-                }
-            }
-        }
-    }
+    public void FlushAll() => DrainQueueAsync().GetAwaiter().GetResult();
 
     private async Task ProcessJob(WriteJob job)
     {
@@ -153,14 +116,7 @@ public class DiskPersistenceService : BackgroundService
         {
             if (job.IsDelete)
             {
-                if (job.IsDirectory)
-                {
-                    if (Directory.Exists(job.FilePath)) Directory.Delete(job.FilePath, true);
-                }
-                else
-                {
-                    if (File.Exists(job.FilePath)) File.Delete(job.FilePath);
-                }
+                DeleteTarget(job);
             }
             else
             {
@@ -168,12 +124,12 @@ public class DiskPersistenceService : BackgroundService
                 var dir = Path.GetDirectoryName(job.FilePath);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-                // Write to temp file first, then move (Atomic Save)
-                // This prevents corrupted files if power cuts out mid-write
-                tempPath = job.FilePath + ".tmp";
+                // Write to unique temp file first, then move (Atomic Save)
+                // This prevents corrupted files if power cuts out mid-write and avoids .tmp contention
+                tempPath = CreateUniqueTempPath(job.FilePath);
                 await using (var stream = File.Create(tempPath))
                 {
-                    await stream.WriteAsync(job.Data);
+                    await stream.WriteAsync(job.Data).ConfigureAwait(false);
                 }
 
                 File.Move(tempPath, job.FilePath, overwrite: true);
@@ -184,20 +140,39 @@ public class DiskPersistenceService : BackgroundService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to persist file: {Path}", job.FilePath);
-            _storageHealth?.RecordPersistenceFailure();
-            _systemLog?.LogError("Storage", $"Failed to persist file {job.FilePath}: {ex.Message}", ex.ToString());
+            HandlePersistenceFailure(job, ex, tempPath);
+        }
+    }
 
-            if (tempPath != null)
+    private static string CreateUniqueTempPath(string filePath) => $"{filePath}.{Guid.NewGuid():N}.tmp";
+
+    private static void DeleteTarget(WriteJob job)
+    {
+        if (job.IsDirectory)
+        {
+            if (Directory.Exists(job.FilePath)) Directory.Delete(job.FilePath, true);
+        }
+        else
+        {
+            if (File.Exists(job.FilePath)) File.Delete(job.FilePath);
+        }
+    }
+
+    private void HandlePersistenceFailure(WriteJob job, Exception ex, string? tempPath)
+    {
+        _logger.LogError(ex, "Failed to persist file: {Path}", job.FilePath);
+        _storageHealth?.RecordPersistenceFailure();
+        _systemLog?.LogError("Storage", $"Failed to persist file {job.FilePath}: {ex.Message}", ex.ToString());
+
+        if (tempPath != null)
+        {
+            try
             {
-                try
-                {
-                    if (File.Exists(tempPath)) File.Delete(tempPath);
-                }
-                catch (Exception cleanupEx)
-                {
-                    _systemLog?.Log("Storage", "Warning", $"Failed to delete temp file {tempPath}: {cleanupEx.Message}");
-                }
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
+            catch (Exception cleanupEx)
+            {
+                _systemLog?.Log("Storage", "Warning", $"Failed to delete temp file {tempPath}: {cleanupEx.Message}");
             }
         }
     }

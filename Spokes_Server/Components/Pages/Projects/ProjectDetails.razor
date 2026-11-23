@@ -12,10 +12,12 @@
 @using Spokes_Server.Components.Shared
 @inject Database Db
 @inject IAccountingService AccountingService
+@inject IProjectService ProjectService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject NavigationManager Nav
 @inject UserService UserService
+@inject IJSRuntime JS
 
 @if (Project == null)
 {
@@ -63,7 +65,7 @@ else
         }
     </MudPaper>
 
-    <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Outlined="true" Elevation="0" Border="true" Rounded="true" TabPanelsClass="pa-4">
+    <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Outlined="true" Elevation="0" Border="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
 
         <MudTabPanel Text="Dashboard" Icon="@Icons.Material.Filled.Dashboard">
             <ProjectOverview ProjectId="@Id" />
@@ -79,7 +81,7 @@ else
                 <QuoteList ProjectId="@Id" />
             </MudTabPanel>
 
-            <MudTabPanel Text="Documents" Icon="@Icons.Material.Filled.Description">
+            <MudTabPanel Text="Documents & Reports" Icon="@Icons.Material.Filled.Description">
                 <ProjectDocuments ProjectId="@Id" Project="@Project" />
             </MudTabPanel>
 
@@ -89,7 +91,7 @@ else
         }
         else
         {
-            <MudTabPanel Text="Documents" Icon="@Icons.Material.Filled.Description">
+            <MudTabPanel Text="Documents & Reports" Icon="@Icons.Material.Filled.Description">
                 <ProjectDocuments ProjectId="@Id" Project="@Project" />
             </MudTabPanel>
         }
@@ -138,39 +140,86 @@ else
     [SupplyParameterFromQuery] public string? Tab { get; set; }
 
     private Project? Project;
+    private string? _authorizedProjectId;
     private int activeTabIndex;
     private List<ProjectStatusConfig> AvailableStatuses = [];
 
     private bool CanEdit;
     private bool CanDelete;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
-        Project = Db.Projects.GetById(Id);
-        
-        if (Project != null && !await UserService.CanViewProjectAsync(Project))
+        ApplyTabFromQuery();
+
+        if (!string.Equals(_authorizedProjectId, Id, StringComparison.OrdinalIgnoreCase) || Project == null)
         {
+            _authorizedProjectId = null;
+            Project = null;
+            CanEdit = false;
+            CanDelete = false;
+            AvailableStatuses = [];
+
+            var emp = await UserService.GetEmployeeAsync();
+            var candidate = Db.Projects.GetById(Id);
+
+            if (candidate != null && (emp == null || !UserService.CanViewProject(emp, candidate)))
+            {
+                Nav.NavigateTo("/projects");
+                return;
+            }
+
+            if (candidate != null && emp != null)
+            {
+                Project = candidate;
+                _authorizedProjectId = candidate.Id;
+                var profile = Db.CompanyProfile.Get();
+                AvailableStatuses = profile?.ProjectStatuses ?? [];
+                ApplyPermissions(emp, candidate);
+            }
+            return;
+        }
+
+        await RefreshPermissionsAsync();
+    }
+
+    private async Task RefreshPermissionsAsync()
+    {
+        if (Project == null)
+        {
+            CanEdit = false;
+            CanDelete = false;
+            return;
+        }
+
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !UserService.CanViewProject(emp, Project))
+        {
+            _authorizedProjectId = null;
+            Project = null;
+            CanEdit = false;
+            CanDelete = false;
             Nav.NavigateTo("/projects");
             return;
         }
 
-        var profile = Db.CompanyProfile.Get();
-        AvailableStatuses = profile?.ProjectStatuses ?? [];
-        await LoadPermissions();
+        ApplyPermissions(emp, Project);
     }
 
-    private async Task LoadPermissions()
+    private void ApplyPermissions(Employee? emp, Project? project)
     {
-        var emp = await UserService.GetEmployeeAsync();
-        if (emp != null) 
+        if (emp == null || project == null)
         {
-            CanEdit = emp.HasPermission(AppPermissions.Projects.Edit);
-            CanDelete = emp.HasPermission(AppPermissions.Projects.Delete);
+            CanEdit = false;
+            CanDelete = false;
+            return;
         }
+
+        CanEdit = ProjectAccessHelper.CanEditProject(emp, project, Db.Teams);
+        CanDelete = emp.HasPermission(AppPermissions.Projects.Delete)
+            && UserService.CanViewProject(emp, project);
     }
 
-    // Logic to switch tabs based on URL
-    protected override void OnParametersSet()
+    private void ApplyTabFromQuery()
     {
         if (!string.IsNullOrEmpty(Tab))
         {
@@ -181,7 +230,7 @@ else
                 {
                     "dashboard" => 0,
                     "timeline" => 1,
-                    "documents" => 2,
+                    "documents" or "reports" => 2,
                     "settings" => 3,
                     _ => 0
                 };
@@ -194,7 +243,7 @@ else
                     "timeline" => 1,
                     "quote" => 2,
                     "invoices" => 2,
-                    "documents" => 3,
+                    "documents" or "reports" => 3,
                     "labor" => 4,
                     "settings" => 5,
                     _ => 0
@@ -203,35 +252,89 @@ else
         }
     }
 
-    private void UpdateStatus(string newStatus)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (Project != null)
+        if (firstRender)
         {
-            Project.Status = newStatus;
-
-            // Auto-archive if needed
-            var statusConfig = AvailableStatuses.FirstOrDefault(s => string.Equals(s.Name, newStatus, StringComparison.OrdinalIgnoreCase));
-            bool isArchived = statusConfig?.SystemMapping == SystemStatusMappings.Archived;
-
-            Project.IsActive = !isArchived;
-
-            Db.Projects.Save(Project);
-            AccountingService.EvaluateProjectCommissions(Project.Id);
-            
-            Snackbar.Add($"Status manual update: {newStatus}", Severity.Success);
+            try
+            {
+                await JS.InvokeVoidAsync("scrollMainToTop");
+            }
+            catch
+            {
+                // Ignore JS disconnected exceptions
+            }
         }
+    }
+
+    private async Task UpdateStatus(string newStatus)
+    {
+        if (Project == null) return;
+
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = Db.Projects.GetById(Project.Id);
+        if (!ProjectAccessHelper.CanEditProject(emp, liveProject, Db.Teams))
+        {
+            ApplyPermissions(emp, liveProject);
+            Snackbar.Add("You do not have permission to edit this project.", Severity.Warning);
+            return;
+        }
+
+        liveProject!.Status = newStatus;
+
+        // Auto-archive if needed
+        var statusConfig = AvailableStatuses.FirstOrDefault(s => string.Equals(s.Name, newStatus, StringComparison.OrdinalIgnoreCase));
+        bool isArchived = statusConfig?.SystemMapping == SystemStatusMappings.Archived;
+
+        liveProject.IsActive = !isArchived;
+
+        Db.Projects.Save(liveProject);
+        AccountingService.EvaluateProjectCommissions(liveProject.Id);
+        Project = liveProject;
+
+        Snackbar.Add($"Status manual update: {newStatus}", Severity.Success);
     }
 
     private async Task EditProject()
     {
         if (Project == null) return;
 
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = Db.Projects.GetById(Project.Id);
+        if (!ProjectAccessHelper.CanEditProject(emp, liveProject, Db.Teams))
+        {
+            ApplyPermissions(emp, liveProject);
+            Snackbar.Add("You do not have permission to edit this project.", Severity.Warning);
+            return;
+        }
+
         // Re-use your existing ProjectDialog
         var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true };
-        var dialog = await DialogService.ShowAsync<ProjectDialog>("Edit Project", new DialogParameters { ["Project"] = Project }, options);
+        var dialog = await DialogService.ShowAsync<ProjectDialog>("Edit Project", new DialogParameters { ["Project"] = liveProject! }, options);
         var result = await dialog.Result;
         if (result is { Canceled: false, Data: Project project })
         {
+            var saveActor = await UserService.GetEmployeeAsync();
+            var saveTarget = Db.Projects.GetById(liveProject!.Id);
+            if (!ProjectAccessHelper.CanEditProject(saveActor, saveTarget, Db.Teams) ||
+                !string.Equals(project.Id, liveProject.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                ApplyPermissions(saveActor, saveTarget);
+                Snackbar.Add("You do not have permission to edit this project.", Severity.Warning);
+                return;
+            }
+
+            project.Id = liveProject.Id;
+            project.ProjectNumber = project.ProjectNumber?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(project.ProjectNumber) ||
+                Db.Projects.GetAll().Any(p =>
+                    !string.Equals(p.Id, project.Id, StringComparison.OrdinalIgnoreCase) &&
+                    p.ProjectNumber.Equals(project.ProjectNumber, StringComparison.InvariantCultureIgnoreCase)))
+            {
+                Snackbar.Add($"Project ID '{project.ProjectNumber}' is invalid or already in use.", Severity.Error);
+                return;
+            }
+
             Db.Projects.Save(project);
             AccountingService.EvaluateProjectCommissions(project.Id);
             Project = project;
@@ -243,14 +346,38 @@ else
     {
         if (Project == null) return;
 
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = Db.Projects.GetById(Project.Id);
+        if (emp == null || liveProject == null || !emp.HasPermission(AppPermissions.Projects.Delete) || !UserService.CanViewProject(emp, liveProject))
+        {
+            ApplyPermissions(emp, liveProject);
+            Snackbar.Add("You do not have permission to delete this project.", Severity.Warning);
+            return;
+        }
+
         var result = await DialogService.ShowMessageBoxAsync(
-            "Delete Project", 
-            $"Are you sure you want to delete '{Project.Name}'? This action cannot be undone and will delete all associated data.", 
+            "Delete Project",
+            $"Are you sure you want to delete '{liveProject.Name}'? This action cannot be undone and will delete all associated data.",
             yesText: "Delete", cancelText: "Cancel");
 
         if (result == true)
         {
-            Db.Projects.Delete(Project.Id);
+            var confirmActor = await UserService.GetEmployeeAsync();
+            var confirmTarget = Db.Projects.GetById(liveProject.Id);
+            if (confirmActor == null || confirmTarget == null || !confirmActor.HasPermission(AppPermissions.Projects.Delete) || !UserService.CanViewProject(confirmActor, confirmTarget))
+            {
+                ApplyPermissions(confirmActor, confirmTarget);
+                Snackbar.Add("You do not have permission to delete this project.", Severity.Warning);
+                return;
+            }
+
+            var deleteResult = ProjectService.DeleteProject(confirmTarget.Id);
+            if (!deleteResult.IsSuccess)
+            {
+                Snackbar.Add(deleteResult.ErrorMessage ?? "Cannot delete project.", Severity.Warning);
+                return;
+            }
+
             Nav.NavigateTo("/projects");
             Snackbar.Add("Project deleted", Severity.Success);
         }
@@ -309,4 +436,3 @@ else
     }
 
 }
-

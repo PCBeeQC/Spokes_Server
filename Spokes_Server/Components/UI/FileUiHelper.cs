@@ -1,5 +1,7 @@
+using System;
 using System.IO;
 using MudBlazor;
+using Spokes_Server.Core.Helpers;
 
 namespace Spokes_Server.Components.UI;
 
@@ -9,19 +11,30 @@ namespace Spokes_Server.Components.UI;
 /// </summary>
 public static class FileUiHelper
 {
-    public static string GetFileIcon(string fileName)
+    public static string GetFileIcon(string? fileName, string? contentType = null)
     {
+        if (!string.IsNullOrEmpty(contentType))
+        {
+            if (contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return Icons.Material.Filled.Image;
+            if (contentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase)) return Icons.Material.Filled.VideoFile;
+            if (contentType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) return Icons.Material.Filled.AudioFile;
+            if (contentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase)) return Icons.Material.Filled.PictureAsPdf;
+        }
+
         if (string.IsNullOrEmpty(fileName)) return Icons.Material.Filled.InsertDriveFile;
+
+        if (FileHelper.IsImageFile(fileName)) return Icons.Material.Filled.Image;
+        if (FileHelper.IsVideoFile(fileName)) return Icons.Material.Filled.VideoFile;
+        if (FileHelper.IsAudioFile(fileName)) return Icons.Material.Filled.AudioFile;
+
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext switch
         {
-            ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".bmp" => Icons.Material.Filled.Image,
             ".pdf" => Icons.Material.Filled.PictureAsPdf,
-            ".doc" or ".docx" => Icons.Material.Filled.Description,
-            ".xls" or ".xlsx" => Icons.Material.Filled.TableChart,
-            ".zip" or ".rar" or ".7z" => Icons.Material.Filled.FolderZip,
-            ".mp4" or ".webm" or ".ogg" or ".mov" => Icons.Material.Filled.VideoFile,
+            ".doc" or ".docx" or ".odt" or ".rtf" => Icons.Material.Filled.Description,
             ".txt" => Icons.Material.Filled.TextSnippet,
+            ".xls" or ".xlsx" or ".csv" => Icons.Material.Filled.TableChart,
+            ".zip" or ".rar" or ".7z" or ".tar" or ".gz" => Icons.Material.Filled.FolderZip,
             _ => Icons.Material.Filled.InsertDriveFile
         };
     }

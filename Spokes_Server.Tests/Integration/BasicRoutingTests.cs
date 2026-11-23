@@ -204,7 +204,7 @@ public class BasicRoutingTests : IClassFixture<SpokesTestWebApplicationFactory>
 
         var response = await client.SendAsync(request);
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
-        Assert.Equal("/session-expired", response.Headers.Location?.OriginalString);
+        Assert.Equal("/session-expired?returnUrl=%2Fdashboard", response.Headers.Location?.OriginalString);
     }
 
     [Fact]
@@ -921,7 +921,7 @@ public class BasicRoutingTests : IClassFixture<SpokesTestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task OnValidatePrincipal_WithSystemRendererEmployeeId_PermitsPrincipalValidation()
+    public async Task OnValidatePrincipal_WithSystemRendererEmployeeId_RejectsPrincipalValidation()
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<Spokes_Server.Aggregate.Database>();
@@ -971,8 +971,8 @@ public class BasicRoutingTests : IClassFixture<SpokesTestWebApplicationFactory>
         var forgedResponse = await client.SendAsync(forgedRequest);
         Assert.Equal(HttpStatusCode.Unauthorized, forgedResponse.StatusCode);
 
-        // 2. An authentic RenderTokenMiddleware session carrying Spokes_InternalRenderer="true" must pass OnValidatePrincipal
-        // even though no "system-renderer" record exists in db.Employees (hitting 404 NotFound on the dummy API route, never 401).
+        // 2. Even a session carrying Spokes_InternalRenderer="true" with EmployeeId = "system-renderer"
+        // must now be rejected with 401 Unauthorized (global virtual system-renderer removed under #55).
         var ticketStore = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Authentication.Cookies.ITicketStore>();
         var rendererIdentity = new System.Security.Claims.ClaimsIdentity(new[]
         {
@@ -988,10 +988,69 @@ public class BasicRoutingTests : IClassFixture<SpokesTestWebApplicationFactory>
 
         await ticketStore.RenewAsync("session-" + session.Id, rendererTicket);
 
-        var validRendererRequest = new HttpRequestMessage(HttpMethod.Get, "/spokesapi/dummy-system-renderer-check");
-        validRendererRequest.Headers.Add("Cookie", $"Spokes_Session_v3={cookie}");
-        var validRendererResponse = await client.SendAsync(validRendererRequest);
-        Assert.Equal(HttpStatusCode.NotFound, validRendererResponse.StatusCode);
+        var legacyRendererRequest = new HttpRequestMessage(HttpMethod.Get, "/spokesapi/dummy-system-renderer-check");
+        legacyRendererRequest.Headers.Add("Cookie", $"Spokes_Session_v3={cookie}");
+        var legacyRendererResponse = await client.SendAsync(legacyRendererRequest);
+        Assert.Equal(HttpStatusCode.Unauthorized, legacyRendererResponse.StatusCode);
+
+        // 3. A delegated Headless Renderer session bound to a real active employee with DocumentExport scope
+        // passes OnValidatePrincipal for GET (404 on dummy route), but is rejected on mutating POST (401).
+        var delegatedEmp = new Spokes_Server.Core.Models.HR.Employee
+        {
+            Id = "emp_rend_" + Guid.NewGuid(),
+            FirstName = "Delegated",
+            LastName = "Initiator",
+            IsActive = true
+        };
+        db.Employees.Save(delegatedEmp);
+
+        var delegatedRawToken = "tok_delrend_" + Guid.NewGuid();
+        var delegatedHash = Convert.ToBase64String(sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(delegatedRawToken)));
+        var delegatedSession = new Spokes_Server.Core.Models.Core.DeviceSession
+        {
+            Id = "sess_delrend_" + Guid.NewGuid(),
+            EmployeeId = delegatedEmp.Id,
+            TokenHash = delegatedHash,
+            DeviceId = "dev_delrend_1",
+            DeviceName = Spokes_Server.Core.Middleware.RenderTokenMiddleware.HeadlessRendererName,
+            ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+        };
+        db.DeviceSessions.Save(delegatedSession);
+
+        var delegatedClient = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, HandleCookies = false });
+        var delegatedBootstrapRes = await delegatedClient.PostAsync("/sso/login/mobile-bootstrap", new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("refreshToken", delegatedRawToken),
+            new KeyValuePair<string, string>("deviceId", "dev_delrend_1"),
+            new KeyValuePair<string, string>("returnUrl", "/")
+        }));
+        var delegatedCookie = ExtractCookieValue(delegatedBootstrapRes, "Spokes_Session_v3");
+        Assert.NotEmpty(delegatedCookie);
+
+        var delegatedIdentity = new System.Security.Claims.ClaimsIdentity(new[]
+        {
+            new System.Security.Claims.Claim("EmployeeId", delegatedEmp.Id),
+            new System.Security.Claims.Claim("SessionId", delegatedSession.Id),
+            new System.Security.Claims.Claim("Spokes_InternalRenderer", "true"),
+            new System.Security.Claims.Claim("RenderScope", Spokes_Server.Core.Middleware.RenderTokenMiddleware.DocumentExportScope)
+        }, Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
+
+        var delegatedTicket = new Microsoft.AspNetCore.Authentication.AuthenticationTicket(
+            new System.Security.Claims.ClaimsPrincipal(delegatedIdentity),
+            new Microsoft.AspNetCore.Authentication.AuthenticationProperties { ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(5) },
+            Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme);
+
+        await ticketStore.RenewAsync("session-" + delegatedSession.Id, delegatedTicket);
+
+        var validGetRequest = new HttpRequestMessage(HttpMethod.Get, "/spokesapi/dummy-delegated-renderer-check");
+        validGetRequest.Headers.Add("Cookie", $"Spokes_Session_v3={delegatedCookie}");
+        var validGetResponse = await delegatedClient.SendAsync(validGetRequest);
+        Assert.Equal(HttpStatusCode.NotFound, validGetResponse.StatusCode);
+
+        var blockedPostRequest = new HttpRequestMessage(HttpMethod.Post, "/spokesapi/dummy-delegated-renderer-check");
+        blockedPostRequest.Headers.Add("Cookie", $"Spokes_Session_v3={delegatedCookie}");
+        var blockedPostResponse = await delegatedClient.SendAsync(blockedPostRequest);
+        Assert.Equal(HttpStatusCode.Unauthorized, blockedPostResponse.StatusCode);
     }
 
     [Fact]
@@ -1289,7 +1348,7 @@ public class BasicRoutingTests : IClassFixture<SpokesTestWebApplicationFactory>
         Assert.DoesNotContain("/sso/login/mobile-bootstrap", html);
 
         // The client boot/resume logic trusts this server-rendered state instead of probing the session.
-        var match = System.Text.RegularExpressions.Regex.Match(html, @"window\.__spokesSession = \{ authenticated: true, expiresAt: (\d+) \}");
+        var match = System.Text.RegularExpressions.Regex.Match(html, @"window\.__spokesSession = \{ authenticated: true, expiresAt: (\d+), userScope: ""([0-9a-f]{16})"" \|\| null, hasVaultKey: (true|false) \}");
         Assert.True(match.Success, "Expected authenticated __spokesSession in the rendered page");
         var expiresAt = DateTimeOffset.FromUnixTimeMilliseconds(long.Parse(match.Groups[1].Value));
         Assert.True(expiresAt > DateTimeOffset.UtcNow, "Expected the session expiry to be in the future");
@@ -1305,7 +1364,7 @@ public class BasicRoutingTests : IClassFixture<SpokesTestWebApplicationFactory>
         var response = await client.SendAsync(request);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var html = await response.Content.ReadAsStringAsync();
-        Assert.Contains("window.__spokesSession = { authenticated: false, expiresAt: 0 }", html);
+        Assert.Contains("window.__spokesSession = { authenticated: false, expiresAt: 0, userScope: \"\" || null, hasVaultKey: false }", html);
     }
 
     [Fact]
@@ -1905,6 +1964,102 @@ public class BasicRoutingTests : IClassFixture<SpokesTestWebApplicationFactory>
 
         var apiRes = await client.SendAsync(apiReq);
         Assert.Equal(HttpStatusCode.OK, apiRes.StatusCode);
+    }
+
+    [Fact]
+    public async Task AuthenticationLogin_WithoutSsoAttemptCookie_RedirectsImmediatelyToSsoLoginAuto()
+    {
+        var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var response = await client.GetAsync("/authentication/login");
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/sso/login/auto?returnUrl=%2F", response.Headers.Location?.PathAndQuery);
+    }
+
+    [Fact]
+    public async Task AuthenticationLogin_WithoutSsoAttemptCookie_PreservesSafeReturnUrlAndSanitizesOpenRedirect()
+    {
+        var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var safeResp = await client.GetAsync("/authentication/login?returnUrl=%2Fplanning%2Fcalendar");
+        Assert.Equal(HttpStatusCode.Redirect, safeResp.StatusCode);
+        Assert.Equal("/sso/login/auto?returnUrl=%2Fplanning%2Fcalendar", safeResp.Headers.Location?.PathAndQuery);
+
+        var openRedirectResp = await client.GetAsync("/authentication/login?returnUrl=https%3A%2F%2Fevil.example%2Fphish");
+        Assert.Equal(HttpStatusCode.Redirect, openRedirectResp.StatusCode);
+        Assert.Equal("/sso/login/auto?returnUrl=%2F", openRedirectResp.Headers.Location?.PathAndQuery);
+    }
+
+    [Fact]
+    public async Task AuthenticationLogin_WithSsoAttemptCookie_RendersStaticSsrManualLoginWithoutBlazorCircuitPrewarm()
+    {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<Spokes_Server.Aggregate.Database>();
+            var profile = db.CompanyProfile.Get();
+            profile.CompanyName = "Spokes Test Org";
+            db.CompanyProfile.Save(profile);
+        }
+
+        var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var request = new HttpRequestMessage(HttpMethod.Get, "/authentication/login?returnUrl=%2Fplanning%2Fcalendar");
+        request.Headers.Add("Cookie", "Spokes_SSO_Attempt=1");
+
+        var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var html = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Spokes Test Org", html);
+        Assert.Contains("Connect with SSO", html);
+        Assert.Contains("action=\"/sso/login\"", html);
+        Assert.Contains("name=\"returnUrl\" value=\"/planning/calendar\"", html);
+        Assert.Contains("\"isStaticLoginRoute\":true", html);
+        Assert.DoesNotContain("prewarmBlazorSocket", html);
+    }
+
+    [Fact]
+    public async Task AuthenticationLogin_WhenAlreadyAuthenticated_RedirectsToSafeReturnUrlEvenWithSsoAttemptCookie()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<Spokes_Server.Aggregate.Database>();
+        var employee = new Spokes_Server.Core.Models.HR.Employee
+        {
+            Id = "emp_auth_login_redir_" + Guid.NewGuid().ToString("N"),
+            FirstName = "Already",
+            LastName = "SignedIn",
+            IsActive = true
+        };
+        db.Employees.Save(employee);
+
+        var rawToken = "tok_auth_login_redir_" + Guid.NewGuid().ToString("N");
+        var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(rawToken)));
+        var session = new Spokes_Server.Core.Models.Core.DeviceSession
+        {
+            Id = "sess_auth_login_redir_" + Guid.NewGuid().ToString("N"),
+            EmployeeId = employee.Id,
+            TokenHash = hash,
+            DeviceId = "dev_auth_login_redir_1",
+            ExpiresAt = DateTime.UtcNow.AddDays(30)
+        };
+        db.DeviceSessions.Save(session);
+
+        var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var bootstrapRes = await client.PostAsync("/sso/login/mobile-bootstrap", new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("refreshToken", rawToken),
+            new KeyValuePair<string, string>("deviceId", "dev_auth_login_redir_1"),
+            new KeyValuePair<string, string>("returnUrl", "/")
+        }));
+        var sessionCookie = ExtractCookieValue(bootstrapRes, "Spokes_Session_v3");
+        Assert.NotEmpty(sessionCookie);
+
+        var loginReq = new HttpRequestMessage(HttpMethod.Get, "/authentication/login?returnUrl=%2Fplanning%2Fcalendar");
+        loginReq.Headers.Add("Cookie", $"Spokes_Session_v3={sessionCookie}; Spokes_SSO_Attempt=1");
+
+        var loginRes = await client.SendAsync(loginReq);
+        Assert.Equal(HttpStatusCode.Redirect, loginRes.StatusCode);
+        Assert.Equal("/planning/calendar", loginRes.Headers.Location?.PathAndQuery);
     }
 
     private static string ExtractCookieValue(HttpResponseMessage response, string cookieName)

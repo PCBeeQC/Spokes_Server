@@ -19,11 +19,11 @@ public class LicenseValidationServiceTests : IDisposable
     public LicenseValidationServiceTests()
     {
             var mockLogger = new Mock<ILogger<LicenseValidationService>>();
-            _licenseService = new LicenseValidationService(mockLogger.Object, new VersionMetadata("2026.8.102"));
+            _licenseService = new LicenseValidationService(mockLogger.Object);
 
             _testRsa = RSA.Create(2048);
             _testPublicKeyPem = _testRsa.ExportSubjectPublicKeyInfoPem();
-            _testKeyLicenseService = new LicenseValidationService(mockLogger.Object, new VersionMetadata("2026.8.102"), _testPublicKeyPem);
+            _testKeyLicenseService = new LicenseValidationService(mockLogger.Object, _testPublicKeyPem);
         }
 
         public void Dispose()
@@ -314,44 +314,6 @@ public class LicenseValidationServiceTests : IDisposable
             var version = LicenseValidationService.AppVersion;
 
             Assert.False(string.IsNullOrWhiteSpace(version));
-        }
-
-        [Fact]
-        public void SpokesLicenseFile_And_LicenseValidationResult_PropertyCoverage()
-        {
-            var testDate = new DateTime(2026, 12, 31, 23, 59, 59, DateTimeKind.Utc);
-            List<string> editions = ["Enterprise", "Custom"];
-            var license = new SpokesLicenseFile
-            {
-                Email = "admin@spokes.local",
-                LicenseId = "SPK-PROPERTY-TEST",
-                ValidForUpdatesUntil = testDate,
-                AvailableEditions = editions,
-                Signature = "base64-signature"
-            };
-
-            Assert.Equal("admin@spokes.local", license.Email);
-            Assert.Equal("SPK-PROPERTY-TEST", license.LicenseId);
-            Assert.Equal(testDate, license.ValidForUpdatesUntil);
-            Assert.Equal(editions, license.AvailableEditions);
-            Assert.Equal("base64-signature", license.Signature);
-
-            var result = new LicenseValidationResult
-            {
-                Status = LicenseStatus.Tolerated,
-                Message = "Test message",
-                ParsedLicense = license,
-                FirstInstalledVersion = "2026.1.0",
-                LockupVersion = "2026.5.0",
-                MaxAllowedVersion = "v2026.7.0"
-            };
-
-            Assert.Equal(LicenseStatus.Tolerated, result.Status);
-            Assert.Equal("Test message", result.Message);
-            Assert.Same(license, result.ParsedLicense);
-            Assert.Equal("2026.1.0", result.FirstInstalledVersion);
-            Assert.Equal("2026.5.0", result.LockupVersion);
-            Assert.Equal("v2026.7.0", result.MaxAllowedVersion);
         }
 
         [Fact]

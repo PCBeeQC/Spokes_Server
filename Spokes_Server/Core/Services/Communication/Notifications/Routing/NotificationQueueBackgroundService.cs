@@ -6,14 +6,21 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Helpers;
+using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.Communication.Notifications;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Communication.Chat;
+using Spokes_Server.Core.Services.Communication.Email;
 using Spokes_Server.Core.Services.Communication.Notifications.WebPush;
 using Spokes_Server.Core.Services.Communication.Presence;
+using Spokes_Server.Core.Services.HR;
 using Spokes_Server.Core.Services.Logging;
+using Spokes_Server.Core.Services.Storage;
 
 namespace Spokes_Server.Core.Services.Communication.Notifications.Routing;
 
@@ -70,16 +77,15 @@ public class NotificationQueueBackgroundService : BackgroundService
         using var scope = _serviceProvider.CreateScope();
         var employees = scope.ServiceProvider.GetRequiredService<EmployeeRepository>();
         var webPush = scope.ServiceProvider.GetRequiredService<IWebPushService>();
-        var readStates = scope.ServiceProvider.GetService<ChatReadStateRepository>();
-        var emailMessages = scope.ServiceProvider.GetService<EmailMessageRepository>();
+        var validation = LiveNotificationValidationContext.Resolve(scope.ServiceProvider);
 
         foreach (var userId in userIds)
         {
             var employee = employees.GetById(userId);
-            if (employee == null)
+            if (employee == null || !employee.IsActive || employee.IsBanned)
             {
-                // User deleted — discard their queue
-                _queue.DequeueAll(userId);
+                // User deleted, deactivated, or banned — discard all queued items
+                _queue.PurgeForUser(userId);
                 continue;
             }
 
@@ -90,12 +96,12 @@ public class NotificationQueueBackgroundService : BackgroundService
             var leased = _queue.LeaseDueNotifications(userId, TimeSpan.FromMinutes(2));
             if (leased.Count == 0) continue;
 
-            // Prune items that were already read or expired while queued during quiet hours
+            // Prune items that were already read, expired, deleted, or whose ACL was revoked while queued
             var alreadyHandledIds = new List<Guid>();
             var queued = new List<QueuedNotification>(leased.Count);
             foreach (var item in leased)
             {
-                if (IsQueuedItemAlreadyReadOrExpired(item, employee, readStates, emailMessages))
+                if (IsQueuedItemAlreadyReadExpiredOrRevoked(item, employee, validation))
                 {
                     alreadyHandledIds.Add(item.Id);
                 }
@@ -167,39 +173,93 @@ public class NotificationQueueBackgroundService : BackgroundService
         }
     }
 
-    private static bool IsQueuedItemAlreadyReadOrExpired(
+    private sealed record LiveNotificationValidationContext(
+        EmployeeRepository? Employees,
+        ChatChannelRepository? Channels,
+        IChatAuthorizationService? ChatAuth,
+        ChatMessageRepository? Messages,
+        ChatReadStateRepository? ReadStates,
+        EmailMessageRepository? EmailMessages,
+        IEmailInboxService? EmailInboxService,
+        ReportedMessageRepository? ReportedMessages,
+        CalendarEventRepository? CalendarEvents,
+        TeamRepository? Teams)
+    {
+        public static LiveNotificationValidationContext Resolve(IServiceProvider sp) => new(
+            sp.GetService<EmployeeRepository>(),
+            sp.GetService<ChatChannelRepository>(),
+            sp.GetService<IChatAuthorizationService>(),
+            sp.GetService<ChatMessageRepository>(),
+            sp.GetService<ChatReadStateRepository>(),
+            sp.GetService<EmailMessageRepository>(),
+            sp.GetService<IEmailInboxService>(),
+            sp.GetService<ReportedMessageRepository>(),
+            sp.GetService<CalendarEventRepository>(),
+            sp.GetService<TeamRepository>());
+    }
+
+    private static bool IsQueuedItemAlreadyReadExpiredOrRevoked(
         QueuedNotification item,
         Employee employee,
-        ChatReadStateRepository? readStates,
-        EmailMessageRepository? emailMessages)
+        LiveNotificationValidationContext validation)
     {
-        if (string.Equals(item.Category, NotificationCategories.Call, StringComparison.OrdinalIgnoreCase))
+        var sentAt = item.SentAtUtc == default ? item.QueuedAtUtc : item.SentAtUtc;
+        return ShouldDropNotificationForLiveState(item.ToPushNotificationRequest(), sentAt, validation, employee);
+    }
+
+    private static bool ShouldDropNotificationForLiveState(
+        PushNotificationRequest req,
+        DateTime sentOrQueuedAtUtc,
+        LiveNotificationValidationContext ctx,
+        Employee? employee,
+        string? delayedType = null,
+        string? delayedMessageId = null,
+        string? delayedChannelId = null,
+        string? delayedAccountId = null)
+    {
+        if (ctx.Employees != null && (employee == null || !employee.IsActive || employee.IsBanned))
         {
-            var sentAt = item.SentAtUtc == default ? item.QueuedAtUtc : item.SentAtUtc;
-            if (DateTime.UtcNow - sentAt > TimeSpan.FromSeconds(PushPayloadBuilder.CallTtlSeconds))
+            return true;
+        }
+
+        if (employee != null && (!employee.IsActive || employee.IsBanned || !employee.PushNotificationsEnabled))
+        {
+            return true;
+        }
+
+        if (string.Equals(req.Category, NotificationCategories.Call, StringComparison.OrdinalIgnoreCase))
+        {
+            if (DateTime.UtcNow - sentOrQueuedAtUtc > TimeSpan.FromSeconds(PushPayloadBuilder.CallTtlSeconds))
             {
                 return true;
             }
         }
 
-        bool isEmail = string.Equals(item.Category, NotificationCategories.Email, StringComparison.OrdinalIgnoreCase) ||
-                       (item.Url != null && item.Url.StartsWith("/email", StringComparison.OrdinalIgnoreCase));
-        if (isEmail)
+        bool hasDelayedType = !string.IsNullOrEmpty(delayedType);
+        bool isCalendar = hasDelayedType
+            ? string.Equals(delayedType, "Calendar", StringComparison.OrdinalIgnoreCase)
+            : (string.Equals(req.Category, NotificationCategories.Calendar, StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrEmpty(req.SourceEventId));
+        if (isCalendar)
         {
-            var sentAt = item.SentAtUtc == default ? item.QueuedAtUtc : item.SentAtUtc;
-            if (employee.LastEmailVisitedAt.HasValue && sentAt <= employee.LastEmailVisitedAt.Value.UtcDateTime)
+            if (employee != null && !CalendarService.HasCalendarViewAccess(employee) && !CalendarService.HasCalendarAdminOverride(employee))
             {
                 return true;
             }
 
-            if (emailMessages != null && !string.IsNullOrEmpty(item.Url))
+            var eventId = ExtractCalendarEventId(req, delayedChannelId, delayedMessageId);
+            if (ctx.CalendarEvents != null && !string.IsNullOrEmpty(eventId))
             {
-                var segments = item.Url.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                if (segments.Length >= 3 && string.Equals(segments[0], "email", StringComparison.OrdinalIgnoreCase))
+                var evt = ctx.CalendarEvents.GetById(eventId);
+                if (evt == null)
                 {
-                    var messageId = segments[2];
-                    var email = emailMessages.GetByIdOrLoad(employee.Id, messageId) ?? emailMessages.GetById(messageId);
-                    if (email != null && email.IsRead)
+                    return true;
+                }
+
+                if (employee != null)
+                {
+                    var teamIds = BuildEmployeeTeamIds(employee, ctx.Teams);
+                    if (!CalendarService.CanUserViewEventCore(evt, employee, teamIds))
                     {
                         return true;
                     }
@@ -209,32 +269,216 @@ public class NotificationQueueBackgroundService : BackgroundService
             return false;
         }
 
-        bool isChat = string.Equals(item.Category, NotificationCategories.Chat, StringComparison.OrdinalIgnoreCase) ||
-                      (item.Url != null && item.Url.StartsWith("/chat", StringComparison.OrdinalIgnoreCase));
-        if (isChat && readStates != null)
+        bool isModeration = hasDelayedType
+            ? string.Equals(delayedType, "Moderation", StringComparison.OrdinalIgnoreCase)
+            : (string.Equals(req.Category, "moderation", StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrEmpty(req.SourceReportId));
+        if (isModeration)
         {
-            string? channelId = !string.IsNullOrEmpty(item.ThreadId) ? item.ThreadId : null;
-            if (string.IsNullOrEmpty(channelId) && !string.IsNullOrEmpty(item.Url))
+            if (employee != null && !ModerationAuthorizationHelper.CanModerateAny(employee))
             {
-                var segments = item.Url.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                if (segments.Length >= 2 && string.Equals(segments[0], "chat", StringComparison.OrdinalIgnoreCase))
+                return true;
+            }
+
+            var reportId = ExtractModerationReportId(req, delayedMessageId);
+            if (ctx.ReportedMessages != null && !string.IsNullOrEmpty(reportId))
+            {
+                var report = ctx.ReportedMessages.GetById(reportId);
+                if (report == null || report.Status != ReportedMessageStatus.Open)
                 {
-                    channelId = segments[1];
+                    return true;
+                }
+
+                if (employee != null)
+                {
+                    var channel = ModerationAuthorizationHelper.ResolveReportChannel(report, ctx.Channels, ctx.Messages);
+                    if (!ModerationAuthorizationHelper.CanViewReport(employee, report, channel, ctx.ChatAuth))
+                    {
+                        return true;
+                    }
                 }
             }
 
-            if (!string.IsNullOrEmpty(channelId))
+            return false;
+        }
+
+        bool isEmail = hasDelayedType
+            ? string.Equals(delayedType, "Email", StringComparison.OrdinalIgnoreCase)
+            : (string.Equals(req.Category, NotificationCategories.Email, StringComparison.OrdinalIgnoreCase)
+                || (req.Url != null && req.Url.StartsWith("/email", StringComparison.OrdinalIgnoreCase))
+                || !string.IsNullOrEmpty(req.SourceEmailMessageId));
+        if (isEmail)
+        {
+            if (employee != null && (!employee.IsActive || employee.IsBanned || employee.IsSuspended || !FileAccessPermissionHelper.HasAssignedPermission(employee, AppPermissions.Email.Use)))
             {
-                var lastReadAt = readStates.GetLastReadAt(employee.Id, channelId);
-                var sentAt = item.SentAtUtc == default ? item.QueuedAtUtc : item.SentAtUtc;
-                if (lastReadAt > DateTime.MinValue && sentAt <= lastReadAt)
+                return true;
+            }
+
+            if (employee?.LastEmailVisitedAt.HasValue == true && sentOrQueuedAtUtc <= employee.LastEmailVisitedAt.Value.UtcDateTime)
+            {
+                return true;
+            }
+
+            var messageId = !string.IsNullOrEmpty(req.SourceEmailMessageId)
+                ? req.SourceEmailMessageId
+                : (!string.IsNullOrEmpty(delayedMessageId) ? delayedMessageId : ExtractUrlSegment(req.Url, 2));
+            var accountId = !string.IsNullOrEmpty(req.SourceEmailAccountId)
+                ? req.SourceEmailAccountId
+                : (!string.IsNullOrEmpty(delayedAccountId)
+                    ? delayedAccountId
+                    : (!string.IsNullOrEmpty(delayedChannelId) && delayedChannelId != "email" ? delayedChannelId : req.UserId));
+
+            if (ctx.EmailMessages != null && !string.IsNullOrEmpty(messageId))
+            {
+                var email = (!string.IsNullOrEmpty(accountId) ? ctx.EmailMessages.GetById(accountId, messageId) : null)
+                    ?? (employee != null ? ctx.EmailMessages.GetById(employee.Id, messageId) : null)
+                    ?? ctx.EmailMessages.GetById(messageId);
+
+                if (email == null || email.IsRead)
+                {
+                    return true;
+                }
+
+                var effectiveAccountId = !string.IsNullOrEmpty(email.AccountId) ? email.AccountId : accountId;
+                if (ctx.EmailInboxService != null && employee != null && !string.IsNullOrEmpty(effectiveAccountId)
+                    && !ctx.EmailInboxService.CanUserAccessEmailMessage(employee, effectiveAccountId, email.Id))
                 {
                     return true;
                 }
             }
+            else if (!string.IsNullOrEmpty(delayedType))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        bool isChat = hasDelayedType
+            ? string.Equals(delayedType, "Chat", StringComparison.OrdinalIgnoreCase)
+            : (string.Equals(req.Category, NotificationCategories.Chat, StringComparison.OrdinalIgnoreCase)
+                || (req.Url != null && req.Url.StartsWith("/chat", StringComparison.OrdinalIgnoreCase))
+                || !string.IsNullOrEmpty(req.SourceChannelId));
+        if (isChat)
+        {
+            if (employee != null && (!employee.IsActive || employee.IsBanned || !employee.HasEffectivePermission(AppPermissions.Chat.Use, allowSuspended: true)))
+            {
+                return true;
+            }
+
+            var channelId = !string.IsNullOrEmpty(req.SourceChannelId)
+                ? req.SourceChannelId
+                : (!string.IsNullOrEmpty(delayedChannelId)
+                    ? delayedChannelId
+                    : (!string.IsNullOrEmpty(req.ThreadId) ? req.ThreadId : ExtractUrlSegment(req.Url, 1)));
+            var messageId = !string.IsNullOrEmpty(req.SourceMessageId) ? req.SourceMessageId : delayedMessageId;
+
+            if (ctx.Channels != null && !string.IsNullOrEmpty(channelId))
+            {
+                var channel = ctx.Channels.GetById(channelId);
+                if (channel == null || channel.IsArchived)
+                {
+                    return true;
+                }
+
+                if (employee != null && ctx.ChatAuth != null && !ctx.ChatAuth.CanUserAccessChannel(channel, employee))
+                {
+                    return true;
+                }
+            }
+
+            if (ctx.Messages != null && !string.IsNullOrEmpty(channelId) && !string.IsNullOrEmpty(messageId))
+            {
+                var msg = ctx.Messages.GetByIdOrLoad(channelId, messageId);
+                if (msg == null || msg.IsDeleted)
+                {
+                    return true;
+                }
+
+                if (ctx.ReadStates != null)
+                {
+                    var lastReadAt = ctx.ReadStates.GetLastReadAt(req.UserId, channelId);
+                    if (msg.SentAt <= lastReadAt)
+                    {
+                        return true;
+                    }
+                }
+            }
+            else if (ctx.ReadStates != null && !string.IsNullOrEmpty(channelId))
+            {
+                var lastReadAt = ctx.ReadStates.GetLastReadAt(req.UserId, channelId);
+                if (lastReadAt > DateTime.MinValue && sentOrQueuedAtUtc <= lastReadAt)
+                {
+                    return true;
+                }
+            }
+            else if (!string.IsNullOrEmpty(delayedType) && (string.IsNullOrEmpty(channelId) || string.IsNullOrEmpty(messageId)))
+            {
+                return true;
+            }
         }
 
         return false;
+    }
+
+    private static string? ExtractUrlSegment(string? url, int index)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        var segments = url.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length > index ? segments[index] : null;
+    }
+
+    private static string? ExtractCalendarEventId(PushNotificationRequest req, string? delayedChannelId, string? delayedMessageId)
+    {
+        if (!string.IsNullOrEmpty(req.SourceEventId)) return req.SourceEventId;
+        if (!string.IsNullOrEmpty(delayedChannelId) && !delayedChannelId.StartsWith('/')) return delayedChannelId;
+        if (!string.IsNullOrEmpty(delayedMessageId) && !delayedMessageId.StartsWith("calendar_", StringComparison.OrdinalIgnoreCase)) return delayedMessageId;
+
+        var tag = req.Tag ?? req.ThreadId ?? delayedMessageId;
+        if (!string.IsNullOrEmpty(tag) && tag.StartsWith("calendar_", StringComparison.OrdinalIgnoreCase))
+        {
+            var lastUnderscore = tag.LastIndexOf('_');
+            if (lastUnderscore > "calendar_".Length)
+            {
+                return tag.Substring("calendar_".Length, lastUnderscore - "calendar_".Length);
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ExtractModerationReportId(PushNotificationRequest req, string? delayedMessageId)
+    {
+        if (!string.IsNullOrEmpty(req.SourceReportId)) return req.SourceReportId;
+        if (!string.IsNullOrEmpty(delayedMessageId)) return delayedMessageId;
+
+        var tag = req.Tag ?? req.ThreadId;
+        if (!string.IsNullOrEmpty(tag) && tag.StartsWith("mod-", StringComparison.OrdinalIgnoreCase))
+        {
+            return tag.Substring("mod-".Length);
+        }
+
+        return null;
+    }
+
+    private static HashSet<string> BuildEmployeeTeamIds(Employee employee, TeamRepository? teams)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrEmpty(employee.TeamId))
+        {
+            set.Add(employee.TeamId);
+        }
+        if (teams != null && !string.IsNullOrEmpty(employee.Id))
+        {
+            foreach (var team in teams.GetAll().Where(t => string.Equals(t.LeaderId, employee.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!string.IsNullOrEmpty(team.Id))
+                {
+                    set.Add(team.Id);
+                }
+            }
+        }
+        return set;
     }
 
     private async Task FlushDelayedMobileNotificationsAsync()
@@ -244,39 +488,37 @@ public class NotificationQueueBackgroundService : BackgroundService
 
         using var scope = _serviceProvider.CreateScope();
         var webPush = scope.ServiceProvider.GetRequiredService<IWebPushService>();
-        var readStates = scope.ServiceProvider.GetRequiredService<ChatReadStateRepository>();
         var presenceState = scope.ServiceProvider.GetService<IPushDecisionService>()
             ?? (IPushDecisionService)scope.ServiceProvider.GetRequiredService<PresenceStateService>();
-        var messages = scope.ServiceProvider.GetRequiredService<ChatMessageRepository>();
-        var emailMessages = scope.ServiceProvider.GetRequiredService<EmailMessageRepository>();
         var systemLog = scope.ServiceProvider.GetRequiredService<ISystemLogService>();
         var notificationRouting = scope.ServiceProvider.GetRequiredService<INotificationRoutingService>();
+        var validation = LiveNotificationValidationContext.Resolve(scope.ServiceProvider);
 
         foreach (var item in matured)
         {
             try
             {
-                // 1. Is it still unread?
-                if (item.Type == "Chat")
-                {
-                    var lastReadAt = readStates.GetLastReadAt(item.UserId, item.ChannelId);
-                    var message = messages.GetByIdOrLoad(item.ChannelId, item.MessageId);
+                var employee = validation.Employees?.GetById(item.UserId);
+                var request = item.ToPushNotificationRequest();
+                var sentAt = item.SentAtUtc == default ? item.QueuedAtUtc : item.SentAtUtc;
 
-                    if (message == null || message.IsDeleted || message.SentAt <= lastReadAt)
-                    {
-                        _queue.AcknowledgeMobilePushDelivery(item.Id);
-                        continue; // Message was read or deleted
-                    }
-                }
-                else if (item.Type == "Email")
+                // 1. Validate live user, existence, unread state, and ACL before releasing delayed push
+                if (ShouldDropNotificationForLiveState(
+                    request,
+                    sentAt,
+                    validation,
+                    employee,
+                    item.Type,
+                    item.MessageId,
+                    item.ChannelId,
+                    item.AccountId))
                 {
-                    var accountId = !string.IsNullOrEmpty(item.ChannelId) && item.ChannelId != "email" ? item.ChannelId : item.UserId;
-                    var email = emailMessages.GetByIdOrLoad(accountId, item.MessageId) ?? emailMessages.GetById(item.MessageId);
-                    if (email == null || email.IsRead)
+                    if (validation.Employees != null && (employee == null || !employee.IsActive || employee.IsBanned))
                     {
-                        _queue.AcknowledgeMobilePushDelivery(item.Id);
-                        continue; // Email was read or deleted
+                        _queue.PurgeForUser(item.UserId);
                     }
+                    _queue.AcknowledgeMobilePushDelivery(item.Id);
+                    continue;
                 }
 
                 // 2. Are they currently actively looking at a desktop connection? 

@@ -3,7 +3,6 @@ using System.IO.Compression;
 using System.Linq;
 using Microsoft.AspNetCore.Components.Server;
 using Microsoft.AspNetCore.Components.Server.Circuits;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -14,7 +13,6 @@ using Microsoft.Extensions.Options;
 using MudBlazor.Services;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Middleware;
-using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Communication.Presence;
 using Spokes_Server.Core.Services.Communication.Voice;
 using Spokes_Server.Core.Services.UI;
@@ -26,26 +24,9 @@ public static class WebUiExtensions
     public const long DefaultMaxFileUploadSizeBytes = 268435456; // 256MB
     public const long DefaultHubMessageSizeLimitBytes = 64 * 1024 * 1024; // 64MB
 
-    public static IServiceCollection AddSpokesWebUi(
-        this IServiceCollection services,
-        IWebHostBuilder? webHost = null,
-        CompanyProfile? companyProfile = null)
+    public static IServiceCollection AddSpokesWebUi(this IServiceCollection services)
     {
-        var maxFileUploadSize = companyProfile?.MaxFileUploadSizeBytes ?? DefaultMaxFileUploadSizeBytes;
         var hubMessageSizeLimit = DefaultHubMessageSizeLimitBytes;
-
-        if (webHost != null)
-        {
-            webHost.ConfigureKestrel(options =>
-            {
-                options.Limits.MaxRequestBodySize = maxFileUploadSize;
-            });
-        }
-
-        services.Configure<FormOptions>(options =>
-        {
-            options.MultipartBodyLengthLimit = maxFileUploadSize;
-        });
 
         services.ConfigureOptions<KestrelServerOptionsSetup>();
         services.ConfigureOptions<FormOptionsSetup>();
@@ -60,6 +41,7 @@ public static class WebUiExtensions
             .AddHubOptions(options =>
             {
                 options.MaximumReceiveMessageSize = hubMessageSizeLimit;
+                options.MaximumParallelInvocationsPerClient = 8;
                 options.ClientTimeoutInterval = TimeSpan.FromSeconds(120);
                 options.KeepAliveInterval = TimeSpan.FromSeconds(15);
                 options.HandshakeTimeout = TimeSpan.FromSeconds(60);
@@ -102,13 +84,7 @@ public static class WebUiExtensions
             options.HandshakeTimeout = TimeSpan.FromSeconds(60);
         });
 
-        services.AddMudServices(config =>
-        {
-            config.SnackbarConfiguration.PositionClass = MudBlazor.Defaults.Classes.Position.BottomLeft;
-            config.SnackbarConfiguration.NewestOnTop = true;
-            config.SnackbarConfiguration.ShowTransitionDuration = 200;
-            config.SnackbarConfiguration.HideTransitionDuration = 200;
-        });
+        services.AddMudServices();
 
         // Ensure SnackbarConfiguration is Scoped per circuit/session so mobile users changing position
         // does not affect desktop or other user sessions
@@ -214,5 +190,29 @@ public class CircuitOptionsSetup : IConfigureOptions<CircuitOptions>
         options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromHours(2);
         options.DisconnectedCircuitMaxRetained = 100;
         options.JSInteropDefaultCallTimeout = TimeSpan.FromSeconds(60);
+    }
+}
+
+/// <summary>
+/// Shared JS interop helpers for UI components.
+/// </summary>
+public static class SpokesJsInteropExtensions
+{
+    public static async System.Threading.Tasks.Task OpenPdfFileInNewTabAsync(
+        this Microsoft.JSInterop.IJSRuntime js,
+        string pdfPath,
+        string fileName)
+    {
+        var bytes = await System.IO.File.ReadAllBytesAsync(pdfPath);
+        await js.OpenPdfBytesInNewTabAsync(bytes, fileName);
+    }
+
+    public static async System.Threading.Tasks.Task OpenPdfBytesInNewTabAsync(
+        this Microsoft.JSInterop.IJSRuntime js,
+        byte[] pdfBytes,
+        string fileName)
+    {
+        var dataUrl = $"data:application/pdf;base64,{Convert.ToBase64String(pdfBytes)}";
+        await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(js, "window.openBase64InNewTab", dataUrl, fileName);
     }
 }

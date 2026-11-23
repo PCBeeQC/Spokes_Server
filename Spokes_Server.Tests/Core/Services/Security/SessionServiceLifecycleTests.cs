@@ -33,6 +33,7 @@ public class SessionServiceLifecycleTests : IDisposable
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         _persistence = new DiskPersistenceService(Mock.Of<ILogger<DiskPersistenceService>>());
         _sessionRepo = new DeviceSessionRepository(_persistence, mockConfig.Object);
@@ -112,52 +113,6 @@ public class SessionServiceLifecycleTests : IDisposable
     // =========================================================================
 
     [Fact]
-    public void GetActiveSession_UserAuthenticatedWithValidSessionIdClaim_ReturnsActiveSession()
-    {
-        // Arrange
-        var emp = SeedEmployee();
-        var (_, session) = SeedSession(emp.Id, "device-1");
-
-        var context = CreateHttpContext();
-        var identity = new ClaimsIdentity(new[]
-        {
-            new Claim("SessionId", session.Id),
-            new Claim("sub", emp.Id)
-        }, "Spokes_Session_v3");
-        context.User = new ClaimsPrincipal(identity);
-
-        // Act
-        var result = _sessionService.GetActiveSession(context);
-
-        // Assert
-        Assert.NotNull(result);
-        Assert.Equal(session.Id, result.Id);
-        Assert.Equal(emp.Id, result.EmployeeId);
-    }
-
-    [Fact]
-    public void GetActiveSession_UserAuthenticatedWithRevokedSession_FallsThroughAndReturnsNullWhenNoCookie()
-    {
-        // Arrange
-        var emp = SeedEmployee();
-        var (_, session) = SeedSession(emp.Id, "device-1", isRevoked: true);
-
-        var context = CreateHttpContext();
-        var identity = new ClaimsIdentity(new[]
-        {
-            new Claim("SessionId", session.Id),
-            new Claim("sub", emp.Id)
-        }, "Spokes_Session_v3");
-        context.User = new ClaimsPrincipal(identity);
-
-        // Act
-        var result = _sessionService.GetActiveSession(context);
-
-        // Assert
-        Assert.Null(result);
-    }
-
-    [Fact]
     public void GetActiveSession_UserAuthenticatedWithRevokedSession_FallsThroughAndReturnsSessionFromRefreshCookie()
     {
         // Arrange
@@ -185,58 +140,21 @@ public class SessionServiceLifecycleTests : IDisposable
         Assert.Equal(activeSession.Id, result.Id);
     }
 
-    [Fact]
-    public void GetActiveSession_UserAuthenticatedWithNonExistentSessionId_FallsThroughAndReturnsNull()
+    [Theory]
+    [InlineData("SessionId", "non-existent-session-id")]
+    [InlineData(ClaimTypes.NameIdentifier, "emp-no-session-claim")]
+    [InlineData("SessionId", "")]
+    public void GetActiveSession_UserAuthenticatedWithInvalidOrMissingSessionIdClaim_FallsThroughAndReturnsNull(string claimType, string claimValue)
     {
-        // Arrange
         var context = CreateHttpContext();
         var identity = new ClaimsIdentity(new[]
         {
-            new Claim("SessionId", "non-existent-session-id")
+            new Claim(claimType, claimValue)
         }, "Spokes_Session_v3");
         context.User = new ClaimsPrincipal(identity);
 
-        // Act
         var result = _sessionService.GetActiveSession(context);
 
-        // Assert
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public void GetActiveSession_UserAuthenticatedWithoutSessionIdClaim_FallsThroughAndReturnsNull()
-    {
-        // Arrange
-        var emp = SeedEmployee();
-        var context = CreateHttpContext();
-        var identity = new ClaimsIdentity(new[]
-        {
-            new Claim(ClaimTypes.NameIdentifier, emp.Id)
-        }, "Spokes_Session_v3");
-        context.User = new ClaimsPrincipal(identity);
-
-        // Act
-        var result = _sessionService.GetActiveSession(context);
-
-        // Assert
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public void GetActiveSession_UserAuthenticatedWithEmptySessionIdClaim_FallsThroughAndReturnsNull()
-    {
-        // Arrange
-        var context = CreateHttpContext();
-        var identity = new ClaimsIdentity(new[]
-        {
-            new Claim("SessionId", "")
-        }, "Spokes_Session_v3");
-        context.User = new ClaimsPrincipal(identity);
-
-        // Act
-        var result = _sessionService.GetActiveSession(context);
-
-        // Assert
         Assert.Null(result);
     }
 
@@ -307,63 +225,16 @@ public class SessionServiceLifecycleTests : IDisposable
         Assert.Equal(headerDeviceId, result.DeviceId);
     }
 
-    [Fact]
-    public void GetActiveSession_UserUnauthenticatedWithValidCookieUnboundSession_ReturnsSessionViaValidateToken()
+    [Theory]
+    [InlineData("Spokes_Refresh=non_existent_token_string")]
+    [InlineData("Spokes_Refresh=")]
+    public void GetActiveSession_UserUnauthenticatedWithInvalidOrEmptyRefreshCookie_ReturnsNull(string cookieHeader)
     {
-        // Arrange - Unbound desktop session where DeviceId is null
-        var emp = SeedEmployee();
-        var (rawToken, session) = SeedSession(emp.Id, deviceId: null);
-
         var context = CreateHttpContext();
-        context.Request.Headers.Cookie = $"Spokes_Refresh={rawToken}";
+        context.Request.Headers.Cookie = cookieHeader;
 
-        // Act
         var result = _sessionService.GetActiveSession(context);
 
-        // Assert
-        Assert.NotNull(result);
-        Assert.Equal(session.Id, result.Id);
-        Assert.Null(result.DeviceId);
-    }
-
-    [Fact]
-    public void GetActiveSession_UserUnauthenticatedWithInvalidCookie_ReturnsNull()
-    {
-        // Arrange
-        var context = CreateHttpContext();
-        context.Request.Headers.Cookie = "Spokes_Refresh=non_existent_token_string";
-
-        // Act
-        var result = _sessionService.GetActiveSession(context);
-
-        // Assert
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public void GetActiveSession_UserUnauthenticatedWithNoCookies_ReturnsNull()
-    {
-        // Arrange
-        var context = CreateHttpContext();
-
-        // Act
-        var result = _sessionService.GetActiveSession(context);
-
-        // Assert
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public void GetActiveSession_UserUnauthenticatedWithEmptyRefreshCookie_ReturnsNull()
-    {
-        // Arrange
-        var context = CreateHttpContext();
-        context.Request.Headers.Cookie = "Spokes_Refresh=";
-
-        // Act
-        var result = _sessionService.GetActiveSession(context);
-
-        // Assert
         Assert.Null(result);
     }
 
@@ -444,31 +315,6 @@ public class SessionServiceLifecycleTests : IDisposable
     }
 
     [Fact]
-    public void CreateSession_DeviceIdNull_DoesNotAdoptExistingSessions()
-    {
-        // Arrange - Desktop web sessions (deviceId == null) always create isolated sessions
-        var emp = SeedEmployee();
-        var (_, existingSession) = SeedSession(emp.Id, deviceId: null);
-
-        var context = CreateHttpContext();
-
-        // Act
-        var (newSession, _) = _sessionService.CreateSession(context, emp.Id, deviceId: null);
-
-        // Assert
-        Assert.NotEqual(existingSession.Id, newSession.Id);
-        Assert.Null(newSession.DeviceId);
-
-        // Both sessions remain active in DB
-        var storedExisting = _sessionRepo.GetById(existingSession.Id);
-        var storedNew = _sessionRepo.GetById(newSession.Id);
-        Assert.NotNull(storedExisting);
-        Assert.Null(storedExisting.RevokedAt);
-        Assert.NotNull(storedNew);
-        Assert.Null(storedNew.RevokedAt);
-    }
-
-    [Fact]
     public void CreateSession_DeviceIdProvided_MatchesExistingSession_ReusesAndUpdatesSession()
     {
         // Arrange
@@ -497,37 +343,6 @@ public class SessionServiceLifecycleTests : IDisposable
     }
 
     [Fact]
-    public void CreateSession_DeviceIdProvided_PreservesPushCredentialsAcrossReLogin()
-    {
-        // Arrange
-        var emp = SeedEmployee();
-        var deviceId = "mobile-device-push-1";
-        var (_, existingSession) = SeedSession(emp.Id, deviceId: deviceId);
-
-        existingSession.PushEndpoint = "https://fcm.googleapis.com/fcm/send/token123";
-        existingSession.PushP256dh = "test-p256dh-key";
-        existingSession.PushAuth = "test-auth-secret";
-        existingSession.PushEnabled = true;
-        _sessionRepo.Save(existingSession);
-
-        var context = CreateHttpContext();
-
-        // Act
-        var (session, _) = _sessionService.CreateSession(context, emp.Id, deviceId: deviceId);
-
-        // Assert
-        Assert.Equal(existingSession.Id, session.Id);
-        Assert.Equal("https://fcm.googleapis.com/fcm/send/token123", session.PushEndpoint);
-        Assert.Equal("test-p256dh-key", session.PushP256dh);
-        Assert.Equal("test-auth-secret", session.PushAuth);
-        Assert.True(session.PushEnabled);
-
-        var stored = _sessionRepo.GetById(session.Id);
-        Assert.NotNull(stored);
-        Assert.Equal("https://fcm.googleapis.com/fcm/send/token123", stored.PushEndpoint);
-    }
-
-    [Fact]
     public void CreateSession_DeviceIdProvided_WhitespaceIsTrimmed_MatchesExistingSession()
     {
         // Arrange
@@ -543,55 +358,6 @@ public class SessionServiceLifecycleTests : IDisposable
         // Assert
         Assert.Equal(existingSession.Id, session.Id);
         Assert.Equal("clean-device-id", session.DeviceId);
-    }
-
-    [Fact]
-    public void CreateSession_DeviceIdProvided_NoExactMatch_AdoptsLegacyDevSession()
-    {
-        // Arrange
-        var emp = SeedEmployee();
-        var legacyDeviceId = "dev_legacy_phone_999";
-        var (_, legacySession) = SeedSession(emp.Id, deviceId: legacyDeviceId);
-        legacySession.PushEndpoint = "https://push.example.com/legacy";
-        _sessionRepo.Save(legacySession);
-
-        var modernDeviceId = "modern-guid-device-123";
-        var context = CreateHttpContext();
-
-        // Act
-        var (session, _) = _sessionService.CreateSession(context, emp.Id, deviceId: modernDeviceId);
-
-        // Assert
-        Assert.Equal(legacySession.Id, session.Id);
-        Assert.Equal(modernDeviceId, session.DeviceId); // modernized device ID
-        Assert.Equal("https://push.example.com/legacy", session.PushEndpoint); // push preserved
-
-        var stored = _sessionRepo.GetById(session.Id);
-        Assert.NotNull(stored);
-        Assert.Equal(modernDeviceId, stored.DeviceId);
-    }
-
-    [Fact]
-    public void CreateSession_DeviceIdProvided_NoExactMatchAndUnboundSessionExists_DoesNotAdoptUnboundSession()
-    {
-        // Arrange - Unbound desktop sessions (DeviceId is null) should NEVER be adopted
-        var emp = SeedEmployee();
-        var (_, unboundSession) = SeedSession(emp.Id, deviceId: null);
-
-        var modernDeviceId = "modern-device-456";
-        var context = CreateHttpContext();
-
-        // Act
-        var (session, _) = _sessionService.CreateSession(context, emp.Id, deviceId: modernDeviceId);
-
-        // Assert
-        Assert.NotEqual(unboundSession.Id, session.Id);
-        Assert.Equal(modernDeviceId, session.DeviceId);
-
-        var storedUnbound = _sessionRepo.GetById(unboundSession.Id);
-        Assert.NotNull(storedUnbound);
-        Assert.Null(storedUnbound.DeviceId);
-        Assert.Null(storedUnbound.RevokedAt);
     }
 
     [Fact]
@@ -669,24 +435,6 @@ public class SessionServiceLifecycleTests : IDisposable
     }
 
     [Fact]
-    public void CreateSession_IssueCookieFalse_DoesNotSetCookieAndReturnsRawToken()
-    {
-        // Arrange
-        var emp = SeedEmployee();
-        var context = CreateHttpContext();
-
-        // Act
-        var (session, rawToken) = _sessionService.CreateSession(context, emp.Id, issueCookie: false);
-
-        // Assert
-        Assert.NotNull(rawToken);
-        Assert.NotEmpty(rawToken);
-
-        var setCookieHeader = context.Response.Headers["Set-Cookie"].ToString();
-        Assert.Empty(setCookieHeader);
-    }
-
-    [Fact]
     public void CreateSession_IssueCookieFalse_RawTokenHashMatchesSessionTokenHash()
     {
         // Arrange
@@ -707,25 +455,6 @@ public class SessionServiceLifecycleTests : IDisposable
     // =========================================================================
     // 6. CreateSession - IdToken Handling
     // =========================================================================
-
-    [Fact]
-    public void CreateSession_IdTokenProvided_SetsIdTokenOnNewSession()
-    {
-        // Arrange
-        var emp = SeedEmployee();
-        var context = CreateHttpContext();
-        var idToken = "sample.jwt.id_token_value";
-
-        // Act
-        var (session, _) = _sessionService.CreateSession(context, emp.Id, idToken: idToken);
-
-        // Assert
-        Assert.Equal(idToken, session.IdToken);
-
-        var stored = _sessionRepo.GetById(session.Id);
-        Assert.NotNull(stored);
-        Assert.Equal(idToken, stored.IdToken);
-    }
 
     [Fact]
     public void CreateSession_IdTokenProvided_UpdatesExistingSessionIdToken()

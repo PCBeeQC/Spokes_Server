@@ -5,9 +5,11 @@ using System.Linq;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Helpers;
+using Spokes_Server.Core.Models.Communication.Notifications;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Security;
@@ -15,11 +17,16 @@ using Spokes_Server.Core.Services.Security;
 namespace Spokes_Server.Core.Services.Communication.Notifications.Routing;
 
 /// <summary>
-/// Queued notification awaiting delivery when the user's schedule window opens.
-/// Composes PushNotificationRequest.
+/// Shared base for persisted notification queue entries composing <see cref="PushNotificationRequest"/>.
+/// Preserves flat JSON serialization compatible with existing queue_state.json snapshots.
 /// </summary>
-public class QueuedNotification
+public abstract class NotificationQueueItemBase
 {
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public DateTime QueuedAtUtc { get; set; } = DateTime.UtcNow;
+    public int RetryCount { get; set; } = 0;
+    public DateTime? LeasedUntilUtc { get; set; }
+
     [JsonIgnore]
     public PushNotificationRequest Request { get; set; } = new()
     {
@@ -35,16 +42,10 @@ public class QueuedNotification
     public string? Icon { get => Request.Icon; set => Request.Icon = value; }
     public string? Tag { get => Request.Tag; set => Request.Tag = value; }
     public object[]? Actions { get => Request.Actions; set => Request.Actions = value; }
-    public PresenceTier? Tier { get => Request.Tier; set => Request.Tier = value; }
-    public DateTime QueuedAtUtc { get; set; } = DateTime.UtcNow;
-    public string? ThreadId { get => Request.ThreadId; set => Request.ThreadId = value; }
     public string? ServerName { get => Request.ServerName; set => Request.ServerName = value; }
     public string? ChannelName { get => Request.ChannelName; set => Request.ChannelName = value; }
     public bool IsGroupChat { get => Request.IsGroupChat; set => Request.IsGroupChat = value; }
     public int? Badge { get => Request.Badge; set => Request.Badge = value; }
-    public Guid Id { get; set; } = Guid.NewGuid();
-    public int RetryCount { get; set; } = 0;
-    public DateTime? LeasedUntilUtc { get; set; }
     public string Category { get => Request.Category; set => Request.Category = value; }
     public bool IsSilent { get => Request.IsSilent; set => Request.IsSilent = value; }
     public string? Sound { get => Request.Sound; set => Request.Sound = value; }
@@ -52,35 +53,67 @@ public class QueuedNotification
     public int? TtlSeconds { get => Request.TtlSeconds; set => Request.TtlSeconds = value; }
     public bool IsEncrypted { get => Request.IsEncrypted; set => Request.IsEncrypted = value; }
     public string? MaskedBody { get => Request.MaskedBody; set => Request.MaskedBody = value; }
+    public string? SourceChannelId { get => Request.SourceChannelId; set => Request.SourceChannelId = value; }
+    public string? SourceMessageId { get => Request.SourceMessageId; set => Request.SourceMessageId = value; }
+    public string? SourceEmailAccountId { get => Request.SourceEmailAccountId; set => Request.SourceEmailAccountId = value; }
+    public string? SourceEmailFolderPath { get => Request.SourceEmailFolderPath; set => Request.SourceEmailFolderPath = value; }
+    public string? SourceEmailMessageId { get => Request.SourceEmailMessageId; set => Request.SourceEmailMessageId = value; }
+    public string? SourceReportId { get => Request.SourceReportId; set => Request.SourceReportId = value; }
+    public string? SourceEventId { get => Request.SourceEventId; set => Request.SourceEventId = value; }
+
+    protected static PushNotificationRequest CloneRequest(
+        PushNotificationRequest source,
+        PresenceTier? tierOverride = null,
+        string? threadIdOverride = null,
+        int? badgeOverride = null,
+        bool preserveExcludedSessionIds = false) => new()
+        {
+            UserId = source.UserId,
+            Title = source.Title,
+            Body = source.Body,
+            Url = source.Url,
+            Icon = source.Icon,
+            Tier = tierOverride ?? source.Tier,
+            ExcludedSessionIds = preserveExcludedSessionIds ? source.ExcludedSessionIds : null,
+            Tag = source.Tag,
+            Actions = source.Actions,
+            Category = source.Category,
+            ThreadId = threadIdOverride ?? source.ThreadId,
+            ServerName = source.ServerName,
+            ChannelName = source.ChannelName,
+            IsGroupChat = source.IsGroupChat,
+            Badge = badgeOverride ?? source.Badge,
+            IsSilent = source.IsSilent,
+            Sound = source.Sound,
+            SentAtUtc = source.SentAtUtc,
+            TtlSeconds = source.TtlSeconds,
+            IsEncrypted = source.IsEncrypted,
+            MaskedBody = source.MaskedBody,
+            SourceChannelId = source.SourceChannelId,
+            SourceMessageId = source.SourceMessageId,
+            SourceEmailAccountId = source.SourceEmailAccountId,
+            SourceEmailFolderPath = source.SourceEmailFolderPath,
+            SourceEmailMessageId = source.SourceEmailMessageId,
+            SourceReportId = source.SourceReportId,
+            SourceEventId = source.SourceEventId
+        };
+}
+
+/// <summary>
+/// Queued notification awaiting delivery when the user's schedule window opens.
+/// Composes PushNotificationRequest.
+/// </summary>
+public class QueuedNotification : NotificationQueueItemBase
+{
+    public PresenceTier? Tier { get => Request.Tier; set => Request.Tier = value; }
+    public string? ThreadId { get => Request.ThreadId; set => Request.ThreadId = value; }
 
     public QueuedNotification() { }
 
     public QueuedNotification(PushNotificationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        Request = new PushNotificationRequest
-        {
-            UserId = request.UserId,
-            Title = request.Title,
-            Body = request.Body,
-            Url = request.Url,
-            Icon = request.Icon,
-            Tier = request.Tier,
-            Tag = request.Tag,
-            Actions = request.Actions,
-            Category = request.Category,
-            ThreadId = request.ThreadId,
-            ServerName = request.ServerName,
-            ChannelName = request.ChannelName,
-            IsGroupChat = request.IsGroupChat,
-            Badge = request.Badge,
-            IsSilent = request.IsSilent,
-            Sound = request.Sound,
-            SentAtUtc = request.SentAtUtc,
-            TtlSeconds = request.TtlSeconds,
-            IsEncrypted = request.IsEncrypted,
-            MaskedBody = request.MaskedBody
-        };
+        Request = CloneRequest(request, preserveExcludedSessionIds: true);
         QueuedAtUtc = DateTime.UtcNow;
     }
 
@@ -92,79 +125,46 @@ public class QueuedNotification
 /// because the user was active on a desktop.
 /// Composes PushNotificationRequest to avoid boundary parameter sprawl.
 /// </summary>
-public class DelayedMobileNotification
+public class DelayedMobileNotification : NotificationQueueItemBase
 {
-    public Guid Id { get; set; } = Guid.NewGuid();
     public string Type { get; set; } = "Chat"; // "Chat" or "Email"
     public string MessageId { get; set; } = string.Empty;
     public string ChannelId { get; set; } = string.Empty;
+    public string AccountId { get; set; } = string.Empty;
+    public string FolderPath { get; set; } = string.Empty;
     public DateTime ProcessAtUtc { get; set; }
-    public DateTime QueuedAtUtc { get; set; }
-    public int RetryCount { get; set; } = 0;
-    public DateTime? LeasedUntilUtc { get; set; }
 
-    [JsonIgnore]
-    public PushNotificationRequest Request { get; set; } = new()
+    public DelayedMobileNotification()
     {
-        UserId = string.Empty,
-        Title = string.Empty,
-        Body = string.Empty
-    };
-
-    public string UserId { get => Request.UserId; set => Request.UserId = value; }
-    public string Title { get => Request.Title; set => Request.Title = value; }
-    public string Body { get => Request.Body; set => Request.Body = value; }
-    public string? Url { get => Request.Url; set => Request.Url = value; }
-    public string? Icon { get => Request.Icon; set => Request.Icon = value; }
-    public string? Tag { get => Request.Tag; set => Request.Tag = value; }
-    public object[]? Actions { get => Request.Actions; set => Request.Actions = value; }
-    public string? ServerName { get => Request.ServerName; set => Request.ServerName = value; }
-    public string? ChannelName { get => Request.ChannelName; set => Request.ChannelName = value; }
-    public bool IsGroupChat { get => Request.IsGroupChat; set => Request.IsGroupChat = value; }
-    public bool IsSilent { get => Request.IsSilent; set => Request.IsSilent = value; }
-    public int? Badge { get => Request.Badge; set => Request.Badge = value; }
-    public string? Sound { get => Request.Sound; set => Request.Sound = value; }
-    public string Category { get => Request.Category; set => Request.Category = value; }
-    public DateTime SentAtUtc { get => Request.SentAtUtc; set => Request.SentAtUtc = value; }
-    public int? TtlSeconds { get => Request.TtlSeconds; set => Request.TtlSeconds = value; }
-    public bool IsEncrypted { get => Request.IsEncrypted; set => Request.IsEncrypted = value; }
-    public string? MaskedBody { get => Request.MaskedBody; set => Request.MaskedBody = value; }
-
-    public DelayedMobileNotification() { }
+        QueuedAtUtc = default;
+    }
 
     public DelayedMobileNotification(
         PushNotificationRequest request,
         string messageId,
         string channelId,
         string type = "Chat",
-        TimeSpan? delay = null)
+        TimeSpan? delay = null,
+        string? accountId = null,
+        string? folderPath = null)
     {
         ArgumentNullException.ThrowIfNull(request);
-        Request = new PushNotificationRequest
-        {
-            UserId = request.UserId,
-            Title = request.Title,
-            Body = request.Body,
-            Url = request.Url,
-            Icon = request.Icon,
-            Tier = PresenceTier.MobileOnly,
-            Tag = request.Tag,
-            Actions = request.Actions,
-            Category = request.Category,
-            ThreadId = channelId,
-            ServerName = request.ServerName,
-            ChannelName = request.ChannelName,
-            IsGroupChat = request.IsGroupChat,
-            Badge = request.Badge,
-            IsSilent = request.IsSilent,
-            Sound = request.Sound,
-            SentAtUtc = request.SentAtUtc,
-            TtlSeconds = request.TtlSeconds,
-            IsEncrypted = request.IsEncrypted,
-            MaskedBody = request.MaskedBody
-        };
+        var resolvedAccountId = accountId ?? request.SourceEmailAccountId ?? string.Empty;
+        var resolvedFolderPath = folderPath ?? request.SourceEmailFolderPath ?? string.Empty;
+        var cloned = CloneRequest(request, tierOverride: PresenceTier.MobileOnly, threadIdOverride: channelId);
+        cloned.SourceChannelId = request.SourceChannelId ?? (string.Equals(type, "Chat", StringComparison.OrdinalIgnoreCase) ? channelId : null);
+        cloned.SourceMessageId = request.SourceMessageId ?? (string.Equals(type, "Chat", StringComparison.OrdinalIgnoreCase) ? messageId : null);
+        cloned.SourceEmailAccountId = string.IsNullOrEmpty(resolvedAccountId) ? request.SourceEmailAccountId : resolvedAccountId;
+        cloned.SourceEmailFolderPath = string.IsNullOrEmpty(resolvedFolderPath) ? request.SourceEmailFolderPath : resolvedFolderPath;
+        cloned.SourceEmailMessageId = request.SourceEmailMessageId ?? (string.Equals(type, "Email", StringComparison.OrdinalIgnoreCase) ? messageId : null);
+        cloned.SourceReportId = request.SourceReportId ?? (string.Equals(type, "Moderation", StringComparison.OrdinalIgnoreCase) ? messageId : null);
+        cloned.SourceEventId = request.SourceEventId ?? (string.Equals(type, "Calendar", StringComparison.OrdinalIgnoreCase) ? channelId : null);
+        Request = cloned;
+
         MessageId = messageId;
         ChannelId = channelId;
+        AccountId = resolvedAccountId;
+        FolderPath = resolvedFolderPath;
         Type = type;
         QueuedAtUtc = DateTime.UtcNow;
         ProcessAtUtc = QueuedAtUtc.Add(delay ?? TimeSpan.FromMinutes(1));
@@ -172,29 +172,10 @@ public class DelayedMobileNotification
 
     public PushNotificationRequest ToPushNotificationRequest(int? freshBadge = null)
     {
-        return new PushNotificationRequest
-        {
-            UserId = Request.UserId,
-            Title = Request.Title,
-            Body = Request.Body,
-            Url = Request.Url,
-            Icon = Request.Icon,
-            Tier = PresenceTier.MobileOnly,
-            Tag = Request.Tag,
-            Actions = Request.Actions,
-            Category = Request.Category,
-            ThreadId = ChannelId,
-            ServerName = Request.ServerName,
-            ChannelName = Request.ChannelName,
-            IsGroupChat = Request.IsGroupChat,
-            Badge = freshBadge ?? Request.Badge,
-            IsSilent = Request.IsSilent,
-            Sound = Request.Sound,
-            SentAtUtc = Request.SentAtUtc,
-            TtlSeconds = Request.TtlSeconds,
-            IsEncrypted = Request.IsEncrypted,
-            MaskedBody = Request.MaskedBody
-        };
+        var cloned = CloneRequest(Request, tierOverride: PresenceTier.MobileOnly, threadIdOverride: ChannelId, badgeOverride: freshBadge);
+        cloned.SourceEmailAccountId = Request.SourceEmailAccountId ?? (string.IsNullOrEmpty(AccountId) ? null : AccountId);
+        cloned.SourceEmailFolderPath = Request.SourceEmailFolderPath ?? (string.IsNullOrEmpty(FolderPath) ? null : FolderPath);
+        return cloned;
     }
 }
 
@@ -314,10 +295,6 @@ public class NotificationQueueService
                             .Where(n => now - n.QueuedAtUtc < QueuedNotificationTtl)
                             .Take(MaxQueuePerUser)
                             .ToList();
-                        if (wasLegacyUnwrapped)
-                        {
-                            foreach (var item in valid) MigrateLegacyFieldsInPlace(item);
-                        }
                         if (valid.Count > 0)
                         {
                             _queue[kvp.Key] = valid;
@@ -331,10 +308,8 @@ public class NotificationQueueService
                     {
                         if (item.Id == Guid.Empty) item.Id = Guid.NewGuid();
                         if (item.QueuedAtUtc == default) item.QueuedAtUtc = item.ProcessAtUtc;
-                        var queuedAt = item.QueuedAtUtc == default ? item.ProcessAtUtc : item.QueuedAtUtc;
-                        if (now - queuedAt < DelayedMobileNotificationTtl)
+                        if (now - item.QueuedAtUtc < DelayedMobileNotificationTtl)
                         {
-                            if (wasLegacyUnwrapped) MigrateLegacyFieldsInPlace(item);
                             _delayedMobileQueue[item.Id] = item;
                         }
                     }
@@ -343,20 +318,12 @@ public class NotificationQueueService
                 if (snapshot.DeadLetterNotifications != null)
                 {
                     _deadLetterQueue.Clear();
-                    if (wasLegacyUnwrapped)
-                    {
-                        foreach (var item in snapshot.DeadLetterNotifications) MigrateLegacyFieldsInPlace(item);
-                    }
                     _deadLetterQueue.AddRange(snapshot.DeadLetterNotifications);
                 }
 
                 if (snapshot.DeadLetterMobileNotifications != null)
                 {
                     _deadLetterMobileQueue.Clear();
-                    if (wasLegacyUnwrapped)
-                    {
-                        foreach (var item in snapshot.DeadLetterMobileNotifications) MigrateLegacyFieldsInPlace(item);
-                    }
                     _deadLetterMobileQueue.AddRange(snapshot.DeadLetterMobileNotifications);
                 }
 
@@ -387,58 +354,6 @@ public class NotificationQueueService
 
         var encryptedEnvelopeBytes = _encryptionService.EncryptJsonEnvelopeToUtf8Bytes(snapshot);
         _persistence.QueueWriteBytes(_stateFilePath, encryptedEnvelopeBytes);
-    }
-
-    private void MigrateLegacyFieldsInPlace(QueuedNotification n)
-    {
-        n.Title = MigrateLegacyFieldIfEncrypted(n.Title) ?? string.Empty;
-        n.Body = MigrateLegacyFieldIfEncrypted(n.Body) ?? string.Empty;
-        n.MaskedBody = MigrateLegacyFieldIfEncrypted(n.MaskedBody);
-        n.ChannelName = MigrateLegacyFieldIfEncrypted(n.ChannelName);
-        n.ServerName = MigrateLegacyFieldIfEncrypted(n.ServerName);
-    }
-
-    private void MigrateLegacyFieldsInPlace(DelayedMobileNotification n)
-    {
-        n.Title = MigrateLegacyFieldIfEncrypted(n.Title) ?? string.Empty;
-        n.Body = MigrateLegacyFieldIfEncrypted(n.Body) ?? string.Empty;
-        n.MaskedBody = MigrateLegacyFieldIfEncrypted(n.MaskedBody);
-        n.ChannelName = MigrateLegacyFieldIfEncrypted(n.ChannelName);
-        n.ServerName = MigrateLegacyFieldIfEncrypted(n.ServerName);
-    }
-
-    private string? MigrateLegacyFieldIfEncrypted(string? value)
-    {
-        if (string.IsNullOrEmpty(value)) return value;
-
-        if (value.StartsWith("v2:", StringComparison.Ordinal) || LooksLikeLegacyV1Ciphertext(value))
-        {
-            if (_encryptionService.TryDecrypt(value, out var decrypted))
-            {
-                return decrypted;
-            }
-        }
-
-        return value;
-    }
-
-    private static bool LooksLikeLegacyV1Ciphertext(string value)
-    {
-        if (value.Length < 64 || value.Length % 4 != 0)
-        {
-            return false;
-        }
-
-        Span<byte> buffer = value.Length <= 512
-            ? stackalloc byte[384]
-            : new byte[(value.Length * 3) / 4];
-
-        if (!Convert.TryFromBase64String(value, buffer, out int bytesWritten))
-        {
-            return false;
-        }
-
-        return bytesWritten >= 48 && (bytesWritten - 32) % 16 == 0;
     }
 
     /// <summary>
@@ -613,35 +528,48 @@ public class NotificationQueueService
     /// <summary>
     /// Confirms successful delivery of leased notifications and removes them permanently from the queue.
     /// </summary>
-    public void AcknowledgeDelivery(string userId, IEnumerable<Guid> notificationIds)
-    {
-        ArgumentNullException.ThrowIfNull(notificationIds);
-        var idSet = notificationIds.ToHashSet();
-        if (idSet.Count == 0) return;
-
-        lock (_lock)
-        {
-            EnsureRestoredFromDiskLocked();
-            if (_queue.TryGetValue(userId, out var list))
-            {
-                int removed = list.RemoveAll(n => idSet.Contains(n.Id));
-                if (list.Count == 0)
-                {
-                    _queue.Remove(userId);
-                }
-                if (removed > 0)
-                {
-                    PersistSnapshotLocked();
-                }
-            }
-        }
-    }
+    public void AcknowledgeDelivery(string userId, IEnumerable<Guid> notificationIds) =>
+        MutateUserQueueItemsLocked(userId, notificationIds, (list, idSet) => list.RemoveAll(n => idSet.Contains(n.Id)) > 0);
 
     /// <summary>
     /// Handles failed delivery of leased notifications. Increments retry count and either releases the lease
     /// for re-delivery or moves to the dead-letter store if max retries is exceeded.
     /// </summary>
-    public void RequeueOnFailure(string userId, IEnumerable<Guid> notificationIds, Exception? exception = null)
+    public void RequeueOnFailure(string userId, IEnumerable<Guid> notificationIds, Exception? exception = null) =>
+        MutateUserQueueItemsLocked(userId, notificationIds, (list, idSet) =>
+        {
+            var deadLettered = new List<QueuedNotification>();
+            foreach (var item in list.Where(n => idSet.Contains(n.Id)))
+            {
+                item.RetryCount++;
+                item.LeasedUntilUtc = null;
+
+                if (item.RetryCount >= MaxDeliveryRetries)
+                {
+                    deadLettered.Add(item);
+                    _logger.LogWarning("Queued notification {Id} for user {UserId} exceeded max retries ({Max}); moving to dead-letter store: {Message}",
+                        item.Id, userId, MaxDeliveryRetries, exception?.Message ?? "Delivery failed");
+                }
+                else
+                {
+                    _logger.LogInformation("Requeued notification {Id} for user {UserId} on delivery failure (attempt {Attempt}/{Max})",
+                        item.Id, userId, item.RetryCount, MaxDeliveryRetries);
+                }
+            }
+
+            foreach (var dead in deadLettered)
+            {
+                list.Remove(dead);
+                _deadLetterQueue.Add(dead);
+            }
+
+            return true;
+        });
+
+    private void MutateUserQueueItemsLocked(
+        string userId,
+        IEnumerable<Guid> notificationIds,
+        Func<List<QueuedNotification>, HashSet<Guid>, bool> mutator)
     {
         ArgumentNullException.ThrowIfNull(notificationIds);
         var idSet = notificationIds.ToHashSet();
@@ -650,38 +578,16 @@ public class NotificationQueueService
         lock (_lock)
         {
             EnsureRestoredFromDiskLocked();
-            if (_queue.TryGetValue(userId, out var list))
+            if (!_queue.TryGetValue(userId, out var list)) return;
+
+            bool shouldPersist = mutator(list, idSet);
+            if (list.Count == 0)
             {
-                var deadLettered = new List<QueuedNotification>();
-                foreach (var item in list.Where(n => idSet.Contains(n.Id)))
-                {
-                    item.RetryCount++;
-                    item.LeasedUntilUtc = null;
+                _queue.Remove(userId);
+            }
 
-                    if (item.RetryCount >= MaxDeliveryRetries)
-                    {
-                        deadLettered.Add(item);
-                        _logger.LogWarning("Queued notification {Id} for user {UserId} exceeded max retries ({Max}); moving to dead-letter store: {Message}",
-                            item.Id, userId, MaxDeliveryRetries, exception?.Message ?? "Delivery failed");
-                    }
-                    else
-                    {
-                        _logger.LogInformation("Requeued notification {Id} for user {UserId} on delivery failure (attempt {Attempt}/{Max})",
-                            item.Id, userId, item.RetryCount, MaxDeliveryRetries);
-                    }
-                }
-
-                foreach (var dead in deadLettered)
-                {
-                    list.Remove(dead);
-                    _deadLetterQueue.Add(dead);
-                }
-
-                if (list.Count == 0)
-                {
-                    _queue.Remove(userId);
-                }
-
+            if (shouldPersist)
+            {
                 PersistSnapshotLocked();
             }
         }
@@ -773,46 +679,6 @@ public class NotificationQueueService
         notification.ProcessAtUtc = now.Add(delay);
         EnqueueDelayedMobilePush(notification);
         return true;
-    }
-
-    /// <summary>
-    /// Retrieve all mobile notifications whose processing time has arrived in FIFO order.
-    /// Evicts expired items and persists updated state to disk.
-    /// </summary>
-    public List<DelayedMobileNotification> DequeueMaturedMobilePushes()
-    {
-        var now = DateTime.UtcNow;
-        List<DelayedMobileNotification> results = [];
-
-        lock (_lock)
-        {
-            EnsureRestoredFromDiskLocked();
-            var maturedKeys = _delayedMobileQueue
-                .Where(kvp => kvp.Value.ProcessAtUtc <= now)
-                .OrderBy(kvp => kvp.Value.ProcessAtUtc)
-                .Select(kvp => kvp.Key)
-                .ToList();
-
-            foreach (var key in maturedKeys)
-            {
-                if (_delayedMobileQueue.TryGetValue(key, out var notif))
-                {
-                    _delayedMobileQueue.Remove(key);
-                    var queuedAt = notif.QueuedAtUtc == default ? notif.ProcessAtUtc : notif.QueuedAtUtc;
-                    if (now - queuedAt < DelayedMobileNotificationTtl)
-                    {
-                        results.Add(notif);
-                    }
-                }
-            }
-
-            if (maturedKeys.Count > 0)
-            {
-                PersistSnapshotLocked();
-            }
-        }
-
-        return results;
     }
 
     /// <summary>
@@ -915,15 +781,116 @@ public class NotificationQueueService
     public int PurgeExpired()
     {
         var now = DateTime.UtcNow;
+        return PurgeNotificationsLocked(
+            q => now - q.QueuedAtUtc >= QueuedNotificationTtl,
+            m => now - (m.QueuedAtUtc == default ? m.ProcessAtUtc : m.QueuedAtUtc) >= DelayedMobileNotificationTtl,
+            "expired",
+            includeDeadLetter: false);
+    }
+
+    /// <summary>
+    /// Proactively purges queued, delayed mobile, and dead-letter notifications for a deleted chat message.
+    /// </summary>
+    public int PurgeForChatMessage(string channelId, string messageId)
+    {
+        if (string.IsNullOrWhiteSpace(messageId)) return 0;
+
+        return PurgeNotificationsLocked(
+            q => (string.IsNullOrWhiteSpace(channelId) || MatchesChatChannel(q, channelId) || string.IsNullOrEmpty(q.SourceChannelId))
+                && (string.Equals(q.SourceMessageId, messageId, StringComparison.OrdinalIgnoreCase)
+                    || (IsChatQueuedItem(q) && !string.IsNullOrEmpty(q.Tag) && q.Tag.Contains(messageId, StringComparison.OrdinalIgnoreCase))),
+            m => (string.IsNullOrWhiteSpace(channelId) || string.Equals(m.SourceChannelId ?? m.ChannelId, channelId, StringComparison.OrdinalIgnoreCase))
+                && (string.Equals(m.SourceMessageId, messageId, StringComparison.OrdinalIgnoreCase)
+                    || (string.Equals(m.Type, "Chat", StringComparison.OrdinalIgnoreCase) && string.Equals(m.MessageId, messageId, StringComparison.OrdinalIgnoreCase))),
+            $"deleted chat message {messageId}");
+    }
+
+    /// <summary>
+    /// Proactively purges queued, delayed mobile, and dead-letter notifications for a channel (or for one evicted user).
+    /// </summary>
+    public int PurgeForChannel(string channelId, string? userId = null)
+    {
+        if (string.IsNullOrWhiteSpace(channelId)) return 0;
+
+        return PurgeNotificationsLocked(
+            q => (userId == null || string.Equals(q.UserId, userId, StringComparison.OrdinalIgnoreCase))
+                && MatchesChatChannel(q, channelId),
+            m => (userId == null || string.Equals(m.UserId, userId, StringComparison.OrdinalIgnoreCase))
+                && (string.Equals(m.SourceChannelId, channelId, StringComparison.OrdinalIgnoreCase)
+                    || (string.Equals(m.Type, "Chat", StringComparison.OrdinalIgnoreCase) && string.Equals(m.ChannelId, channelId, StringComparison.OrdinalIgnoreCase))),
+            userId == null ? $"channel {channelId}" : $"channel {channelId} for user {userId}");
+    }
+
+    /// <summary>
+    /// Proactively purges queued, delayed mobile, and dead-letter moderation notifications for a resolved or removed report.
+    /// </summary>
+    public int PurgeForModerationReport(string reportId, string? userId = null)
+    {
+        if (string.IsNullOrWhiteSpace(reportId)) return 0;
+
+        return PurgeNotificationsLocked(
+            q => (userId == null || string.Equals(q.UserId, userId, StringComparison.OrdinalIgnoreCase))
+                && (string.Equals(q.SourceReportId, reportId, StringComparison.OrdinalIgnoreCase)
+                    || (string.Equals(q.Category, "moderation", StringComparison.OrdinalIgnoreCase)
+                        && (string.Equals(q.ThreadId, $"mod-{reportId}", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(q.Tag, $"mod-{reportId}", StringComparison.OrdinalIgnoreCase)))),
+            m => (userId == null || string.Equals(m.UserId, userId, StringComparison.OrdinalIgnoreCase))
+                && (string.Equals(m.SourceReportId, reportId, StringComparison.OrdinalIgnoreCase)
+                    || (string.Equals(m.Type, "Moderation", StringComparison.OrdinalIgnoreCase) && string.Equals(m.MessageId, reportId, StringComparison.OrdinalIgnoreCase))),
+            userId == null ? $"moderation report {reportId}" : $"moderation report {reportId} for user {userId}");
+    }
+
+    /// <summary>
+    /// Proactively purges queued, delayed mobile, and dead-letter notifications for a deleted or un-RSVPed calendar event.
+    /// </summary>
+    public int PurgeForCalendarEvent(string eventId, string? userId = null)
+    {
+        if (string.IsNullOrWhiteSpace(eventId)) return 0;
+
+        return PurgeNotificationsLocked(
+            q => (userId == null || string.Equals(q.UserId, userId, StringComparison.OrdinalIgnoreCase))
+                && (string.Equals(q.SourceEventId, eventId, StringComparison.OrdinalIgnoreCase)
+                    || (string.Equals(q.Category, NotificationCategories.Calendar, StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrEmpty(q.Tag)
+                        && q.Tag.StartsWith($"calendar_{eventId}_", StringComparison.OrdinalIgnoreCase))),
+            m => (userId == null || string.Equals(m.UserId, userId, StringComparison.OrdinalIgnoreCase))
+                && (string.Equals(m.SourceEventId, eventId, StringComparison.OrdinalIgnoreCase)
+                    || (string.Equals(m.Type, "Calendar", StringComparison.OrdinalIgnoreCase)
+                        && (string.Equals(m.ChannelId, eventId, StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(m.MessageId, eventId, StringComparison.OrdinalIgnoreCase)
+                            || (!string.IsNullOrEmpty(m.MessageId) && m.MessageId.StartsWith($"calendar_{eventId}_", StringComparison.OrdinalIgnoreCase))))),
+            userId == null ? $"calendar event {eventId}" : $"calendar event {eventId} for user {userId}");
+    }
+
+    /// <summary>
+    /// Proactively purges all queued, delayed mobile, and dead-letter notifications for a deleted/banned/inactive user.
+    /// </summary>
+    public int PurgeForUser(string userId)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return 0;
+
+        return PurgeNotificationsLocked(
+            q => string.Equals(q.UserId, userId, StringComparison.OrdinalIgnoreCase),
+            m => string.Equals(m.UserId, userId, StringComparison.OrdinalIgnoreCase),
+            $"user {userId}");
+    }
+
+    private int PurgeNotificationsLocked(
+        Func<QueuedNotification, bool> queuedPredicate,
+        Func<DelayedMobileNotification, bool> mobilePredicate,
+        string reason,
+        bool includeDeadLetter = true)
+    {
         int purgedCount = 0;
 
         lock (_lock)
         {
             EnsureRestoredFromDiskLocked();
+
             var emptyUsers = new List<string>();
             foreach (var kvp in _queue)
             {
-                var removed = kvp.Value.RemoveAll(n => now - n.QueuedAtUtc >= QueuedNotificationTtl);
+                var removed = kvp.Value.RemoveAll(n => queuedPredicate(n));
                 purgedCount += removed;
                 if (kvp.Value.Count == 0)
                 {
@@ -936,24 +903,57 @@ public class NotificationQueueService
                 _queue.Remove(emptyUser);
             }
 
-            var expiredDelayedKeys = _delayedMobileQueue
-                .Where(kvp => now - (kvp.Value.QueuedAtUtc == default ? kvp.Value.ProcessAtUtc : kvp.Value.QueuedAtUtc) >= DelayedMobileNotificationTtl)
+            var matchingDelayedKeys = _delayedMobileQueue
+                .Where(kvp => mobilePredicate(kvp.Value))
                 .Select(kvp => kvp.Key)
                 .ToList();
-
-            foreach (var key in expiredDelayedKeys)
+            foreach (var key in matchingDelayedKeys)
             {
                 _delayedMobileQueue.Remove(key);
                 purgedCount++;
             }
 
+            if (includeDeadLetter)
+            {
+                purgedCount += _deadLetterQueue.RemoveAll(n => queuedPredicate(n));
+                purgedCount += _deadLetterMobileQueue.RemoveAll(m => mobilePredicate(m));
+            }
+
             if (purgedCount > 0)
             {
-                _logger.LogInformation("Purged {Count} expired notifications from queue", purgedCount);
+                _logger.LogInformation("Proactively purged {Count} queued notifications ({Reason})", purgedCount, reason);
                 PersistSnapshotLocked();
             }
         }
 
         return purgedCount;
+    }
+
+    private static bool IsChatQueuedItem(QueuedNotification q) =>
+        string.Equals(q.Category, NotificationCategories.Chat, StringComparison.OrdinalIgnoreCase)
+        || (!string.IsNullOrEmpty(q.Url) && q.Url.StartsWith("/chat", StringComparison.OrdinalIgnoreCase));
+
+    private static bool MatchesChatChannel(QueuedNotification q, string channelId)
+    {
+        if (string.Equals(q.SourceChannelId, channelId, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!IsChatQueuedItem(q))
+            return false;
+
+        if (string.Equals(q.ThreadId, channelId, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrEmpty(q.Url))
+        {
+            var segments = q.Url.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length >= 2 && string.Equals(segments[0], "chat", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(segments[1], channelId, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

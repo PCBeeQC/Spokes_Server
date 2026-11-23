@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Authorization;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Services.Communication;
@@ -53,11 +54,17 @@ public class MediaController : SpokesControllerBase
     }
 
     [HttpGet("Icon")]
+    [HttpHead("Icon")]
     [Spokes_Server.Core.Security.AllowDuringSetup]
     [Microsoft.AspNetCore.Authorization.AllowAnonymous]
     [ResponseCache(Duration = 3600, Location = ResponseCacheLocation.Client)] // Cache for 1 hour locally
-    public IActionResult GetIcon([FromQuery] string? t = null)
+    public IActionResult GetIcon()
     {
+        if (HttpContext?.Response?.Headers != null)
+        {
+            HttpContext.Response.Headers["Priority"] = "u=3, i=?0";
+        }
+
         var profile = _companyProfile.Get();
         if (DataUriHelper.TryParseImage(profile?.IconBase64, out var bytes, out var mimeType))
         {
@@ -76,11 +83,17 @@ public class MediaController : SpokesControllerBase
     }
 
     [HttpGet("Logo")]
+    [HttpHead("Logo")]
     [Spokes_Server.Core.Security.AllowDuringSetup]
     [Microsoft.AspNetCore.Authorization.AllowAnonymous]
     [ResponseCache(Duration = 3600, Location = ResponseCacheLocation.Client)]
-    public IActionResult GetLogo([FromQuery] string? t = null)
+    public IActionResult GetLogo()
     {
+        if (HttpContext?.Response?.Headers != null)
+        {
+            HttpContext.Response.Headers["Priority"] = "u=3, i=?0";
+        }
+
         var profile = _companyProfile.Get();
         if (DataUriHelper.TryParseImage(profile?.LogoBase64, out var bytes, out var mimeType))
         {
@@ -92,10 +105,15 @@ public class MediaController : SpokesControllerBase
     }
 
     [HttpGet("Avatar/{userId}")]
+    [HttpHead("Avatar/{userId}")]
     [AllowAnonymous]
     [ResponseCache(Duration = 31536000, Location = ResponseCacheLocation.Client)] // Cache for 1 year locally
     public IActionResult GetAvatar(string userId, [FromQuery] string? t)
     {
+        if (HttpContext?.Response?.Headers != null)
+        {
+            HttpContext.Response.Headers["Priority"] = "u=3, i=?0";
+        }
         Employee? currentUser = null;
         if (User?.Identity?.IsAuthenticated == true)
         {
@@ -103,6 +121,7 @@ public class MediaController : SpokesControllerBase
         }
 
         bool isAuthorized = currentUser != null && currentUser.IsActive && !currentUser.IsBanned;
+        bool authorizedViaPushToken = false;
 
         // Validate token for push workers
         if (!isAuthorized && !string.IsNullOrEmpty(t))
@@ -112,9 +131,15 @@ public class MediaController : SpokesControllerBase
                 var protector = _dataProtection.CreateProtector("AvatarPushToken");
                 var decrypted = protector.Unprotect(t);
                 var parts = decrypted.Split('|');
-                if (parts.Length == 2 && parts[0] == userId && new DateTime(long.Parse(parts[1])) > DateTime.UtcNow)
+                var safeUserId = userId.Replace("|", string.Empty);
+                if (parts.Length == 2 &&
+                    (string.Equals(parts[0], userId, StringComparison.Ordinal) ||
+                     string.Equals(parts[0], safeUserId, StringComparison.Ordinal)) &&
+                    long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var expiryTicks) &&
+                    new DateTime(expiryTicks, DateTimeKind.Utc) > DateTime.UtcNow)
                 {
                     isAuthorized = true;
+                    authorizedViaPushToken = true;
                 }
             }
             catch (Exception ex)
@@ -132,11 +157,11 @@ public class MediaController : SpokesControllerBase
         if (employee == null)
         {
             // Fallback to company icon if no avatar found
-            return GetIcon(t);
+            return GetIcon();
         }
 
-        // Check file access authorization
-        if (currentUser != null && !_fileAuthService.CanAccess("avatars", userId, currentUser))
+        // Check file access authorization unless authorized by a signed push token
+        if (!authorizedViaPushToken && (currentUser == null || !_fileAuthService.CanAccess("avatars", userId, currentUser)))
         {
             return ForbiddenError("Access to avatar forbidden.", "FORBIDDEN");
         }
@@ -178,6 +203,6 @@ public class MediaController : SpokesControllerBase
         }
 
         // Fallback to company icon if no avatar found
-        return GetIcon(t);
+        return GetIcon();
     }
 }

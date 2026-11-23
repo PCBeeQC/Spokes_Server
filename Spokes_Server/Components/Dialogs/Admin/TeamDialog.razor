@@ -14,33 +14,30 @@
                     <MudTextField Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" @bind-Value="Team.Description" Label="@Loc["Description"]" />
                 </MudItem>
                 <MudItem xs="12">
-                    <MudSelect Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" T="string" @bind-Value="Team.LeaderId" Label="@string.Format(Loc["{0} Leader"].Value, AppLabels.Team)" Clearable="true">
-                        @foreach (var emp in Employees)
-                        {
-                            <MudSelectItem Value="@emp.Id">@emp.FullName</MudSelectItem>
-                        }
-                    </MudSelect>
+                    @if (LockLeader)
+                    {
+                        <MudTextField T="string" Value="@LockedLeaderLabel" Label="@string.Format(Loc["{0} Leader"].Value, AppLabels.Team)" Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" Disabled="true" />
+                    }
+                    else
+                    {
+                        <MudSelect Variant="Variant.Outlined" Margin="Margin.Dense" ShrinkLabel="true" T="string" @bind-Value="Team.LeaderId" Label="@string.Format(Loc["{0} Leader"].Value, AppLabels.Team)" Clearable="true">
+                            @foreach (var emp in Employees)
+                            {
+                                <MudSelectItem Value="@emp.Id">@emp.FullName</MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
                 </MudItem>
 
                 <!-- Member Picker -->
                 <MudItem xs="12">
                     <MudText Typo="Typo.subtitle2" Class="mb-1">@string.Format(Loc["{0} Members"].Value, AppLabels.Team)</MudText>
-                     
-                     <EmployeeAutocomplete Label="@Loc["Add Member"]" ShrinkLabel="true" Margin="Margin.Dense"
-                                           Employees="@Employees" ExcludedIds="@SelectedMemberIds"
-                                           ValueChanged="AddUser" ResetOnSelect="true" />
- 
-                     <div class="d-flex flex-wrap gap-1 mt-2">
-                         @foreach(var userId in SelectedMemberIds)
-                         {
-                             var user = Employees.FirstOrDefault(u => u.Id == userId);
-                             if (user != null)
-                             {
-                                 <EmployeeChip Employee="@user" OnClose="@(() => RemoveUser(userId))" Size="Size.Small" />
-                             }
-                         }
-                     </div>
-                 </MudItem>
+                    <EmployeeMultiPicker Employees="@Employees"
+                                         @bind-SelectedUserIds="SelectedMemberIds"
+                                         ExcludeCurrentUser="false"
+                                         ChipColor="Color.Default"
+                                         Label="@Loc["Add Member"]" />
+                </MudItem>
 
             </MudGrid>
         </MudForm>
@@ -55,28 +52,17 @@
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public Team Team { get; set; } = default!;
     [Parameter] public List<Employee> Employees { get; set; } = [];
+    [Parameter] public bool LockLeader { get; set; }
+    [Parameter] public string LockedLeaderLabel { get; set; } = string.Empty;
 
     private MudForm form = default!;
     private bool success;
-    private HashSet<string> SelectedMemberIds { get; set; } = [];
+    private List<string> SelectedMemberIds { get; set; } = [];
 
     protected override void OnInitialized()
     {
         // Initialize members who are currently in this team
-        SelectedMemberIds = Employees.Where(e => e.TeamId == Team.Id).Select(e => e.Id).ToHashSet();
-    }
-
-    private void AddUser(Employee? user)
-    {
-        if (user != null && !SelectedMemberIds.Contains(user.Id))
-        {
-            SelectedMemberIds.Add(user.Id);
-        }
-    }
-
-    private void RemoveUser(string userId)
-    {
-        SelectedMemberIds.Remove(userId);
+        SelectedMemberIds = Employees.Where(e => e.TeamId == Team.Id).Select(e => e.Id).ToList();
     }
 
     private void Cancel() => MudDialog.Cancel();

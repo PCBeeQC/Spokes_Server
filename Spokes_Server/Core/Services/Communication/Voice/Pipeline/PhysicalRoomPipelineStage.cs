@@ -6,30 +6,27 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using LiveKit.Rtc;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Communication;
-using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Communication.Voice.Dsp;
 
 /// <summary>
 /// Server-side LiveKit media pipeline stage that automatically activates <see cref="AcousticRoomProcessor"/>
 /// whenever 2 or more enrolled (EmployeeId, DeviceId) participants from the same <see cref="Spokes_Server.Core.Models.Communication.PhysicalVoiceRoom"/>
 /// are connected in the same voice channel.
-/// Publishes per-participant cleaned audio tracks ("processed-mic:{userId}") and unsubscribes human clients
-/// from the raw microphone tracks at the LiveKit SFU level.
+/// Publishes per-participant cleaned audio tracks ("processed-mic:{userId}"); human clients deterministically reconcile
+/// subscriptions between <c>processed-mic:{userId}</c>, raw microphone tracks, and Direct LAN audio on their own signaling session.
 /// </summary>
 public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDisposable
 {
     public const string ProcessedTrackPrefix = "processed-mic:";
 
     private readonly PhysicalVoiceRoomService _physicalRoomService;
-    private readonly ChatStateService _chatState;
-    private readonly LiveKitService _liveKitService;
-    private readonly SystemConfigRepository _systemConfigs;
+    private readonly VoiceStateService _voiceState;
     private readonly ILogger<PhysicalRoomPipelineStage> _logger;
 
     private readonly ConcurrentDictionary<string, ChannelRoomPipelineState> _channelStates = new(StringComparer.Ordinal);
@@ -38,23 +35,19 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
 
     public PhysicalRoomPipelineStage(
         PhysicalVoiceRoomService physicalRoomService,
-        ChatStateService chatState,
-        LiveKitService liveKitService,
-        SystemConfigRepository systemConfigs,
+        VoiceStateService voiceState,
         ILogger<PhysicalRoomPipelineStage>? logger = null)
     {
         _physicalRoomService = physicalRoomService ?? throw new ArgumentNullException(nameof(physicalRoomService));
-        _chatState = chatState ?? throw new ArgumentNullException(nameof(chatState));
-        _liveKitService = liveKitService ?? throw new ArgumentNullException(nameof(liveKitService));
-        _systemConfigs = systemConfigs ?? throw new ArgumentNullException(nameof(systemConfigs));
+        _voiceState = voiceState ?? throw new ArgumentNullException(nameof(voiceState));
         _logger = logger ?? NullLogger<PhysicalRoomPipelineStage>.Instance;
 
-        _chatState.PhysicalRoomsChanged += OnPhysicalRoomsChanged;
+        _voiceState.PhysicalRoomsChanged += OnPhysicalRoomsChanged;
     }
 
     public void Dispose()
     {
-        _chatState.PhysicalRoomsChanged -= OnPhysicalRoomsChanged;
+        _voiceState.PhysicalRoomsChanged -= OnPhysicalRoomsChanged;
     }
 
     private void OnPhysicalRoomsChanged()
@@ -151,19 +144,6 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
     }
 
     /// <summary>
-    /// Returns live acoustic calibration telemetry for a given channel and physical room (if active).
-    /// </summary>
-    public IReadOnlyList<PairwiseAcousticCalibration> GetActiveCalibrations(string channelId, string physicalRoomId)
-    {
-        if (_channelStates.TryGetValue(channelId, out var state) &&
-            state.RoomProcessors.TryGetValue(physicalRoomId, out var processor))
-        {
-            return processor.GetCalibrations();
-        }
-        return [];
-    }
-
-    /// <summary>
     /// Returns a comprehensive diagnostic snapshot (gate states, pairwise matrix, physics decomposition, timeline, warnings)
     /// for an active physical room in the specified voice channel.
     /// </summary>
@@ -253,7 +233,9 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
             }
         }
 
-        // 1. Stop streams for users who are no longer in an active >=2 Physical Room or whose raw track was removed
+        // 1. Stop streams for users who are no longer in an active >=2 Physical Room or whose raw track was removed.
+        // Readiness Invariant: processed-mic:{userId} must NEVER remain published without an active ParticipantDspWorker
+        // pumping frames from a subscribed RawTrack, otherwise remote callers will subscribe to a silent track.
         foreach (var activeUserId in state.ActiveUserWorkers.Keys.ToList())
         {
             bool isUserStillCoLocated = activeCoLocatedUserToRoom.ContainsKey(activeUserId);
@@ -264,29 +246,25 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
                 if (state.ActiveUserWorkers.TryRemove(activeUserId, out var worker))
                 {
                     await worker.StopAsync();
-
-                    // Only tear down the bot's auxiliary output track and restore raw subscriptions when the user
-                    // actually leaves the co-located room group (not during a 100ms noise-filter track swap or mute).
                     if (!isUserStillCoLocated)
                     {
                         state.LastTrackSidByUser.TryRemove(activeUserId, out _);
-                        await state.Context.UnpublishAuxiliaryAudioTrackAsync($"{ProcessedTrackPrefix}{activeUserId}", cancellationToken);
-
-                        if (!string.IsNullOrWhiteSpace(worker.RawTrackSid))
-                        {
-                            await UpdateHumanSubscriptionsForRawTrackAsync(state.Context.ChannelId, activeUserId, worker.RawTrackSid, subscribe: true, cancellationToken);
-                        }
                     }
+                    await state.Context.UnpublishAuxiliaryAudioTrackAsync($"{ProcessedTrackPrefix}{activeUserId}", cancellationToken);
                 }
             }
         }
 
-        // Also clean up auxiliary tracks for any user who left the co-located room while muted
+        // Also clean up auxiliary tracks for any user who left the co-located room or lost their raw track
         foreach (var trackedUserId in state.LastTrackSidByUser.Keys.ToList())
         {
             if (!activeCoLocatedUserToRoom.ContainsKey(trackedUserId))
             {
                 state.LastTrackSidByUser.TryRemove(trackedUserId, out _);
+                await state.Context.UnpublishAuxiliaryAudioTrackAsync($"{ProcessedTrackPrefix}{trackedUserId}", cancellationToken);
+            }
+            else if (!state.RawTracks.ContainsKey(trackedUserId))
+            {
                 await state.Context.UnpublishAuxiliaryAudioTrackAsync($"{ProcessedTrackPrefix}{trackedUserId}", cancellationToken);
             }
         }
@@ -309,10 +287,10 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
 
             if (state.ActiveUserWorkers.TryGetValue(userId, out var existingWorker))
             {
-                if (existingWorker.RawTrackSid == rawTrackInfo.TrackSid && ReferenceEquals(existingWorker.Processor, processor))
+                if (existingWorker.RawTrackSid == rawTrackInfo.TrackSid &&
+                    ReferenceEquals(existingWorker.Processor, processor) &&
+                    existingWorker.IsHealthy)
                 {
-                    // Ensure any newly joined human participants are unsubscribed from this user's raw track
-                    await UpdateHumanSubscriptionsForRawTrackAsync(state.Context.ChannelId, userId, rawTrackInfo.TrackSid, subscribe: false, cancellationToken);
                     continue;
                 }
 
@@ -346,12 +324,15 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
                 publishedAux,
                 processor,
                 _logger,
-                () => PersistRoomCalibrations(state.Context.ChannelId, roomId, processor));
+                () => _voiceState.IsUserMuted(state.Context.ChannelId, userId),
+                () => PersistRoomCalibrations(state.Context.ChannelId, roomId, processor),
+                () => _ = Task.Run(() => ReconcileChannelDspStateAsync(state, CancellationToken.None)),
+                (uid, speaking) => _voiceState.SetPhysicalRoomDspSpeaking(state.Context.ChannelId, uid, speaking),
+                (uid, managed) => _voiceState.SetPhysicalRoomDspManaged(state.Context.ChannelId, uid, managed));
 
             if (state.ActiveUserWorkers.TryAdd(userId, newWorker))
             {
                 newWorker.Start();
-                await UpdateHumanSubscriptionsForRawTrackAsync(state.Context.ChannelId, userId, rawTrackInfo.TrackSid, subscribe: false, cancellationToken);
                 _logger.LogInformation(
                     "[PhysicalRoomPipeline] Activated server-side cross-talk isolation for user {UserId} in channel {ChannelId} (room {RoomId}, track {TrackSid})",
                     userId, state.Context.ChannelId, roomId, rawTrackInfo.TrackSid);
@@ -372,7 +353,7 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
         var userToDeviceId = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var uid in userIds)
         {
-            var devId = _chatState.GetVoiceParticipantDevice(channelId, uid)?.DeviceId;
+            var devId = _voiceState.GetVoiceParticipantDevice(channelId, uid)?.DeviceId;
             if (!string.IsNullOrWhiteSpace(devId))
             {
                 userToDeviceId[uid] = devId;
@@ -393,8 +374,8 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
                 userToDeviceId.TryGetValue(saved.TargetEmployeeId, out var tgtDevId) &&
                 string.Equals(tgtDevId, saved.TargetDeviceId, StringComparison.Ordinal))
             {
-                var srcTelemetry = _chatState.GetVoiceParticipantAudioTelemetry(channelId, saved.SourceEmployeeId);
-                var tgtTelemetry = _chatState.GetVoiceParticipantAudioTelemetry(channelId, saved.TargetEmployeeId);
+                var srcTelemetry = _voiceState.GetVoiceParticipantAudioTelemetry(channelId, saved.SourceEmployeeId);
+                var tgtTelemetry = _voiceState.GetVoiceParticipantAudioTelemetry(channelId, saved.TargetEmployeeId);
                 string currentSrcFilter = srcTelemetry?.FilterType ?? "client-default";
                 string currentTgtFilter = tgtTelemetry?.FilterType ?? "client-default";
 
@@ -415,44 +396,70 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
 
     private void SyncParticipantPipelineTelemetry(string channelId, string uid, AcousticRoomProcessor processor)
     {
-        var telemetry = _chatState.GetVoiceParticipantAudioTelemetry(channelId, uid);
-        var devName = _chatState.GetVoiceParticipantDevice(channelId, uid)?.DeviceName ?? string.Empty;
+        var telemetry = _voiceState.GetVoiceParticipantAudioTelemetry(channelId, uid);
+        var devName = _voiceState.GetVoiceParticipantDevice(channelId, uid)?.DeviceName ?? string.Empty;
 
         string filterType = telemetry?.FilterType ?? "webrtc";
-        double estimatedCaptureLatencyMs = telemetry?.EstimatedCaptureLatencyMs ?? 0.0;
+        string platform = telemetry?.Platform ?? string.Empty;
+        double reportedLatencyMs = telemetry?.EstimatedCaptureLatencyMs ?? 0.0;
         double serverToClientDelayMs = telemetry?.ServerToClientDelayMs ?? 0.0;
 
+        double effectiveCaptureLatencyMs = ResolveEffectiveCaptureLatencyMs(
+            reportedLatencyMs,
+            platform,
+            devName,
+            filterType);
+
+        processor.SetParticipantClientPipelineInfo(
+            uid,
+            effectiveCaptureLatencyMs,
+            serverToClientDelayMs);
+    }
+
+    internal static double ResolveEffectiveCaptureLatencyMs(
+        double reportedLatencyMs,
+        string? platform,
+        string? deviceName,
+        string? filterType)
+    {
+        bool isNativeAndroid = string.Equals(platform, "android-native", StringComparison.OrdinalIgnoreCase);
+        string safeDeviceName = deviceName ?? string.Empty;
+
         double baseCaptureMs = 15.0;
-        if (devName.Contains("Android", StringComparison.OrdinalIgnoreCase))
+        if (isNativeAndroid)
+        {
+            // Native JavaAudioDeviceModule + hardware AEC path bypasses WebView AudioContext/Worklet queues.
+            baseCaptureMs = 25.0;
+        }
+        else if (safeDeviceName.Contains("Android", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(platform, "android", StringComparison.OrdinalIgnoreCase))
         {
             baseCaptureMs = 65.0;
         }
-        else if (devName.Contains("iOS", StringComparison.OrdinalIgnoreCase) ||
-                 devName.Contains("iPhone", StringComparison.OrdinalIgnoreCase) ||
-                 devName.Contains("iPad", StringComparison.OrdinalIgnoreCase))
+        else if (safeDeviceName.Contains("iOS", StringComparison.OrdinalIgnoreCase) ||
+                 safeDeviceName.Contains("iPhone", StringComparison.OrdinalIgnoreCase) ||
+                 safeDeviceName.Contains("iPad", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(platform, "ios", StringComparison.OrdinalIgnoreCase))
         {
             baseCaptureMs = 30.0;
         }
 
-        double filterLookaheadMs = filterType.ToLowerInvariant() switch
+        double filterLookaheadMs = (filterType ?? "webrtc").ToLowerInvariant() switch
         {
-            "rnnoise" => 15.3,
+            "rnnoise" => isNativeAndroid ? 10.0 : 15.3,
             "deepfilternet" => 30.3,
             "none" => 0.0,
             _ => 10.0
         };
 
         double platformFloorMs = Math.Round(baseCaptureMs + filterLookaheadMs, 1);
-        if (estimatedCaptureLatencyMs <= 0 || (baseCaptureMs > 15.0 && estimatedCaptureLatencyMs < platformFloorMs))
+        double effectiveLatencyMs = reportedLatencyMs;
+        if (effectiveLatencyMs <= 0 || (baseCaptureMs > 15.0 && effectiveLatencyMs < platformFloorMs))
         {
-            estimatedCaptureLatencyMs = platformFloorMs;
+            effectiveLatencyMs = platformFloorMs;
         }
 
-        processor.SetParticipantClientPipelineInfo(
-            uid,
-            filterType,
-            estimatedCaptureLatencyMs,
-            serverToClientDelayMs);
+        return effectiveLatencyMs;
     }
 
     private void PersistRoomCalibrations(string channelId, string roomId, AcousticRoomProcessor processor)
@@ -465,15 +472,15 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
                 continue;
             }
 
-            var srcDevId = _chatState.GetVoiceParticipantDevice(channelId, cal.SourceUserId)?.DeviceId;
-            var tgtDevId = _chatState.GetVoiceParticipantDevice(channelId, cal.TargetUserId)?.DeviceId;
+            var srcDevId = _voiceState.GetVoiceParticipantDevice(channelId, cal.SourceUserId)?.DeviceId;
+            var tgtDevId = _voiceState.GetVoiceParticipantDevice(channelId, cal.TargetUserId)?.DeviceId;
             if (string.IsNullOrWhiteSpace(srcDevId) || string.IsNullOrWhiteSpace(tgtDevId))
             {
                 continue;
             }
 
-            var srcTelemetry = _chatState.GetVoiceParticipantAudioTelemetry(channelId, cal.SourceUserId);
-            var tgtTelemetry = _chatState.GetVoiceParticipantAudioTelemetry(channelId, cal.TargetUserId);
+            var srcTelemetry = _voiceState.GetVoiceParticipantAudioTelemetry(channelId, cal.SourceUserId);
+            var tgtTelemetry = _voiceState.GetVoiceParticipantAudioTelemetry(channelId, cal.TargetUserId);
 
             _physicalRoomService.SaveLearnedPairCalibration(roomId, new PhysicalRoomSavedPairCalibration
             {
@@ -488,42 +495,6 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
                 Confidence = cal.Confidence,
                 UpdatedAtUtc = DateTime.UtcNow
             });
-        }
-    }
-
-    private async Task UpdateHumanSubscriptionsForRawTrackAsync(
-        string channelId,
-        string trackOwnerUserId,
-        string rawTrackSid,
-        bool subscribe,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(rawTrackSid)) return;
-
-        var config = _systemConfigs.Get();
-        if (string.IsNullOrEmpty(config.LiveKitApiKey) || string.IsNullOrEmpty(config.LiveKitApiSecret))
-        {
-            return;
-        }
-
-        var participants = _chatState.GetVoiceParticipants(channelId);
-        foreach (var listenerId in participants)
-        {
-            if (string.IsNullOrWhiteSpace(listenerId) ||
-                string.Equals(listenerId, trackOwnerUserId, StringComparison.Ordinal) ||
-                listenerId.StartsWith("bot:", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            await _liveKitService.UpdateParticipantSubscriptionsAsync(
-                channelId,
-                listenerId,
-                [rawTrackSid],
-                subscribe,
-                config.LiveKitApiKey,
-                config.LiveKitApiSecret,
-                cancellationToken);
         }
     }
 
@@ -563,10 +534,31 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
         public PublishedServerAudioTrack OutputTrack { get; }
         public AcousticRoomProcessor Processor { get; }
 
+        private const float DspSpeechRmsThreshold = 0.012f; // ~ -38.4 dBFS on post-leveler cleaned audio
+        private const int DspSpeechAttackFrames = 2;
+        private const long DspSpeechHangoverMs = 300;
+
         private readonly ILogger _logger;
+        private readonly Func<bool>? _isParticipantMuted;
         private readonly Action? _onPersistCalibrations;
+        private readonly Action? _onUnexpectedStop;
+        private readonly Action<string, bool>? _onDspSpeakingChanged;
+        private readonly Action<string, bool>? _onDspManagedChanged;
         private readonly CancellationTokenSource _cts = new();
+        private readonly Channel<AudioFrame> _egressChannel = Channel.CreateBounded<AudioFrame>(new BoundedChannelOptions(8)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = true
+        });
+        private Task? _egressTask;
+        private int _persistInFlight;
         private Task? _loopTask;
+
+        public bool IsHealthy =>
+            !_cts.IsCancellationRequested &&
+            _loopTask is { IsCompleted: false } &&
+            _egressTask is { IsCompleted: false };
 
         public ParticipantDspWorker(
             string userId,
@@ -575,7 +567,11 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
             PublishedServerAudioTrack outputTrack,
             AcousticRoomProcessor processor,
             ILogger logger,
-            Action? onPersistCalibrations = null)
+            Func<bool>? isParticipantMuted = null,
+            Action? onPersistCalibrations = null,
+            Action? onUnexpectedStop = null,
+            Action<string, bool>? onDspSpeakingChanged = null,
+            Action<string, bool>? onDspManagedChanged = null)
         {
             UserId = userId;
             RawTrackSid = rawTrackSid;
@@ -583,11 +579,17 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
             OutputTrack = outputTrack;
             Processor = processor;
             _logger = logger;
+            _isParticipantMuted = isParticipantMuted;
             _onPersistCalibrations = onPersistCalibrations;
+            _onUnexpectedStop = onUnexpectedStop;
+            _onDspSpeakingChanged = onDspSpeakingChanged;
+            _onDspManagedChanged = onDspManagedChanged;
         }
 
         public void Start()
         {
+            try { _onDspManagedChanged?.Invoke(UserId, true); } catch { }
+            _egressTask = Task.Run(() => RunAudioEgressLoopAsync(_cts.Token));
             _loopTask = Task.Run(() => RunAudioLoopAsync(_cts.Token));
         }
 
@@ -598,12 +600,84 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
             {
                 try { await _loopTask; } catch { }
             }
+            _egressChannel.Writer.TryComplete();
+            if (_egressTask != null)
+            {
+                try { await _egressTask; } catch { }
+            }
             _cts.Dispose();
+        }
+
+        private void TriggerBackgroundPersist()
+        {
+            if (_onPersistCalibrations == null) return;
+            if (Interlocked.CompareExchange(ref _persistInFlight, 1, 0) != 0) return;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    _onPersistCalibrations.Invoke();
+                }
+                catch
+                {
+                }
+                finally
+                {
+                    Volatile.Write(ref _persistInFlight, 0);
+                }
+            });
+        }
+
+        private async Task RunAudioEgressLoopAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await foreach (var outFrame in _egressChannel.Reader.ReadAllAsync(cancellationToken))
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+                    try
+                    {
+                        await OutputTrack.AudioSource.CaptureFrameAsync(outFrame, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                    catch (Exception frameEx)
+                    {
+                        // Swallow transient native queue full / FFI frame capture errors so the egress loop stays alive
+                        _logger.LogDebug(frameEx, "[PhysicalRoomPipeline] Transient audio egress frame drop for {UserId}: {Message}", UserId, frameEx.Message);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal shutdown
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[PhysicalRoomPipeline] Audio egress loop ended for {UserId}: {Message}", UserId, ex.Message);
+            }
+        }
+
+        private static float ComputePcm16Rms(ReadOnlySpan<short> samples)
+        {
+            if (samples.IsEmpty) return 0f;
+            double sumSq = 0;
+            for (int i = 0; i < samples.Length; i++)
+            {
+                double norm = samples[i] / 32768.0;
+                sumSq += norm * norm;
+            }
+            return (float)Math.Sqrt(sumSq / samples.Length);
         }
 
         private async Task RunAudioLoopAsync(CancellationToken cancellationToken)
         {
             int framesSincePersist = 0;
+            bool isDspSpeaking = false;
+            int consecutiveSpeechFrames = 0;
+            long lastSpeechTickMs = 0;
             try
             {
                 using var audioStream = new AudioStream(RawTrack, sampleRate: AcousticRoomProcessor.SampleRate, numChannels: 1);
@@ -618,7 +692,41 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
                     ReadOnlySpan<short> pcm16Span = MemoryMarshal.Cast<byte, short>(rawBytes.AsSpan());
                     long wallClockMs = Environment.TickCount64;
 
+                    if (_isParticipantMuted?.Invoke() == true)
+                    {
+                        short[] silentPcm16 = new short[pcm16Span.Length];
+                        Processor.ProcessParticipantFrame(UserId, silentPcm16, wallClockMs);
+                        consecutiveSpeechFrames = 0;
+                        if (isDspSpeaking)
+                        {
+                            isDspSpeaking = false;
+                            _onDspSpeakingChanged?.Invoke(UserId, false);
+                        }
+                        continue;
+                    }
+
                     short[] cleanedPcm16 = Processor.ProcessParticipantFrame(UserId, pcm16Span, wallClockMs);
+                    float cleanedRms = ComputePcm16Rms(cleanedPcm16);
+                    if (cleanedRms >= DspSpeechRmsThreshold)
+                    {
+                        consecutiveSpeechFrames++;
+                        lastSpeechTickMs = wallClockMs;
+                        if (!isDspSpeaking && consecutiveSpeechFrames >= DspSpeechAttackFrames)
+                        {
+                            isDspSpeaking = true;
+                            _onDspSpeakingChanged?.Invoke(UserId, true);
+                        }
+                    }
+                    else
+                    {
+                        consecutiveSpeechFrames = 0;
+                        if (isDspSpeaking && wallClockMs - lastSpeechTickMs >= DspSpeechHangoverMs)
+                        {
+                            isDspSpeaking = false;
+                            _onDspSpeakingChanged?.Invoke(UserId, false);
+                        }
+                    }
+
                     byte[] cleanedBytes = MemoryMarshal.AsBytes(cleanedPcm16.AsSpan()).ToArray();
 
                     var outFrame = new AudioFrame(
@@ -628,12 +736,12 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
                         cleanedPcm16.Length,
                         null);
 
-                    await OutputTrack.AudioSource.CaptureFrameAsync(outFrame, cancellationToken);
+                    _egressChannel.Writer.TryWrite(outFrame);
 
                     if (++framesSincePersist >= 150)
                     {
                         framesSincePersist = 0;
-                        try { _onPersistCalibrations?.Invoke(); } catch { }
+                        TriggerBackgroundPersist();
                     }
                 }
             }
@@ -647,7 +755,16 @@ public sealed class PhysicalRoomPipelineStage : IVoiceRoomPipelineStage, IDispos
             }
             finally
             {
+                if (isDspSpeaking)
+                {
+                    try { _onDspSpeakingChanged?.Invoke(UserId, false); } catch { }
+                }
+                try { _onDspManagedChanged?.Invoke(UserId, false); } catch { }
                 try { _onPersistCalibrations?.Invoke(); } catch { }
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    try { _onUnexpectedStop?.Invoke(); } catch { }
+                }
             }
         }
     }

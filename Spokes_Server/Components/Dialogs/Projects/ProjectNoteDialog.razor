@@ -1,7 +1,12 @@
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Security
+@implements IBackDismissHandler
 @inject Database Db
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject IJSRuntime JS
+@inject UserService UserService
+@inject FileUrlSigner FileUrls
 
 
 <MudDialog>
@@ -10,7 +15,7 @@
             <MudGrid>
                 <!-- Title -->
                 <MudItem xs="12">
-                    <MudTextField @bind-Value="Note.Title" Label="Title" Required="true" Variant="Variant.Outlined" />
+                    <MudTextField @bind-Value="Note.Title" Label="Title" Required="true" Disabled="@(!_canEdit)" Variant="Variant.Outlined" />
                 </MudItem>
 
                 <!-- Category -->
@@ -18,8 +23,8 @@
                     @if (IsAddingCategory)
                     {
                         <div class="d-flex align-end gap-2">
-                             <MudTextField @bind-Value="NewCategoryName" Label="New Category Name" AutoFocus="true" />
-                             <MudIconButton Icon="@Icons.Material.Filled.Check" Color="Color.Success" OnClick="SaveNewCategory" />
+                             <MudTextField @bind-Value="NewCategoryName" Label="New Category Name" Disabled="@(!_canEdit)" AutoFocus="true" />
+                             <MudIconButton Icon="@Icons.Material.Filled.Check" Color="Color.Success" Disabled="@(!_canEdit)" OnClick="SaveNewCategory" />
                              <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Error" OnClick="@(() => IsAddingCategory = false)" />
                         </div>
                     }
@@ -27,7 +32,7 @@
                     {
                         <div class="d-flex align-end gap-2">
                             <div class="flex-grow-1">
-                                <MudSelect T="string" @bind-Value="Note.Category" Label="Category" AnchorOrigin="Origin.BottomCenter">
+                                <MudSelect T="string" @bind-Value="Note.Category" Label="Category" Disabled="@(!_canEdit)" AnchorOrigin="Origin.BottomCenter">
                                     @foreach (var cat in ProjectCategories)
                                     {
                                         <MudSelectItem Value="@cat">@cat</MudSelectItem>
@@ -36,17 +41,17 @@
                             </div>
                             
                             <MudTooltip Text="Category Color">
-                                <MudColorPicker Value="@GetCategoryHex()" ValueChanged="SetCategoryHex" Label="" />
+                                <MudColorPicker Value="@GetCategoryHex()" ValueChanged="SetCategoryHex" Disabled="@(!_canEdit)" Label="" />
                             </MudTooltip>
 
                             <MudTooltip Text="Add New Category">
-                                <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary" OnClick="@(() => IsAddingCategory = true)" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary" Disabled="@(!_canEdit)" OnClick="@(() => IsAddingCategory = true)" />
                             </MudTooltip>
                             
                             @if (!string.IsNullOrEmpty(Note.Category) && !DefaultCategories.Contains(Note.Category))
                             {
                                 <MudTooltip Text="Delete this Category">
-                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="DeleteCategory" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Disabled="@(!_canEdit)" OnClick="DeleteCategory" />
                                 </MudTooltip>
                             }
                         </div>
@@ -55,7 +60,7 @@
                 
                 <!-- Date -->
                  <MudItem xs="4">
-                     <MudDatePicker @bind-Date="Date" Label="Date" />
+                     <MudDatePicker @bind-Date="Date" Label="Date" Disabled="@(!_canEdit)" />
                  </MudItem>
 
                 <!-- Content -->
@@ -80,7 +85,7 @@
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Close">Close</MudButton>
-        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save Note</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(!_canEdit)" OnClick="Submit">Save Note</MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -96,9 +101,11 @@
     private List<string> DefaultCategories = new() { "General", "Meeting", "Event", "Maintenance", "Email" };
     private bool IsAddingCategory = false;
     private string NewCategoryName = "";
+    private bool _canEdit;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        await RefreshEditPermissionAsync();
         if (Project.NoteCategories == null || !Project.NoteCategories.Any())
         {
             Project.NoteCategories = DefaultCategories.ToList();
@@ -108,6 +115,25 @@
             Project.NoteCategoryColors = new Dictionary<string, string>();
         }
         ProjectCategories = Project.NoteCategories.ToList();
+    }
+
+    private async Task<bool> RefreshEditPermissionAsync()
+    {
+        var liveUser = await UserService.GetEmployeeAsync();
+        var liveProject = Db.Projects.GetById(Project.Id) ?? Project;
+        _canEdit = !Note.IsSystemEvent &&
+                   liveUser != null &&
+                   liveUser.IsActiveUnsuspended &&
+                   await UserService.CanEditProjectAsync(liveProject);
+        return _canEdit;
+    }
+
+    private async Task<bool> AuthorizeNoteMutationAsync()
+    {
+        if (await RefreshEditPermissionAsync()) return true;
+        Snackbar.Add("You do not have permission to modify this project note.", Severity.Warning);
+        StateHasChanged();
+        return false;
     }
 
     private MudBlazor.Utilities.MudColor GetCategoryHex()
@@ -125,17 +151,24 @@
         return new MudBlazor.Utilities.MudColor(colors[Math.Abs(hash) % colors.Length]);
     }
 
-    private void SetCategoryHex(MudBlazor.Utilities.MudColor color)
+    private async Task SetCategoryHex(MudBlazor.Utilities.MudColor color)
     {
         if (string.IsNullOrEmpty(Note.Category)) return;
+        if (!await AuthorizeNoteMutationAsync()) return;
         Project.NoteCategoryColors[Note.Category] = color.Value;
         // Project changes are saved in Submit or implicitly when adding category, 
         // but let's save here too to ensure color persists immediately.
         Db.Projects.Save(Project);
     }
 
-    private void SaveNewCategory()
+    private async Task SaveNewCategory()
     {
+        if (!await AuthorizeNoteMutationAsync())
+        {
+            IsAddingCategory = false;
+            NewCategoryName = "";
+            return;
+        }
         if (!string.IsNullOrWhiteSpace(NewCategoryName))
         {
             if (!Project.NoteCategories.Contains(NewCategoryName))
@@ -153,8 +186,9 @@
         NewCategoryName = "";
     }
     
-    private void DeleteCategory()
+    private async Task DeleteCategory()
     {
+        if (!await AuthorizeNoteMutationAsync()) return;
         var catToDelete = Note.Category;
         if (!string.IsNullOrEmpty(catToDelete) && !DefaultCategories.Contains(catToDelete))
         {
@@ -182,11 +216,12 @@
             {
                 Id = a.Id,
                 FileName = a.FileName,
-                FilePath = a.FilePath,
+                FilePath = FileUrls.SignUrl(a.FilePath),
                 ContentType = FileHelper.GetContentType(a.FileName, a.ContentType),
                 AddedAt = Note.Date,
                 FileSizeBytes = a.FileSizeBytes,
-                HasServerThumbnail = a.HasServerThumbnail
+                HasServerThumbnail = a.HasServerThumbnail,
+                IsEncrypted = false
             }).ToList();
 
             var parameters = new DialogParameters
@@ -205,7 +240,7 @@
         }
         else if (!string.IsNullOrWhiteSpace(att.FilePath))
         {
-            await JS.InvokeVoidAsync("open", att.FilePath, "_blank");
+            await JS.InvokeVoidAsync("open", FileUrls.SignUrl(att.FilePath), "_blank");
         }
     }
 
@@ -218,8 +253,15 @@
         MudDialog.Cancel();
     }
 
-    private void Submit()
+    public async Task<BackDismissAction> OnBackRequestedAsync()
     {
+        await Close();
+        return BackDismissAction.Handled;
+    }
+
+    private async Task Submit()
+    {
+        if (!await AuthorizeNoteMutationAsync()) return;
         _attachmentManager?.CommitSession();
         MudDialog.Close(DialogResult.Ok(Note));
     }

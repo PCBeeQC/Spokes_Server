@@ -15,6 +15,7 @@ using Moq;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Controllers;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
@@ -54,43 +55,43 @@ public class SlideshowMediaControllerTests : IDisposable
     [InlineData("", "media-1")]
     [InlineData("sess-1", "")]
     [InlineData("  ", "  ")]
-    public void GetMedia_InvalidParameters_ReturnsBadRequest(string sessionId, string mediaId)
+    public async Task GetMedia_InvalidParameters_ReturnsBadRequest(string sessionId, string mediaId)
     {
-        var result = _controller.GetMedia(sessionId, mediaId);
+        var result = await _controller.GetMedia(sessionId, mediaId);
         Assert.IsType<BadRequestObjectResult>(result);
     }
 
     [Fact]
-    public void GetMedia_NonExistentSession_ReturnsForbidden403()
+    public async Task GetMedia_NonExistentSession_ReturnsForbidden403()
     {
-        var result = _controller.GetMedia("non-existent-session", "media-1");
+        var result = await _controller.GetMedia("non-existent-session", "media-1");
         var objResult = Assert.IsType<ObjectResult>(result);
         Assert.Equal(403, objResult.StatusCode);
     }
 
     [Fact]
-    public void GetMedia_UnpairedSession_ReturnsForbidden403()
+    public async Task GetMedia_UnpairedSession_ReturnsForbidden403()
     {
         var session = _sessionService.CreateSession("tv-conn-1");
         // Not paired yet
-        var result = _controller.GetMedia(session.SessionId, "media-1");
+        var result = await _controller.GetMedia(session.SessionId, "media-1");
         var objResult = Assert.IsType<ObjectResult>(result);
         Assert.Equal(403, objResult.StatusCode);
     }
 
     [Fact]
-    public void GetMedia_ActiveSessionWithoutBridge_ReturnsForbidden403()
+    public async Task GetMedia_ActiveSessionWithoutBridge_ReturnsForbidden403()
     {
         var session = _sessionService.CreateSession("tv-conn-1");
         _sessionService.TryPair(session.PairingPin, "user-1", "host-1", "album-1", out _, out _, fileBridge: null);
 
-        var result = _controller.GetMedia(session.SessionId, "media-1");
+        var result = await _controller.GetMedia(session.SessionId, "media-1");
         var objResult = Assert.IsType<ObjectResult>(result);
         Assert.Equal(403, objResult.StatusCode);
     }
 
     [Fact]
-    public void GetMedia_ExpiredSession_ReturnsForbidden403()
+    public async Task GetMedia_ExpiredSession_ReturnsForbidden403()
     {
         var mockBridge = new Mock<ISlideshowFileBridge>();
         var session = _sessionService.CreateSession("tv-conn-1");
@@ -99,118 +100,118 @@ public class SlideshowMediaControllerTests : IDisposable
         // Force expiration
         pairedSession!.ExpiresAtUtc = DateTime.UtcNow.AddMinutes(-5);
 
-        var result = _controller.GetMedia(session.SessionId, "media-1");
+        var result = await _controller.GetMedia(session.SessionId, "media-1");
         var objResult = Assert.IsType<ObjectResult>(result);
         Assert.Equal(403, objResult.StatusCode);
     }
 
     [Fact]
-    public void GetMedia_WhenSessionEnds_ImmediatelyReturnsForbidden403()
+    public async Task GetMedia_WhenSessionEnds_ImmediatelyReturnsForbidden403()
     {
         var mockBridge = new Mock<ISlideshowFileBridge>();
-        mockBridge.Setup(b => b.GetMedia("media-1", false)).Returns(new OkResult());
+        mockBridge.Setup(b => b.GetMediaAsync("media-1", false, It.IsAny<CancellationToken>())).ReturnsAsync(new OkResult());
 
         var session = _sessionService.CreateSession("tv-conn-1");
         _sessionService.TryPair(session.PairingPin, "user-1", "host-1", "album-1", out _, out _, mockBridge.Object);
 
         // Works while session is active with valid capability secret
-        var activeResult = _controller.GetMedia(session.SessionId, "media-1", session.TvSecret);
+        var activeResult = await _controller.GetMedia(session.SessionId, "media-1", session.TvSecret);
         Assert.IsType<OkResult>(activeResult);
 
         // Presenter ends the session
         _sessionService.EndSession(session.SessionId);
 
         // Immediate 403 Forbidden even with secret
-        var endedResult = _controller.GetMedia(session.SessionId, "media-1", session.TvSecret);
+        var endedResult = await _controller.GetMedia(session.SessionId, "media-1", session.TvSecret);
         var objResult = Assert.IsType<ObjectResult>(endedResult);
         Assert.Equal(403, objResult.StatusCode);
     }
 
     [Fact]
-    public void GetMedia_MissingOrInvalidCapabilitySecret_ReturnsForbidden403_UnlessAuthenticatedHost()
+    public async Task GetMedia_MissingOrInvalidCapabilitySecret_ReturnsForbidden403_UnlessAuthenticatedHost()
     {
         var mockBridge = new Mock<ISlideshowFileBridge>();
-        mockBridge.Setup(b => b.GetMedia("photo-1", false)).Returns(new OkResult());
+        mockBridge.Setup(b => b.GetMediaAsync("photo-1", false, It.IsAny<CancellationToken>())).ReturnsAsync(new OkResult());
 
         var session = _sessionService.CreateSession("tv-conn-1");
         _sessionService.TryPair(session.PairingPin, "user-1", "host-1", "album-1", out _, out _, mockBridge.Object);
 
         // Missing ?st= rejected with 403
-        var missingSecret = Assert.IsType<ObjectResult>(_controller.GetMedia(session.SessionId, "photo-1"));
+        var missingSecret = Assert.IsType<ObjectResult>(await _controller.GetMedia(session.SessionId, "photo-1"));
         Assert.Equal(403, missingSecret.StatusCode);
 
         // Wrong ?st= rejected with 403
-        var wrongSecret = Assert.IsType<ObjectResult>(_controller.GetMedia(session.SessionId, "photo-1", "wrong-secret"));
+        var wrongSecret = Assert.IsType<ObjectResult>(await _controller.GetMedia(session.SessionId, "photo-1", "wrong-secret"));
         Assert.Equal(403, wrongSecret.StatusCode);
 
         // Authenticated non-host user without ?st= rejected with 403
         _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
             new ClaimsIdentity([new Claim("EmployeeId", "other-user")], "TestAuth"));
-        var nonHostResult = Assert.IsType<ObjectResult>(_controller.GetMedia(session.SessionId, "photo-1"));
+        var nonHostResult = Assert.IsType<ObjectResult>(await _controller.GetMedia(session.SessionId, "photo-1"));
         Assert.Equal(403, nonHostResult.StatusCode);
 
         // Authenticated session host user allowed without ?st=
         _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
             new ClaimsIdentity([new Claim("EmployeeId", "user-1")], "TestAuth"));
-        Assert.IsType<OkResult>(_controller.GetMedia(session.SessionId, "photo-1"));
+        Assert.IsType<OkResult>(await _controller.GetMedia(session.SessionId, "photo-1"));
     }
 
     [Fact]
-    public void GetMedia_ActiveSessionWithBridge_DelegatesToBridge()
+    public async Task GetMedia_ActiveSessionWithBridge_DelegatesToBridge()
     {
         var mockBridge = new Mock<ISlideshowFileBridge>();
         var expectedResult = new PhysicalFileResult(Path.Combine(_tempDir, "photo.jpg"), "image/jpeg");
-        mockBridge.Setup(b => b.GetMedia("photo-1", false)).Returns(expectedResult);
+        mockBridge.Setup(b => b.GetMediaAsync("photo-1", false, It.IsAny<CancellationToken>())).ReturnsAsync(expectedResult);
 
         var session = _sessionService.CreateSession("tv-conn-1");
         _sessionService.TryPair(session.PairingPin, "user-1", "host-1", "album-1", out _, out _, mockBridge.Object);
 
-        var result = _controller.GetMedia(session.SessionId, "photo-1", session.TvSecret);
+        var result = await _controller.GetMedia(session.SessionId, "photo-1", session.TvSecret);
 
         Assert.Same(expectedResult, result);
-        mockBridge.Verify(b => b.GetMedia("photo-1", false), Times.Once);
+        mockBridge.Verify(b => b.GetMediaAsync("photo-1", false, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public void GetMediaThumb_ActiveSessionWithBridge_DelegatesToBridgeWithThumbTrue()
+    public async Task GetMediaThumb_ActiveSessionWithBridge_DelegatesToBridgeWithThumbTrue()
     {
         var mockBridge = new Mock<ISlideshowFileBridge>();
         var expectedResult = new PhysicalFileResult(Path.Combine(_tempDir, "photo_thumb.jpg"), "image/jpeg");
-        mockBridge.Setup(b => b.GetMedia("photo-1", true)).Returns(expectedResult);
+        mockBridge.Setup(b => b.GetMediaAsync("photo-1", true, It.IsAny<CancellationToken>())).ReturnsAsync(expectedResult);
 
         var session = _sessionService.CreateSession("tv-conn-1");
         _sessionService.TryPair(session.PairingPin, "user-1", "host-1", "album-1", out _, out _, mockBridge.Object);
 
-        var result = _controller.GetMediaThumb(session.SessionId, "photo-1", session.TvSecret);
+        var result = await _controller.GetMediaThumb(session.SessionId, "photo-1", session.TvSecret);
 
         Assert.Same(expectedResult, result);
-        mockBridge.Verify(b => b.GetMedia("photo-1", true), Times.Once);
+        mockBridge.Verify(b => b.GetMediaAsync("photo-1", true, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public void UserScopedBridge_MediaNotInAlbum_ReturnsNotFound404()
+    public async Task UserScopedBridge_MediaNotInAlbum_ReturnsNotFound404()
     {
         var allowedMedia = new Dictionary<string, string>
         {
             { "media-1", "photo1.jpg" }
         };
 
-        var user = new Employee { Id = "user-1", IsActive = true };
+        var user = new Employee { Id = "user-1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
         var serviceProvider = new ServiceCollection().BuildServiceProvider();
         var bridge = new UserScopedSlideshowBridge(serviceProvider, user, "album-1", null, allowedMedia);
 
-        var result = bridge.GetMedia("unrelated-photo-id", thumb: false);
+        var result = await bridge.GetMediaAsync("unrelated-photo-id", thumb: false);
         var notFound = Assert.IsType<NotFoundObjectResult>(result);
         Assert.Contains("Media item not found", notFound.Value?.ToString());
     }
 
     [Fact]
-    public void UserScopedBridge_DelegatesToFileControllerServeFileForUser()
+    public async Task UserScopedBridge_DelegatesToFileControllerServeFileForUser()
     {
         var fakeFilePath = Path.Combine(_tempDir, "photo1.jpg");
         File.WriteAllText(fakeFilePath, "image bytes");
 
-        var user = new Employee { Id = "user-1", IsActive = true };
+        var user = new Employee { Id = "user-1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
         var allowedMedia = new Dictionary<string, string>
         {
             { "media-1", "photo1.jpg" }
@@ -230,6 +231,7 @@ public class SlideshowMediaControllerTests : IDisposable
         var writer = new DiskPersistenceService(mockPersistenceLogger.Object);
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_tempDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var empRepo = new EmployeeRepository(writer, mockConfig.Object);
         var openIdRepo = new OpenIdAccountRepository(writer, mockConfig.Object);
@@ -253,23 +255,23 @@ public class SlideshowMediaControllerTests : IDisposable
         var sp = services.BuildServiceProvider();
         var bridge = new UserScopedSlideshowBridge(sp, user, "album-1", null, allowedMedia);
 
-        var result = bridge.GetMedia("media-1", thumb: false);
+        var result = await bridge.GetMediaAsync("media-1", thumb: false);
 
         var physicalFile = Assert.IsType<PhysicalFileResult>(result);
         Assert.Equal(fakeFilePath, physicalFile.FileName);
         Assert.Equal("image/jpeg", physicalFile.ContentType);
-        Assert.True(physicalFile.EnableRangeProcessing);
+        Assert.False(physicalFile.EnableRangeProcessing);
     }
 
     [Fact]
-    public void UserScopedBridge_WhenFileNotFoundInAlbum_FallsBackToDemoMedia()
+    public async Task UserScopedBridge_WhenFileNotFoundInAlbum_FallsBackToDemoMedia()
     {
         var demoMediaPath = Path.Combine(_tempDir, "DemoMedia");
         Directory.CreateDirectory(demoMediaPath);
         var demoFilePath = Path.Combine(demoMediaPath, "sample1.jpg");
         File.WriteAllText(demoFilePath, "demo image bytes");
 
-        var user = new Employee { Id = "user-1", IsActive = true };
+        var user = new Employee { Id = "user-1", IsActive = true, Permissions = [AppPermissions.Albums.View] };
         var allowedMedia = new Dictionary<string, string>
         {
             { "media-1", "sample1.jpg" }
@@ -289,7 +291,7 @@ public class SlideshowMediaControllerTests : IDisposable
         var mockPersistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
         var writer = new DiskPersistenceService(mockPersistenceLogger.Object);
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> {
-            { "DataPath", _tempDir },
+            { "DataPath", _tempDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" },
             { "Spokes_DemoMode", "true" }
         }).Build();
 
@@ -316,7 +318,7 @@ public class SlideshowMediaControllerTests : IDisposable
         var sp = services.BuildServiceProvider();
         var bridge = new UserScopedSlideshowBridge(sp, user, "album-1", null, allowedMedia);
 
-        var result = bridge.GetMedia("media-1", thumb: false);
+        var result = await bridge.GetMediaAsync("media-1", thumb: false);
 
         var physicalFile = Assert.IsType<PhysicalFileResult>(result);
         Assert.Equal(Path.GetFullPath(demoFilePath), physicalFile.FileName);

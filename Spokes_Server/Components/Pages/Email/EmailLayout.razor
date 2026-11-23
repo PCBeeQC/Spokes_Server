@@ -31,18 +31,6 @@
 <!-- Main Layout Container -->
 <div class="d-flex flex-row flex-grow-1 w-100 email-main-layout @(IsMobileReading ? "email-mobile-reading" : "")">
 
-    <style>
-        .email-main-layout { width: 100%; height: calc(100dvh - 84px); max-height: calc(100dvh - 84px); min-height: 0; overflow: hidden; }
-        .email-sidebar-container { width: 100%; height: 100%; min-height: 0; overflow: hidden; }
-        .email-list-container { width: 100%; height: 100%; min-height: 0; overflow: hidden; }
-        .email-reader-container { flex: 1; min-width: 0; height: 100%; min-height: 0; overflow: hidden; }
-
-        @@media (min-width: 960px) {
-            .email-sidebar-container { width: 260px; flex-shrink: 0; }
-            .email-list-container { width: 360px; flex-shrink: 0; }
-        }
-    </style>
-
     <!-- Left Pane: Sidebar (Unified Views, Inboxes, Mailboxes & Folders) -->
     <div class="@SidebarClass email-sidebar-container">
         <EmailSidebar Inboxes="_inboxes"
@@ -66,18 +54,18 @@
     <!-- Middle Pane: Message List -->
     <div class="@ListClass email-list-container">
         <EmailList Messages="_messages"
-                   CurrentAccountId="@(_selectedRealInbox?.Id ?? _selectedFolder?.AccountId)"
+                   CurrentAccountId="@CurrentBrowsableAccountId"
                    CurrentAccountFolders="@CurrentAccountFolders"
                    SelectedFolder="@_selectedFolder"
                    OnSelectFolder="SelectFolder"
                    OnFoldersChanged="HandleFoldersAndInboxesChanged"
                    FolderName="@CurrentViewTitle"
                    FolderSubtitle="@CurrentViewSubtitle"
-                   ShowReceivingAddressBadge="@ShowReceivingBadge"
                    OnGoBack="@(() => { _showMobileFolders = true; StateHasChanged(); })"
                    OnCompose="OpenComposer"
                    OnRefresh="HandleRefreshAsync"
                    IsRefreshing="_isRefreshing"
+                   IsReadOnly="@IsReadOnly"
                    SelectedMessageId="@_selectedMessageId"
                    SearchText="@_searchText"
                    HasMoreMessages="_hasMoreMessages"
@@ -97,7 +85,6 @@
     <!-- Right Pane: Reader -->
     <div class="@ReaderClass flex-grow-1 email-reader-container" style="min-width: 0;">
         <EmailReader SelectedMessage="_selectedMessage"
-                     SelectedMessageId="@_selectedMessageId"
                      MessageBody="@_messageBody"
                      IsLoadingBody="_isLoadingBody"
                      TimeZoneId="@_timeZoneId"
@@ -105,6 +92,10 @@
                      CurrentFolderPath="@(_selectedMessage?.FolderPath ?? _selectedFolder?.Path)"
                      AccountId="@(_selectedMessage?.AccountId ?? _selectedRealInbox?.Id ?? _selectedFolder?.AccountId ?? _selectedInbox?.AccountId)"
                      EmployeeId="@_currentEmployee?.Id"
+                     IsReadOnly="@IsReadOnly"
+                     ShowFolderActions="@CanBrowseFullAccount(_selectedMessage?.AccountId)"
+                     AllowedRemoteImageMessageIds="_sessionAllowedRemoteImageMessageIds"
+                     OnRemoteImagesAllowed="HandleRemoteImagesAllowed"
                      OnClose="@(() => SelectMessage(null))"
                      OnToggleFlag="ToggleFlag"
                      OnDownloadAttachment="DownloadAttachment"
@@ -118,7 +109,7 @@
                      OnArchive="ArchiveMessage"
                      OnJunk="JunkMessage"
                      OnPrint="PrintMessage"
-                     CanAddToTimeline="_canAddToTimeline"
+                     CanAddToTimeline="@(!IsReadOnly && _canAddToTimeline)"
                      OnAddToTimeline="AddEmailToTimeline"
                      HasNextMessage="HasNextMessage"
                      HasPreviousMessage="HasPreviousMessage"
@@ -176,6 +167,11 @@
     private EmailMessage? _selectedMessage;
 
     private Employee? _currentEmployee;
+    private Employee? LiveEmployee => _currentEmployee != null ? (Db.Employees.GetById(_currentEmployee.Id) ?? _currentEmployee) : null;
+    private bool IsReadOnly => LiveEmployee is not { IsActiveUnsuspended: true };
+    private bool CanComposeEmail => !IsReadOnly &&
+                                    !string.Equals(Db.CompanyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase) &&
+                                    (LiveEmployee?.HasPermission(AppPermissions.Email.Use) ?? false);
     private string _searchText = "";
     private bool _searchAllFolders;
     private string _messageBody = "";
@@ -199,11 +195,11 @@
     {
         get
         {
-            var accountId = _selectedRealInbox?.Id ?? _selectedFolder?.AccountId;
+            var accountId = CurrentBrowsableAccountId;
             if (string.IsNullOrEmpty(accountId)) return [];
             return _folders
                 .Where(f => f.AccountId == accountId && f.Path != "LocalDrafts")
-                .OrderByDescending(f => f.IsInbox)
+                .OrderByDescending(f => f.IsInbox && string.IsNullOrEmpty(f.ParentPath))
                 .ThenBy(f => f.Name)
                 .ToList();
         }
@@ -268,9 +264,20 @@
         return null;
     }
 
-    private bool ShowReceivingBadge =>
-        (_selectedNodeKey == "all-inboxes" && (_accounts.Count + _inboxes.Count > 1)) ||
-        (_selectedInbox != null && (_selectedInbox.TargetAddresses.Count > 1 || _selectedInbox.TargetAddresses.Any(a => a.StartsWith("@") || a.StartsWith("*@"))));
+    private bool CanBrowseFullAccount(string? accountId) => GetBrowsableAccount(accountId) != null;
+
+    private string CurrentBrowsableAccountId =>
+        CanBrowseFullAccount(_selectedRealInbox?.Id ?? _selectedFolder?.AccountId)
+            ? (_selectedRealInbox?.Id ?? _selectedFolder?.AccountId ?? "")
+            : "";
+
+    private readonly HashSet<string> _sessionAllowedRemoteImageMessageIds = new(StringComparer.OrdinalIgnoreCase);
+
+    private void HandleRemoteImagesAllowed(string messageId)
+    {
+        if (!string.IsNullOrWhiteSpace(messageId))
+            _sessionAllowedRemoteImageMessageIds.Add(messageId);
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -280,14 +287,16 @@
             if (_currentEmployee == null) return;
 
             var profile = Db.CompanyProfile.Get();
-            if (string.Equals(profile?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(profile?.Edition, "Family", StringComparison.OrdinalIgnoreCase)
+                || !_currentEmployee.HasPermission(AppPermissions.Email.Use))
             {
                 Nav.NavigateTo("/");
                 return;
             }
             _timeZoneId = profile?.TimeZoneId ?? "";
 
-            _canAddToTimeline = _currentEmployee.HasPermission(AppPermissions.Projects.Edit);
+            _canAddToTimeline = _currentEmployee.HasPermission(AppPermissions.Email.Use) &&
+                            _currentEmployee.HasPermission(AppPermissions.Projects.Edit);
 
             SyncStateService.OnNewEmailReceived += HandleRealtimeNewEmail;
             SyncStateService.OnUnreadCountChanged += HandleRealtimeUnreadCountChanged;
@@ -357,8 +366,7 @@
         var folder = _folders.FirstOrDefault(f => f.Id == routeKey);
         if (folder != null)
         {
-            var canBrowseFullAccount = _accounts.Any(a => string.Equals(a.Id, folder.AccountId, StringComparison.OrdinalIgnoreCase));
-            if (canBrowseFullAccount || folder.IsDrafts || folder.Path == "LocalDrafts")
+            if (CanBrowseFullAccount(folder.AccountId))
             {
                 SelectFolder(folder, updateUrl: false);
                 return true;
@@ -403,7 +411,7 @@
 
     private async Task HandleRefreshAsync()
     {
-        if (_currentEmployee == null || _isRefreshing) return;
+        if (IsReadOnly || _isRefreshing) return;
 
         _isRefreshing = true;
         StateHasChanged();
@@ -455,20 +463,7 @@
 
         if (string.Equals(message.FolderPath, "LocalDrafts", StringComparison.OrdinalIgnoreCase))
         {
-            if (!string.IsNullOrWhiteSpace(message.CreatedByEmployeeId))
-            {
-                return string.Equals(message.CreatedByEmployeeId, _currentEmployee.Id, StringComparison.OrdinalIgnoreCase);
-            }
-
-            var account = Db.EmailAccounts.GetById(message.AccountId);
-            if (account != null)
-            {
-                return !account.IsServerManaged &&
-                       !string.IsNullOrWhiteSpace(account.OwnerEmployeeId) &&
-                       string.Equals(account.OwnerEmployeeId, _currentEmployee.Id, StringComparison.OrdinalIgnoreCase);
-            }
-
-            return string.Equals(message.AccountId, _currentEmployee.Id, StringComparison.OrdinalIgnoreCase);
+            return InboxService.CanEmployeeAccessLocalDraft(message, _currentEmployee.Id);
         }
 
         // External IMAP-synced Drafts folder (non-LocalDrafts) requires full Real Inbox access.
@@ -492,9 +487,14 @@
             return CanCurrentUserSeeDraft(message);
         }
 
-        if (_accounts.Any(a => string.Equals(a.Id, message.AccountId, StringComparison.OrdinalIgnoreCase)))
+        if (CanBrowseFullAccount(message.AccountId))
         {
             return true;
+        }
+
+        if (!InboxService.IsPrimaryRootInboxMessage(message))
+        {
+            return false;
         }
 
         return _inboxes.Any(i =>
@@ -521,20 +521,25 @@
                 bool matchesCurrentView = false;
                 if (_selectedNodeKey == "all-inboxes")
                 {
-                    var folder = _folders.FirstOrDefault(f => f.AccountId == message.AccountId && f.Path == message.FolderPath);
-                    matchesCurrentView = !isLocalDraft && (folder?.IsInbox == true || message.FolderPath.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+                    matchesCurrentView = !isLocalDraft && InboxService.IsPrimaryRootInboxMessage(message);
                 }
                 else if (_selectedNodeKey is "all-mail" or "all-unread")
                 {
-                    matchesCurrentView = !isLocalDraft && (_selectedNodeKey != "all-unread" || !message.IsRead);
+                    matchesCurrentView = !isLocalDraft
+                        && (_selectedNodeKey != "all-unread" || !message.IsRead)
+                        && (CanBrowseFullAccount(message.AccountId) || InboxService.IsPrimaryRootInboxMessage(message));
                 }
                 else if (_selectedRealInbox != null)
                 {
-                    matchesCurrentView = !isLocalDraft && string.Equals(message.AccountId, _selectedRealInbox.Id, StringComparison.OrdinalIgnoreCase);
+                    matchesCurrentView = !isLocalDraft
+                        && string.Equals(message.AccountId, _selectedRealInbox.Id, StringComparison.OrdinalIgnoreCase)
+                        && CanBrowseFullAccount(message.AccountId);
                 }
                 else if (_selectedInbox != null)
                 {
-                    if (!isLocalDraft && string.Equals(message.AccountId, _selectedInbox.AccountId, StringComparison.OrdinalIgnoreCase))
+                    if (!isLocalDraft
+                        && string.Equals(message.AccountId, _selectedInbox.AccountId, StringComparison.OrdinalIgnoreCase)
+                        && (CanBrowseFullAccount(message.AccountId) || InboxService.IsPrimaryRootInboxMessage(message)))
                     {
                         var filter = InboxService.GetMetadataFilterForInbox(_selectedInbox);
                         var meta = new Spokes_Server.Core.Data.Repositories.Communication.MessageMetadata
@@ -694,6 +699,14 @@
             return;
 
         var accountFolders = Db.EmailFolders.GetByAccount(accountId);
+        if (!CanBrowseFullAccount(accountId))
+        {
+            var rootInbox = accountFolders.FirstOrDefault(f => f.IsInbox && string.IsNullOrEmpty(f.ParentPath))
+                            ?? accountFolders.FirstOrDefault(f => f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+            accountFolders = accountFolders
+                .Where(f => ReferenceEquals(f, rootInbox) || string.Equals(f.Path, "LocalDrafts", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
         foreach (var folder in accountFolders)
         {
             folder.UnreadCount = Db.EmailMessages.GetUnreadCount(accountId, folder.Path);
@@ -716,7 +729,7 @@
         foreach (var inbox in _inboxes)
         {
             if (realAccountIds.Contains(inbox.AccountId)) continue;
-            var inboxFolder = _folders.FirstOrDefault(f => f.AccountId == inbox.AccountId && f.IsInbox)
+            var inboxFolder = _folders.FirstOrDefault(f => f.AccountId == inbox.AccountId && f.IsInbox && string.IsNullOrEmpty(f.ParentPath))
                               ?? _folders.FirstOrDefault(f => f.AccountId == inbox.AccountId && f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
             if (inboxFolder != null)
             {
@@ -965,9 +978,37 @@
                 {
                     if (token.IsCancellationRequested) break;
 
-                    await foreach (var msg in Db.EmailMessages.SearchStreamingAsync(targetAccountId, _searchText, folderPath, progress, token))
+                    var canBrowse = CanBrowseFullAccount(targetAccountId);
+                    var searchFolderPath = folderPath;
+                    Func<Spokes_Server.Core.Data.Repositories.Communication.MessageMetadata, bool>? metadataFilter = null;
+                    if (!canBrowse)
+                    {
+                        searchFolderPath = _folders.FirstOrDefault(f => string.Equals(f.AccountId, targetAccountId, StringComparison.OrdinalIgnoreCase) && f.IsInbox && string.IsNullOrEmpty(f.ParentPath))?.Path
+                            ?? _folders.FirstOrDefault(f => string.Equals(f.AccountId, targetAccountId, StringComparison.OrdinalIgnoreCase) && f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase))?.Path
+                            ?? "INBOX";
+
+                        if (scopedInbox != null)
+                        {
+                            metadataFilter = string.Equals(scopedInbox.AccountId, targetAccountId, StringComparison.OrdinalIgnoreCase)
+                                ? InboxService.GetMetadataFilterForInbox(scopedInbox)
+                                : (_ => false);
+                        }
+                        else
+                        {
+                            var inboxFilters = _inboxes
+                                .Where(i => string.Equals(i.AccountId, targetAccountId, StringComparison.OrdinalIgnoreCase))
+                                .Select(i => InboxService.GetMetadataFilterForInbox(i))
+                                .ToList();
+                            metadataFilter = inboxFilters.Count == 0
+                                ? (_ => false)
+                                : (meta => inboxFilters.Any(f => f == null || f(meta)));
+                        }
+                    }
+
+                    await foreach (var msg in Db.EmailMessages.SearchStreamingAsync(targetAccountId, _searchText, searchFolderPath, progress, token, metadataFilter))
                     {
                         if (token.IsCancellationRequested) break;
+                        if (!canBrowse && !InboxService.IsPrimaryRootInboxMessage(msg)) continue;
                         if (!CanCurrentUserAccessMessageInUi(msg)) continue;
                         if (scopedInbox != null && !InboxService.DoesMessageMatchInbox(msg, scopedInbox)) continue;
 
@@ -1026,7 +1067,7 @@
 
         LoadCurrentViewMessages();
 
-        if (viewKey is "all-inboxes" or "all-unread")
+        if (!IsReadOnly && viewKey is "all-inboxes" or "all-unread")
         {
             _ = Task.Run(async () =>
             {
@@ -1090,9 +1131,10 @@
 
         LoadCurrentViewMessages();
 
-        if (!account.IsArchived)
+        if (!IsReadOnly && !account.IsArchived)
         {
-            var inboxFolder = _folders.FirstOrDefault(f => f.AccountId == account.Id && f.IsInbox);
+            var inboxFolder = _folders.FirstOrDefault(f => f.AccountId == account.Id && f.IsInbox && string.IsNullOrEmpty(f.ParentPath))
+                              ?? _folders.FirstOrDefault(f => f.AccountId == account.Id && f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
             if (inboxFolder != null)
             {
                 _ = Task.Run(async () =>
@@ -1139,25 +1181,29 @@
         LoadCurrentViewMessages();
 
         // Trigger a background sync on the underlying account's INBOX folder
-        var inboxFolder = _folders.FirstOrDefault(f => f.AccountId == inbox.AccountId && f.IsInbox);
-        if (inboxFolder != null)
+        if (!IsReadOnly)
         {
-            _ = Task.Run(async () =>
+            var inboxFolder = _folders.FirstOrDefault(f => f.AccountId == inbox.AccountId && f.IsInbox && string.IsNullOrEmpty(f.ParentPath))
+                              ?? _folders.FirstOrDefault(f => f.AccountId == inbox.AccountId && f.Path.Equals("INBOX", StringComparison.OrdinalIgnoreCase));
+            if (inboxFolder != null)
             {
-                try
+                _ = Task.Run(async () =>
                 {
-                    await EmailSyncService.SyncSingleFolderAsync(inbox.AccountId, inboxFolder.Path);
-                    await InvokeAsync(() =>
+                    try
                     {
-                        LoadFoldersAndInboxes();
-                        LoadCurrentViewMessages();
-                    });
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogError(ex, "Failed to background sync inbox folder for account {AccountId}", inbox.AccountId);
-                }
-            });
+                        await EmailSyncService.SyncSingleFolderAsync(inbox.AccountId, inboxFolder.Path);
+                        await InvokeAsync(() =>
+                        {
+                            LoadFoldersAndInboxes();
+                            LoadCurrentViewMessages();
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError(ex, "Failed to background sync inbox folder for account {AccountId}", inbox.AccountId);
+                    }
+                });
+            }
         }
     }
 
@@ -1165,6 +1211,7 @@
 
     private void SelectFolder(EmailFolder folder, bool updateUrl)
     {
+        if (folder == null || !CanBrowseFullAccount(folder.AccountId)) return;
         StopWatchingPreviousFolder();
 
         _showMobileFolders = false;
@@ -1184,7 +1231,7 @@
         LoadCurrentViewMessages();
 
         var folderAccount = _accounts.FirstOrDefault(a => a.Id == folder.AccountId) ?? GetBrowsableAccount(folder.AccountId);
-        if (folderAccount is { IsArchived: true })
+        if (IsReadOnly || folderAccount is { IsArchived: true })
         {
             return;
         }
@@ -1240,6 +1287,11 @@
         var msgFolder = _folders.FirstOrDefault(f => f.AccountId == msg.AccountId && f.Path == msg.FolderPath);
         if (_selectedNodeKey == "all-drafts" || (msgFolder != null && msgFolder.IsDrafts) || msg.FolderPath == "LocalDrafts")
         {
+            if (IsReadOnly || !CanComposeEmail)
+            {
+                Snackbar.Add(Loc["Your account is currently in read-only mode."].Value, Severity.Warning);
+                return;
+            }
             if (!CanCurrentUserSeeDraft(msg))
             {
                 Snackbar.Add(Loc["You do not have permission to open this draft."].Value, Severity.Error);
@@ -1271,7 +1323,7 @@
             _isLoadingBody = false;
             StateHasChanged();
 
-            if (!msg.IsRead)
+            if (!msg.IsRead && LiveEmployee is { IsActiveUnsuspended: true } readActor)
             {
                 msg.IsRead = true;
                 if (msgFolder != null && msgFolder.UnreadCount > 0)
@@ -1280,11 +1332,12 @@
                 }
                 StateHasChanged();
 
+                var callerId = readActor.Id;
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await MessageLifecycleService.MarkMessageReadAsync(msg.AccountId, msg.Id, true);
+                        await MessageLifecycleService.MarkMessageReadAsync(msg.AccountId, msg.Id, true, callerId);
                         await InvokeAsync(() =>
                         {
                             LoadFoldersAndInboxes();
@@ -1318,8 +1371,9 @@
 
     private async Task ToggleFlag(EmailMessage msg)
     {
+        if (IsReadOnly || LiveEmployee is not { IsActiveUnsuspended: true } actor) return;
         msg.IsFlagged = !msg.IsFlagged;
-        await MessageLifecycleService.MarkMessageFlaggedAsync(msg.AccountId, msg.Id, msg.IsFlagged);
+        await MessageLifecycleService.MarkMessageFlaggedAsync(msg.AccountId, msg.Id, msg.IsFlagged, actor.Id);
     }
 
     private async Task DownloadAttachment(EmailAttachmentMeta att)
@@ -1335,18 +1389,18 @@
     }
 
     private bool _isRepairing;
-    private async Task RepairAttachments()
+    private async Task RepairAttachments(string accountId)
     {
-        if (_currentEmployee == null) return;
+        if (IsReadOnly || LiveEmployee is not { IsActiveUnsuspended: true } actor) return;
+        var account = GetBrowsableAccount(accountId);
+        if (account == null || account.IsArchived) return;
+        var callerId = actor.Id;
         _isRepairing = true;
         StateHasChanged();
 
         await Task.Run(async () =>
         {
-            foreach (var account in _accounts)
-            {
-                await CacheMaintenance.RepairEmailInstallationAsync(account.Id, (id, ct) => EmailSyncService.SyncAccountAsync(id, ct));
-            }
+            await CacheMaintenance.RepairEmailInstallationAsync(account.Id, (id, ct) => EmailSyncService.SyncAccountAsync(id, ct), callerId);
         });
 
         _isRepairing = false;
@@ -1357,6 +1411,7 @@
 
     private async Task OpenComposer()
     {
+        if (!CanComposeEmail) return;
         string? targetAccountId = null;
         string? targetInboxId = null;
         string? targetIdentityId = null;
@@ -1413,8 +1468,9 @@
         string? inReplyTo = null,
         List<string>? references = null,
         List<string>? replyReceivingAddresses = null,
-        List<(string Path, string FileName)>? preloadedFiles = null)
+        List<ForwardedEmailAttachmentRef>? preloadedForwardedAttachments = null)
     {
+        if (!CanComposeEmail) return;
         var parameters = new DialogParameters();
         if (to != null) parameters.Add("To", to);
         if (subject != null) parameters.Add("Subject", subject);
@@ -1426,7 +1482,7 @@
         if (inReplyTo != null) parameters.Add("InReplyTo", inReplyTo);
         if (references != null) parameters.Add("References", references);
         if (replyReceivingAddresses != null) parameters.Add("ReplyReceivingAddresses", replyReceivingAddresses);
-        if (preloadedFiles != null) parameters.Add("PreloadedFiles", preloadedFiles);
+        if (preloadedForwardedAttachments != null) parameters.Add("PreloadedForwardedAttachments", preloadedForwardedAttachments);
 
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.ExtraLarge, FullWidth = true, CloseButton = true };
         var dialog = await _dialogService.ShowAsync<EmailComposer>(Loc["Compose Message"], parameters, options);
@@ -1466,7 +1522,7 @@
 
     private async Task Reply()
     {
-        if (_selectedMessage == null) return;
+        if (!CanComposeEmail || _selectedMessage == null) return;
         var subject = _selectedMessage.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
             ? _selectedMessage.Subject
             : $"Re: {_selectedMessage.Subject}";
@@ -1490,7 +1546,7 @@
 
     private async Task ReplyAll()
     {
-        if (_selectedMessage == null) return;
+        if (!CanComposeEmail || _selectedMessage == null) return;
         var subject = _selectedMessage.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
             ? _selectedMessage.Subject
             : $"Re: {_selectedMessage.Subject}";
@@ -1522,21 +1578,26 @@
 
     private async Task Forward()
     {
-        if (_selectedMessage == null) return;
+        if (!CanComposeEmail || _selectedMessage == null) return;
         var subject = $"Fwd: {_selectedMessage.Subject}";
         var cleanQuote = GetCleanQuotedBody(_messageBody);
         var dateStr = FormatDate(_selectedMessage.Date);
         var body = $"---------- Forwarded message ---------<br>From: {_selectedMessage.FromName} &lt;{_selectedMessage.FromAddress}&gt;<br>Date: {dateStr}<br>Subject: {_selectedMessage.Subject}<br><br>{cleanQuote}";
 
-        List<(string Path, string FileName)> preloadedFiles = [];
+        List<ForwardedEmailAttachmentRef> preloadedForwardedAttachments = [];
         if (_selectedMessage.HasAttachments)
         {
             foreach (var att in _selectedMessage.Attachments)
             {
+                if (string.IsNullOrWhiteSpace(att.Id)) continue;
                 var path = CacheMaintenance.GetAttachmentPath(_selectedMessage.AccountId, _selectedMessage.Id, att.Id);
                 if (System.IO.File.Exists(path))
                 {
-                    preloadedFiles.Add((path, att.FileName));
+                    preloadedForwardedAttachments.Add(new ForwardedEmailAttachmentRef(
+                        _selectedMessage.AccountId,
+                        _selectedMessage.Id,
+                        att.Id,
+                        att.FileName));
                 }
             }
         }
@@ -1547,7 +1608,7 @@
             accountId: _selectedMessage.AccountId,
             inboxId: _selectedInbox?.Id,
             replyReceivingAddresses: _selectedMessage.ReceivingAddresses,
-            preloadedFiles: preloadedFiles);
+            preloadedForwardedAttachments: preloadedForwardedAttachments);
     }
 
     private async Task MarkAsUnread()
@@ -1558,7 +1619,7 @@
 
     private async Task MarkMessageAsUnread(EmailMessage msg)
     {
-        if (msg == null) return;
+        if (IsReadOnly || LiveEmployee is not { IsActiveUnsuspended: true } actor || msg == null) return;
 
         msg.IsRead = false;
         var msgId = msg.Id;
@@ -1570,7 +1631,7 @@
             _messageBody = "";
         }
 
-        await MessageLifecycleService.MarkMessageReadAsync(msg.AccountId, msgId, false);
+        await MessageLifecycleService.MarkMessageReadAsync(msg.AccountId, msgId, false, actor.Id);
         LoadFoldersAndInboxes();
         StateHasChanged();
     }
@@ -1615,27 +1676,8 @@
         }
     }
 
-    private string FormatDate(DateTimeOffset date)
-    {
-        DateTime localDate;
-        if (!string.IsNullOrWhiteSpace(_timeZoneId))
-        {
-            try
-            {
-                localDate = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(date, _timeZoneId).DateTime;
-            }
-            catch
-            {
-                localDate = date.LocalDateTime;
-            }
-        }
-        else
-        {
-            localDate = date.LocalDateTime;
-        }
-
-        return localDate.ToString("g");
-    }
+    private string FormatDate(DateTimeOffset date) =>
+        TimeZoneHelper.ConvertOffsetToLocalTime(_timeZoneId, date).ToString("g");
 
     private EmailMessage? GetAdjacentMessage(EmailMessage current)
     {
@@ -1653,16 +1695,15 @@
 
     private bool CanCurrentUserMutateSelectedMessage()
     {
-        if (_selectedMessage == null || _currentEmployee == null)
-            return false;
-        if (!_currentEmployee.IsActive || _currentEmployee.IsBanned || _currentEmployee.IsSuspended)
+        if (_selectedMessage == null || LiveEmployee is not { IsActiveUnsuspended: true })
             return false;
         return CanCurrentUserAccessMessageInUi(_selectedMessage);
     }
 
     private async Task MoveFolderTo(string destFolderPath)
     {
-        if (!CanCurrentUserMutateSelectedMessage() || string.IsNullOrEmpty(destFolderPath)) return;
+        if (!CanCurrentUserMutateSelectedMessage() || !CanBrowseFullAccount(_selectedMessage!.AccountId) || string.IsNullOrEmpty(destFolderPath)) return;
+        var actorId = LiveEmployee!.Id;
 
         var accountId = _selectedMessage!.AccountId;
         var msgId = _selectedMessage.Id;
@@ -1671,7 +1712,7 @@
         _messages.Remove(_selectedMessage);
         await SelectMessage(nextMessage);
 
-        await MessageLifecycleService.MoveMessageAsync(accountId, msgId, destFolderPath);
+        await MessageLifecycleService.MoveMessageAsync(accountId, msgId, destFolderPath, actorId);
 
         LoadFoldersAndInboxes();
         LoadCurrentViewMessages();
@@ -1681,6 +1722,7 @@
     private async Task DeleteMessage()
     {
         if (!CanCurrentUserMutateSelectedMessage()) return;
+        var actorId = LiveEmployee!.Id;
 
         var selected = _selectedMessage!;
         var accountId = selected.AccountId;
@@ -1692,11 +1734,11 @@
 
         if (string.Equals(selected.FolderPath, "LocalDrafts", StringComparison.OrdinalIgnoreCase))
         {
-            await EmailDraftService.DeleteDraftAsync(accountId, msgId, _currentEmployee!.Id);
+            await EmailDraftService.DeleteDraftAsync(accountId, msgId, actorId);
         }
         else
         {
-            await MessageLifecycleService.MoveMessageToTrashAsync(accountId, msgId);
+            await MessageLifecycleService.MoveMessageToTrashAsync(accountId, msgId, actorId);
         }
         LoadFoldersAndInboxes();
         StateHasChanged();
@@ -1705,6 +1747,7 @@
     private async Task ArchiveMessage()
     {
         if (!CanCurrentUserMutateSelectedMessage()) return;
+        var actorId = LiveEmployee!.Id;
 
         var accountId = _selectedMessage!.AccountId;
         var msgId = _selectedMessage.Id;
@@ -1713,7 +1756,7 @@
         _messages.Remove(_selectedMessage);
         await SelectMessage(nextMessage);
 
-        await MessageLifecycleService.ArchiveMessageAsync(accountId, msgId);
+        await MessageLifecycleService.ArchiveMessageAsync(accountId, msgId, actorId);
         LoadFoldersAndInboxes();
         StateHasChanged();
     }
@@ -1721,6 +1764,7 @@
     private async Task JunkMessage()
     {
         if (!CanCurrentUserMutateSelectedMessage()) return;
+        var actorId = LiveEmployee!.Id;
 
         var accountId = _selectedMessage!.AccountId;
         var msgId = _selectedMessage.Id;
@@ -1729,7 +1773,7 @@
         _messages.Remove(_selectedMessage);
         await SelectMessage(nextMessage);
 
-        await MessageLifecycleService.JunkMessageAsync(accountId, msgId);
+        await MessageLifecycleService.JunkMessageAsync(accountId, msgId, actorId);
         LoadFoldersAndInboxes();
         StateHasChanged();
     }
@@ -1744,24 +1788,29 @@
             : $"{_selectedMessage.FromName} <{_selectedMessage.FromAddress}>";
         var to = string.Join(", ", _selectedMessage.ToAddresses ?? []);
         var dateStr = FormatDate(_selectedMessage.Date);
+        var sanitizedBody = EmailPrintSanitizer.SanitizeForPrint(_messageBody, _sessionAllowedRemoteImageMessageIds.Contains(_selectedMessage.Id));
 
         await _module.InvokeVoidAsync("printEmail",
             System.Net.WebUtility.HtmlEncode(subject ?? ""),
             System.Net.WebUtility.HtmlEncode(from),
             System.Net.WebUtility.HtmlEncode(to),
             System.Net.WebUtility.HtmlEncode(dateStr),
-            _messageBody);
+            sanitizedBody);
     }
 
     private async Task AddEmailToTimeline()
     {
-        if (_selectedMessage == null || _currentEmployee == null) return;
+        if (IsReadOnly || _selectedMessage == null || LiveEmployee is not { IsActiveUnsuspended: true } actor) return;
+        if (!actor.HasPermission(AppPermissions.Email.Use) || !actor.HasPermission(AppPermissions.Projects.Edit))
+        {
+            Snackbar.Add("You do not have permission to add emails to project timelines.", Severity.Warning);
+            return;
+        }
 
         var parameters = new DialogParameters
         {
             { "Email", _selectedMessage },
-            { "EmployeeId", _selectedMessage.AccountId },
-            { "CurrentUser", _currentEmployee.FullName }
+            { "AccountId", _selectedMessage.AccountId }
         };
 
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };

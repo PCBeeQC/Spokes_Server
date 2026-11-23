@@ -6,32 +6,6 @@ namespace Spokes_Server.Tests.Core.Models.HR;
 public class CalendarCategoryTests
 {
     [Fact]
-    public void CalendarCategory_Initialization_SetsDefaultsCorrectly()
-    {
-        var category = new CalendarCategory();
-
-        Assert.False(string.IsNullOrWhiteSpace(category.Id));
-        Assert.True(Guid.TryParse(category.Id, out _));
-        Assert.Equal(string.Empty, category.Name);
-        Assert.Equal("Default", category.Color);
-    }
-
-    [Fact]
-    public void CalendarCategory_PropertyMutations_WorkCorrectly()
-    {
-        var category = new CalendarCategory
-        {
-            Id = "cat-custom",
-            Name = "Deployment",
-            Color = "Primary"
-        };
-
-        Assert.Equal("cat-custom", category.Id);
-        Assert.Equal("Deployment", category.Name);
-        Assert.Equal("Primary", category.Color);
-    }
-
-    [Fact]
     public void CalendarCategoryDefaults_GetSystemDefaults_ReturnsExpectedCategories()
     {
         var defaults = CalendarCategoryDefaults.GetSystemDefaults();

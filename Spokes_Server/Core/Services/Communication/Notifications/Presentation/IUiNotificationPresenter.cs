@@ -8,7 +8,6 @@ namespace Spokes_Server.Core.Services.Communication.Notifications.Presentation;
 public interface IUiNotificationPresenter
 {
     void ShowChatNotification(InAppNotification notification);
-    void ShowChatNotification(string senderName, string truncatedContent, string initials, string channelId, string channelName);
     void ShowModerationAlert(string reporterName, string reason);
     void ShowEmailNotification(string fromName, string subject, string snippet);
     void ShowCalendarNotification(CalendarNotificationModel notification);

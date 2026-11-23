@@ -4,17 +4,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Spokes_Server.Core.Models.Core;
 
 /// <summary>
 /// Extracts supplier and buyer entities, contact info, and global business/tax identifiers.
 /// </summary>
 public static class UniversalPartyExtractor
 {
-    private static readonly HashSet<string> DefaultInternalCompanyKeywords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "poly-robotics", "poly robotics", "polyrobotics"
-    };
-
     private static readonly Regex LegalEntitySuffixRegex = new(
         @"\b(?:inc\.?|llc|l\.l\.c\.|ltd\.?|limited|corp\.?|corporation|gmbh|gmbh\s*&\s*co\.?\s*kg|ag|sarl|s\.a\.r\.l\.|sas|s\.a\.s\.|s\.a\.|b\.v\.|n\.v\.|s\.r\.l\.|s\.l\.|ab|as|aps|oy|lt[eé]e|s\.e\.n\.c\.|plc)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -30,20 +26,7 @@ public static class UniversalPartyExtractor
         var fullText = document.FullLayoutText;
         var firstPage = document.Pages[0];
 
-        // 1. Supplier Email (from first page)
-        var emailMatches = Regex.Matches(fullText, @"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b");
-        foreach (Match match in emailMatches)
-        {
-            var email = match.Value.Trim();
-            // Don't assign internal buyer/forwarder emails as supplier email
-            if (!IsInternalBuyerEmail(email, context))
-            {
-                data.SupplierEmail = email;
-                break;
-            }
-        }
-
-        // 2. Supplier Name from Header Letterhead & Buyer Zone Segmentation (Column-aware for 2-column Seller/Buyer layouts)
+        // 1. Supplier Name from Header Letterhead & Buyer Zone Segmentation (Column-aware for 2-column Seller/Buyer layouts)
         string? headerSupplier = null;
         var headerLines = firstPage.HeaderLines.Take(16).ToList();
         double? buyerZoneLeft = null;
@@ -132,8 +115,9 @@ public static class UniversalPartyExtractor
             headerSupplier = ResolveSpacedCompanyName(headerSupplier, fullText);
         }
 
-        // 3. Global & Regional Tax IDs (Scans document while excluding Buyer address block cells)
+        // 2. Build Seller-Scoped Text (excludes Buyer address block cells) & Extract Supplier Email + Tax IDs
         var sellerText = BuildSellerScopedText(document, buyerBlockCells);
+        data.SupplierEmail = FindFirstSupplierEmail(sellerText, context);
         ExtractTaxIdentifiers(sellerText, data, context);
 
         // 4. Filename fallback (e.g. Facture1631_de_Alumax_Usinage.pdf -> Alumax Usinage)
@@ -225,12 +209,23 @@ public static class UniversalPartyExtractor
         return line.Length >= 2 && line.Length <= 80;
     }
 
+    private static string? FindFirstSupplierEmail(string text, InvoiceExtractionContext? context)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var emailMatches = Regex.Matches(text, @"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b");
+        foreach (Match match in emailMatches)
+        {
+            var email = match.Value.Trim();
+            if (!IsInternalBuyerEmail(email, context))
+            {
+                return email;
+            }
+        }
+        return null;
+    }
+
     private static bool IsInternalBuyerName(string text, InvoiceExtractionContext? context)
     {
-        if (DefaultInternalCompanyKeywords.Any(k => text.Contains(k, StringComparison.OrdinalIgnoreCase)))
-        {
-            return true;
-        }
         if (context?.BuyerNames != null)
         {
             foreach (var buyer in context.BuyerNames)
@@ -245,23 +240,36 @@ public static class UniversalPartyExtractor
         return false;
     }
 
-    private static bool IsInternalBuyerEmail(string email, InvoiceExtractionContext? context)
+    public static bool IsInternalBuyerEmail(string email, InvoiceExtractionContext? context)
     {
-        if (DefaultInternalCompanyKeywords.Any(k => email.Contains(k, StringComparison.OrdinalIgnoreCase)) ||
-            email.Contains("poly-robotics.com", StringComparison.OrdinalIgnoreCase))
+        var emailDomain = CompanyProfile.ExtractDomainFromEmail(email);
+        if (string.IsNullOrWhiteSpace(emailDomain) || context == null)
         {
-            return true;
+            return false;
         }
-        if (context?.BuyerEmailDomains != null)
+
+        foreach (var domain in context.AllBuyerEmailDomains)
         {
-            foreach (var domain in context.BuyerEmailDomains)
+            if (string.Equals(emailDomain, domain, StringComparison.OrdinalIgnoreCase) ||
+                emailDomain.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase))
             {
-                if (!string.IsNullOrWhiteSpace(domain) && email.EndsWith(domain, StringComparison.OrdinalIgnoreCase))
+                return true;
+            }
+        }
+
+        var domainLabel = emailDomain.Split('.')[0];
+        if (domainLabel.Length >= 4)
+        {
+            foreach (var buyer in context.BuyerNames)
+            {
+                if (string.IsNullOrWhiteSpace(buyer) || buyer.Contains(' ')) continue;
+                if (buyer.Length >= 4 && string.Equals(domainLabel, buyer, StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
                 }
             }
         }
+
         return false;
     }
 
@@ -271,11 +279,6 @@ public static class UniversalPartyExtractor
         {
             return document.FullLayoutText;
         }
-
-        var buyerStrings = buyerBlockCells
-            .Select(c => c.Text.Trim())
-            .Where(t => !string.IsNullOrWhiteSpace(t))
-            .ToList();
 
         var sb = new System.Text.StringBuilder();
         foreach (var page in document.Pages)

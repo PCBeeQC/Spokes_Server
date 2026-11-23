@@ -1,11 +1,14 @@
 @page "/business/accounting/inbox"
 @attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
 @implements IDisposable
+@using System.Text.Json
 @using Spokes_Server.Aggregate
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Accounting.InvoiceExtraction
+@using Spokes_Server.Core.Services.Projects
 @using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Core.Services.Communication.Email
 @using Spokes_Server.Components.Dialogs
@@ -13,12 +16,11 @@
 @using Spokes_Server.Components.Dialogs.Communication.Email
 @using Spokes_Server.Components.Pages.Email
 @inject Database Db
+@inject IAccountingService AccountingService
 @inject CompanyBillInboxService BillInboxService
-@inject IEmailCacheMaintenanceService CacheMaintenance
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject UserService UserService
-@inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Nav
 @inject ILogger<CompanyBillInbox> Logger
 @inject IJSRuntime JS
@@ -45,58 +47,67 @@
                 }
             </div>
             <MudText Typo="Typo.caption" Color="Color.Secondary">
-                @BizLoc["Central billing mailbox:"] <b>@(!string.IsNullOrEmpty(_settings.EmailAddress) ? _settings.EmailAddress : BizLoc["Not Configured"].Value)</b>
+                @BizLoc["Central billing mailbox:"] <b>@ConfiguredMailboxDisplay</b>
                 @if (_settings.LastCheckedAt.HasValue)
                 {
-                    <span class="ml-2">| @BizLoc["Last checked:"] @_settings.LastCheckedAt.Value.ToLocalTime().ToString("g")</span>
+                    <span class="ml-2">| @BizLoc["Last Checked:"] @_settings.LastCheckedAt.Value.ToLocalTime().ToString("g")</span>
                 }
             </MudText>
         </div>
 
         <div class="d-flex align-center gap-2">
-            <MudTooltip Text="@(!_settings.Enabled || string.IsNullOrWhiteSpace(_settings.EmailAddress) ? BizLoc["Configure and enable the billing mailbox in Inbox Settings to sync emails."].Value : "")">
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh"
-                           OnClick="SyncNow" Disabled="@(_isSyncing || !_settings.Enabled || string.IsNullOrWhiteSpace(_settings.EmailAddress))">
-                    @if (_isSyncing)
-                    {
-                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
-                        <span>@BizLoc["Syncing..."]</span>
-                    }
-                    else
-                    {
-                        <span>@BizLoc["Sync Now"]</span>
-                    }
+            @if (_canManageBills)
+            {
+                <MudTooltip Text="@(!_settings.Enabled || string.IsNullOrWhiteSpace(_settings.AccountId) ? BizLoc["Configure and enable the billing mailbox in Inbox Settings to sync emails."].Value : "")">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh"
+                               OnClick="SyncNow" Disabled="@(_isSyncing || !_settings.Enabled || string.IsNullOrWhiteSpace(_settings.AccountId))">
+                        @if (_isSyncing)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                            <span>@BizLoc["Syncing..."]</span>
+                        }
+                        else
+                        {
+                            <span>@BizLoc["Sync Now"]</span>
+                        }
+                    </MudButton>
+                </MudTooltip>
+
+                <MudTooltip Text="@BizLoc["Scan bill inbox emails against manually entered bills to detect matches and clean up redundant drafts"]">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ContentPasteSearch"
+                               OnClick="ScanForExistingBills" Disabled="@(_isScanningDuplicates || _isSyncing)">
+                        @if (_isScanningDuplicates)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                            <span>@BizLoc["Scanning..."]</span>
+                        }
+                        else
+                        {
+                            <span>@BizLoc["Scan for Existing Bills"]</span>
+                        }
+                    </MudButton>
+                </MudTooltip>
+            }
+
+            @if (CanUserSendFromBillInbox())
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Send"
+                           OnClick="OpenCompose">
+                    @BizLoc["Compose Email"]
                 </MudButton>
-            </MudTooltip>
+            }
 
-            <MudTooltip Text="@BizLoc["Scan bill inbox emails against manually entered bills to detect matches and clean up redundant drafts"]">
-                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ContentPasteSearch"
-                           OnClick="ScanForExistingBills" Disabled="@(_isScanningDuplicates || _isSyncing)">
-                    @if (_isScanningDuplicates)
-                    {
-                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
-                        <span>@BizLoc["Scanning..."]</span>
-                    }
-                    else
-                    {
-                        <span>@BizLoc["Scan for Existing Bills"]</span>
-                    }
+            @if (_canManageSettings)
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.Settings"
+                           OnClick="OpenSettings">
+                    @BizLoc["Inbox Settings"]
                 </MudButton>
-            </MudTooltip>
-
-            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Send"
-                       OnClick="OpenCompose">
-                @BizLoc["Compose Email"]
-            </MudButton>
-
-            <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.Settings"
-                       OnClick="OpenSettings">
-                @BizLoc["Inbox Settings"]
-            </MudButton>
+            }
         </div>
     </div>
     
-    @if (!_settings.Enabled || string.IsNullOrWhiteSpace(_settings.EmailAddress))
+    @if (!_settings.Enabled || string.IsNullOrWhiteSpace(_settings.AccountId))
     {
         <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-3" Elevation="0"
                   Icon="@Icons.Material.Filled.MarkEmailUnread">
@@ -109,17 +120,38 @@
                         @BizLoc["Set up a dedicated email address (e.g. factures@company.com or bills@company.com) to automatically ingest supplier invoices, extract invoice line items, and match against purchase orders."]
                     </MudText>
                 </div>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                           StartIcon="@Icons.Material.Filled.Settings" OnClick="OpenSettings">
-                    @BizLoc["Configure Mailbox"]
-                </MudButton>
+                @if (_canManageSettings)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Settings" OnClick="OpenSettings">
+                        @BizLoc["Configure Mailbox"]
+                    </MudButton>
+                }
+            </div>
+        </MudAlert>
+    }
+    else if (!string.IsNullOrWhiteSpace(_settings.LastCheckStatus) &&
+             !string.Equals(_settings.LastCheckStatus, "Success", StringComparison.OrdinalIgnoreCase))
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3" Elevation="0">
+            <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                <MudText Typo="Typo.body2">
+                    <b>@BizLoc["Mailbox Sync Issue:"]</b> @_settings.LastCheckStatus
+                </MudText>
+                @if (_canManageSettings)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Settings" OnClick="OpenSettings">
+                        @BizLoc["Inbox Settings"]
+                    </MudButton>
+                }
             </div>
         </MudAlert>
     }
 
     <!-- Triage Queue Tabs & Search -->
     <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-2 flex-shrink-0">
-        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="false" ActivePanelIndex="_triageTabIndex" ActivePanelIndexChanged="OnTriageTabChanged">
+        <MudTabs Elevation="0" Outlined="true" Rounded="true" ApplyEffectsToContainer="false" ActivePanelIndex="_triageTabIndex" ActivePanelIndexChanged="OnTriageTabChanged">
             <MudTabPanel Text="@string.Format(BizLoc["Action Required ({0})"].Value, ActionRequiredCount)" Icon="@Icons.Material.Filled.PendingActions" />
             <MudTabPanel Text="@string.Format(BizLoc["Completed ({0})"].Value, CompletedCount)" Icon="@Icons.Material.Filled.CheckCircle" />
             <MudTabPanel Text="@string.Format(BizLoc["All ({0})"].Value, _allMessages.Count)" Icon="@Icons.Material.Filled.AllInbox" />
@@ -226,12 +258,15 @@
                                             <MudText Typo="Typo.caption" Color="Color.Secondary" Style="white-space: nowrap;">
                                                 @msg.Date.ToLocalTime().ToString("MMM dd")
                                             </MudText>
-                                            <span @onclick:stopPropagation="true">
-                                                <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Size="Size.Small" Color="Color.Default"
-                                                               OnClick="@(() => PromptDeleteEmail(msg))" title="@BizLoc["Delete email"].Value"
-                                                               Disabled="@(_isDeleting || _isSyncing)"
-                                                               Style="padding: 2px; margin-left: 2px;" />
-                                            </span>
+                                            @if (_canManageBills)
+                                            {
+                                                <span @onclick:stopPropagation="true">
+                                                    <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Size="Size.Small" Color="Color.Default"
+                                                                   OnClick="@(() => PromptDeleteEmail(msg))" title="@BizLoc["Delete email"].Value"
+                                                                   Disabled="@(_isDeleting || _isSyncing)"
+                                                                   Style="padding: 2px; margin-left: 2px;" />
+                                                </span>
+                                            }
                                         </div>
                                     </div>
                                     <div class="d-flex align-center justify-space-between mt-1">
@@ -301,13 +336,17 @@
                                             <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Filled">@BizLoc["Unprocessed"]</MudChip>
                                         }
                                     </div>
-                                    @if (enteredCount > 0 || (msg.BillingStatus == CompanyBillInboxConstants.BillingStatus.DuplicateDetected && !string.IsNullOrEmpty(msg.LinkedBillId)))
+                                    @if (_canViewBills && (enteredCount > 0 || (msg.BillingStatus == CompanyBillInboxConstants.BillingStatus.DuplicateDetected && !string.IsNullOrEmpty(msg.LinkedBillId))))
                                     {
-                                        var firstEnteredId = msg.LinkedBillIds?.FirstOrDefault(id => Db.Bills.GetById(id)?.Status != BillStatus.AwaitingApproval) ?? msg.LinkedBillId;
+                                        var firstEnteredId = msg.LinkedBillIds?.FirstOrDefault(id =>
+                                        {
+                                            var candidateBill = Db.Bills.GetById(id);
+                                            return candidateBill != null && candidateBill.Status != BillStatus.AwaitingApproval && IsBillAccessibleToCurrentUser(candidateBill);
+                                        }) ?? msg.LinkedBillId;
                                         if (!string.IsNullOrEmpty(firstEnteredId))
                                         {
                                             var matchedBill = Db.Bills.GetById(firstEnteredId);
-                                            if (matchedBill != null)
+                                            if (matchedBill != null && IsBillAccessibleToCurrentUser(matchedBill))
                                             {
                                                 <div class="d-flex align-center gap-1 mt-1">
                                                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="text-truncate" Style="max-width: 70%;">
@@ -320,6 +359,26 @@
                                                     </MudChip>
                                                 </div>
                                             }
+                                        }
+                                    }
+                                    else if (_canViewInvoices && !string.IsNullOrEmpty(msg.LinkedInvoiceId))
+                                    {
+                                        var matchedInv = Db.Invoices.GetById(msg.LinkedInvoiceId);
+                                        if (matchedInv != null && IsInvoiceAccessibleToCurrentUser(matchedInv))
+                                        {
+                                            var effectiveStatus = Math.Round(matchedInv.BalanceDue, 2, MidpointRounding.AwayFromZero) <= 0m
+                                                ? (matchedInv.AmountPaid <= 0m && matchedInv.HasWriteOffs ? InvoiceStatus.WrittenOff : InvoiceStatus.Paid)
+                                                : ((matchedInv.AmountPaid > 0 || matchedInv.HasWriteOffs) ? InvoiceStatus.Partial : matchedInv.Status);
+                                            <div class="d-flex align-center gap-1 mt-1">
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="text-truncate" Style="max-width: 70%;">
+                                                    Linked to Invoice @(!string.IsNullOrEmpty(matchedInv.InvoiceNumber) ? $"#{matchedInv.InvoiceNumber}" : "") • @matchedInv.GrandTotal.ToString("C2")
+                                                </MudText>
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" 
+                                                         Color="@(effectiveStatus == InvoiceStatus.Paid ? Color.Success : (effectiveStatus == InvoiceStatus.WrittenOff ? Color.Secondary : (matchedInv.AmountPaid > 0 ? Color.Warning : Color.Default)))"
+                                                         Style="height: 18px; font-size: 0.65rem; padding: 0 4px;">
+                                                    @effectiveStatus
+                                                </MudChip>
+                                            </div>
                                         }
                                     }
                                 </div>
@@ -365,31 +424,40 @@
                         }
                     </div>
                     <div class="d-flex align-center gap-2">
-                        <MudFileUpload T="IBrowserFile" FilesChanged="UploadDocumentToEmail" Accept=".pdf,.png,.jpg,.jpeg">
-                            <CustomContent>
-                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                           OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.CloudUpload">
-                                    @BizLoc["Upload Invoice PDF"]
-                                </MudButton>
-                            </CustomContent>
-                            <SelectedTemplate></SelectedTemplate>
-                        </MudFileUpload>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
-                                   Disabled="@(_isDeleting || _isSyncing)"
-                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="PromptDeleteSelectedEmail">
-                            @BizLoc["Delete"]
-                        </MudButton>
-                        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true">
-                            <MudMenuItem Icon="@Icons.Material.Filled.Block" OnClick="PromptBlockSenderDomain">
-                                @BizLoc["Block Sender Domain"]
-                            </MudMenuItem>
-                            @if (_selectedMessage.BillingStatus == CompanyBillInboxConstants.BillingStatus.Approved || _selectedMessage.BillingStatus == CompanyBillInboxConstants.BillingStatus.Dismissed)
-                            {
-                                <MudMenuItem Icon="@Icons.Material.Filled.DriveFileMove" OnClick="MoveToProcessedFolder">
-                                    @BizLoc["Move to Processed Folder"]
-                                </MudMenuItem>
-                            }
-                        </MudMenu>
+                        @if (_canManageBills)
+                        {
+                            <MudFileUpload T="IBrowserFile" FilesChanged="UploadDocumentToEmail" Accept=".pdf,.png,.jpg,.jpeg">
+                                <CustomContent>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                               OnClick="@context.OpenFilePickerAsync" StartIcon="@Icons.Material.Filled.CloudUpload">
+                                        @BizLoc["Upload Invoice PDF"]
+                                    </MudButton>
+                                </CustomContent>
+                                <SelectedTemplate></SelectedTemplate>
+                            </MudFileUpload>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                       Disabled="@(_isDeleting || _isSyncing)"
+                                       StartIcon="@Icons.Material.Filled.Delete" OnClick="PromptDeleteSelectedEmail">
+                                @BizLoc["Delete"]
+                            </MudButton>
+                        }
+                        @if (_canManageSettings || (_canManageBills && (_selectedMessage.BillingStatus == CompanyBillInboxConstants.BillingStatus.Approved || _selectedMessage.BillingStatus == CompanyBillInboxConstants.BillingStatus.Dismissed)))
+                        {
+                            <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true">
+                                @if (_canManageSettings)
+                                {
+                                    <MudMenuItem Icon="@Icons.Material.Filled.Block" OnClick="PromptBlockSenderDomain">
+                                        @BizLoc["Block Sender Domain"]
+                                    </MudMenuItem>
+                                }
+                                @if (_canManageBills && (_selectedMessage.BillingStatus == CompanyBillInboxConstants.BillingStatus.Approved || _selectedMessage.BillingStatus == CompanyBillInboxConstants.BillingStatus.Dismissed))
+                                {
+                                    <MudMenuItem Icon="@Icons.Material.Filled.DriveFileMove" OnClick="MoveToProcessedFolder">
+                                        @BizLoc["Move to Processed Folder"]
+                                    </MudMenuItem>
+                                }
+                            </MudMenu>
+                        }
                     </div>
                 </div>
 
@@ -413,31 +481,37 @@
                                     </div>
                                 </div>
                                 <div class="d-flex align-center gap-2">
-                                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
-                                               Disabled="@(_approvingBillId != null || _isApprovingAll)"
-                                               StartIcon="@(_isApprovingAll ? null : Icons.Material.Filled.DoneAll)"
-                                               OnClick="ApproveAllDrafts">
-                                        @if (_isApprovingAll)
-                                        {
-                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
-                                            <span>@BizLoc["Approving..."]</span>
-                                        }
-                                        else
-                                        {
-                                            <span>@string.Format(BizLoc["Approve All ({0})"].Value, _draftBills.Count)</span>
-                                        }
-                                    </MudButton>
-                                    <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
-                                               OnClick="DismissEmail">
-                                        @BizLoc["Dismiss"]
-                                    </MudButton>
+                                    @if (_canApproveBills)
+                                    {
+                                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                                   Disabled="@(_approvingBillId != null || _isApprovingAll)"
+                                                   StartIcon="@(_isApprovingAll ? null : Icons.Material.Filled.DoneAll)"
+                                                   OnClick="ApproveAllDrafts">
+                                            @if (_isApprovingAll)
+                                            {
+                                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                                <span>@BizLoc["Approving..."]</span>
+                                            }
+                                            else
+                                            {
+                                                <span>@string.Format(BizLoc["Approve All ({0})"].Value, _draftBills.Count)</span>
+                                            }
+                                        </MudButton>
+                                    }
+                                    @if (_canManageBills)
+                                    {
+                                        <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
+                                                   OnClick="DismissEmail">
+                                            @BizLoc["Dismiss"]
+                                        </MudButton>
+                                    }
                                 </div>
                             </div>
 
                             <div class="d-flex flex-column gap-2" style="max-height: 280px; overflow-y: auto;">
                                 @foreach (var bill in _draftBills)
                                 {
-                                    var sameAmtBills = BillInboxService.GetSameSupplierSameAmountBills(bill);
+                                    var sameAmtBills = _canViewBills ? BillInboxService.GetSameSupplierSameAmountBills(bill, _currentEmployee) : [];
                                     <MudPaper Elevation="0" Outlined="true" Class="pa-3 d-flex flex-column gap-2" Style="background: var(--mud-palette-surface);">
                                         <div class="d-flex align-center justify-space-between flex-wrap gap-2">
                                             <div>
@@ -468,10 +542,10 @@
                                                     {
                                                         <MudChip T="string" Color="Color.Info" Size="Size.Small" Icon="@Icons.Material.Filled.Repeat">@BizLoc["Recurring"]</MudChip>
                                                     }
-                                                    @if (!string.IsNullOrEmpty(bill.PurchaseOrderId))
+                                                    @if (_canViewPOs && !string.IsNullOrEmpty(bill.PurchaseOrderId))
                                                     {
                                                         var po = Db.PurchaseOrders.GetById(bill.PurchaseOrderId);
-                                                        if (po != null)
+                                                        if (po != null && IsPoAccessibleToCurrentUser(po))
                                                         {
                                                             <MudChip T="string" Color="Color.Primary" Size="Size.Small" Icon="@Icons.Material.Filled.Assignment"
                                                                      OnClick="@(() => Nav.NavigateTo($"/purchases/po/{po.Id}"))">
@@ -479,7 +553,7 @@
                                                             </MudChip>
                                                         }
                                                     }
-                                                    else
+                                                    else if (_canManageBills && _canViewPOs && string.IsNullOrEmpty(bill.PurchaseOrderId))
                                                     {
                                                         <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
                                                                    StartIcon="@Icons.Material.Filled.AddLink" OnClick="@(() => OpenLinkPoDialog(bill))"
@@ -499,38 +573,47 @@
                                             </div>
 
                                             <div class="d-flex align-center gap-2">
-                                                <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
-                                                           StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => ViewBill(bill))">
-                                                    @BizLoc["Edit Draft"]
-                                                </MudButton>
-                                                <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
-                                                           Disabled="@(_approvingBillId != null || _isApprovingAll || _rejectingBillId != null)"
-                                                           StartIcon="@(_rejectingBillId == bill.Id ? null : Icons.Material.Filled.Cancel)"
-                                                           OnClick="@(() => PromptRejectSingleBill(bill))">
-                                                    @if (_rejectingBillId == bill.Id)
-                                                    {
-                                                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
-                                                        <span>@BizLoc["Rejecting..."]</span>
-                                                    }
-                                                    else
-                                                    {
-                                                        <span>@BizLoc["Reject"]</span>
-                                                    }
-                                                </MudButton>
-                                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
-                                                           Disabled="@(_approvingBillId != null || _isApprovingAll || _rejectingBillId != null)"
-                                                           StartIcon="@(_approvingBillId == bill.Id ? null : Icons.Material.Filled.Check)"
-                                                           OnClick="@(() => ApproveSingleBill(bill))">
-                                                    @if (_approvingBillId == bill.Id)
-                                                    {
-                                                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
-                                                        <span>@BizLoc["Approving..."]</span>
-                                                    }
-                                                    else
-                                                    {
-                                                        <span>@BizLoc["Approve"]</span>
-                                                    }
-                                                </MudButton>
+                                                @if (_canViewBills && IsBillAccessibleToCurrentUser(bill))
+                                                {
+                                                    <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                                                               StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => ViewBill(bill))">
+                                                        @(_canManageBills ? BizLoc["Edit Draft"] : BizLoc["View Draft"])
+                                                    </MudButton>
+                                                }
+                                                @if (_canManageBills)
+                                                {
+                                                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                                               Disabled="@(_approvingBillId != null || _isApprovingAll || _rejectingBillId != null)"
+                                                               StartIcon="@(_rejectingBillId == bill.Id ? null : Icons.Material.Filled.Cancel)"
+                                                               OnClick="@(() => PromptRejectSingleBill(bill))">
+                                                        @if (_rejectingBillId == bill.Id)
+                                                        {
+                                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                                            <span>@BizLoc["Rejecting..."]</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span>@BizLoc["Reject"]</span>
+                                                        }
+                                                    </MudButton>
+                                                }
+                                                @if (_canApproveBills)
+                                                {
+                                                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                                               Disabled="@(_approvingBillId != null || _isApprovingAll || _rejectingBillId != null)"
+                                                               StartIcon="@(_approvingBillId == bill.Id ? null : Icons.Material.Filled.Check)"
+                                                               OnClick="@(() => ApproveSingleBill(bill))">
+                                                        @if (_approvingBillId == bill.Id)
+                                                        {
+                                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                                            <span>@BizLoc["Approving..."]</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span>@BizLoc["Approve"]</span>
+                                                        }
+                                                    </MudButton>
+                                                }
                                             </div>
                                         </div>
 
@@ -549,10 +632,13 @@
                                                             existingSameAmt.Date.ToShortDateString(),
                                                             existingSameAmt.Status)
                                                     </span>
-                                                    <MudButton Variant="Variant.Text" Color="Color.Warning" Size="Size.Small"
-                                                               StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => ViewBill(existingSameAmt))">
-                                                        @BizLoc["View Existing Bill"]
-                                                    </MudButton>
+                                                    @if (_canViewBills && IsBillAccessibleToCurrentUser(existingSameAmt))
+                                                    {
+                                                        <MudButton Variant="Variant.Text" Color="Color.Warning" Size="Size.Small"
+                                                                   StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => ViewBill(existingSameAmt))">
+                                                            @BizLoc["View Existing Bill"]
+                                                        </MudButton>
+                                                    }
                                                 </div>
                                             </MudAlert>
                                         }
@@ -564,7 +650,7 @@
                     else
                     {
                         var singleDraft = _draftBills[0];
-                        var singleSameAmtBills = BillInboxService.GetSameSupplierSameAmountBills(singleDraft);
+                        var singleSameAmtBills = _canViewBills ? BillInboxService.GetSameSupplierSameAmountBills(singleDraft, _currentEmployee) : [];
                         <MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4" Style="background-color: var(--mud-palette-info-hover); border-color: var(--mud-palette-info);">
                             <div class="d-flex align-start justify-space-between flex-wrap gap-3">
                                 <div>
@@ -613,10 +699,13 @@
                                                         existingSameAmt.Date.ToShortDateString(),
                                                         existingSameAmt.Status)
                                                 </span>
-                                                <MudButton Variant="Variant.Text" Color="Color.Warning" Size="Size.Small"
-                                                           StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => ViewBill(existingSameAmt))">
-                                                    @BizLoc["View Existing Bill"]
-                                                </MudButton>
+                                                @if (_canViewBills && IsBillAccessibleToCurrentUser(existingSameAmt))
+                                                {
+                                                    <MudButton Variant="Variant.Text" Color="Color.Warning" Size="Size.Small"
+                                                               StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => ViewBill(existingSameAmt))">
+                                                        @BizLoc["View Existing Bill"]
+                                                    </MudButton>
+                                                }
                                             </div>
                                         </MudAlert>
                                     }
@@ -632,10 +721,10 @@
                                             @string.Format(BizLoc["A prior payment of {0} was detected on this invoice reminder and automatically recorded. Remaining balance due: {1}."].Value, singleDraft.AmountPaid.ToString("C2"), singleDraft.BalanceDue.ToString("C2"))
                                         </MudAlert>
                                     }
-                                    @if (!string.IsNullOrEmpty(singleDraft.PurchaseOrderId))
+                                    @if (_canViewPOs && !string.IsNullOrEmpty(singleDraft.PurchaseOrderId))
                                     {
                                         var po = Db.PurchaseOrders.GetById(singleDraft.PurchaseOrderId);
-                                        if (po != null)
+                                        if (po != null && IsPoAccessibleToCurrentUser(po))
                                         {
                                             <div class="d-flex align-center gap-1 mt-1">
                                                 <MudChip T="string" Color="Color.Primary" Size="Size.Small" Icon="@Icons.Material.Filled.Assignment"
@@ -646,12 +735,15 @@
                                                 {
                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">(@singleDraft.AutoMatchReason)</MudText>
                                                 }
-                                                <MudIconButton Icon="@Icons.Material.Filled.LinkOff" Size="Size.Small" Color="Color.Default"
-                                                               title="@BizLoc["Unlink PO"]" OnClick="@(() => UnlinkPoFromDraft(singleDraft))" />
+                                                @if (_canManageBills)
+                                                {
+                                                    <MudIconButton Icon="@Icons.Material.Filled.LinkOff" Size="Size.Small" Color="Color.Default"
+                                                                   title="@BizLoc["Unlink PO"]" OnClick="@(() => UnlinkPoFromDraft(singleDraft))" />
+                                                }
                                             </div>
                                         }
                                     }
-                                    else
+                                    else if (_canManageBills && _canViewPOs && string.IsNullOrEmpty(singleDraft.PurchaseOrderId))
                                     {
                                         <div class="mt-1">
                                             <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
@@ -663,42 +755,54 @@
                                 </div>
 
                                 <div class="d-flex align-center gap-2">
-                                    <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
-                                               StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => ViewBill(singleDraft))">
-                                        @BizLoc["View / Edit Draft"]
-                                    </MudButton>
-                                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
-                                               Disabled="@(_approvingBillId != null || _isApprovingAll || _rejectingBillId != null)"
-                                               StartIcon="@(_rejectingBillId == singleDraft.Id ? null : Icons.Material.Filled.Cancel)"
-                                               OnClick="@(() => PromptRejectSingleBill(singleDraft))">
-                                        @if (_rejectingBillId == singleDraft.Id)
-                                        {
-                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
-                                            <span>@BizLoc["Rejecting..."]</span>
-                                        }
-                                        else
-                                        {
-                                            <span>@BizLoc["Reject Draft"]</span>
-                                        }
-                                    </MudButton>
-                                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
-                                               Disabled="@(_approvingBillId != null || _isApprovingAll || _rejectingBillId != null)"
-                                               StartIcon="@(_approvingBillId == singleDraft.Id ? null : Icons.Material.Filled.CheckCircle)"
-                                               OnClick="@(() => ApproveSingleBill(singleDraft))">
-                                        @if (_approvingBillId == singleDraft.Id)
-                                        {
-                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
-                                            <span>@BizLoc["Approving..."]</span>
-                                        }
-                                        else
-                                        {
-                                            <span>@BizLoc["Approve & Mark Dealt With"]</span>
-                                        }
-                                    </MudButton>
-                                    <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
-                                               OnClick="DismissEmail">
-                                        @BizLoc["Dismiss"]
-                                    </MudButton>
+                                    @if (_canViewBills && IsBillAccessibleToCurrentUser(singleDraft))
+                                    {
+                                        <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => ViewBill(singleDraft))">
+                                            @(_canManageBills ? BizLoc["View / Edit Draft"] : BizLoc["View Draft"])
+                                        </MudButton>
+                                    }
+                                    @if (_canManageBills)
+                                    {
+                                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                                   Disabled="@(_approvingBillId != null || _isApprovingAll || _rejectingBillId != null)"
+                                                   StartIcon="@(_rejectingBillId == singleDraft.Id ? null : Icons.Material.Filled.Cancel)"
+                                                   OnClick="@(() => PromptRejectSingleBill(singleDraft))">
+                                            @if (_rejectingBillId == singleDraft.Id)
+                                            {
+                                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                                <span>@BizLoc["Rejecting..."]</span>
+                                            }
+                                            else
+                                            {
+                                                <span>@BizLoc["Reject Draft"]</span>
+                                            }
+                                        </MudButton>
+                                    }
+                                    @if (_canApproveBills)
+                                    {
+                                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                                   Disabled="@(_approvingBillId != null || _isApprovingAll || _rejectingBillId != null)"
+                                                   StartIcon="@(_approvingBillId == singleDraft.Id ? null : Icons.Material.Filled.CheckCircle)"
+                                                   OnClick="@(() => ApproveSingleBill(singleDraft))">
+                                            @if (_approvingBillId == singleDraft.Id)
+                                            {
+                                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                                <span>@BizLoc["Approving..."]</span>
+                                            }
+                                            else
+                                            {
+                                                <span>@BizLoc["Approve & Mark Dealt With"]</span>
+                                            }
+                                        </MudButton>
+                                    }
+                                    @if (_canManageBills)
+                                    {
+                                        <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
+                                                   OnClick="DismissEmail">
+                                            @BizLoc["Dismiss"]
+                                        </MudButton>
+                                    }
                                 </div>
                             </div>
                         </MudPaper>
@@ -708,7 +812,7 @@
                 @if (_selectedMessage.BillingStatus != CompanyBillInboxConstants.BillingStatus.Approved && (_duplicateBills.Count > 0 || (_draftBills.Count == 0 && _selectedMessage.BillingStatus == CompanyBillInboxConstants.BillingStatus.DuplicateDetected)))
                 {
                     var dupsToRender = _duplicateBills.Count > 0 ? _duplicateBills : (_linkedBill != null ? new List<Bill> { _linkedBill } : new List<Bill>());
-                    var anyPossibleDuplicate = _decisionLog?.DuplicateMatches.Any(m => m.IsPossibleDuplicate) == true;
+                    var anyPossibleDuplicate = _decisionLog?.DuplicateMatches.Any(m => m.IsPossibleDuplicate && dupsToRender.Any(d => d.Id == m.ExistingBillId)) == true;
                     <MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4" Style="background-color: var(--mud-palette-secondary-hover); border-color: var(--mud-palette-secondary);">
                         <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-3">
                             <div class="d-flex align-center gap-2">
@@ -725,7 +829,7 @@
                                 </MudText>
                             </div>
                             <div class="d-flex align-center gap-2">
-                                @if (_draftBills.Count == 0)
+                                @if (_draftBills.Count == 0 && _canManageBills)
                                 {
                                     <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
                                                StartIcon="@Icons.Material.Filled.CheckCircle" OnClick="MarkAsProcessed">
@@ -773,7 +877,7 @@
                                         }
 
                                         <!-- Structured Comparison Diff Table -->
-                                        <MudSimpleTable Dense="true" Hover="true" Outlined="true" Class="mb-3">
+                                        <MudSimpleTable Elevation="0" Dense="true" Hover="true" Outlined="true" Class="mb-3">
                                             <thead>
                                                 <tr style="background-color: var(--mud-palette-background-grey);">
                                                     <th style="width: 18%; font-weight: 700;">@BizLoc["Field"]</th>
@@ -919,10 +1023,13 @@
                                                     <div>
                                                         @string.Format(BizLoc["This bill was recorded as paid on {0}. If this document is a reminder because the previous payment failed, you can reopen the bill."].Value, dupBill.DatePaid.HasValue ? dupBill.DatePaid.Value.ToShortDateString() : dupBill.Date.ToShortDateString())
                                                     </div>
-                                                    <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
-                                                               StartIcon="@Icons.Material.Filled.RestartAlt" OnClick="@(() => ReopenBillForFailedPayment(dupBill))">
-                                                        @BizLoc["Reopen Bill (Payment Failed)"]
-                                                    </MudButton>
+                                                    @if (_canManageBills)
+                                                    {
+                                                        <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
+                                                                   StartIcon="@Icons.Material.Filled.RestartAlt" OnClick="@(() => ReopenBillForFailedPayment(dupBill))">
+                                                            @BizLoc["Reopen Bill (Payment Failed)"]
+                                                        </MudButton>
+                                                    }
                                                 </div>
                                             </MudAlert>
                                         }
@@ -946,10 +1053,13 @@
                                                     <div>
                                                         <b>@BizLoc["Amount Discrepancy:"]</b> @string.Format(BizLoc["Existing bill is {0}, but incoming document indicates {1}."].Value, dupBill.Amount.ToString("C2"), incomingAmount.Value.ToString("C2"))
                                                     </div>
-                                                    <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
-                                                               StartIcon="@Icons.Material.Filled.Update" OnClick="@(() => UpdateBillToDetectedAmount(dupBill))">
-                                                        @string.Format(BizLoc["Update Bill to {0} & Mark Dealt With"].Value, incomingAmount.Value.ToString("C2"))
-                                                    </MudButton>
+                                                    @if (_canManageBills)
+                                                    {
+                                                        <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
+                                                                   StartIcon="@Icons.Material.Filled.Update" OnClick="@(() => UpdateBillToDetectedAmount(dupBill))">
+                                                            @string.Format(BizLoc["Update Bill to {0} & Mark Dealt With"].Value, incomingAmount.Value.ToString("C2"))
+                                                        </MudButton>
+                                                    }
                                                 </div>
                                             </MudAlert>
                                         }
@@ -966,10 +1076,13 @@
                                                             <span> (@string.Format(BizLoc["Remaining Balance Due: {0}"].Value, _selectedMessage.DetectedBalanceDue.Value.ToString("C2")))</span>
                                                         }
                                                     </div>
-                                                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
-                                                               StartIcon="@Icons.Material.Filled.Check" OnClick="@(() => RecordDetectedPaymentOnExistingBill(dupBill))">
-                                                        @BizLoc["Record Payment & Mark Dealt With"]
-                                                    </MudButton>
+                                                    @if (_canManageBills && (dupBill.Status != BillStatus.AwaitingApproval || _canApproveBills))
+                                                    {
+                                                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                                                   StartIcon="@Icons.Material.Filled.Check" OnClick="@(() => RecordDetectedPaymentOnExistingBill(dupBill))">
+                                                            @BizLoc["Record Payment & Mark Dealt With"]
+                                                        </MudButton>
+                                                    }
                                                 </div>
                                             </MudAlert>
                                         }
@@ -997,10 +1110,10 @@
                                                     </MudChip>
                                                 }
 
-                                                @if (!string.IsNullOrEmpty(dupBill.PurchaseOrderId))
+                                                @if (_canViewPOs && !string.IsNullOrEmpty(dupBill.PurchaseOrderId))
                                                 {
                                                     var po = Db.PurchaseOrders.GetById(dupBill.PurchaseOrderId);
-                                                    if (po != null)
+                                                    if (po != null && IsPoAccessibleToCurrentUser(po))
                                                     {
                                                         <MudChip T="string" Color="Color.Primary" Size="Size.Small" Icon="@Icons.Material.Filled.Assignment"
                                                                  OnClick="@(() => Nav.NavigateTo($"/purchases/po/{po.Id}"))">
@@ -1011,21 +1124,27 @@
                                             </div>
 
                                             <div class="d-flex align-center gap-2 flex-wrap">
-                                                @if ((!string.IsNullOrEmpty(dupMatch?.AttachmentPath) || !string.IsNullOrEmpty(_selectedMessage.MatchedAttachmentPath)) && string.IsNullOrEmpty(dupBill.AttachmentPath))
+                                                @if (_canManageBills && (!string.IsNullOrEmpty(dupMatch?.AttachmentPath) || !string.IsNullOrEmpty(_selectedMessage.MatchedAttachmentPath)) && string.IsNullOrEmpty(dupBill.AttachmentPath))
                                                 {
                                                     <MudButton Variant="Variant.Filled" Color="Color.Secondary" Size="Size.Small"
                                                                StartIcon="@Icons.Material.Filled.AttachFile" OnClick="@(() => AttachPdfToExistingBill(dupBill, dupMatch))">
                                                         @BizLoc["Attach PDF"]
                                                     </MudButton>
                                                 }
-                                                <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
-                                                           StartIcon="@Icons.Material.Filled.AddCard" OnClick="@(() => CreateDraftForDuplicate(dupBill, dupMatch))">
-                                                    @BizLoc["Draft Separate Bill Anyway"]
-                                                </MudButton>
-                                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                                           StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => ViewBill(dupBill))">
-                                                    @BizLoc["View Bill"]
-                                                </MudButton>
+                                                @if (_canManageBills)
+                                                {
+                                                    <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                                                               StartIcon="@Icons.Material.Filled.AddCard" OnClick="@(() => CreateDraftForDuplicate(dupBill, dupMatch))">
+                                                        @BizLoc["Draft Separate Bill Anyway"]
+                                                    </MudButton>
+                                                }
+                                                @if (_canViewBills && IsBillAccessibleToCurrentUser(dupBill))
+                                                {
+                                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                                               StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => ViewBill(dupBill))">
+                                                        @BizLoc["View Bill"]
+                                                    </MudButton>
+                                                }
                                             </div>
                                         </div>
                                     </MudPaper>
@@ -1042,10 +1161,13 @@
                                 @BizLoc["Auto-drafted bill record could not be loaded or was deleted. You can re-evaluate this email."]
                             </MudText>
                             <div class="d-flex align-center gap-2">
-                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                           StartIcon="@Icons.Material.Filled.Refresh" OnClick="ReevaluateDecisionLog">
-                                    @BizLoc["Re-evaluate"]
-                                </MudButton>
+                                @if (_canManageBills)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Refresh" OnClick="ReevaluateDecisionLog">
+                                        @BizLoc["Re-evaluate"]
+                                    </MudButton>
+                                }
                             </div>
                         </div>
                     </MudPaper>
@@ -1075,31 +1197,34 @@
                                 }
                             </div>
                             <div class="d-flex align-center gap-2 flex-wrap">
-                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
-                                           StartIcon="@Icons.Material.Filled.CheckCircle" OnClick="ConfirmSelectedStatement">
-                                    @BizLoc["Confirm Statement"]
-                                </MudButton>
-                                <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
-                                           StartIcon="@Icons.Material.Filled.Link" OnClick="OpenLinkToExistingBill">
-                                    @BizLoc["Link to Existing Bill"]
-                                </MudButton>
-                                <MudButtonGroup Color="Color.Primary" Variant="Variant.Outlined" Size="Size.Small">
-                                    <MudButton StartIcon="@Icons.Material.Filled.AddCard" OnClick="CreateDraftAnyway">
-                                        @BizLoc["Draft Bill Anyway"]
+                                @if (_canManageBills)
+                                {
+                                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.CheckCircle" OnClick="ConfirmSelectedStatement">
+                                        @BizLoc["Confirm Statement"]
                                     </MudButton>
-                                    <MudMenu Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" Style="align-self: auto;" Dense="true">
-                                        <MudMenuItem Icon="@Icons.Material.Filled.PostAdd" OnClick="CreateDraftAnyway">
-                                            @BizLoc["Draft Standalone Bill"]
-                                        </MudMenuItem>
-                                        <MudMenuItem Icon="@Icons.Material.Filled.Repeat" OnClick="OpenAddToRecurringBill">
-                                            @BizLoc["Add to Existing Recurring Bill"]
-                                        </MudMenuItem>
-                                    </MudMenu>
-                                </MudButtonGroup>
-                                <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
-                                           OnClick="DismissEmail">
-                                    @BizLoc["Dismiss"]
-                                </MudButton>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Link" OnClick="OpenLinkToExistingBill">
+                                        @BizLoc["Link to Existing Bill"]
+                                    </MudButton>
+                                    <MudButtonGroup Color="Color.Primary" Variant="Variant.Outlined" Size="Size.Small">
+                                        <MudButton StartIcon="@Icons.Material.Filled.AddCard" OnClick="CreateDraftAnyway">
+                                            @BizLoc["Draft Bill Anyway"]
+                                        </MudButton>
+                                        <MudMenu Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" Style="align-self: auto;" Dense="true">
+                                            <MudMenuItem Icon="@Icons.Material.Filled.PostAdd" OnClick="CreateDraftAnyway">
+                                                @BizLoc["Draft Standalone Bill"]
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Repeat" OnClick="OpenAddToRecurringBill">
+                                                @BizLoc["Add to Existing Recurring Bill"]
+                                            </MudMenuItem>
+                                        </MudMenu>
+                                    </MudButtonGroup>
+                                    <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
+                                               OnClick="DismissEmail">
+                                        @BizLoc["Dismiss"]
+                                    </MudButton>
+                                }
                             </div>
                         </div>
                     </MudPaper>
@@ -1129,31 +1254,60 @@
                                 }
                             </div>
                             <div class="d-flex align-center gap-2 flex-wrap">
-                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
-                                           StartIcon="@Icons.Material.Filled.CheckCircle" OnClick="ConfirmSelectedReceipt">
-                                    @BizLoc["Confirm Receipt"]
-                                </MudButton>
-                                <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
-                                           StartIcon="@Icons.Material.Filled.Link" OnClick="OpenLinkToExistingBill">
-                                    @BizLoc["Link to Existing Bill"]
-                                </MudButton>
-                                <MudButtonGroup Color="Color.Primary" Variant="Variant.Outlined" Size="Size.Small">
-                                    <MudButton StartIcon="@Icons.Material.Filled.AddCard" OnClick="CreateDraftAnyway">
-                                        @BizLoc["Draft Bill Anyway"]
+                                @if (_canManageBills || _canLinkInvoices)
+                                {
+                                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.CheckCircle" OnClick="ConfirmSelectedReceipt">
+                                        @BizLoc["Confirm Receipt"]
                                     </MudButton>
-                                    <MudMenu Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" Style="align-self: auto;" Dense="true">
-                                        <MudMenuItem Icon="@Icons.Material.Filled.PostAdd" OnClick="CreateDraftAnyway">
-                                            @BizLoc["Draft Standalone Bill"]
-                                        </MudMenuItem>
-                                        <MudMenuItem Icon="@Icons.Material.Filled.Repeat" OnClick="OpenAddToRecurringBill">
-                                            @BizLoc["Add to Existing Recurring Bill"]
-                                        </MudMenuItem>
-                                    </MudMenu>
-                                </MudButtonGroup>
-                                <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
-                                           OnClick="DismissEmail">
-                                    @BizLoc["Dismiss"]
-                                </MudButton>
+                                }
+                                @if (_canLinkInvoices && _canManageBills)
+                                {
+                                    <MudButtonGroup Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small">
+                                        <MudButton StartIcon="@Icons.Material.Filled.Link" OnClick="OpenLinkToExistingInvoice">
+                                            @BizLoc["Link to Existing Invoice"]
+                                        </MudButton>
+                                        <MudMenu Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined" Style="align-self: auto;" Dense="true">
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Receipt" OnClick="OpenLinkToExistingBill">
+                                                @BizLoc["Link to Existing Bill"]
+                                            </MudMenuItem>
+                                        </MudMenu>
+                                    </MudButtonGroup>
+                                }
+                                else if (_canLinkInvoices)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Link" OnClick="OpenLinkToExistingInvoice">
+                                        @BizLoc["Link to Existing Invoice"]
+                                    </MudButton>
+                                }
+                                else if (_canManageBills)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Receipt" OnClick="OpenLinkToExistingBill">
+                                        @BizLoc["Link to Existing Bill"]
+                                    </MudButton>
+                                }
+                                @if (_canManageBills)
+                                {
+                                    <MudButtonGroup Color="Color.Primary" Variant="Variant.Outlined" Size="Size.Small">
+                                        <MudButton StartIcon="@Icons.Material.Filled.AddCard" OnClick="CreateDraftAnyway">
+                                            @BizLoc["Draft Bill Anyway"]
+                                        </MudButton>
+                                        <MudMenu Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" Style="align-self: auto;" Dense="true">
+                                            <MudMenuItem Icon="@Icons.Material.Filled.PostAdd" OnClick="CreateDraftAnyway">
+                                                @BizLoc["Draft Standalone Bill"]
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Repeat" OnClick="OpenAddToRecurringBill">
+                                                @BizLoc["Add to Existing Recurring Bill"]
+                                            </MudMenuItem>
+                                        </MudMenu>
+                                    </MudButtonGroup>
+                                    <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
+                                               OnClick="DismissEmail">
+                                        @BizLoc["Dismiss"]
+                                    </MudButton>
+                                }
                             </div>
                         </div>
                     </MudPaper>
@@ -1181,31 +1335,34 @@
                             </div>
 
                             <div class="d-flex align-center gap-2">
-                                <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
-                                           StartIcon="@Icons.Material.Filled.Link" OnClick="OpenLinkToExistingBill">
-                                    @BizLoc["Link to Existing Bill"]
-                                </MudButton>
-                                <MudButtonGroup Color="Color.Primary" Variant="Variant.Filled" Size="Size.Small">
-                                    <MudButton StartIcon="@Icons.Material.Filled.AddCard" OnClick="CreateBillFromEmail">
-                                        @BizLoc["Create Bill from Email"]
+                                @if (_canManageBills)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Link" OnClick="OpenLinkToExistingBill">
+                                        @BizLoc["Link to Existing Bill"]
                                     </MudButton>
-                                    <MudMenu Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled" Style="align-self: auto;" Dense="true">
-                                        <MudMenuItem Icon="@Icons.Material.Filled.PostAdd" OnClick="CreateBillFromEmail">
-                                            @BizLoc["Create Standalone Bill"]
-                                        </MudMenuItem>
-                                        <MudMenuItem Icon="@Icons.Material.Filled.Repeat" OnClick="OpenAddToRecurringBill">
-                                            @BizLoc["Add to Existing Recurring Bill"]
-                                        </MudMenuItem>
-                                    </MudMenu>
-                                </MudButtonGroup>
-                                <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
-                                           OnClick="MarkAsProcessed">
-                                    @BizLoc["Mark Dealt With"]
-                                </MudButton>
-                                <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
-                                           OnClick="DismissEmail">
-                                    @BizLoc["Dismiss"]
-                                </MudButton>
+                                    <MudButtonGroup Color="Color.Primary" Variant="Variant.Filled" Size="Size.Small">
+                                        <MudButton StartIcon="@Icons.Material.Filled.AddCard" OnClick="CreateBillFromEmail">
+                                            @BizLoc["Create Bill from Email"]
+                                        </MudButton>
+                                        <MudMenu Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled" Style="align-self: auto;" Dense="true">
+                                            <MudMenuItem Icon="@Icons.Material.Filled.PostAdd" OnClick="CreateBillFromEmail">
+                                                @BizLoc["Create Standalone Bill"]
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Repeat" OnClick="OpenAddToRecurringBill">
+                                                @BizLoc["Add to Existing Recurring Bill"]
+                                            </MudMenuItem>
+                                        </MudMenu>
+                                    </MudButtonGroup>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                               OnClick="MarkAsProcessed">
+                                        @BizLoc["Mark Dealt With"]
+                                    </MudButton>
+                                    <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
+                                               OnClick="DismissEmail">
+                                        @BizLoc["Dismiss"]
+                                    </MudButton>
+                                }
                             </div>
                         </div>
                     </MudPaper>
@@ -1229,7 +1386,7 @@
                                 </div>
                             </div>
                             <div class="d-flex align-center gap-2">
-                                @if (!string.IsNullOrEmpty(_selectedMessage.LinkedRecurringExpenseId))
+                                @if (_canViewBills && !string.IsNullOrEmpty(_selectedMessage.LinkedRecurringExpenseId))
                                 {
                                     var linkedRec = Db.RecurringExpenses.GetById(_selectedMessage.LinkedRecurringExpenseId);
                                     var recRecord = linkedRec?.History.FirstOrDefault(h => h.Id == _selectedMessage.LinkedRecurringRecordId);
@@ -1238,9 +1395,9 @@
                                         @string.Format(BizLoc["View Recurring Bill: {0}{1}"].Value, linkedRec?.Name ?? BizLoc["Recurring"].Value, recRecord != null ? $" ({recRecord.Amount:C2})" : "")
                                     </MudButton>
                                 }
-                                @if (_linkedBills.Count > 1)
+                                @if (_canViewBills && _linkedBills.Count > 1)
                                 {
-                                    @foreach (var b in _linkedBills)
+                                    @foreach (var b in _linkedBills.Where(b => IsBillAccessibleToCurrentUser(b)))
                                     {
                                         <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.Receipt" OnClick="@(() => ViewBill(b))">
@@ -1248,17 +1405,20 @@
                                         </MudButton>
                                     }
                                 }
-                                else if (_linkedBill != null)
+                                else if (_canViewBills && _linkedBill != null && IsBillAccessibleToCurrentUser(_linkedBill))
                                 {
                                     <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
                                                StartIcon="@Icons.Material.Filled.Receipt" OnClick="ViewLinkedBill">
                                         @string.Format(BizLoc["View Bill ({0} {1})"].Value, _linkedBill.Amount.ToString("C2"), !string.IsNullOrEmpty(_linkedBill.Currency) ? _linkedBill.Currency : "CAD")
                                     </MudButton>
                                 }
-                                <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
-                                           OnClick="ReopenEmail">
-                                    @BizLoc["Reopen (Mark Unprocessed)"]
-                                </MudButton>
+                                @if (_canManageBills)
+                                {
+                                    <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
+                                               OnClick="ReopenEmail">
+                                        @BizLoc["Reopen (Mark Unprocessed)"]
+                                    </MudButton>
+                                }
                             </div>
                         </div>
                     </MudPaper>
@@ -1282,17 +1442,20 @@
                                 </div>
                             </div>
                             <div class="d-flex align-center gap-2">
-                                @if (!string.IsNullOrEmpty(_selectedMessage.LinkedBillId))
+                                @if (_canViewBills && _linkedBill != null && IsBillAccessibleToCurrentUser(_linkedBill))
                                 {
                                     <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
                                                StartIcon="@Icons.Material.Filled.Receipt" OnClick="ViewLinkedBill">
                                         @BizLoc["View Linked Bill"]
                                     </MudButton>
                                 }
-                                <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
-                                           OnClick="ReopenEmail">
-                                    @BizLoc["Reopen (Mark Unprocessed)"]
-                                </MudButton>
+                                @if (_canManageBills)
+                                {
+                                    <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
+                                               OnClick="ReopenEmail">
+                                        @BizLoc["Reopen (Mark Unprocessed)"]
+                                    </MudButton>
+                                }
                             </div>
                         </div>
                     </MudPaper>
@@ -1316,17 +1479,27 @@
                                 </div>
                             </div>
                             <div class="d-flex align-center gap-2">
-                                @if (!string.IsNullOrEmpty(_selectedMessage.LinkedBillId))
+                                @if (_canViewInvoices && _linkedInvoice != null && IsInvoiceAccessibleToCurrentUser(_linkedInvoice))
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Description" OnClick="ViewLinkedInvoice">
+                                        @BizLoc["View Linked Invoice"]
+                                    </MudButton>
+                                }
+                                @if (_canViewBills && _linkedBill != null && IsBillAccessibleToCurrentUser(_linkedBill))
                                 {
                                     <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
                                                StartIcon="@Icons.Material.Filled.Receipt" OnClick="ViewLinkedBill">
                                         @BizLoc["View Linked Bill"]
                                     </MudButton>
                                 }
-                                <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
-                                           OnClick="ReopenEmail">
-                                    @BizLoc["Reopen (Mark Unprocessed)"]
-                                </MudButton>
+                                @if (_canManageBills)
+                                {
+                                    <MudButton Variant="Variant.Text" Color="Color.Secondary" Size="Size.Small"
+                                               OnClick="ReopenEmail">
+                                        @BizLoc["Reopen (Mark Unprocessed)"]
+                                    </MudButton>
+                                }
                             </div>
                         </div>
                     </MudPaper>
@@ -1339,10 +1512,13 @@
                                 @BizLoc["Dismissed — not considered an actionable supplier bill."]
                             </MudText>
                             <div class="d-flex align-center gap-2">
-                                <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
-                                           OnClick="ReopenEmail">
-                                    @BizLoc["Reopen"]
-                                </MudButton>
+                                @if (_canManageBills)
+                                {
+                                    <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                                               OnClick="ReopenEmail">
+                                        @BizLoc["Reopen"]
+                                    </MudButton>
+                                }
                             </div>
                         </div>
                     </MudPaper>
@@ -1351,11 +1527,10 @@
 
                 <MudPaper Elevation="0" Outlined="true" Class="d-flex flex-column flex-grow-1" Style="min-height: 350px;">
                     <EmailReader SelectedMessage="_selectedMessage"
-                                 SelectedMessageId="@_selectedMessage?.Id"
                                  MessageBody="@_messageBody"
                                  IsLoadingBody="_isLoadingBody"
                                  TimeZoneId="@_timeZoneId"
-                                 AccountId="@CompanyBillInboxConstants.SystemEmployeeId"
+                                 AccountId="@(_selectedMessage?.AccountId ?? BillInboxService.GetEffectiveAccountId(_settings))"
                                  ShowFolderActions="false"
                                  ShowDelete="false"
                                  CanAddToTimeline="false"
@@ -1382,7 +1557,7 @@
     </div>
     </div>
 
-    @if (_settings.EnableDebugLog)
+    @if (_settings.EnableDebugLog && (_canManageBills || _canManageSettings))
     {
         <!-- Bottom Decision Tree & Field Extraction Debug Log (always requires scrolling down to access) -->
         <MudPaper Elevation="1" Outlined="true" Class="mt-4 mb-4 pa-4 flex-shrink-0" Style="border-color: var(--mud-palette-primary);">
@@ -1415,10 +1590,13 @@
                         </div>
                         <div class="d-flex align-center gap-2">
                             <MudText Typo="Typo.caption" Color="Color.Secondary">Evaluated: @_decisionLog.EvaluatedAt.ToLocalTime().ToString("g")</MudText>
-                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                                       StartIcon="@Icons.Material.Filled.Refresh" OnClick="ReevaluateDecisionLog">
-                                Re-evaluate
-                            </MudButton>
+                            @if (_canManageBills)
+                            {
+                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                           StartIcon="@Icons.Material.Filled.Refresh" OnClick="ReevaluateDecisionLog">
+                                    Re-evaluate
+                                </MudButton>
+                            }
                         </div>
                     </div>
 
@@ -1505,9 +1683,12 @@
             {
                 <div class="d-flex align-center justify-space-between pa-2">
                     <MudText Typo="Typo.caption" Color="Color.Secondary">No decision log available for this message.</MudText>
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="ReevaluateDecisionLog">
-                        Evaluate Now
-                    </MudButton>
+                    @if (_canManageBills)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="ReevaluateDecisionLog">
+                            Evaluate Now
+                        </MudButton>
+                    }
                 </div>
             }
         </MudPaper>
@@ -1518,6 +1699,7 @@
     private List<EmailMessage> _allMessages = [];
     private EmailMessage? _selectedMessage;
     private Bill? _linkedBill;
+    private Invoice? _linkedInvoice;
     private List<Bill> _linkedBills = [];
     private List<Bill> _draftBills = [];
     private List<Bill> _approvedBills = [];
@@ -1531,12 +1713,17 @@
 
     private (int draftCount, int enteredCount) GetMessageBillCounts(EmailMessage msg)
     {
+        if (!_canViewBills)
+        {
+            return (0, 0);
+        }
+
         if (msg.LinkedBillIds == null || msg.LinkedBillIds.Count == 0)
         {
             if (!string.IsNullOrEmpty(msg.LinkedBillId))
             {
                 var b = Db.Bills.GetById(msg.LinkedBillId);
-                if (b != null)
+                if (b != null && IsBillAccessibleToCurrentUser(b))
                 {
                     if (b.Status == BillStatus.AwaitingApproval) return (1, 0);
                     if (msg.BillingStatus == CompanyBillInboxConstants.BillingStatus.DuplicateDetected || b.SourceEmailId != msg.Id) return (0, 1);
@@ -1550,7 +1737,7 @@
         foreach (var id in msg.LinkedBillIds)
         {
             var b = Db.Bills.GetById(id);
-            if (b != null)
+            if (b != null && IsBillAccessibleToCurrentUser(b))
             {
                 if (b.Status == BillStatus.AwaitingApproval)
                 {
@@ -1581,6 +1768,112 @@
     private bool _isDeleting = false;
     private string _currentUserId = "";
     private Employee? _currentEmployee;
+    private bool _canViewBills;
+    private bool _canManageBills;
+    private bool _canApproveBills;
+    private bool _canViewPOs;
+    private bool _canManageSettings;
+    private bool _canLinkInvoices;
+    private bool _canViewInvoices;
+
+    private void RefreshPermissionFlags(Employee? emp)
+    {
+        var active = emp is { IsActive: true, IsBanned: false, IsSuspended: false };
+        _canViewBills = active &&
+                        (emp!.HasEffectivePermission(AppPermissions.Purchases.ViewBills) ||
+                         emp.HasEffectivePermission(AppPermissions.Purchases.ManageBills) ||
+                         emp.HasEffectivePermission(AppPermissions.Purchases.ApproveBills));
+        _canManageBills = active && emp!.HasEffectivePermission(AppPermissions.Purchases.ManageBills);
+        _canApproveBills = active && emp!.HasEffectivePermission(AppPermissions.Purchases.ApproveBills);
+        _canViewPOs = active &&
+                      (emp!.HasEffectivePermission(AppPermissions.Purchases.ViewPOs) ||
+                       emp.HasEffectivePermission(AppPermissions.Purchases.ManagePOs));
+        _canManageSettings = active && emp!.HasEffectivePermission(AppPermissions.Admin.ManageSettings);
+        _canLinkInvoices = active &&
+                           (emp!.HasEffectivePermission(AppPermissions.Finance.AccessAccounting) ||
+                            emp.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices));
+        _canViewInvoices = _canLinkInvoices;
+    }
+
+    private async Task<Employee?> RefreshLiveEmployeeAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        _currentEmployee = emp;
+        _currentUserId = emp?.Id ?? "user";
+        RefreshPermissionFlags(emp);
+        return emp;
+    }
+
+    private bool IsPoAccessibleToCurrentUser(PurchaseOrder? po, Employee? actor = null)
+    {
+        var effectiveActor = actor ?? _currentEmployee;
+        return effectiveActor != null &&
+               BillInboxService.IsPurchaseOrderAccessible(po, effectiveActor);
+    }
+
+    private bool IsBillAccessibleToCurrentUser(Bill? bill, Employee? actor = null)
+    {
+        var effectiveActor = actor ?? _currentEmployee;
+        return effectiveActor != null &&
+               BillInboxService.IsBillAccessible(bill, effectiveActor);
+    }
+
+    private bool IsInvoiceAccessibleToCurrentUser(Invoice? invoice, Employee? actor = null)
+    {
+        var effectiveActor = actor ?? _currentEmployee;
+        if (effectiveActor is not { IsActive: true, IsBanned: false, IsSuspended: false } || invoice == null)
+        {
+            return false;
+        }
+        if (!effectiveActor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting) &&
+            !effectiveActor.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices))
+        {
+            return false;
+        }
+        if (!string.IsNullOrWhiteSpace(invoice.ProjectId) &&
+            !ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, effectiveActor, invoice.ProjectId, allowAccountingFinancialRead: true))
+        {
+            return false;
+        }
+        if (!string.IsNullOrWhiteSpace(invoice.ProjectGroupId))
+        {
+            var group = Db.ProjectGroups.GetById(invoice.ProjectGroupId);
+            if (group != null && group.ProjectIds.Any(pid =>
+                    !ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, effectiveActor, pid, allowAccountingFinancialRead: true)))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Bill CloneBill(Bill bill) => bill.DeepClone();
+
+    private static RecurringExpense CloneRecurringExpense(RecurringExpense expense) => expense.DeepClone();
+
+    private async Task<Employee?> RequireLiveEmployeeAsync(Func<Employee, bool> predicate, string deniedMessage)
+    {
+        var emp = await RefreshLiveEmployeeAsync();
+        if (emp is not { IsActive: true, IsBanned: false, IsSuspended: false } || !predicate(emp))
+        {
+            Snackbar.Add(BizLoc[deniedMessage].Value, Severity.Error);
+            return null;
+        }
+        return emp;
+    }
+
+    private static bool CanViewBills(Employee emp) =>
+        emp.HasEffectivePermission(AppPermissions.Purchases.ViewBills) ||
+        emp.HasEffectivePermission(AppPermissions.Purchases.ManageBills) ||
+        emp.HasEffectivePermission(AppPermissions.Purchases.ApproveBills);
+
+    private static bool CanViewPurchaseOrders(Employee emp) =>
+        emp.HasEffectivePermission(AppPermissions.Purchases.ViewPOs) ||
+        emp.HasEffectivePermission(AppPermissions.Purchases.ManagePOs);
+
+    private static bool CanManageInvoices(Employee emp) =>
+        emp.HasEffectivePermission(AppPermissions.Finance.AccessAccounting) ||
+        emp.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices);
 
     private int ActionRequiredCount => _allMessages.Count(m => string.IsNullOrEmpty(m.BillingStatus)
         || m.BillingStatus == CompanyBillInboxConstants.BillingStatus.Unprocessed
@@ -1616,11 +1909,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var user = authState.User;
-        var emp = UserService.GetEmployee(user);
-        _currentEmployee = emp;
-        _currentUserId = emp?.Id ?? "user";
+        await RefreshLiveEmployeeAsync();
 
         var profile = Db.CompanyProfile.Get();
         _timeZoneId = profile?.TimeZoneId ?? "";
@@ -1628,6 +1917,10 @@
         CompanyBillInboxService.OnInboxIngested += HandleInboxIngested;
 
         ReloadSettings();
+        if (!string.IsNullOrWhiteSpace(_settings.AccountId))
+        {
+            await BillInboxService.PurgeUnsharedWebmailCacheAsync(_settings.AccountId);
+        }
         await ReloadMessagesAsync();
     }
 
@@ -1647,6 +1940,24 @@
         });
     }
 
+    private string ConfiguredMailboxDisplay
+    {
+        get
+        {
+            var boundAccount = BillInboxService.GetBoundAccount(_settings);
+            if (boundAccount != null)
+            {
+                return !string.IsNullOrWhiteSpace(boundAccount.EmailAddress)
+                    ? boundAccount.EmailAddress
+                    : boundAccount.Name;
+            }
+
+            return !string.IsNullOrWhiteSpace(_settings.EmailAddress)
+                ? _settings.EmailAddress
+                : BizLoc["Not Configured"].Value;
+        }
+    }
+
     private void ReloadSettings()
     {
         _settings = BillInboxService.GetSettings();
@@ -1654,13 +1965,13 @@
 
     private async Task ReloadMessagesAsync(string? preferredSelectId = null)
     {
+        await RefreshLiveEmployeeAsync();
+
         var currentSelectedId = preferredSelectId ?? _selectedMessage?.Id;
         var prevFiltered = FilteredMessages;
         var prevIndex = _selectedMessage != null ? prevFiltered.FindIndex(m => m.Id == _selectedMessage.Id) : -1;
 
-        _allMessages = Db.EmailMessages.GetAllForAccount(CompanyBillInboxConstants.SystemEmployeeId)
-            .OrderByDescending(m => m.Date)
-            .ToList();
+        _allMessages = BillInboxService.GetBillInboxMessages(_settings);
 
         var newFiltered = FilteredMessages;
 
@@ -1760,8 +2071,13 @@
         }
     }
 
-    private void ToggleFlag(EmailMessage msg)
+    private async Task ToggleFlag(EmailMessage msg)
     {
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills) || CanManageInvoices(e),
+            "You do not have permission to flag emails.");
+        if (emp == null) return;
+
         msg.IsFlagged = !msg.IsFlagged;
         Db.EmailMessages.Save(msg);
         Snackbar.Add(msg.IsFlagged ? "Message flagged" : "Flag removed", Severity.Info);
@@ -1770,7 +2086,10 @@
     private async Task DownloadAttachment(EmailAttachmentMeta att)
     {
         if (_selectedMessage == null) return;
-        var url = $"/spokesapi/files/email/{Uri.EscapeDataString(_selectedMessage.Id)}/{Uri.EscapeDataString(att.Id)}?employeeId={Uri.EscapeDataString(CompanyBillInboxConstants.SystemEmployeeId)}&fn={Uri.EscapeDataString(att.FileName)}&download=true";
+        var accountId = !string.IsNullOrWhiteSpace(_selectedMessage.AccountId)
+            ? _selectedMessage.AccountId
+            : BillInboxService.GetEffectiveAccountId(_settings);
+        var url = $"/spokesapi/files/email/{Uri.EscapeDataString(_selectedMessage.Id)}/{Uri.EscapeDataString(att.Id)}?employeeId={Uri.EscapeDataString(accountId)}&fn={Uri.EscapeDataString(att.FileName)}&download=true";
         await JS.InvokeVoidAsync("open", url, "_blank");
     }
 
@@ -1824,7 +2143,7 @@
 
     private Task OnMessageSelected(EmailMessage? message) => OnMessageSelected(message, false);
 
-    private Task OnMessageSelected(EmailMessage? message, bool forceReloadBody)
+    private async Task OnMessageSelected(EmailMessage? message, bool forceReloadBody)
     {
         // Cancel any in-flight background loading for previously selected message
         _loadMessageCts?.Cancel();
@@ -1832,9 +2151,16 @@
         _loadMessageCts = new CancellationTokenSource();
         var cancellationToken = _loadMessageCts.Token;
 
+        var emp = await RefreshLiveEmployeeAsync();
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
         var isSameMessage = _selectedMessage?.Id == message?.Id;
         _selectedMessage = message;
         _linkedBill = null;
+        _linkedInvoice = null;
         _linkedBills = [];
         _draftBills = [];
         _approvedBills = [];
@@ -1862,41 +2188,60 @@
 
         if (message != null)
         {
-            if (message.LinkedBillIds.Count > 0)
+            if (_canViewBills)
             {
-                _linkedBills = message.LinkedBillIds
-                    .Select(id => Db.Bills.GetById(id))
-                    .Where(b => b != null)
-                    .Select(b => b!)
-                    .ToList();
-            }
-
-            if (!string.IsNullOrEmpty(message.LinkedBillId))
-            {
-                var single = Db.Bills.GetById(message.LinkedBillId);
-                if (single != null && !_linkedBills.Any(b => b.Id == single.Id))
+                if (message.LinkedBillIds.Count > 0)
                 {
-                    _linkedBills.Insert(0, single);
+                    _linkedBills = message.LinkedBillIds
+                        .Select(id => Db.Bills.GetById(id))
+                        .Where(b => b != null && IsBillAccessibleToCurrentUser(b, emp))
+                        .Select(b => b!)
+                        .ToList();
+                }
+
+                if (!string.IsNullOrEmpty(message.LinkedBillId))
+                {
+                    var single = Db.Bills.GetById(message.LinkedBillId);
+                    if (single != null && IsBillAccessibleToCurrentUser(single, emp) && !_linkedBills.Any(b => b.Id == single.Id))
+                    {
+                        _linkedBills.Insert(0, single);
+                    }
                 }
             }
 
             CategorizeLinkedBills(message);
 
-            if (_linkedBill != null && !string.IsNullOrEmpty(_linkedBill.PurchaseOrderId))
+            if (_canViewPOs && _linkedBill != null && !string.IsNullOrEmpty(_linkedBill.PurchaseOrderId))
             {
-                _linkedPo = Db.PurchaseOrders.GetById(_linkedBill.PurchaseOrderId);
+                var candidatePo = Db.PurchaseOrders.GetById(_linkedBill.PurchaseOrderId);
+                if (IsPoAccessibleToCurrentUser(candidatePo, emp))
+                {
+                    _linkedPo = candidatePo;
+                }
             }
 
-            _decisionLog ??= message.DecisionLog;
+            if (_canViewInvoices && !string.IsNullOrEmpty(message.LinkedInvoiceId))
+            {
+                var candidateInv = Db.Invoices.GetById(message.LinkedInvoiceId);
+                if (IsInvoiceAccessibleToCurrentUser(candidateInv, emp))
+                {
+                    _linkedInvoice = candidateInv;
+                }
+            }
+
+            if (emp?.IsEffectiveAdmin == true)
+            {
+                _decisionLog ??= message.DecisionLog;
+            }
 
             var needLoadBody = string.IsNullOrEmpty(_messageBody);
-            var needLoadDecisionLog = (_settings.EnableDebugLog || _duplicateBills.Count > 0) && _decisionLog == null;
+            var needLoadDecisionLog = ((_settings.EnableDebugLog && (_canManageBills || _canManageSettings)) || _duplicateBills.Count > 0) && _decisionLog == null;
 
             _isLoadingBody = needLoadBody;
             _isLoadingDecisionLog = needLoadDecisionLog;
 
             // Immediately render the UI with message details, draft bills, action buttons
-            StateHasChanged();
+            await InvokeAsync(StateHasChanged);
 
             if (needLoadBody)
             {
@@ -1912,10 +2257,8 @@
         {
             _isLoadingBody = false;
             _isLoadingDecisionLog = false;
-            StateHasChanged();
+            await InvokeAsync(StateHasChanged);
         }
-
-        return Task.CompletedTask;
     }
 
     private async Task LoadEmailBodyAsync(EmailMessage message, CancellationToken cancellationToken)
@@ -1961,7 +2304,15 @@
         StateHasChanged();
         try
         {
-            var log = message.DecisionLog ?? await BillInboxService.GenerateDecisionLogAsync(message);
+            var emp = await RefreshLiveEmployeeAsync();
+            if (emp is not { IsActive: true, IsBanned: false, IsSuspended: false })
+            {
+                return;
+            }
+
+            var log = emp.IsEffectiveAdmin && message.DecisionLog != null
+                ? message.DecisionLog
+                : await BillInboxService.GenerateDecisionLogAsync(message, actor: emp);
             if (!cancellationToken.IsCancellationRequested && _selectedMessage?.Id == message.Id)
             {
                 _decisionLog = log;
@@ -1989,11 +2340,22 @@
     {
         if (_selectedMessage == null) return;
 
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to re-evaluate billing emails.");
+        if (emp == null) return;
+
         // Check if existing linked bills created by this email are approved
         var hasApprovedBills = _linkedBills.Any(b => b.SourceEmailId == _selectedMessage.Id && b.Status != BillStatus.AwaitingApproval);
 
         if (hasApprovedBills)
         {
+            if (!emp.HasEffectivePermission(AppPermissions.Purchases.ApproveBills))
+            {
+                Snackbar.Add(BizLoc["You need bill approval permission to re-evaluate approved bills."].Value, Severity.Error);
+                return;
+            }
+
             bool? confirmed = await DialogService.ShowMessageBoxAsync(
                 "Re-evaluate Approved Bill?",
                 "This email is linked to a bill that has already been approved into Accounts Payable. Re-evaluating will delete the existing bill and re-process the email from scratch. Are you sure you want to proceed?",
@@ -2004,6 +2366,12 @@
             {
                 return;
             }
+
+            emp = await RequireLiveEmployeeAsync(
+                e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills) &&
+                     e.HasEffectivePermission(AppPermissions.Purchases.ApproveBills),
+                "You do not have permission to re-evaluate approved bills.");
+            if (emp == null) return;
         }
 
         _isLoadingDecisionLog = true;
@@ -2011,13 +2379,20 @@
         {
             var result = await BillInboxService.ReprocessEmailAsync(
                 _selectedMessage.Id,
-                _currentUserId,
-                forceEvenIfApproved: true);
+                emp.Id,
+                forceEvenIfApproved: true,
+                actor: emp);
 
             if (!result.Success)
             {
                 if (result.RequiresConfirmation)
                 {
+                    if (!emp.HasEffectivePermission(AppPermissions.Purchases.ApproveBills))
+                    {
+                        Snackbar.Add(BizLoc["You need bill approval permission to re-evaluate approved bills."].Value, Severity.Error);
+                        return;
+                    }
+
                     bool? confirmed = await DialogService.ShowMessageBoxAsync(
                         "Re-evaluate Approved Bill?",
                         $"This email is linked to {result.ApprovedBillsCount} approved bill(s). Re-evaluating will delete them and re-process from scratch. Are you sure you want to proceed?",
@@ -2029,10 +2404,17 @@
                         return;
                     }
 
+                    emp = await RequireLiveEmployeeAsync(
+                        e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills) &&
+                             e.HasEffectivePermission(AppPermissions.Purchases.ApproveBills),
+                        "You do not have permission to re-evaluate approved bills.");
+                    if (emp == null) return;
+
                     result = await BillInboxService.ReprocessEmailAsync(
                         _selectedMessage.Id,
-                        _currentUserId,
-                        forceEvenIfApproved: true);
+                        emp.Id,
+                        forceEvenIfApproved: true,
+                        actor: emp);
                 }
 
                 if (!result.Success)
@@ -2054,23 +2436,41 @@
                 }
             }
 
-            _linkedBills = result.LinkedBills ?? [];
+            _linkedBills = CanViewBills(emp)
+                ? (result.LinkedBills ?? []).Where(b => IsBillAccessibleToCurrentUser(b, emp)).ToList()
+                : [];
             CategorizeLinkedBills(_selectedMessage);
 
-            if (_linkedBill != null && !string.IsNullOrEmpty(_linkedBill.PurchaseOrderId))
+            if (CanViewPurchaseOrders(emp) && _linkedBill != null && !string.IsNullOrEmpty(_linkedBill.PurchaseOrderId))
             {
-                _linkedPo = Db.PurchaseOrders.GetById(_linkedBill.PurchaseOrderId);
+                var candidatePo = Db.PurchaseOrders.GetById(_linkedBill.PurchaseOrderId);
+                _linkedPo = IsPoAccessibleToCurrentUser(candidatePo, emp) ? candidatePo : null;
             }
             else
             {
                 _linkedPo = null;
             }
 
-            _decisionLog = _selectedMessage?.DecisionLog ?? await BillInboxService.GenerateDecisionLogAsync(_selectedMessage!);
-
-            if (string.IsNullOrEmpty(_messageBody) && _selectedMessage != null)
+            if (CanManageInvoices(emp) && !string.IsNullOrEmpty(_selectedMessage?.LinkedInvoiceId))
             {
-                _messageBody = await BillInboxService.GetOrFetchEmailBodyAsync(_selectedMessage);
+                var candidateInv = Db.Invoices.GetById(_selectedMessage.LinkedInvoiceId);
+                _linkedInvoice = IsInvoiceAccessibleToCurrentUser(candidateInv, emp) ? candidateInv : null;
+            }
+            else
+            {
+                _linkedInvoice = null;
+            }
+
+            if (_selectedMessage != null)
+            {
+                _decisionLog = emp.IsEffectiveAdmin && _selectedMessage.DecisionLog != null
+                    ? _selectedMessage.DecisionLog
+                    : await BillInboxService.GenerateDecisionLogAsync(_selectedMessage, actor: emp);
+
+                if (string.IsNullOrEmpty(_messageBody))
+                {
+                    _messageBody = await BillInboxService.GetOrFetchEmailBodyAsync(_selectedMessage);
+                }
             }
 
             Snackbar.Add($"Email re-evaluated successfully! Status: {_selectedMessage?.BillingStatus}", Severity.Success);
@@ -2088,10 +2488,15 @@
 
     private async Task SyncNow()
     {
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to sync the bill inbox.");
+        if (emp == null) return;
+
         _isSyncing = true;
         try
         {
-            var count = await BillInboxService.CheckInboxAsync();
+            var count = await BillInboxService.SyncInboxInteractiveAsync(emp);
             Snackbar.Add(count > 0 ? $"Sync complete: {count} new bill email(s) ingested!" : "Sync complete: No new emails found.", Severity.Info);
             ReloadSettings();
             await ReloadMessagesAsync();
@@ -2108,6 +2513,11 @@
 
     private async Task OpenSettings()
     {
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Admin.ManageSettings),
+            "You do not have permission to modify inbox settings.");
+        if (emp == null) return;
+
         var dialog = await DialogService.ShowAsync<CompanyBillInboxDialog>("Company Bill Inbox Configuration", new DialogOptions
         {
             MaxWidth = MaxWidth.Medium,
@@ -2119,6 +2529,7 @@
         if (result != null && !result.Canceled)
         {
             ReloadSettings();
+            await ReloadMessagesAsync();
             if (_selectedMessage != null && _settings.EnableDebugLog && _decisionLog == null)
             {
                 await LoadDecisionLogAsync(_selectedMessage);
@@ -2127,8 +2538,9 @@
     }
 
     private bool CanUserSendFromBillInbox() =>
+        Db.CompanyProfile.Get()?.Edition != "Family" &&
         _currentEmployee is { IsActive: true, IsBanned: false, IsSuspended: false } &&
-        (_currentEmployee.IsAdmin ||
+        (_currentEmployee.IsEffectiveAdmin ||
          _currentEmployee.HasPermission(AppPermissions.Finance.AccessAccounting) ||
          _currentEmployee.HasPermission(AppPermissions.Purchases.ManageBills));
 
@@ -2150,22 +2562,37 @@
         return refs;
     }
 
+    private string ResolveSenderFromDisplay()
+    {
+        var identity = BillInboxService.ResolveSendingIdentity(_settings);
+        if (identity != null)
+        {
+            return identity.FormattedFrom;
+        }
+
+        return !string.IsNullOrEmpty(_settings.DisplayName) && !string.IsNullOrEmpty(_settings.EmailAddress)
+            ? $"{_settings.DisplayName} <{_settings.EmailAddress}>"
+            : _settings.EmailAddress;
+    }
+
     private async Task OpenCompose()
     {
+        await RefreshLiveEmployeeAsync();
         if (!CanUserSendFromBillInbox())
         {
             Snackbar.Add(Loc["You do not have permission to send email from this inbox."].Value, Severity.Error);
             return;
         }
 
-        var senderFrom = !string.IsNullOrEmpty(_settings.DisplayName) && !string.IsNullOrEmpty(_settings.EmailAddress)
-            ? $"{_settings.DisplayName} <{_settings.EmailAddress}>"
-            : _settings.EmailAddress;
+        var identity = BillInboxService.ResolveSendingIdentity(_settings);
+        var senderFrom = ResolveSenderFromDisplay();
 
         var parameters = new DialogParameters<EmailComposer>
         {
             { x => x.Subject, "Accounting Inquiry" },
             { x => x.AccountId, CompanyBillInboxConstants.SystemEmployeeId },
+            { x => x.SendingIdentityId, identity?.Id ?? _settings.SendingIdentityId },
+            { x => x.InboxId, _settings.InboxId },
             { x => x.SenderFrom, senderFrom }
         };
         await DialogService.ShowAsync<EmailComposer>("Compose Email (Company Facturation)", parameters, new DialogOptions
@@ -2180,15 +2607,15 @@
     {
         if (_selectedMessage == null) return;
 
+        await RefreshLiveEmployeeAsync();
         if (!CanUserSendFromBillInbox())
         {
             Snackbar.Add(Loc["You do not have permission to send email from this inbox."].Value, Severity.Error);
             return;
         }
 
-        var senderFrom = !string.IsNullOrEmpty(_settings.DisplayName) && !string.IsNullOrEmpty(_settings.EmailAddress)
-            ? $"{_settings.DisplayName} <{_settings.EmailAddress}>"
-            : _settings.EmailAddress;
+        var identity = BillInboxService.ResolveSendingIdentity(_settings);
+        var senderFrom = ResolveSenderFromDisplay();
 
         var parameters = new DialogParameters<EmailComposer>
         {
@@ -2196,6 +2623,8 @@
             { x => x.Subject, _selectedMessage.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) ? _selectedMessage.Subject : $"Re: {_selectedMessage.Subject}" },
             { x => x.Body, !string.IsNullOrEmpty(_messageBody) ? _messageBody : _selectedMessage.Snippet },
             { x => x.AccountId, CompanyBillInboxConstants.SystemEmployeeId },
+            { x => x.SendingIdentityId, identity?.Id ?? _settings.SendingIdentityId },
+            { x => x.InboxId, _settings.InboxId },
             { x => x.SenderFrom, senderFrom },
             { x => x.InReplyTo, _selectedMessage.GlobalMessageId },
             { x => x.References, BuildReplyReferences(_selectedMessage) }
@@ -2215,11 +2644,61 @@
         await ViewBill(_linkedBill);
     }
 
+    private async Task ViewLinkedInvoice()
+    {
+        var emp = await RequireLiveEmployeeAsync(
+            CanManageInvoices,
+            "You do not have permission to view linked invoices.");
+        if (emp == null) return;
+
+        var inv = _linkedInvoice ?? (!string.IsNullOrEmpty(_selectedMessage?.LinkedInvoiceId) ? Db.Invoices.GetById(_selectedMessage.LinkedInvoiceId) : null);
+        if (inv == null)
+        {
+            Snackbar.Add(BizLoc["Linked invoice not found."].Value, Severity.Warning);
+            return;
+        }
+
+        if (!IsInvoiceAccessibleToCurrentUser(inv, emp))
+        {
+            Snackbar.Add(BizLoc["You do not have access to this invoice."].Value, Severity.Error);
+            return;
+        }
+
+        var parameters = new DialogParameters<InvoiceMasterDialog>
+        {
+            { x => x.Invoice, inv },
+            { x => x.CanEditDraft, emp.HasPermission(AppPermissions.Finance.AccessAccounting) && inv.Status == InvoiceStatus.Draft },
+            { x => x.CanApproveInvoice, emp.HasPermission(AppPermissions.Finance.ApproveInvoices) }
+        };
+
+        var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>(
+            string.Format(BizLoc["Client Invoice #{0}"].Value, inv.InvoiceNumber),
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraLarge, FullWidth = true, CloseButton = true });
+
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled)
+        {
+            await ReloadMessagesAsync();
+        }
+    }
+
     private async Task ViewBill(Bill bill)
     {
+        var emp = await RequireLiveEmployeeAsync(
+            CanViewBills,
+            "You do not have permission to view bills.");
+        if (emp == null) return;
+
+        if (!IsBillAccessibleToCurrentUser(bill, emp))
+        {
+            Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+            return;
+        }
+
         var parameters = new DialogParameters<BillEditorDialog>
         {
-            { x => x.Bill, bill }
+            { x => x.Bill, CloneBill(bill) }
         };
 
         var dialog = await DialogService.ShowAsync<BillEditorDialog>("Draft Bill Details", parameters, new DialogOptions
@@ -2232,21 +2711,45 @@
         var result = await dialog.Result;
         if (result != null && !result.Canceled && result.Data is Bill updatedBill)
         {
-            Db.Bills.Save(updatedBill);
+            var saveActor = await RequireLiveEmployeeAsync(
+                e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+                "You do not have permission to save bills.");
+            if (saveActor == null) return;
+
+            if (bill.Status == BillStatus.AwaitingApproval &&
+                updatedBill.Status != BillStatus.AwaitingApproval &&
+                !saveActor.HasEffectivePermission(AppPermissions.Purchases.ApproveBills))
+            {
+                Snackbar.Add(BizLoc["You do not have permission to approve draft bills."].Value, Severity.Error);
+                return;
+            }
+
+            if (!IsBillAccessibleToCurrentUser(updatedBill, saveActor))
+            {
+                Snackbar.Add(BizLoc["You do not have access to save a bill for this project."].Value, Severity.Error);
+                return;
+            }
+
+            AccountingService.SaveBill(updatedBill, saveActor.FullName, saveActor);
             Snackbar.Add("Draft bill saved", Severity.Success);
             await ReloadMessagesAsync();
         }
     }
 
-    private async Task ApproveDraftBill()
-    {
-        if (_selectedMessage == null || _linkedBill == null) return;
-        await ApproveSingleBill(_linkedBill);
-    }
-
     private async Task ApproveSingleBill(Bill bill)
     {
         if (_selectedMessage == null || _approvingBillId != null || _isApprovingAll) return;
+
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ApproveBills),
+            "You do not have permission to approve bills.");
+        if (emp == null) return;
+
+        if (!IsBillAccessibleToCurrentUser(bill, emp))
+        {
+            Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+            return;
+        }
 
         _approvingBillId = bill.Id;
         StateHasChanged();
@@ -2254,7 +2757,7 @@
         {
             var isPaid = bill.BalanceDue <= 0;
             var msgId = _selectedMessage.Id;
-            BillInboxService.ApproveBillFromEmail(msgId, bill.Id, _currentUserId);
+            BillInboxService.ApproveBillFromEmail(msgId, bill.Id, emp.Id, actor: emp);
             _approvingBillId = null;
             Snackbar.Add(
                 string.Format(
@@ -2289,9 +2792,20 @@
     {
         if (_selectedMessage == null || _rejectingBillId != null || _approvingBillId != null || _isApprovingAll) return;
 
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to reject draft bills.");
+        if (emp == null) return;
+
+        if (!IsBillAccessibleToCurrentUser(bill, emp))
+        {
+            Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+            return;
+        }
+
         var parameters = new DialogParameters<RejectDraftBillDialog>
         {
-            { x => x.DraftBill, bill },
+            { x => x.DraftBill, CloneBill(bill) },
             { x => x.Email, _selectedMessage }
         };
 
@@ -2305,12 +2819,23 @@
         var result = await dialog.Result;
         if (result != null && !result.Canceled && result.Data is RejectDraftBillOptions options)
         {
+            var rejectActor = await RequireLiveEmployeeAsync(
+                e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+                "You do not have permission to reject draft bills.");
+            if (rejectActor == null) return;
+
+            if (!IsBillAccessibleToCurrentUser(bill, rejectActor))
+            {
+                Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+                return;
+            }
+
             _rejectingBillId = bill.Id;
             StateHasChanged();
             try
             {
                 var msgId = _selectedMessage.Id;
-                BillInboxService.RejectDraftBillFromEmail(msgId, bill.Id, _currentUserId, options);
+                BillInboxService.RejectDraftBillFromEmail(msgId, bill.Id, rejectActor.Id, options, actor: rejectActor);
                 _rejectingBillId = null;
                 if (options.IsDuplicate)
                 {
@@ -2349,6 +2874,17 @@
     {
         if (_selectedMessage == null || _draftBills.Count == 0 || _approvingBillId != null || _isApprovingAll) return;
 
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ApproveBills),
+            "You do not have permission to approve bills.");
+        if (emp == null) return;
+
+        if (_draftBills.Any(b => !IsBillAccessibleToCurrentUser(b, emp)))
+        {
+            Snackbar.Add(BizLoc["You do not have access to all draft bills on this email."].Value, Severity.Error);
+            return;
+        }
+
         _isApprovingAll = true;
         StateHasChanged();
         try
@@ -2358,7 +2894,7 @@
             var msgId = _selectedMessage.Id;
             foreach (var bill in _draftBills.ToList())
             {
-                BillInboxService.ApproveBillFromEmail(msgId, bill.Id, _currentUserId);
+                BillInboxService.ApproveBillFromEmail(msgId, bill.Id, emp.Id, actor: emp);
             }
             _isApprovingAll = false;
             Snackbar.Add(
@@ -2386,8 +2922,19 @@
         var target = bill ?? _linkedBill;
         if (_selectedMessage == null || target == null || !_selectedMessage.DetectedAmount.HasValue) return;
 
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to update bill amounts.");
+        if (emp == null) return;
+
+        if (!IsBillAccessibleToCurrentUser(target, emp))
+        {
+            Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+            return;
+        }
+
         var msgId = _selectedMessage.Id;
-        BillInboxService.UpdateExistingBillAmount(msgId, target.Id, _selectedMessage.DetectedAmount.Value, _currentUserId);
+        BillInboxService.UpdateExistingBillAmount(msgId, target.Id, _selectedMessage.DetectedAmount.Value, emp.Id, actor: emp);
         Snackbar.Add(string.Format(BizLoc["Updated bill amount to {0} and linked document!"].Value, _selectedMessage.DetectedAmount.Value.ToString("C2")), Severity.Success);
         await AdvanceToNextAfterActionAsync(msgId);
     }
@@ -2397,8 +2944,20 @@
         var target = bill ?? _linkedBill;
         if (_selectedMessage == null || target == null || !_selectedMessage.DetectedPaidAmount.HasValue || _selectedMessage.DetectedPaidAmount.Value <= 0) return;
 
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills) &&
+                 (target.Status != BillStatus.AwaitingApproval || e.HasEffectivePermission(AppPermissions.Purchases.ApproveBills)),
+            "You do not have permission to record a payment on this bill.");
+        if (emp == null) return;
+
+        if (!IsBillAccessibleToCurrentUser(target, emp))
+        {
+            Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+            return;
+        }
+
         var msgId = _selectedMessage.Id;
-        BillInboxService.RecordPaymentOnExistingBill(msgId, target.Id, _selectedMessage.DetectedPaidAmount.Value, _currentUserId);
+        BillInboxService.RecordPaymentOnExistingBill(msgId, target.Id, _selectedMessage.DetectedPaidAmount.Value, emp.Id, actor: emp);
         Snackbar.Add(string.Format(BizLoc["Recorded payment of {0} on bill #{1}!"].Value, _selectedMessage.DetectedPaidAmount.Value.ToString("C2"), target.InvoiceNumber ?? target.Id), Severity.Success);
         await AdvanceToNextAfterActionAsync(msgId);
     }
@@ -2407,7 +2966,12 @@
     {
         if (_selectedMessage == null) return;
 
-        var success = await BillInboxService.MoveEmailToProcessedFolderAsync(_selectedMessage.Id, _currentUserId);
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to move billing emails.");
+        if (emp == null) return;
+
+        var success = await BillInboxService.MoveEmailToProcessedFolderAsync(_selectedMessage.Id, emp.Id, actor: emp);
         if (success)
         {
             Snackbar.Add($"Email moved to '{_settings.ProcessedFolderName}' folder on mail server.", Severity.Success);
@@ -2423,13 +2987,18 @@
     {
         if (_selectedMessage == null) return;
 
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to upload documents to billing emails.");
+        if (emp == null) return;
+
         try
         {
             using var mem = new MemoryStream();
             await file.OpenReadStream(maxAllowedSize: 20 * 1024 * 1024).CopyToAsync(mem);
             mem.Position = 0;
 
-            var bill = await BillInboxService.UploadAttachmentToEmailAsync(_selectedMessage.Id, mem, file.Name, _currentUserId);
+            var bill = await BillInboxService.UploadAttachmentToEmailAsync(_selectedMessage.Id, mem, file.Name, emp.Id, actor: emp);
             if (bill != null)
             {
                 Snackbar.Add($"Document '{file.Name}' attached and draft bill created!", Severity.Success);
@@ -2448,10 +3017,15 @@
 
     private async Task ScanForExistingBills()
     {
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to scan for duplicate bills.");
+        if (emp == null) return;
+
         _isScanningDuplicates = true;
         try
         {
-            var result = await BillInboxService.ScanForDuplicateBillsAsync();
+            var result = await BillInboxService.ScanForDuplicateBillsAsync(actor: emp);
             Snackbar.Add(
                 $"Scan completed: Checked {result.ScannedEmailsCount} emails, identified {result.DuplicatesFoundCount} matching bills, and cleaned up {result.DraftsCleanedUpCount} redundant drafts.",
                 result.DuplicatesFoundCount > 0 ? Severity.Success : Severity.Info);
@@ -2472,12 +3046,25 @@
     {
         if (_selectedMessage == null) return;
 
-        var newBill = await BillInboxService.PrepareBillFromEmailAsync(_selectedMessage.Id);
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to create bills.");
+        if (emp == null) return;
+
+        var newBill = await BillInboxService.PrepareBillFromEmailAsync(_selectedMessage.Id, actor: emp);
         if (newBill == null) return;
 
-        // Check if an existing matching bill already exists before creating
+        var reconstructedExt = new ExtractedInvoiceData
+        {
+            InvoiceNumber = newBill.InvoiceNumber,
+            InvoiceDate = newBill.Date,
+            TotalAmount = newBill.Amount,
+            SupplierName = newBill.SupplierName
+        };
+
+        // Check if an existing matching bill already exists before creating (strict definitive matches only)
         var match = BillInboxService.FindExistingBillMatch(
-            extraction: null,
+            extraction: reconstructedExt,
             supplierId: newBill.SupplierId,
             supplierName: newBill.SupplierName,
             emailSubject: _selectedMessage.Subject,
@@ -2485,7 +3072,14 @@
             matchedPoId: newBill.PurchaseOrderId,
             currentEmailId: _selectedMessage.Id,
             duplicateWindowDays: _settings.DuplicateDateWindowDays,
-            textDetectedAmount: newBill.Amount > 0 ? newBill.Amount : _selectedMessage.DetectedAmount);
+            textDetectedAmount: newBill.Amount > 0 ? newBill.Amount : _selectedMessage.DetectedAmount,
+            includePossibleAmountFallback: false,
+            referenceDate: newBill.Date);
+
+        if (match != null && !IsBillAccessibleToCurrentUser(match.Bill, emp))
+        {
+            match = null;
+        }
 
         if (match != null)
         {
@@ -2500,7 +3094,7 @@
 
         var parameters = new DialogParameters<BillEditorDialog>
         {
-            { x => x.Bill, newBill }
+            { x => x.Bill, CloneBill(newBill) }
         };
 
         var dialog = await DialogService.ShowAsync<BillEditorDialog>("Create Bill from Email", parameters, new DialogOptions
@@ -2513,9 +3107,27 @@
         var result = await dialog.Result;
         if (result != null && !result.Canceled && result.Data is Bill createdBill)
         {
-            Db.Bills.Save(createdBill);
+            var saveActor = await RequireLiveEmployeeAsync(
+                e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+                "You do not have permission to save bills.");
+            if (saveActor == null) return;
+
+            if (createdBill.Status != BillStatus.AwaitingApproval &&
+                !saveActor.HasEffectivePermission(AppPermissions.Purchases.ApproveBills))
+            {
+                Snackbar.Add(BizLoc["You do not have permission to approve bills."].Value, Severity.Error);
+                return;
+            }
+
+            if (!IsBillAccessibleToCurrentUser(createdBill, saveActor))
+            {
+                Snackbar.Add(BizLoc["You do not have access to save a bill for this project."].Value, Severity.Error);
+                return;
+            }
+
+            AccountingService.SaveBill(createdBill, saveActor.FullName, saveActor);
             var msgId = _selectedMessage.Id;
-            BillInboxService.UpdateEmailBillingStatus(msgId, CompanyBillInboxConstants.BillingStatus.Approved, _currentUserId, createdBill.Id);
+            BillInboxService.UpdateEmailBillingStatus(msgId, CompanyBillInboxConstants.BillingStatus.Approved, saveActor.Id, createdBill.Id, actor: saveActor);
             Snackbar.Add(BizLoc["Bill created and linked to email!"].Value, Severity.Success);
             await AdvanceToNextAfterActionAsync(msgId);
         }
@@ -2524,8 +3136,13 @@
     private async Task ConfirmSelectedStatement()
     {
         if (_selectedMessage == null) return;
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to confirm statements.");
+        if (emp == null) return;
+
         var msgId = _selectedMessage.Id;
-        BillInboxService.ConfirmStatement(msgId, _currentUserId);
+        BillInboxService.ConfirmStatement(msgId, emp.Id, actor: emp);
         Snackbar.Add(BizLoc["Email confirmed as statement of account and marked as dealt with!"].Value, Severity.Success);
         await AdvanceToNextAfterActionAsync(msgId);
     }
@@ -2533,20 +3150,25 @@
     private async Task ConfirmSelectedReceipt()
     {
         if (_selectedMessage == null) return;
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills) || CanManageInvoices(e),
+            "You do not have permission to confirm payment receipts.");
+        if (emp == null) return;
+
         var msgId = _selectedMessage.Id;
-        BillInboxService.ConfirmReceipt(msgId, _currentUserId);
+        BillInboxService.ConfirmReceipt(msgId, emp.Id, actor: emp);
         Snackbar.Add(BizLoc["Email confirmed as payment receipt and marked as dealt with!"].Value, Severity.Success);
         await AdvanceToNextAfterActionAsync(msgId);
     }
 
     private async Task AdvanceToNextAfterActionAsync(string completedMessageId)
     {
+        await RefreshLiveEmployeeAsync();
+
         var prevFiltered = FilteredMessages;
         var prevIndex = prevFiltered.FindIndex(m => m.Id == completedMessageId);
 
-        _allMessages = Db.EmailMessages.GetAllForAccount(CompanyBillInboxConstants.SystemEmployeeId)
-            .OrderByDescending(m => m.Date)
-            .ToList();
+        _allMessages = BillInboxService.GetBillInboxMessages(_settings);
 
         var newFiltered = FilteredMessages;
 
@@ -2577,14 +3199,27 @@
     {
         var target = bill ?? _linkedBill;
         if (_selectedMessage == null || target == null) return;
+
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to attach documents to bills.");
+        if (emp == null) return;
+
+        if (!IsBillAccessibleToCurrentUser(target, emp))
+        {
+            Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+            return;
+        }
+
         var msgId = _selectedMessage.Id;
 
         BillInboxService.AttachAttachmentToExistingBill(
             msgId,
             target.Id,
-            _currentUserId,
+            emp.Id,
             dupMatch?.AttachmentPath,
-            dupMatch?.AttachmentFileName);
+            dupMatch?.AttachmentFileName,
+            actor: emp);
         Snackbar.Add(BizLoc["PDF attached to existing bill and email marked as dealt with!"].Value, Severity.Success);
         await AdvanceToNextAfterActionAsync(msgId);
     }
@@ -2593,6 +3228,18 @@
     {
         var target = bill ?? _linkedBill;
         if (_selectedMessage == null || target == null) return;
+
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to reopen bills.");
+        if (emp == null) return;
+
+        if (!IsBillAccessibleToCurrentUser(target, emp))
+        {
+            Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+            return;
+        }
+
         var msgId = _selectedMessage.Id;
 
         bool? confirmed = await DialogService.ShowMessageBoxAsync(
@@ -2603,7 +3250,18 @@
 
         if (confirmed == true)
         {
-            BillInboxService.ReopenBillForFailedPayment(msgId, target.Id, _currentUserId);
+            var confirmActor = await RequireLiveEmployeeAsync(
+                e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+                "You do not have permission to reopen bills.");
+            if (confirmActor == null) return;
+
+            if (!IsBillAccessibleToCurrentUser(target, confirmActor))
+            {
+                Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+                return;
+            }
+
+            BillInboxService.ReopenBillForFailedPayment(msgId, target.Id, confirmActor.Id, actor: confirmActor);
             Snackbar.Add(string.Format(BizLoc["Bill #{0} returned to Unpaid status. Email marked as dealt with."].Value, target.InvoiceNumber ?? target.Id), Severity.Success);
             await AdvanceToNextAfterActionAsync(msgId);
         }
@@ -2613,7 +3271,12 @@
     {
         if (_selectedMessage == null) return;
 
-        var draft = await BillInboxService.CreateDraftAnywayAsync(_selectedMessage.Id, _currentUserId);
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to create draft bills.");
+        if (emp == null) return;
+
+        var draft = await BillInboxService.CreateDraftAnywayAsync(_selectedMessage.Id, actor: emp);
         if (draft != null)
         {
             Snackbar.Add(string.Format(BizLoc["Separate draft bill created for {0}!"].Value, draft.SupplierName), Severity.Success);
@@ -2625,12 +3288,17 @@
     {
         if (_selectedMessage == null) return;
 
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to create draft bills.");
+        if (emp == null) return;
+
         var draft = await BillInboxService.CreateDraftAnywayAsync(
             _selectedMessage.Id,
-            _currentUserId,
             replaceDuplicateBillId: dupBill.Id,
             specificAttachmentPath: dupMatch?.AttachmentPath,
-            specificAttachmentName: dupMatch?.AttachmentFileName);
+            specificAttachmentName: dupMatch?.AttachmentFileName,
+            actor: emp);
         if (draft != null)
         {
             Snackbar.Add(string.Format(BizLoc["Separate draft bill created for {0} ({1})!"].Value, draft.SupplierName, draft.Amount.ToString("C2")), Severity.Success);
@@ -2641,8 +3309,14 @@
     private async Task MarkAsProcessed()
     {
         if (_selectedMessage == null) return;
+
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to update billing email status.");
+        if (emp == null) return;
+
         var msgId = _selectedMessage.Id;
-        BillInboxService.UpdateEmailBillingStatus(msgId, CompanyBillInboxConstants.BillingStatus.Approved, _currentUserId);
+        BillInboxService.UpdateEmailBillingStatus(msgId, CompanyBillInboxConstants.BillingStatus.Approved, emp.Id, actor: emp);
         Snackbar.Add(BizLoc["Email marked as dealt with"].Value, Severity.Success);
         await AdvanceToNextAfterActionAsync(msgId);
     }
@@ -2650,8 +3324,14 @@
     private async Task DismissEmail()
     {
         if (_selectedMessage == null) return;
+
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to dismiss billing emails.");
+        if (emp == null) return;
+
         var msgId = _selectedMessage.Id;
-        BillInboxService.UpdateEmailBillingStatus(msgId, CompanyBillInboxConstants.BillingStatus.Dismissed, _currentUserId);
+        BillInboxService.UpdateEmailBillingStatus(msgId, CompanyBillInboxConstants.BillingStatus.Dismissed, emp.Id, actor: emp);
         Snackbar.Add(BizLoc["Email dismissed"].Value, Severity.Info);
         await AdvanceToNextAfterActionAsync(msgId);
     }
@@ -2659,16 +3339,15 @@
     private async Task ReopenEmail()
     {
         if (_selectedMessage == null) return;
-        BillInboxService.UpdateEmailBillingStatus(_selectedMessage.Id, CompanyBillInboxConstants.BillingStatus.Unprocessed, _currentUserId);
+
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to reopen billing emails.");
+        if (emp == null) return;
+
+        BillInboxService.UpdateEmailBillingStatus(_selectedMessage.Id, CompanyBillInboxConstants.BillingStatus.Unprocessed, emp.Id, actor: emp);
         Snackbar.Add(BizLoc["Email marked as unprocessed"].Value, Severity.Info);
         await ReloadMessagesAsync();
-    }
-
-    private static string FormatBytes(long bytes)
-    {
-        if (bytes < 1024) return $"{bytes} B";
-        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
-        return $"{bytes / (1024.0 * 1024.0):F1} MB";
     }
 
     private Color GetStepStatusColor(DecisionStepStatus status) => status switch
@@ -2734,6 +3413,11 @@
     {
         if (_isDeleting) return;
 
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to delete billing emails.");
+        if (emp == null) return;
+
         var (draftCount, _) = GetMessageBillCounts(msg);
         var folderName = string.IsNullOrWhiteSpace(_settings.DeletedFolderName) ? "SPOKES_DELETED" : _settings.DeletedFolderName;
         string content = draftCount > 0
@@ -2748,11 +3432,16 @@
 
         if (confirmed == true)
         {
+            var deleteActor = await RequireLiveEmployeeAsync(
+                e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+                "You do not have permission to delete billing emails.");
+            if (deleteActor == null) return;
+
             _isDeleting = true;
             StateHasChanged();
             try
             {
-                var result = await BillInboxService.DeleteEmailAsync(msg.Id, _currentUserId, deleteLinkedDrafts: true);
+                var result = await BillInboxService.DeleteEmailAsync(msg.Id, deleteLinkedDrafts: true, actor: deleteActor);
                 if (result.Success)
                 {
                     Snackbar.Add(string.Format(BizLoc["Email moved to '{0}' and draft bills cleaned up."].Value, folderName), Severity.Success);
@@ -2780,6 +3469,11 @@
     {
         if (_isDeleting || _selectedMessage == null || string.IsNullOrWhiteSpace(_selectedMessage.FromAddress)) return;
 
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Admin.ManageSettings),
+            "You do not have permission to block sender domains.");
+        if (emp == null) return;
+
         var domain = _selectedMessage.FromAddress.Split('@').LastOrDefault()?.ToLowerInvariant();
         if (string.IsNullOrEmpty(domain)) return;
 
@@ -2792,12 +3486,17 @@
 
         if (confirmed == true)
         {
+            var blockActor = await RequireLiveEmployeeAsync(
+                e => e.HasEffectivePermission(AppPermissions.Admin.ManageSettings),
+                "You do not have permission to block sender domains.");
+            if (blockActor == null) return;
+
             _isDeleting = true;
             StateHasChanged();
             try
             {
                 var msgId = _selectedMessage.Id;
-                var result = await BillInboxService.BlockSenderDomainAsync(_selectedMessage.FromAddress, msgId, _currentUserId);
+                var result = await BillInboxService.BlockSenderDomainAsync(_selectedMessage.FromAddress, msgId, actor: blockActor);
                 if (result.Success)
                 {
                     Snackbar.Add(string.Format(BizLoc["Domain '{0}' added to ignored list and email deleted."].Value, domain), Severity.Success);
@@ -2822,9 +3521,65 @@
         }
     }
 
+    private async Task OpenLinkToExistingInvoice()
+    {
+        if (_selectedMessage == null) return;
+
+        var emp = await RequireLiveEmployeeAsync(
+            CanManageInvoices,
+            "You do not have permission to link emails to invoices.");
+        if (emp == null) return;
+
+        var parameters = new DialogParameters<LinkInvoiceToEmailDialog>
+        {
+            { x => x.Email, _selectedMessage }
+        };
+
+        var dialog = await DialogService.ShowAsync<LinkInvoiceToEmailDialog>(BizLoc["Link Email to Existing Invoice"], parameters, new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = true
+        });
+
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled && result.Data is LinkInvoiceToEmailDialog.LinkInvoiceResult linkResult)
+        {
+            var linkActor = await RequireLiveEmployeeAsync(
+                CanManageInvoices,
+                "You do not have permission to link emails to invoices.");
+            if (linkActor == null) return;
+
+            var msgId = _selectedMessage.Id;
+            var invoice = linkResult.Invoice;
+            if (!IsInvoiceAccessibleToCurrentUser(invoice, linkActor))
+            {
+                Snackbar.Add(BizLoc["You do not have access to this invoice."].Value, Severity.Error);
+                return;
+            }
+
+            BillInboxService.LinkReceiptToInvoice(msgId, invoice.Id, linkActor.Id, linkResult.Payment, actor: linkActor);
+
+            if (linkResult.Payment != null)
+            {
+                Snackbar.Add(string.Format(BizLoc["Email linked to invoice #{0}, payment of {1} recorded, and marked as dealt with!"].Value, invoice.InvoiceNumber, linkResult.Payment.Amount.ToString("C2")), Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(string.Format(BizLoc["Email linked to invoice #{0} and marked as dealt with!"].Value, invoice.InvoiceNumber), Severity.Success);
+            }
+            await AdvanceToNextAfterActionAsync(msgId);
+        }
+    }
+
     private async Task OpenLinkToExistingBill()
     {
         if (_selectedMessage == null) return;
+
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to link emails to bills.");
+        if (emp == null) return;
 
         var parameters = new DialogParameters<LinkBillToEmailDialog>
         {
@@ -2841,6 +3596,11 @@
         var result = await dialog.Result;
         if (result != null && !result.Canceled)
         {
+            var linkActor = await RequireLiveEmployeeAsync(
+                e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+                "You do not have permission to link emails to bills.");
+            if (linkActor == null) return;
+
             var msgId = _selectedMessage.Id;
             if (result.Data is LinkBillToEmailDialog.ExistingBillItem item)
             {
@@ -2850,22 +3610,36 @@
                         msgId,
                         item.RecurringExpense.Id,
                         item.RecurringRecord.Id,
-                        _currentUserId);
+                        linkActor.Id,
+                        actor: linkActor);
                     Snackbar.Add(string.Format(BizLoc["Email linked to recurring bill '{0}' and marked as dealt with!"].Value, item.SupplierName), Severity.Success);
                 }
                 else if (item.Bill != null)
                 {
+                    if (!IsBillAccessibleToCurrentUser(item.Bill, linkActor))
+                    {
+                        Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+                        return;
+                    }
+
                     BillInboxService.AttachAttachmentToExistingBill(
                         msgId,
                         item.Bill.Id,
-                        _currentUserId);
+                        linkActor.Id,
+                        actor: linkActor);
                     Snackbar.Add(string.Format(BizLoc["Email linked to bill #{0} and marked as dealt with!"].Value, item.InvoiceNumber ?? item.Bill.Id), Severity.Success);
                 }
                 await AdvanceToNextAfterActionAsync(msgId);
             }
             else if (result.Data is Bill linkedBill)
             {
-                BillInboxService.AttachAttachmentToExistingBill(msgId, linkedBill.Id, _currentUserId);
+                if (!IsBillAccessibleToCurrentUser(linkedBill, linkActor))
+                {
+                    Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+                    return;
+                }
+
+                BillInboxService.AttachAttachmentToExistingBill(msgId, linkedBill.Id, linkActor.Id, actor: linkActor);
                 Snackbar.Add(string.Format(BizLoc["Email linked to bill #{0} and marked as dealt with!"].Value, linkedBill.InvoiceNumber ?? linkedBill.Id), Severity.Success);
                 await AdvanceToNextAfterActionAsync(msgId);
             }
@@ -2875,6 +3649,11 @@
     private async Task OpenAddToRecurringBill()
     {
         if (_selectedMessage == null) return;
+
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to add bills to recurring expenses.");
+        if (emp == null) return;
 
         var parameters = new DialogParameters<AddBillToRecurringExpenseDialog>
         {
@@ -2902,12 +3681,17 @@
 
     private async Task ViewLinkedRecurringExpense(RecurringExpense? expense = null)
     {
+        var emp = await RequireLiveEmployeeAsync(
+            CanViewBills,
+            "You do not have permission to view recurring bills.");
+        if (emp == null) return;
+
         var target = expense ?? (!string.IsNullOrEmpty(_selectedMessage?.LinkedRecurringExpenseId) ? Db.RecurringExpenses.GetById(_selectedMessage.LinkedRecurringExpenseId) : null);
         if (target == null) return;
 
         var parameters = new DialogParameters<RecurringExpenseDialog>
         {
-            { x => x.Expense, target },
+            { x => x.Expense, CloneRecurringExpense(target) },
             { x => x.IsNew, false },
             { x => x.ActiveTabIndex, 1 } // Bill History tab
         };
@@ -2925,13 +3709,29 @@
         var result = await dialog.Result;
         if (result != null && !result.Canceled && result.Data is RecurringExpense updated)
         {
-            Db.RecurringExpenses.Save(updated);
+            var saveActor = await RequireLiveEmployeeAsync(
+                e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+                "You do not have permission to save recurring bills.");
+            if (saveActor == null) return;
+
+            AccountingService.SaveRecurringExpense(updated, saveActor);
             StateHasChanged();
         }
     }
 
     private async Task OpenLinkPoDialog(Bill draft)
     {
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills) && CanViewPurchaseOrders(e),
+            "You do not have permission to link purchase orders.");
+        if (emp == null) return;
+
+        if (!IsBillAccessibleToCurrentUser(draft, emp))
+        {
+            Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+            return;
+        }
+
         var parameters = new DialogParameters<SelectPurchaseOrderDialog>
         {
             { x => x.SupplierName, draft.SupplierName }
@@ -2947,20 +3747,44 @@
         var result = await dialog.Result;
         if (result != null && !result.Canceled && result.Data is PurchaseOrder po)
         {
-            draft.PurchaseOrderId = po.Id;
-            draft.AutoMatchReason = $"Manually linked to PO #{po.PoNumber}";
-            Db.Bills.Save(draft);
+            var saveActor = await RequireLiveEmployeeAsync(
+                e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills) && CanViewPurchaseOrders(e),
+                "You do not have permission to link purchase orders.");
+            if (saveActor == null) return;
+
+            if (!IsBillAccessibleToCurrentUser(draft, saveActor) || !IsPoAccessibleToCurrentUser(po, saveActor))
+            {
+                Snackbar.Add(BizLoc["You do not have access to link this purchase order."].Value, Severity.Error);
+                return;
+            }
+
+            var updatedDraft = CloneBill(draft);
+            updatedDraft.PurchaseOrderId = po.Id;
+            updatedDraft.AutoMatchReason = $"Manually linked to PO #{po.PoNumber}";
+            AccountingService.SaveBill(updatedDraft, saveActor.FullName, saveActor);
             Snackbar.Add(string.Format(BizLoc["Purchase Order #{0} linked to draft bill."].Value, po.PoNumber), Severity.Success);
             await ReloadMessagesAsync();
         }
     }
 
-    private void UnlinkPoFromDraft(Bill draft)
+    private async Task UnlinkPoFromDraft(Bill draft)
     {
-        draft.PurchaseOrderId = null;
-        draft.AutoMatchReason = null;
-        Db.Bills.Save(draft);
+        var emp = await RequireLiveEmployeeAsync(
+            e => e.HasEffectivePermission(AppPermissions.Purchases.ManageBills),
+            "You do not have permission to unlink purchase orders.");
+        if (emp == null) return;
+
+        if (!IsBillAccessibleToCurrentUser(draft, emp))
+        {
+            Snackbar.Add(BizLoc["You do not have access to this bill."].Value, Severity.Error);
+            return;
+        }
+
+        var updatedDraft = CloneBill(draft);
+        updatedDraft.PurchaseOrderId = null;
+        updatedDraft.AutoMatchReason = null;
+        AccountingService.SaveBill(updatedDraft, emp.FullName, emp);
         Snackbar.Add(BizLoc["Purchase Order unlinked from draft bill."], Severity.Info);
-        StateHasChanged();
+        await ReloadMessagesAsync();
     }
 }

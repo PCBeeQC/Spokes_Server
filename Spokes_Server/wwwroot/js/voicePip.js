@@ -4,18 +4,20 @@
 //  2. Desktop (Electron 45) Frameless Spokes Child Window ('spokes_call_pip') with zero-copy 60fps WebRTC tracks
 //  3. Web Browser OS PiP via Document PiP API (Spokes design language) + Canvas HTMLVideoElement fallback (Safari/Firefox)
 //  4. Android Native Activity PiP 0ms full-bleed stage mode + ForegroundService metadata bridge
-//  5. iOS Native AVPictureInPictureVideoCallViewController metadata + 15fps downscaled video frame bridge
+//  5. iOS Native AVPictureInPictureVideoCallViewController metadata & single-room native video coordinator
+
+import { isAppleMobileDevice, isNativePlatform } from './voice/voiceState.js';
 
 const ACTIVE_SPEAKER_HYSTERESIS_MS = 1500;
 const PIP_CORNER_STORAGE_KEY = 'spokes_pip_corner_v1';
 const DESKTOP_PIP_FRAME_NAME = 'spokes_call_pip';
-const IOS_PIP_FPS_INTERVAL_MS = 67; // ~15 fps while iOS VoIP PiP is actively visible
 const FALLBACK_CANVAS_INTERVAL_MS = 67;
 
 let _dotnetHelper = null;
 let _actions = {
     onToggleMute: null,
     onToggleCamera: null,
+    onToggleScreenShare: null,
     onHangUp: null,
     onReturnToCall: null,
     onRestoreStageTracks: null
@@ -30,6 +32,7 @@ const _callMeta = {
     channelName: '',
     serverName: '',
     localUserId: '',
+    isNativePlatform: false,
     isMuted: false,
     isDeafened: false,
     isVideoOn: false,
@@ -37,7 +40,7 @@ const _callMeta = {
     focusedParticipantId: '',
     inAppPipActive: false,
     speakingIds: new Set(),
-    // Map<id, { id, name, avatarUrl, initials, isMuted }>
+    // Map<id, { id, name, avatarUrl, initials, profileColor, isMuted }>
     participants: new Map()
 };
 
@@ -58,8 +61,8 @@ let _fallbackSourceVideo = null;
 let _fallbackTimer = null;
 let _isFallbackPipOpen = false;
 
-// iOS Native PiP state
-let _iosPipStreaming = false;
+// iOS Native OS PiP state (signaled by SpokesIosPipController)
+let _isIosOsPipActive = false;
 
 // In-App PiP drag state
 let _dragCleanup = null;
@@ -113,26 +116,71 @@ export function isStageSuppressedByExternalPip() {
     );
 }
 
-function pinRemoteTrackForPip(entry) {
-    if (!entry) return;
+const _appliedTrackPolicies = new WeakMap();
+
+function resolveLivekitVideoQuality(qualityKey) {
+    const vq = window.LivekitClient?.VideoQuality;
+    if (!vq || !qualityKey) return null;
+    if (qualityKey === 'LOW') return vq.LOW !== undefined ? vq.LOW : (vq.MEDIUM !== undefined ? vq.MEDIUM : vq.HIGH);
+    if (qualityKey === 'MEDIUM') return vq.MEDIUM !== undefined ? vq.MEDIUM : vq.HIGH;
+    return vq.HIGH;
+}
+
+function applyRemoteTrackPolicy(entry, enabled, qualityKey = null, width = 0, height = 0) {
+    if (!entry || entry.isLocal) return;
     const pub = entry.publication;
     if (!pub) return;
 
+    const resolvedQuality = enabled ? resolveLivekitVideoQuality(qualityKey) : null;
+    const targetWidth = enabled ? width : 0;
+    const targetHeight = enabled ? height : 0;
+    const prev = _appliedTrackPolicies.get(pub);
+    if (prev
+        && prev.enabled === enabled
+        && prev.quality === resolvedQuality
+        && prev.width === targetWidth
+        && prev.height === targetHeight) {
+        return;
+    }
+
+    _appliedTrackPolicies.set(pub, {
+        enabled,
+        quality: resolvedQuality,
+        width: targetWidth,
+        height: targetHeight
+    });
+
     try {
-        if (typeof pub.setSubscribed === 'function' && pub.isSubscribed === false) {
-            pub.setSubscribed(true);
-        }
-        if (typeof pub.setEnabled === 'function') {
-            pub.setEnabled(true);
-        }
-        if (typeof pub.setVideoQuality === 'function' && window.LivekitClient?.VideoQuality) {
-            pub.setVideoQuality(window.LivekitClient.VideoQuality.HIGH);
+        if (enabled) {
+            if (typeof pub.setSubscribed === 'function' && pub.isSubscribed === false) {
+                pub.setSubscribed(true);
+            }
+            if (typeof pub.setEnabled === 'function') {
+                pub.setEnabled(true);
+            }
+            if (resolvedQuality !== null && typeof pub.setVideoQuality === 'function') {
+                pub.setVideoQuality(resolvedQuality);
+            }
+            if (targetWidth > 0 && targetHeight > 0 && typeof pub.setVideoDimensions === 'function') {
+                pub.setVideoDimensions({ width: targetWidth, height: targetHeight });
+            }
+        } else {
+            if (typeof pub.setEnabled === 'function') {
+                pub.setEnabled(false);
+            }
         }
     } catch (e) {}
 }
 
-function unpinRemoteTrackForPip(entry) {
-    if (!entry) return;
+function ensureTrackSubscribed(entry) {
+    if (!entry || entry.isLocal) return;
+    const pub = entry.publication;
+    if (!pub) return;
+    try {
+        if (typeof pub.setSubscribed === 'function' && pub.isSubscribed === false) {
+            pub.setSubscribed(true);
+        }
+    } catch (e) {}
 }
 
 function cleanupTrackEntry(entry) {
@@ -141,42 +189,78 @@ function cleanupTrackEntry(entry) {
         try { entry.cleanupTrackListeners(); } catch (e) {}
         entry.cleanupTrackListeners = null;
     }
-    unpinRemoteTrackForPip(entry);
 }
 
 function syncPipTrackSubscriptions(target) {
-    const isAnyPipSurfaceActive = Boolean(
-        _callMeta.inAppPipActive
-        || _isNativeMobilePip
+    const overlay = typeof document !== 'undefined' ? document.getElementById('spokes-voice-pip-overlay') : null;
+    const isMinimizedPill = Boolean(overlay?.classList.contains('is-minimized-pill')) && !_isNativeMobilePip;
+    const isHostViewVisible = typeof window === 'undefined' || window._spokesHostViewVisible !== false;
+    const isExternalPipActive = Boolean(
+        _isNativeMobilePip
         || (_docPipWindow && !_docPipWindow.closed)
         || _isFallbackPipOpen
-        || _iosPipStreaming
+        || _isIosOsPipActive
     );
-    const isStageMounted = typeof document !== 'undefined' && Boolean(document.getElementById('voice-video-container'));
+    const isVisibleInAppPip = Boolean(isHostViewVisible && _callMeta.inAppPipActive && !isMinimizedPill);
+    const isStageMounted = isHostViewVisible
+        && typeof document !== 'undefined'
+        && Boolean(document.getElementById('voice-video-container'))
+        && !isExternalPipActive;
+
+    // 1. Full call stage is visible (not in PiP): restore full quality for stage rendering
+    if (isStageMounted && !_callMeta.inAppPipActive) {
+        for (const entry of _videoTracks.values()) {
+            if (!entry || entry.isLocal) continue;
+            applyRemoteTrackPolicy(entry, true, 'HIGH', 3840, 2160);
+        }
+        return;
+    }
+
+    // 2. Minimized pill or hidden surface while stage is unmounted: pause remote video RTP (0 kbps)
+    if (!isVisibleInAppPip && !isExternalPipActive) {
+        for (const entry of _videoTracks.values()) {
+            if (!entry || entry.isLocal) continue;
+            applyRemoteTrackPolicy(entry, false);
+        }
+        return;
+    }
+
+    // 3. Active PiP surface: request SFU Simulcast LOW/MEDIUM for small webcam tiles, HIGH for screen shares,
+    // and disable remote video tracks that are not rendered on the active PiP surface.
     const pinnedPrimary = target?.primaryTrack || null;
     const pinnedPresenterCam = target?.presenterCamTrack || null;
-    const pinnedSelf = target?.selfTrack || null;
-    const pinAllForMultiTilePip = isAnyPipSurfaceActive && (
-        target?.layoutMode === 'grid'
-        || (Array.isArray(target?.filmstripParticipants) && target.filmstripParticipants.length > 0)
-    );
+    const isGrid = target?.layoutMode === 'grid';
+    const gridIds = new Set((target?.gridParticipants || []).map(p => p?.id).filter(Boolean));
+    const filmstripIds = new Set((target?.filmstripParticipants || []).map(p => p?.id).filter(Boolean));
 
     for (const entry of _videoTracks.values()) {
-        if (!entry) continue;
-        if (
-            (isAnyPipSurfaceActive && (
-                pinAllForMultiTilePip
-                || entry === pinnedPrimary
-                || entry === pinnedPresenterCam
-                || entry === pinnedSelf
-            ))
-            || !isStageMounted
-        ) {
-            pinRemoteTrackForPip(entry);
+        if (!entry || entry.isLocal) continue;
+
+        const isScreen = entry.source === 'screenshare';
+        const isPrimary = !isGrid && entry === pinnedPrimary;
+        const isPresenterCam = !isGrid && entry === pinnedPresenterCam;
+        const isInGridTile = isGrid && gridIds.has(entry.participantId);
+        const isInFilmstrip = !isGrid && filmstripIds.has(entry.participantId);
+
+        if (!isPrimary && !isPresenterCam && !isInGridTile && !isInFilmstrip) {
+            applyRemoteTrackPolicy(entry, false);
+            continue;
+        }
+
+        if (isScreen) {
+            applyRemoteTrackPolicy(entry, true, 'HIGH', 1920, 1080);
+        } else if (isPrimary) {
+            // Single focused webcam in PiP (~320x198px): MEDIUM (640x360) stays sharp at 2x DPI while saving >70% bandwidth
+            applyRemoteTrackPolicy(entry, true, 'MEDIUM', 640, 360);
         } else {
-            unpinRemoteTrackForPip(entry);
+            // Grid tile / filmstrip / presenter-cam thumbnail (~140-180px): LOW (320x180) simulcast layer
+            applyRemoteTrackPolicy(entry, true, 'LOW', 320, 180);
         }
     }
+}
+
+function isPipTrackAlive(entry) {
+    return Boolean(entry && (entry.isNative || (entry.mediaStreamTrack && entry.mediaStreamTrack.readyState !== 'ended')));
 }
 
 export function registerPipVideoTrack(
@@ -189,7 +273,8 @@ export function registerPipVideoTrack(
     livekitTrack = null,
     publication = null
 ) {
-    if (!participantId || !mediaStreamTrack) return;
+    const isNativeTrack = Boolean(publication?.isNativeTrack);
+    if (!participantId || (!mediaStreamTrack && !isNativeTrack)) return;
     const normalizedSource = source === 'screenshare' ? 'screenshare' : 'camera';
     const key = `${participantId}:${normalizedSource}`;
     const existing = _videoTracks.get(key);
@@ -201,17 +286,17 @@ export function registerPipVideoTrack(
 
     let width = explicitWidth > 0 ? explicitWidth : 0;
     let height = explicitHeight > 0 ? explicitHeight : 0;
-    let facingMode = '';
+    let facingMode = typeof publication?.facingMode === 'string' ? publication.facingMode : '';
     try {
-        if (typeof mediaStreamTrack.getSettings === 'function') {
+        if (mediaStreamTrack && typeof mediaStreamTrack.getSettings === 'function') {
             const s = mediaStreamTrack.getSettings() || {};
             if (width <= 0 && s.width > 0) width = s.width;
             if (height <= 0 && s.height > 0) height = s.height;
-            if (typeof s.facingMode === 'string') facingMode = s.facingMode;
+            if (!facingMode && typeof s.facingMode === 'string') facingMode = s.facingMode;
         }
     } catch (e) {}
 
-    if ((width <= 0 || height <= 0) && existing && existing.mediaStreamTrack === mediaStreamTrack) {
+    if ((width <= 0 || height <= 0) && existing && (existing.mediaStreamTrack === mediaStreamTrack || (isNativeTrack && existing.isNative))) {
         if (width <= 0 && existing.width > 0) width = existing.width;
         if (height <= 0 && existing.height > 0) height = existing.height;
     }
@@ -222,7 +307,8 @@ export function registerPipVideoTrack(
     const entry = {
         participantId,
         source: normalizedSource,
-        mediaStreamTrack,
+        mediaStreamTrack: mediaStreamTrack || null,
+        isNative: isNativeTrack,
         isLocal: Boolean(isLocal),
         width,
         height,
@@ -232,7 +318,7 @@ export function registerPipVideoTrack(
         cleanupTrackListeners: existing?.mediaStreamTrack === mediaStreamTrack ? existing.cleanupTrackListeners : null
     };
 
-    if (!entry.cleanupTrackListeners && typeof mediaStreamTrack.addEventListener === 'function') {
+    if (!entry.cleanupTrackListeners && mediaStreamTrack && typeof mediaStreamTrack.addEventListener === 'function') {
         const onTrackUnmute = () => {
             try {
                 if (typeof mediaStreamTrack.getSettings === 'function') {
@@ -283,7 +369,55 @@ export function unregisterPipVideoTrack(participantId, source = null) {
     refreshAllPipSurfaces();
 }
 
+function computePipLayoutSignature(target) {
+    if (!target) return '';
+    const primaryKey = target.primaryTrack ? `${target.primaryTrack.participantId}:${target.primaryTrack.source}` : '';
+    const presenterKey = target.presenterCamTrack ? `${target.presenterCamTrack.participantId}:${target.presenterCamTrack.source}` : '';
+    const selfKey = target.selfTrack ? `${target.selfTrack.participantId}:${target.selfTrack.source}` : '';
+    const gridKey = (target.gridParticipants || []).map(p => p?.id || '').join(',');
+    const stripKey = (target.filmstripParticipants || []).map(p => p?.id || '').join(',');
+    return `${target.layoutMode}|${target.mode}|${primaryKey}|${presenterKey}|${selfKey}|${target.speaker?.id || ''}|${gridKey}|${stripKey}`;
+}
+
+function applyPipSpeakingClassesOnly(target) {
+    if (typeof document !== 'undefined') {
+        const overlay = document.getElementById('spokes-voice-pip-overlay');
+        if (overlay) {
+            const tiles = overlay.querySelectorAll('.pip-participant-tile');
+            for (let i = 0; i < tiles.length; i++) {
+                const pid = tiles[i].dataset.participantId || '';
+                tiles[i].classList.toggle('is-speaking', Boolean(pid && _callMeta.speakingIds.has(pid)));
+            }
+            const dot = overlay.querySelector('.voice-pip-live-dot');
+            if (dot) {
+                const isAnySpeaking = target?.speaker?.id
+                    ? _callMeta.speakingIds.has(target.speaker.id)
+                    : _callMeta.speakingIds.size > 0;
+                dot.classList.toggle('is-speaking', Boolean(isAnySpeaking));
+            }
+            const ring = overlay.querySelector('.voice-pip-avatar-ring');
+            if (ring) {
+                ring.classList.toggle('is-speaking', Boolean(target?.isSpeaking));
+            }
+        }
+    }
+
+    if (_docPipWindow && !_docPipWindow.closed && _docPipWindow.document) {
+        const docTiles = _docPipWindow.document.querySelectorAll('.pip-participant-tile');
+        for (let i = 0; i < docTiles.length; i++) {
+            const pid = docTiles[i].dataset.participantId || '';
+            docTiles[i].classList.toggle('is-speaking', Boolean(pid && _callMeta.speakingIds.has(pid)));
+        }
+        const docDot = _docPipWindow.document.querySelector('.voice-pip-live-dot');
+        if (docDot) {
+            docDot.classList.toggle('is-speaking', Boolean(target?.isSpeaking));
+        }
+    }
+}
+
 export function updatePipSpeakingParticipants(speakingIdsArray) {
+    const prevSignature = computePipLayoutSignature(selectPipTarget());
+
     _callMeta.speakingIds.clear();
     const now = Date.now();
     if (Array.isArray(speakingIdsArray)) {
@@ -310,6 +444,13 @@ export function updatePipSpeakingParticipants(speakingIdsArray) {
         }
     }
 
+    const nextTarget = selectPipTarget();
+    const nextSignature = computePipLayoutSignature(nextTarget);
+    if (prevSignature === nextSignature) {
+        applyPipSpeakingClassesOnly(nextTarget);
+        return;
+    }
+
     refreshAllPipSurfaces();
 }
 
@@ -321,6 +462,7 @@ export function updatePipCallState(partialState = {}) {
         _callMeta.serverName = partialState.serverName.trim();
     }
     if (typeof partialState.localUserId === 'string') _callMeta.localUserId = partialState.localUserId;
+    if (typeof partialState.isNativePlatform === 'boolean') _callMeta.isNativePlatform = partialState.isNativePlatform;
     if (typeof partialState.isMuted === 'boolean') _callMeta.isMuted = partialState.isMuted;
     if (typeof partialState.isDeafened === 'boolean') _callMeta.isDeafened = partialState.isDeafened;
     if (typeof partialState.isVideoOn === 'boolean') _callMeta.isVideoOn = partialState.isVideoOn;
@@ -337,6 +479,7 @@ export function updatePipCallState(partialState = {}) {
                 name,
                 avatarUrl: normalizeAvatarUrl(p.avatarUrl || ''),
                 initials: p.initials || computeInitials(name),
+                profileColor: p.profileColor || '#673ab7',
                 isMuted: Boolean(p.isMuted)
             });
         }
@@ -366,7 +509,8 @@ export function resetPipOnCallEnd() {
     _stickySpeakerUntil = 0;
 
     closeOsPip();
-    _iosPipStreaming = false;
+    _isIosOsPipActive = false;
+    _callMeta.isNativePlatform = false;
     clearMediaSession();
     detachInAppPipVideos();
 
@@ -453,50 +597,49 @@ function resolveTrackIntrinsicDimensions(entry) {
 }
 
 export function selectPipTarget() {
-    if (_callMeta.active && _callMeta.localUserId && !_callMeta.participants.has(_callMeta.localUserId)) {
-        _callMeta.participants.set(_callMeta.localUserId, {
-            id: _callMeta.localUserId,
-            name: _callMeta.localUserId,
-            avatarUrl: '',
-            initials: computeInitials(_callMeta.localUserId),
-            isMuted: Boolean(_callMeta.isMuted)
-        });
-    }
-
     const aliveTracks = [];
     for (const [key, entry] of _videoTracks.entries()) {
-        if (!entry.mediaStreamTrack || entry.mediaStreamTrack.readyState === 'ended') {
+        if (!isPipTrackAlive(entry)) {
             _videoTracks.delete(key);
             continue;
-        }
-        if (entry.participantId && !_callMeta.participants.has(entry.participantId)) {
-            _callMeta.participants.set(entry.participantId, {
-                id: entry.participantId,
-                name: entry.participantId,
-                avatarUrl: '',
-                initials: computeInitials(entry.participantId),
-                isMuted: false
-            });
         }
         aliveTracks.push(entry);
     }
 
+    const resolveKnownParticipant = (participantId) => {
+        if (!participantId) return null;
+        if (_callMeta.participants.has(participantId)) {
+            return _callMeta.participants.get(participantId);
+        }
+        const fallbackName = _callMeta.channelName || 'Voice Call';
+        return {
+            id: participantId,
+            name: fallbackName,
+            avatarUrl: '',
+            initials: computeInitials(fallbackName),
+            profileColor: '#673ab7',
+            isMuted: participantId === _callMeta.localUserId ? Boolean(_callMeta.isMuted) : false
+        };
+    };
+
     const findTrack = (predicate) => aliveTracks.find(predicate) || null;
-    const focusedId = _callMeta.focusedParticipantId && _callMeta.participants.has(_callMeta.focusedParticipantId)
+    const isSingleStagePip = Boolean(_isNativeMobilePip || _isIosOsPipActive || _callMeta.isNativePlatform);
+    const hasParticipant = (id) => Boolean(id && (_callMeta.participants.has(id) || aliveTracks.some(t => t.participantId === id)));
+    const focusedId = _callMeta.focusedParticipantId && hasParticipant(_callMeta.focusedParticipantId)
         ? _callMeta.focusedParticipantId
         : '';
 
-    const canUseGrid = !_isNativeMobilePip && !_iosPipStreaming && _callMeta.participants.size > 1;
+    const canUseGrid = !isSingleStagePip && _callMeta.participants.size > 1;
     const layoutMode = (!focusedId && canUseGrid) ? 'grid' : 'focus';
 
     let primary = null;
     if (focusedId) {
-        // Strictly honor the focused participant: prefer their screen share, then their camera.
-        // Never hijack the primary view with a different participant's screen share when a user is focused.
+        // In multi-tile PiP (Desktop / Web / In-App), the maximized stage belongs strictly to the focused
+        // participant (their screen share, camera, or avatar card). Never hijack another user's video track.
         primary = findTrack(t => t.participantId === focusedId && t.source === 'screenshare')
             || findTrack(t => t.participantId === focusedId && t.source === 'camera');
-    } else {
-        // Unfocused fallback (used by 1-on-1, native mobile PiP, or canvas fallback):
+    }
+    if (!primary && (!focusedId || isSingleStagePip)) {
         // 1. Any remote screen share
         primary = findTrack(t => !t.isLocal && t.source === 'screenshare')
             // 2. Sticky active speaker camera (remote)
@@ -506,7 +649,9 @@ export function selectPipTarget() {
             // 3. Any remote camera
             || findTrack(t => !t.isLocal && t.source === 'camera')
             // 4. Local screen share
-            || findTrack(t => t.isLocal && t.source === 'screenshare');
+            || findTrack(t => t.isLocal && t.source === 'screenshare')
+            // 5. In native mobile PiP or solo call, promote local camera so self-preview fills the PiP window
+            || ((isSingleStagePip || _callMeta.participants.size <= 1) ? findTrack(t => t.isLocal && t.source === 'camera') : null);
     }
 
     // When the primary feed is a screen share, overlay the streamer's webcam on the stream
@@ -514,28 +659,36 @@ export function selectPipTarget() {
         ? findTrack(t => t.participantId === primary.participantId && t.source === 'camera')
         : null;
 
-    // Local camera preview is always the local user's own camera in the top-left corner
-    const localCam = findTrack(t => t.isLocal && t.source === 'camera');
-    const selfCamera = (localCam && primary !== localCam && presenterCamTrack !== localCam)
-        ? localCam
-        : null;
-
-    const speaker = focusedId
-        ? (_callMeta.participants.get(focusedId) || resolveDisplayParticipant())
+    const speaker = (focusedId && !isSingleStagePip)
+        ? (resolveKnownParticipant(focusedId) || resolveDisplayParticipant())
         : (primary
-            ? (_callMeta.participants.get(primary.participantId) || resolveDisplayParticipant())
-            : resolveDisplayParticipant());
+            ? (resolveKnownParticipant(primary.participantId) || resolveDisplayParticipant())
+            : (focusedId ? (resolveKnownParticipant(focusedId) || resolveDisplayParticipant()) : resolveDisplayParticipant()));
 
-    const primaryParticipantId = focusedId || primary?.participantId || speaker?.id || '';
+    const primaryParticipantId = (focusedId && !isSingleStagePip)
+        ? focusedId
+        : (primary?.participantId || focusedId || speaker?.id || '');
+    const localCam = findTrack(t => t.isLocal && t.source === 'camera');
+    const isDesktopDocPipOpen = Boolean(_docPipWindow && !_docPipWindow.closed);
+    const useFaceTimeSelfCorner = Boolean(
+        localCam
+        && primary
+        && primary !== localCam
+        && presenterCamTrack !== localCam
+        && (isSingleStagePip || (!isDesktopDocPipOpen && _callMeta.participants.size === 2 && primaryParticipantId !== _callMeta.localUserId))
+    );
+
     const filmstripParticipants = [];
-    if (layoutMode === 'focus' && !_isNativeMobilePip && _callMeta.participants.size > 1) {
+    if (layoutMode === 'focus' && !isSingleStagePip && _callMeta.participants.size > 1) {
         for (const p of _callMeta.participants.values()) {
             if (!p || !p.id) continue;
             if (p.id === primaryParticipantId) continue;
-            if (p.id === _callMeta.localUserId && !_callMeta.isScreenSharing) continue;
+            if (useFaceTimeSelfCorner && p.id === _callMeta.localUserId) continue;
             filmstripParticipants.push(p);
         }
     }
+
+    const selfCamera = useFaceTimeSelfCorner ? localCam : null;
 
     const gridParticipants = layoutMode === 'grid'
         ? Array.from(_callMeta.participants.values())
@@ -681,7 +834,7 @@ function detachNonPipElementsFromTrack(entry, keepEl1 = null, keepEl2 = null) {
 function attachMediaTrackToVideo(videoEl, trackEntry, shouldMirror = false) {
     if (!videoEl) return;
     ensurePipVideoElementListeners(videoEl);
-    if (!trackEntry || !trackEntry.mediaStreamTrack || trackEntry.mediaStreamTrack.readyState === 'ended') {
+    if (!isPipTrackAlive(trackEntry)) {
         if (videoEl._spokesAttachedLkTrack && typeof videoEl._spokesAttachedLkTrack.detach === 'function') {
             try { videoEl._spokesAttachedLkTrack.detach(videoEl); } catch (e) {}
             videoEl._spokesAttachedLkTrack = null;
@@ -690,10 +843,39 @@ function attachMediaTrackToVideo(videoEl, trackEntry, shouldMirror = false) {
             videoEl.pause();
             videoEl.srcObject = null;
         }
+        delete videoEl.dataset.nativeIdentity;
+        delete videoEl.dataset.nativeSource;
         videoEl.style.removeProperty('--self-aspect');
-        videoEl.classList.remove('has-stream', 'spokes-pip-mirror');
+        videoEl.classList.remove('has-stream', 'spokes-pip-mirror', 'native-video-active');
+        if (typeof _actions.onSyncNativeVideoSlots === 'function') {
+            try { _actions.onSyncNativeVideoSlots(); } catch (e) {}
+        }
         return;
     }
+
+    if (trackEntry.isNative) {
+        if (videoEl._spokesAttachedLkTrack && typeof videoEl._spokesAttachedLkTrack.detach === 'function') {
+            try { videoEl._spokesAttachedLkTrack.detach(videoEl); } catch (e) {}
+            videoEl._spokesAttachedLkTrack = null;
+        }
+        if (videoEl.srcObject) {
+            videoEl.pause();
+            videoEl.srcObject = null;
+        }
+        syncVideoIntrinsicAspectRatio(videoEl, trackEntry);
+        videoEl.dataset.nativeIdentity = trackEntry.participantId;
+        videoEl.dataset.nativeSource = trackEntry.source;
+        videoEl.classList.add('has-stream', 'native-video-active');
+        videoEl.classList.toggle('spokes-pip-mirror', Boolean(shouldMirror));
+        if (typeof _actions.onSyncNativeVideoSlots === 'function') {
+            try { _actions.onSyncNativeVideoSlots(); } catch (e) {}
+        }
+        return;
+    }
+
+    delete videoEl.dataset.nativeIdentity;
+    delete videoEl.dataset.nativeSource;
+    videoEl.classList.remove('native-video-active');
 
     syncVideoIntrinsicAspectRatio(videoEl, trackEntry);
     videoEl.style.opacity = '1';
@@ -711,23 +893,27 @@ function attachMediaTrackToVideo(videoEl, trackEntry, shouldMirror = false) {
     videoEl.classList.add('has-stream');
     videoEl.classList.toggle('spokes-pip-mirror', Boolean(shouldMirror));
 
+    let trackChanged = false;
     const isInAppPipVideo = isElementInsideInAppPip(videoEl);
     if (isInAppPipVideo && trackEntry.livekitTrack && typeof trackEntry.livekitTrack.attach === 'function') {
         if (videoEl._spokesAttachedLkTrack && videoEl._spokesAttachedLkTrack !== trackEntry.livekitTrack) {
             try { videoEl._spokesAttachedLkTrack.detach(videoEl); } catch (e) {}
             videoEl._spokesAttachedLkTrack = null;
+            trackChanged = true;
         }
 
         const existingTrack = videoEl.srcObject?.getVideoTracks?.()?.[0];
         const isAttachedToLk = Array.isArray(trackEntry.livekitTrack.attachedElements)
             && trackEntry.livekitTrack.attachedElements.includes(videoEl);
         if (!isAttachedToLk || existingTrack !== trackEntry.mediaStreamTrack) {
+            trackChanged = true;
             try {
                 trackEntry.livekitTrack.attach(videoEl);
                 videoEl._spokesAttachedLkTrack = trackEntry.livekitTrack;
             } catch (e) {}
         }
         if (videoEl.srcObject?.getVideoTracks?.()?.[0] !== trackEntry.mediaStreamTrack) {
+            trackChanged = true;
             const StreamCtor = videoEl.ownerDocument?.defaultView?.MediaStream || MediaStream;
             videoEl.srcObject = new StreamCtor([trackEntry.mediaStreamTrack]);
         }
@@ -738,32 +924,35 @@ function attachMediaTrackToVideo(videoEl, trackEntry, shouldMirror = false) {
             const selfEl = typeof document !== 'undefined' ? document.getElementById('spokes-pip-self-video') : null;
             detachNonPipElementsFromTrack(trackEntry, primaryEl, selfEl);
         }
-        pinRemoteTrackForPip(trackEntry);
+        ensureTrackSubscribed(trackEntry);
 
         videoEl.muted = true;
         videoEl.playsInline = true;
     } else {
         const existingTrack = videoEl.srcObject?.getVideoTracks?.()?.[0];
         if (existingTrack !== trackEntry.mediaStreamTrack) {
+            trackChanged = true;
             const StreamCtor = videoEl.ownerDocument?.defaultView?.MediaStream || MediaStream;
             videoEl.srcObject = new StreamCtor([trackEntry.mediaStreamTrack]);
         }
-        pinRemoteTrackForPip(trackEntry);
+        ensureTrackSubscribed(trackEntry);
     }
 
     syncVideoIntrinsicAspectRatio(videoEl, trackEntry);
     if (videoEl.paused) {
         videoEl.play().catch(() => {});
     }
-    setTimeout(() => {
-        if (videoEl.srcObject) {
-            syncVideoIntrinsicAspectRatio(videoEl, trackEntry);
-            if (videoEl.paused) {
-                videoEl.muted = true;
-                videoEl.play().catch(() => {});
+    if (trackChanged || videoEl.paused) {
+        setTimeout(() => {
+            if (videoEl.srcObject) {
+                syncVideoIntrinsicAspectRatio(videoEl, trackEntry);
+                if (videoEl.paused) {
+                    videoEl.muted = true;
+                    videoEl.play().catch(() => {});
+                }
             }
-        }
-    }, 60);
+        }, 60);
+    }
 }
 
 function syncPipTileCollection(containerEl, participants) {
@@ -813,7 +1002,7 @@ function syncPipTileCollection(containerEl, participants) {
             });
             avatarImg.addEventListener('error', () => {
                 avatarImg.style.display = 'none';
-                initialsEl.style.display = 'block';
+                initialsEl.style.display = 'flex';
             });
             tile.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -827,8 +1016,11 @@ function syncPipTileCollection(containerEl, participants) {
 
         const screenEntry = _videoTracks.get(`${p.id}:screenshare`);
         const camEntry = _videoTracks.get(`${p.id}:camera`);
-        const aliveScreen = screenEntry?.mediaStreamTrack?.readyState !== 'ended' ? screenEntry : null;
-        const aliveCam = camEntry?.mediaStreamTrack?.readyState !== 'ended' ? camEntry : null;
+        const isTileVideoRenderable = (entry) => Boolean(
+            entry && !entry.isNative && entry.mediaStreamTrack && entry.mediaStreamTrack.readyState !== 'ended'
+        );
+        const aliveScreen = isTileVideoRenderable(screenEntry) ? screenEntry : null;
+        const aliveCam = isTileVideoRenderable(camEntry) ? camEntry : null;
         const primaryEntry = aliveScreen || aliveCam || null;
         // Unified stream + streamer webcam overlay: when streaming, overlay the streamer's webcam
         const presenterCamEntry = (aliveScreen && aliveCam) ? aliveCam : null;
@@ -846,11 +1038,13 @@ function syncPipTileCollection(containerEl, participants) {
         attachMediaTrackToVideo(tileVideo, primaryEntry, shouldMirrorEntry(primaryEntry));
         attachMediaTrackToVideo(tilePresenterCam, presenterCamEntry, shouldMirrorEntry(presenterCamEntry));
 
+        const avatarWrap = tile.querySelector('.pip-tile-avatar-wrap');
         const nameEl = tile.querySelector('.pip-tile-name');
         const initialsEl = tile.querySelector('.pip-tile-initials');
         const avatarImg = tile.querySelector('.pip-tile-avatar-img');
         const muteEl = tile.querySelector('.pip-tile-mute');
 
+        if (avatarWrap) avatarWrap.style.setProperty('--avatar-bg', p.profileColor || '#673ab7');
         if (nameEl) nameEl.textContent = p.name || '';
         if (initialsEl) initialsEl.textContent = p.initials || computeInitials(p.name || '');
         if (muteEl) muteEl.classList.toggle('visible', isMuted);
@@ -863,24 +1057,46 @@ function syncPipTileCollection(containerEl, participants) {
             } else {
                 avatarImg.removeAttribute('src');
                 avatarImg.style.display = 'none';
-                if (initialsEl) initialsEl.style.display = 'block';
+                if (initialsEl) initialsEl.style.display = 'flex';
             }
         }
     }
 }
 
+function getInAppPipSlots() {
+    return {
+        primaryVideo: document.getElementById('spokes-pip-primary-video'),
+        presenterCamVideo: document.getElementById('spokes-pip-presenter-cam-video'),
+        selfVideo: document.getElementById('spokes-pip-self-video'),
+        gridContainer: document.getElementById('spokes-pip-grid-container'),
+        filmstripContainer: document.getElementById('spokes-pip-filmstrip')
+    };
+}
+
+function applyPipStageMedia(slots, targetOrNull, isGridMode = false, hasFilmstrip = false, requirePrimaryForOverlayTracks = false) {
+    if (!targetOrNull || isGridMode) {
+        attachMediaTrackToVideo(slots.primaryVideo, null, false);
+        attachMediaTrackToVideo(slots.presenterCamVideo, null, false);
+        attachMediaTrackToVideo(slots.selfVideo, null, false);
+        syncPipTileCollection(slots.gridContainer, targetOrNull ? targetOrNull.gridParticipants : []);
+        syncPipTileCollection(slots.filmstripContainer, []);
+        return;
+    }
+
+    const primaryTrack = targetOrNull.primaryTrack || null;
+    const presenterCamTrack = (!requirePrimaryForOverlayTracks || primaryTrack) ? (targetOrNull.presenterCamTrack || null) : null;
+    const selfTrack = (!requirePrimaryForOverlayTracks || primaryTrack) ? (targetOrNull.selfTrack || null) : null;
+
+    attachMediaTrackToVideo(slots.primaryVideo, primaryTrack, shouldMirrorEntry(primaryTrack));
+    attachMediaTrackToVideo(slots.presenterCamVideo, presenterCamTrack, shouldMirrorEntry(presenterCamTrack));
+    attachMediaTrackToVideo(slots.selfVideo, selfTrack, shouldMirrorEntry(selfTrack));
+    syncPipTileCollection(slots.gridContainer, []);
+    syncPipTileCollection(slots.filmstripContainer, hasFilmstrip ? targetOrNull.filmstripParticipants : []);
+}
+
 function detachInAppPipVideos() {
     if (typeof document === 'undefined') return;
-    const primaryEl = document.getElementById('spokes-pip-primary-video');
-    const presenterCamEl = document.getElementById('spokes-pip-presenter-cam-video');
-    const selfEl = document.getElementById('spokes-pip-self-video');
-    const gridEl = document.getElementById('spokes-pip-grid-container');
-    const filmstripEl = document.getElementById('spokes-pip-filmstrip');
-    attachMediaTrackToVideo(primaryEl, null, false);
-    attachMediaTrackToVideo(presenterCamEl, null, false);
-    attachMediaTrackToVideo(selfEl, null, false);
-    syncPipTileCollection(gridEl, []);
-    syncPipTileCollection(filmstripEl, []);
+    applyPipStageMedia(getInAppPipSlots(), null);
 }
 
 function shouldMirrorEntry(entry) {
@@ -918,13 +1134,6 @@ export function setInAppPipActive(active) {
     } else {
         syncPipTrackSubscriptions(selectPipTarget());
         detachInAppPipVideos();
-        if (typeof document !== 'undefined') {
-            const overlay = document.getElementById('spokes-voice-pip-overlay');
-            if (overlay) {
-                overlay.classList.remove('is-native-pip');
-                overlay.classList.add('is-stage-hidden');
-            }
-        }
         if (_dragCleanup) {
             _dragCleanup();
             _dragCleanup = null;
@@ -943,30 +1152,20 @@ export function setInAppPipActive(active) {
 export function syncInAppPipElements() {
     if (typeof document === 'undefined') return;
     const overlay = document.getElementById('spokes-voice-pip-overlay');
-    const primaryEl = document.getElementById('spokes-pip-primary-video');
-    const presenterCamEl = document.getElementById('spokes-pip-presenter-cam-video');
-    const selfEl = document.getElementById('spokes-pip-self-video');
-    const gridEl = document.getElementById('spokes-pip-grid-container');
-    const filmstripEl = document.getElementById('spokes-pip-filmstrip');
-    if (!primaryEl && !selfEl && !overlay) return;
+    const slots = getInAppPipSlots();
+    if (!slots.primaryVideo && !slots.selfVideo && !overlay) return;
 
     if (!_callMeta.inAppPipActive && !_isNativeMobilePip) {
-        if (overlay) {
-            overlay.classList.remove('is-native-pip', 'mode-grid', 'has-filmstrip');
-            overlay.classList.add('is-stage-hidden');
-        }
-        detachInAppPipVideos();
+        applyPipStageMedia(slots, null);
         return;
     }
 
+    const isHostViewVisible = typeof window === 'undefined' || window._spokesHostViewVisible !== false;
     const isMinimizedPill = Boolean(overlay?.classList.contains('is-minimized-pill')) && !_isNativeMobilePip;
-    const shouldRenderMedia = (_callMeta.inAppPipActive && !isMinimizedPill) || _isNativeMobilePip;
+    const shouldRenderMedia = (isHostViewVisible && _callMeta.inAppPipActive && !isMinimizedPill) || _isNativeMobilePip;
 
     if (!shouldRenderMedia) {
-        if (overlay && _callMeta.inAppPipActive) {
-            overlay.classList.remove('is-stage-hidden', 'mode-grid', 'has-filmstrip');
-        }
-        detachInAppPipVideos();
+        applyPipStageMedia(slots, null);
         if (_callMeta.inAppPipActive && overlay && overlay !== _boundOverlayEl) {
             bindInAppPipDrag('spokes-voice-pip-overlay');
         }
@@ -974,33 +1173,12 @@ export function syncInAppPipElements() {
     }
 
     const target = selectPipTarget();
-    const isGridMode = target.layoutMode === 'grid' && !_isNativeMobilePip;
-    const hasFilmstrip = !isGridMode && !_isNativeMobilePip && target.filmstripParticipants.length > 0;
+    const isGridMode = target.layoutMode === 'grid' && !_isNativeMobilePip && !_callMeta.isNativePlatform;
+    const hasFilmstrip = !isGridMode && !_isNativeMobilePip && !_callMeta.isNativePlatform && target.filmstripParticipants.length > 0;
 
-    if (overlay) {
-        overlay.classList.toggle('is-native-pip', Boolean(_isNativeMobilePip));
-        if (_callMeta.inAppPipActive || _isNativeMobilePip) {
-            overlay.classList.remove('is-stage-hidden');
-        }
-        overlay.classList.toggle('mode-grid', isGridMode);
-        overlay.classList.toggle('mode-video', !isGridMode && target.mode === 'video');
-        overlay.classList.toggle('mode-avatar', !isGridMode && target.mode !== 'video');
-        overlay.classList.toggle('has-filmstrip', hasFilmstrip);
-    }
-
-    if (isGridMode) {
-        attachMediaTrackToVideo(primaryEl, null, false);
-        attachMediaTrackToVideo(presenterCamEl, null, false);
-        attachMediaTrackToVideo(selfEl, null, false);
-        syncPipTileCollection(gridEl, target.gridParticipants);
-        syncPipTileCollection(filmstripEl, []);
-    } else {
-        attachMediaTrackToVideo(primaryEl, target.primaryTrack, shouldMirrorEntry(target.primaryTrack));
-        attachMediaTrackToVideo(presenterCamEl, target.presenterCamTrack, shouldMirrorEntry(target.presenterCamTrack));
-        attachMediaTrackToVideo(selfEl, target.selfTrack, shouldMirrorEntry(target.selfTrack));
-        syncPipTileCollection(gridEl, []);
-        syncPipTileCollection(filmstripEl, hasFilmstrip ? target.filmstripParticipants : []);
-    }
+    // Blazor (<VoicePipOverlay />) exclusively owns #spokes-voice-pip-overlay's class list;
+    // voicePip.js exclusively binds streams inside the ShouldRender()=>false <VoicePipVideoSlot />.
+    applyPipStageMedia(slots, target, isGridMode, hasFilmstrip, true);
 
     if (overlay && overlay !== _boundOverlayEl) {
         bindInAppPipDrag('spokes-voice-pip-overlay');
@@ -1146,6 +1324,8 @@ const SVG_ICONS = {
     micOff: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>',
     camOn: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>',
     camOff: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M21 6.5l-4 4V7c0-.55-.45-1-1-1H9.82L21 17.18V6.5zM3.27 2L2 3.27 4.73 6H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.21 0 .39-.08.54-.18L19.73 21 21 19.73 3.27 2z"/></svg>',
+    screenOn: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.11-.9-2-2-2H4c-1.11 0-2 .89-2 2v10c0 1.1.89 2 2 2H0v2h24v-2h-4zm-7-3.53v-2.19c-2.78 0-4.61.85-6 2.72.56-2.67 2.11-5.33 6-5.87V7l4 3.73-4 3.74z"/></svg>',
+    screenOff: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M21.22 18.02l2 2H24v-2h-2.78zm.77-2l.01-10a2 2 0 0 0-2-2H7.22l5.23 5.23c.18-.04.36-.07.55-.1V7l4 3.73-1.58 1.47 5.54 5.54c.61-.33 1.03-.99 1.03-1.72zM2.39 1.73L1.11 3l1.54 1.54c-.4.36-.65.89-.65 1.46v10a2 2 0 0 0 2 2H0v2h18.13l2.71 2.71 1.27-1.27L2.39 1.73zM7 15.02c.31-1.48.92-2.95 2.07-4.06l1.59 1.59c-1.54.38-2.7 1.18-3.66 2.47z"/></svg>',
     gridView: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 3v8h8V3H3zm6 6H5V5h4v4zm-6 4v8h8v-8H3zm6 6H5v-4h4v4zm4-16v8h8V3h-8zm6 6h-4V5h4v4zm-6 4v8h8v-8h-8zm6 6h-4v-4h4v4z"/></svg>',
     focusView: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M5 15H3v4c0 1.1.9 2 2 2h4v-2H5v-4zM5 5h4V3H5c-1.1 0-2 .9-2 2v4h2V5zm14-2h-4v2h4v4h2V5c0-1.1-.9-2-2-2zm0 16h-4v2h4c1.1 0 2-.9 2-2v-4h-2v4zM12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4z"/></svg>',
     openStage: '<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>',
@@ -1174,31 +1354,33 @@ html, body {
     user-select: none;
 }
 .docpip-root {
-    --pip-filmstrip-h: clamp(86px, 21vh, 148px);
+    --pip-filmstrip-h: clamp(72px, 22vh, 96px);
     position: relative; width: 100%; height: 100%;
     display: flex; flex-direction: column; justify-content: center; align-items: center;
     background: radial-gradient(circle at 50% 34%, var(--spokes-pip-surface-elevated) 0%, var(--spokes-pip-bg) 100%);
+}
+.docpip-root.filmstrip-has-video {
+    --pip-filmstrip-h: clamp(82px, 23vh, 132px);
 }
 .docpip-root.is-frameless-desktop {
     border: 1px solid var(--spokes-pip-border);
 }
 .docpip-header {
-    position: absolute; top: 0; left: 0; right: 0; height: 44px; z-index: 6;
-    display: grid; grid-template-columns: minmax(64px, 1fr) auto minmax(28px, 1fr); align-items: center; gap: 6px;
+    position: absolute; top: 0; left: 0; right: 0; height: 38px; z-index: 6;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
     padding: 0 8px 0 10px;
-    background: linear-gradient(to bottom, rgba(21, 21, 33, 0.92) 0%, rgba(21, 21, 33, 0.48) 78%, transparent 100%);
+    background: linear-gradient(to bottom, rgba(21, 21, 33, 0.9) 0%, rgba(21, 21, 33, 0.42) 78%, transparent 100%);
 }
 .docpip-root.is-frameless-desktop .docpip-header {
     -webkit-app-region: drag;
 }
 .docpip-header-pill {
-    justify-self: start;
     display: inline-flex; align-items: center; gap: 7px;
-    padding: 3px 9px; border-radius: 999px;
+    padding: 3px 10px; border-radius: 999px;
     background: rgba(30, 30, 45, 0.78);
     backdrop-filter: blur(10px);
     border: 1px solid rgba(126, 111, 255, 0.22);
-    max-width: 100%; min-width: 0;
+    max-width: calc(100% - 38px); min-width: 0;
     cursor: pointer;
     -webkit-app-region: no-drag;
     transition: border-color 0.15s ease, background 0.15s ease;
@@ -1221,7 +1403,6 @@ html, body {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .docpip-header-actions {
-    justify-self: end;
     display: inline-flex; align-items: center; gap: 4px;
     -webkit-app-region: no-drag;
 }
@@ -1242,10 +1423,11 @@ html, body {
 }
 .docpip-video {
     position: absolute; inset: 0; width: 100%; height: 100%;
-    object-fit: contain; background: #000000; display: none;
+    object-fit: contain; background: #0c0c14; display: none;
 }
 .docpip-root.has-filmstrip .docpip-video {
-    height: calc(100% - var(--pip-filmstrip-h) - 18px);
+    top: 38px;
+    height: calc(100% - var(--pip-filmstrip-h) - 96px);
 }
 .docpip-video.has-stream { display: block; }
 .docpip-video.spokes-pip-mirror,
@@ -1253,41 +1435,50 @@ html, body {
 .docpip-presenter-cam.spokes-pip-mirror { transform: scaleX(-1); }
 .docpip-presenter-cam {
     --effective-self-aspect: var(--self-aspect, 1.7778);
-    position: absolute; right: 12px; bottom: 12px;
+    position: absolute; right: 12px; bottom: 52px;
     width: min(max(96px, 25vw), calc(min(32vh, 100vh - 110px) * var(--effective-self-aspect)));
     height: min(calc(max(96px, 25vw) / var(--effective-self-aspect)), min(32vh, 100vh - 110px));
     aspect-ratio: var(--effective-self-aspect);
-    object-fit: cover;
+    object-fit: contain;
     border-radius: 9px;
     border: 1.5px solid rgba(255, 255, 255, 0.72); background: #0c0c14;
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.65); display: none; z-index: 3;
 }
 .docpip-root.has-filmstrip .docpip-presenter-cam {
-    bottom: calc(var(--pip-filmstrip-h) + 22px);
+    bottom: calc(var(--pip-filmstrip-h) + 60px);
 }
 .docpip-presenter-cam.has-stream { display: block; }
 .docpip-self {
     --effective-self-aspect: var(--self-aspect, 1.7778);
-    position: absolute; top: 48px; left: 10px;
+    position: absolute; top: 42px; left: 10px;
     width: min(max(96px, 26vw), calc(min(36vh, 100vh - 110px) * var(--effective-self-aspect)));
     height: min(calc(max(96px, 26vw) / var(--effective-self-aspect)), min(36vh, 100vh - 110px));
     aspect-ratio: var(--effective-self-aspect);
-    object-fit: cover;
+    object-fit: contain;
     border-radius: 9px;
     border: 1.5px solid rgba(126, 111, 255, 0.55); background: #0c0c14;
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6); display: none; z-index: 4;
 }
 .docpip-self.has-stream { display: block; }
 .docpip-avatar-card {
+    position: absolute; inset: 38px 16px 50px 16px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 7px; padding: 48px 16px 16px; text-align: center; z-index: 2;
+    gap: 6px; padding: 0; text-align: center; z-index: 2;
 }
 .docpip-root.has-filmstrip .docpip-avatar-card {
-    padding-bottom: calc(var(--pip-filmstrip-h) + 22px);
+    bottom: calc(var(--pip-filmstrip-h) + 58px);
+}
+.docpip-root.has-filmstrip .docpip-channel {
+    display: none;
+}
+.docpip-root.has-filmstrip .docpip-avatar-wrap {
+    width: clamp(48px, 18vh, 60px);
+    height: clamp(48px, 18vh, 60px);
+    font-size: clamp(16px, 6vh, 20px);
 }
 .docpip-root.mode-video .docpip-avatar-card { display: none; }
 .docpip-grid {
-    position: absolute; inset: 48px 10px 10px 10px;
+    position: absolute; inset: 40px 10px 52px 10px;
     display: none; gap: 8px;
     grid-template-columns: repeat(2, 1fr);
     grid-auto-rows: 1fr;
@@ -1321,33 +1512,47 @@ html, body {
 .docpip-root.mode-grid .docpip-avatar-card,
 .docpip-root.mode-grid .docpip-filmstrip { display: none !important; }
 .docpip-filmstrip {
-    position: absolute; left: 10px; right: 10px; bottom: 10px; height: var(--pip-filmstrip-h);
-    display: none; align-items: stretch; justify-content: center; gap: 8px;
+    position: absolute; left: 10px; right: 10px; bottom: 52px; height: var(--pip-filmstrip-h);
+    padding: 0 4px;
+    background: transparent;
+    border: none;
+    display: none; align-items: stretch; justify-content: safe center; gap: 10px;
     overflow-x: auto; overflow-y: hidden;
     z-index: 4;
 }
 .docpip-root.has-filmstrip:not(.mode-grid) .docpip-filmstrip { display: flex; }
 .docpip-filmstrip .pip-participant-tile {
-    flex: 0 1 clamp(128px, 28vh, 224px); width: clamp(128px, 28vh, 224px); height: 100%;
+    flex: 1 1 0; max-width: clamp(118px, 26vh, 210px); min-width: 68px; height: 100%;
 }
 .pip-participant-tile {
-    position: relative; overflow: hidden; border-radius: 9px;
-    background: #000000;
-    border: 1.5px solid rgba(126, 111, 255, 0.24);
-    display: flex; align-items: center; justify-content: center;
+    position: relative; overflow: hidden; border-radius: 10px;
+    background: transparent;
+    border: 1.5px solid transparent;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 5px; padding: 4px;
     cursor: pointer; min-width: 0; min-height: 0;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+    transition: background-color 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
 }
-.pip-participant-tile:hover {
+.pip-participant-tile:not(.has-video):hover {
+    background: rgba(126, 111, 255, 0.08);
+    border-color: rgba(126, 111, 255, 0.22);
+}
+.pip-participant-tile.has-video {
+    border-radius: 9px;
+    background: #0c0c14;
+    border-color: rgba(126, 111, 255, 0.24);
+    padding: 0; gap: 0;
+}
+.pip-participant-tile.has-video:hover {
     border-color: rgba(126, 111, 255, 0.65);
 }
-.pip-participant-tile.is-speaking {
+.pip-participant-tile.has-video.is-speaking {
     border-color: var(--spokes-pip-success);
     box-shadow: 0 0 0 2px rgba(61, 203, 108, 0.24);
 }
 .pip-tile-video {
     position: absolute; inset: 0; width: 100%; height: 100%;
-    object-fit: contain; background: #000000; display: none; z-index: 1;
+    object-fit: contain; background: #0c0c14; display: none; z-index: 1;
 }
 .pip-participant-tile.is-screenshare .pip-tile-video {
     object-fit: contain;
@@ -1359,52 +1564,99 @@ html, body {
     position: absolute; right: 4px; bottom: 4px;
     width: 30%; max-width: 68px; min-width: 36px;
     aspect-ratio: var(--self-aspect, 1.7778);
-    object-fit: cover; border-radius: 5px;
+    object-fit: contain; border-radius: 5px;
     border: 1px solid rgba(255, 255, 255, 0.75);
     background: #0c0c14; display: none; z-index: 3;
 }
 .pip-tile-presenter-cam.has-stream { display: block; }
 .pip-tile-avatar-wrap {
-    position: relative; width: 36px; height: 36px; border-radius: 50%;
+    position: relative; width: 58px; height: 58px; border-radius: 50%;
+    padding: 3px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    background: transparent;
+    color: #ffffff; font-weight: 600; font-size: 18px;
+    border: 2.5px solid rgba(126, 111, 255, 0.28);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.36);
+    transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+    z-index: 2;
+}
+.pip-tile-initials {
+    width: 100%; height: 100%; border-radius: 50%;
+    background: var(--avatar-bg, #673ab7);
     display: flex; align-items: center; justify-content: center;
-    background: linear-gradient(135deg, #2d2b45 0%, #202033 100%);
-    color: #ffffff; font-weight: 700; font-size: 13px;
-    border: 2px solid rgba(126, 111, 255, 0.28); z-index: 2;
+}
+.pip-participant-tile:not(.has-video):hover .pip-tile-avatar-wrap {
+    border-color: rgba(126, 111, 255, 0.65);
+    transform: scale(1.04);
+}
+.pip-participant-tile.is-speaking:not(.has-video) .pip-tile-avatar-wrap {
+    border-color: var(--spokes-pip-success);
+    box-shadow: 0 0 0 3.5px rgba(61, 203, 108, 0.26), 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+.docpip-grid[data-count="5"] .pip-tile-avatar-wrap,
+.docpip-grid[data-count="6"] .pip-tile-avatar-wrap {
+    width: 44px; height: 44px; font-size: 14px;
+}
+.docpip-filmstrip .pip-participant-tile:not(.has-video) {
+    gap: 4px; padding: 2px 4px;
 }
 .docpip-filmstrip .pip-tile-avatar-wrap {
-    width: 28px; height: 28px; font-size: 11px;
+    width: 46px; height: 46px; font-size: 14.5px;
+    padding: 2.5px; border-width: 2.5px;
 }
 .pip-participant-tile.has-video .pip-tile-avatar-wrap { display: none; }
 .pip-tile-avatar-img {
     width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: none;
 }
 .pip-tile-footer {
-    position: absolute; left: 4px; right: 4px; bottom: 4px; z-index: 4;
-    display: flex; align-items: center; justify-content: space-between; gap: 4px;
+    position: static; width: 100%; z-index: 4;
+    display: flex; align-items: center; justify-content: center; gap: 4px;
     pointer-events: none;
 }
+.pip-participant-tile.has-video .pip-tile-footer {
+    position: absolute; left: 4px; right: 4px; bottom: 4px; width: auto;
+    justify-content: space-between;
+}
 .pip-tile-name {
-    font-size: 10px; font-weight: 600; color: #ffffff;
-    background: rgba(15, 15, 24, 0.72); padding: 1px 5px; border-radius: 4px;
-    max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 12px; font-weight: 600; color: var(--spokes-pip-text);
+    background: transparent; padding: 0 2px; border-radius: 4px;
+    max-width: 100%; text-align: center;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.docpip-filmstrip .pip-participant-tile:not(.has-video) .pip-tile-name {
+    font-size: 11.5px; line-height: 1.2;
+}
+.pip-participant-tile.has-video .pip-tile-name {
+    font-size: 10px; color: #ffffff;
+    background: rgba(15, 15, 24, 0.76); padding: 1px 5px;
+    text-align: left;
 }
 .pip-tile-mute {
     position: absolute; right: -2px; bottom: -2px;
-    width: 16px; height: 16px; border-radius: 50%;
+    width: 18px; height: 18px; border-radius: 50%;
     background: var(--spokes-pip-error); color: #ffffff;
-    border: 1.5px solid var(--spokes-pip-bg);
+    border: 2px solid var(--spokes-pip-bg);
     display: none; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.docpip-filmstrip .pip-tile-mute {
+    width: 16px; height: 16px;
 }
 .pip-tile-mute svg { width: 10px; height: 10px; }
 .pip-tile-mute.visible { display: inline-flex; }
 .docpip-avatar-wrap {
     position: relative; width: 64px; height: 64px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    background: linear-gradient(135deg, #2d2b45 0%, #202033 100%);
-    color: #ffffff; font-weight: 700; font-size: 21px;
+    padding: 3px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    background: transparent;
+    color: #ffffff; font-weight: 600; font-size: 21px;
     border: 2.5px solid rgba(126, 111, 255, 0.28);
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.38);
     transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+.docpip-initials {
+    width: 100%; height: 100%; border-radius: 50%;
+    background: var(--avatar-bg, #673ab7);
+    display: flex; align-items: center; justify-content: center;
 }
 .docpip-avatar-wrap.is-speaking {
     border-color: var(--spokes-pip-success);
@@ -1422,7 +1674,7 @@ html, body {
 .docpip-mute-pill svg { width: 12px; height: 12px; }
 .docpip-mute-pill.visible { display: flex; }
 .docpip-name {
-    font-size: 14px; font-weight: 600; color: var(--spokes-pip-text);
+    font-size: 13.5px; font-weight: 600; color: var(--spokes-pip-text);
     max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .docpip-channel {
@@ -1430,10 +1682,10 @@ html, body {
     max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .docpip-controls {
-    justify-self: center;
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 8px; z-index: 6;
     pointer-events: auto;
-    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-    padding: 4px 6px; border-radius: 11px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 4px 6px; border-radius: 12px;
     background: rgba(26, 26, 39, 0.86);
     backdrop-filter: blur(14px);
     border: 1px solid rgba(126, 111, 255, 0.18);
@@ -1548,13 +1800,6 @@ function mountRichPipWindow(pipWin, { isFramelessDesktop = false } = {}) {
                 <span class="docpip-dot"></span>
                 <span class="docpip-badge-text"></span>
             </div>
-            <div class="docpip-controls">
-                <button type="button" class="docpip-btn btn-mute" title="Toggle Microphone"></button>
-                <button type="button" class="docpip-btn btn-cam" title="Toggle Camera"></button>
-                <button type="button" class="docpip-btn btn-grid btn-header-grid" title="All Users View">${SVG_ICONS.gridView}</button>
-                <button type="button" class="docpip-btn btn-return btn-header-return" title="Return to Call">${SVG_ICONS.openStage}</button>
-                <button type="button" class="docpip-btn is-danger btn-hangup" title="Disconnect">${SVG_ICONS.hangUp}</button>
-            </div>
             <div class="docpip-header-actions">
                 <button type="button" class="docpip-mini-btn btn-close" title="Close Picture in Picture">${SVG_ICONS.close}</button>
             </div>
@@ -1567,6 +1812,14 @@ function mountRichPipWindow(pipWin, { isFramelessDesktop = false } = {}) {
             </div>
             <div class="docpip-name"></div>
             <div class="docpip-channel"></div>
+        </div>
+        <div class="docpip-controls">
+            <button type="button" class="docpip-btn btn-mute" title="Toggle Microphone"></button>
+            <button type="button" class="docpip-btn btn-cam" title="Toggle Camera"></button>
+            <button type="button" class="docpip-btn btn-screen" title="Share Screen"></button>
+            <button type="button" class="docpip-btn btn-grid btn-header-grid" title="All Users View">${SVG_ICONS.gridView}</button>
+            <button type="button" class="docpip-btn btn-return btn-header-return" title="Return to Call">${SVG_ICONS.openStage}</button>
+            <button type="button" class="docpip-btn is-danger btn-hangup" title="Disconnect">${SVG_ICONS.hangUp}</button>
         </div>
     `;
     doc.body.appendChild(root);
@@ -1591,6 +1844,7 @@ function mountRichPipWindow(pipWin, { isFramelessDesktop = false } = {}) {
         channelEl: root.querySelector('.docpip-channel'),
         btnMute: root.querySelector('.btn-mute'),
         btnCam: root.querySelector('.btn-cam'),
+        btnScreen: root.querySelector('.btn-screen'),
         btnGrid: root.querySelector('.btn-grid'),
         btnReturn: root.querySelector('.btn-return'),
         btnClose: root.querySelector('.btn-close'),
@@ -1604,7 +1858,7 @@ function mountRichPipWindow(pipWin, { isFramelessDesktop = false } = {}) {
     });
     refs.avatarImg.addEventListener('error', () => {
         refs.avatarImg.style.display = 'none';
-        refs.initialsEl.style.display = 'block';
+        refs.initialsEl.style.display = 'flex';
     });
 
     const triggerReturnToCall = () => {
@@ -1619,6 +1873,9 @@ function mountRichPipWindow(pipWin, { isFramelessDesktop = false } = {}) {
     });
     refs.btnCam.addEventListener('click', () => {
         if (typeof _actions.onToggleCamera === 'function') _actions.onToggleCamera();
+    });
+    refs.btnScreen.addEventListener('click', () => {
+        if (typeof _actions.onToggleScreenShare === 'function') _actions.onToggleScreenShare();
     });
     refs.btnGrid.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1679,12 +1936,20 @@ function mountRichPipWindow(pipWin, { isFramelessDesktop = false } = {}) {
     return true;
 }
 
-function openDesktopPipWindow() {
+function computePipWindowSize(sizes) {
     const target = selectPipTarget();
     const isMultiTile = target.layoutMode === 'grid' || (target.filmstripParticipants?.length > 0);
     const hasAnyVideo = isMultiTile || target.mode === 'video' || Boolean(target.selfTrack);
-    const width = isMultiTile ? 420 : (hasAnyVideo ? 380 : 320);
-    const height = isMultiTile ? 280 : (hasAnyVideo ? 240 : 196);
+    if (isMultiTile) return sizes.multiTile;
+    return hasAnyVideo ? sizes.video : sizes.audio;
+}
+
+function openDesktopPipWindow() {
+    const { width, height } = computePipWindowSize({
+        multiTile: { width: 420, height: 280 },
+        video: { width: 380, height: 240 },
+        audio: { width: 320, height: 196 }
+    });
     const features = `popup=yes,width=${width},height=${height}`;
     const pipWin = window.open('', DESKTOP_PIP_FRAME_NAME, features);
     if (!pipWin) {
@@ -1694,11 +1959,11 @@ function openDesktopPipWindow() {
 }
 
 async function openDocumentPip() {
-    const target = selectPipTarget();
-    const isMultiTile = target.layoutMode === 'grid' || (target.filmstripParticipants?.length > 0);
-    const hasAnyVideo = isMultiTile || target.mode === 'video' || Boolean(target.selfTrack);
-    const width = isMultiTile ? 408 : (hasAnyVideo ? 368 : 320);
-    const height = isMultiTile ? 272 : (hasAnyVideo ? 232 : 188);
+    const { width, height } = computePipWindowSize({
+        multiTile: { width: 408, height: 272 },
+        video: { width: 368, height: 232 },
+        audio: { width: 320, height: 188 }
+    });
 
     const pipWin = await window.documentPictureInPicture.requestWindow({ width, height });
     return mountRichPipWindow(pipWin, { isFramelessDesktop: false });
@@ -1711,10 +1976,28 @@ function syncDocumentPipDom() {
     const isGridMode = target.layoutMode === 'grid';
     const isVideoMode = !isGridMode && target.mode === 'video';
     const hasFilmstrip = !isGridMode && target.filmstripParticipants.length > 0;
+    const filmstripHasVideo = hasFilmstrip && target.filmstripParticipants.some(p =>
+        Boolean(p?.id && (
+            isPipTrackAlive(_videoTracks.get(`${p.id}:screenshare`))
+            || isPipTrackAlive(_videoTracks.get(`${p.id}:camera`))
+        ))
+    );
 
     refs.root.classList.toggle('mode-grid', isGridMode);
     refs.root.classList.toggle('mode-video', isVideoMode);
     refs.root.classList.toggle('has-filmstrip', hasFilmstrip);
+    refs.root.classList.toggle('filmstrip-has-video', filmstripHasVideo);
+
+    if ((isGridMode || hasFilmstrip) && !refs.autoExpandedForMultiTile) {
+        try {
+            const curW = _docPipWindow.outerWidth || _docPipWindow.innerWidth || 0;
+            const curH = _docPipWindow.outerHeight || _docPipWindow.innerHeight || 0;
+            if ((curW > 0 && curW < 368) || (curH > 0 && curH < 248)) {
+                refs.autoExpandedForMultiTile = true;
+                _docPipWindow.resizeTo(Math.max(curW, 420), Math.max(curH, 280));
+            }
+        } catch (e) {}
+    }
 
     const showGridToggle = _callMeta.participants.size > 1;
     if (refs.btnGrid) {
@@ -1724,28 +2007,17 @@ function syncDocumentPipDom() {
         refs.btnGrid.title = isGridMode ? 'Focus Speaker' : 'All Users View';
     }
 
-    if (isGridMode) {
-        attachMediaTrackToVideo(refs.primaryVideo, null, false);
-        attachMediaTrackToVideo(refs.presenterCamVideo, null, false);
-        attachMediaTrackToVideo(refs.selfVideo, null, false);
-        syncPipTileCollection(refs.gridContainer, target.gridParticipants);
-        syncPipTileCollection(refs.filmstripContainer, []);
-    } else {
-        attachMediaTrackToVideo(refs.primaryVideo, target.primaryTrack, shouldMirrorEntry(target.primaryTrack));
-        attachMediaTrackToVideo(refs.presenterCamVideo, target.presenterCamTrack, shouldMirrorEntry(target.presenterCamTrack));
-        attachMediaTrackToVideo(refs.selfVideo, target.selfTrack, shouldMirrorEntry(target.selfTrack));
-        syncPipTileCollection(refs.gridContainer, []);
-        syncPipTileCollection(refs.filmstripContainer, hasFilmstrip ? target.filmstripParticipants : []);
-    }
+    applyPipStageMedia(refs, target, isGridMode, hasFilmstrip, false);
 
     const speakerName = target.speaker?.name || _callMeta.channelName || 'Voice Call';
     const channelLabel = _callMeta.channelName || 'Voice Call';
-    refs.badgeText.textContent = isGridMode ? channelLabel : (isVideoMode ? speakerName : channelLabel);
-    refs.badgeDot.classList.toggle('is-speaking', isGridMode ? (_callMeta.speakingIds.size > 0) : target.isSpeaking);
+    refs.badgeText.textContent = isVideoMode ? speakerName : channelLabel;
+    refs.badgeDot.classList.toggle('is-speaking', isVideoMode ? target.isSpeaking : (_callMeta.speakingIds.size > 0));
 
     refs.nameEl.textContent = speakerName;
     refs.channelEl.textContent = _callMeta.channelName || '';
     refs.initialsEl.textContent = target.speaker?.initials || computeInitials(speakerName);
+    refs.avatarWrap.style.setProperty('--avatar-bg', target.speaker?.profileColor || '#673ab7');
     refs.avatarWrap.classList.toggle('is-speaking', target.isSpeaking);
     refs.mutePill.classList.toggle('visible', target.isSpeakerMuted);
 
@@ -1757,7 +2029,7 @@ function syncDocumentPipDom() {
         } else {
             refs.avatarImg.removeAttribute('src');
             refs.avatarImg.style.display = 'none';
-            refs.initialsEl.style.display = 'block';
+            refs.initialsEl.style.display = 'flex';
         }
     }
 
@@ -1766,6 +2038,11 @@ function syncDocumentPipDom() {
     refs.btnMute.classList.toggle('is-active', !_callMeta.isMuted);
     refs.btnCam.innerHTML = _callMeta.isVideoOn ? SVG_ICONS.camOn : SVG_ICONS.camOff;
     refs.btnCam.classList.toggle('is-active', _callMeta.isVideoOn);
+    if (refs.btnScreen) {
+        refs.btnScreen.innerHTML = _callMeta.isScreenSharing ? SVG_ICONS.screenOn : SVG_ICONS.screenOff;
+        refs.btnScreen.classList.toggle('is-active', _callMeta.isScreenSharing);
+        refs.btnScreen.title = _callMeta.isScreenSharing ? 'Stop Sharing' : 'Share Screen';
+    }
 }
 
 // --- Tier 2 Fallback: Canvas-backed HTMLVideoElement PiP (Safari / Firefox Web only) ---
@@ -1990,9 +2267,7 @@ export function closeOsPip() {
 
 function syncMediaSession() {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
-    const isNativeMobile = Boolean(typeof window !== 'undefined' && window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
-    const isAppleMobile = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent || '') || ((navigator.userAgent || '').includes('Mac') && typeof document !== 'undefined' && 'ontouchend' in document));
-    if (isNativeMobile || isAppleMobile) {
+    if (isNativePlatform() || isAppleMobileDevice()) {
         clearMediaSession();
         return;
     }
@@ -2034,7 +2309,7 @@ function clearMediaSession() {
 }
 
 // ============================================================================
-// Mobile Native PiP & ForegroundService Metadata / iOS Frame Streamer
+// Mobile Native PiP & ForegroundService Metadata Coordinator
 // ============================================================================
 
 function pushNativeMobileCallMetadata(force = false) {
@@ -2144,28 +2419,15 @@ function setNativePipModeInternal(isInPip) {
     const changed = _isNativeMobilePip !== next;
     _isNativeMobilePip = next;
     if (typeof document !== 'undefined' && document.documentElement) {
+        // html.spokes-native-pip drives 0ms full-bleed OS PiP CSS without mutating Blazor-owned classes on #spokes-voice-pip-overlay
         document.documentElement.classList.toggle('spokes-native-pip', next);
     }
 
     if (next) {
-        if (typeof document !== 'undefined') {
-            const overlay = document.getElementById('spokes-voice-pip-overlay');
-            if (overlay) {
-                overlay.classList.add('is-native-pip');
-                overlay.classList.remove('is-stage-hidden');
-            }
-        }
         // Release covered stage <video> hardware sinks so #spokes-pip-primary-video is the sole decoder sink
         detachStageVideosForExternalPip();
     } else if (!_callMeta.inAppPipActive) {
         detachInAppPipVideos();
-        if (typeof document !== 'undefined') {
-            const overlay = document.getElementById('spokes-voice-pip-overlay');
-            if (overlay) {
-                overlay.classList.remove('is-native-pip');
-                overlay.classList.add('is-stage-hidden');
-            }
-        }
     }
 
     // Synchronously bind/detach pre-mounted stage videos in 0ms without waiting for SignalR round-trip
@@ -2177,6 +2439,9 @@ function setNativePipModeInternal(isInPip) {
 
     requestAnimationFrame(() => {
         refreshAllPipSurfaces();
+        if (typeof _actions.onSyncNativeVideoSlots === 'function') {
+            try { _actions.onSyncNativeVideoSlots(); } catch (e) {}
+        }
         if (!next && changed) {
             restoreStageVideosIfUnsubpressed();
         }
@@ -2186,8 +2451,23 @@ function setNativePipModeInternal(isInPip) {
         setTimeout(() => {
             if (_isNativeMobilePip) {
                 syncInAppPipElements();
+                if (typeof _actions.onSyncNativeVideoSlots === 'function') {
+                    try { _actions.onSyncNativeVideoSlots(); } catch (e) {}
+                }
             }
         }, 120);
+    } else if (changed) {
+        // Re-sync stage slots after Android OS PiP exit bounds animation and Blazor layout settle.
+        setTimeout(() => {
+            if (!_isNativeMobilePip) {
+                restoreStageVideosIfUnsubpressed();
+            }
+        }, 90);
+        setTimeout(() => {
+            if (!_isNativeMobilePip) {
+                restoreStageVideosIfUnsubpressed();
+            }
+        }, 280);
     }
 }
 
@@ -2215,10 +2495,16 @@ if (typeof window !== 'undefined') {
         setNativePipModeInternal(isInPip);
     };
 
-    window.spokesSetIosPipStreaming = function (isStreaming) {
-        _iosPipStreaming = Boolean(isStreaming);
-        if (_iosPipStreaming && _callMeta.active) {
+    window.spokesSetIosNativePipActive = function (isActive) {
+        _isIosOsPipActive = Boolean(isActive);
+        if (_isIosOsPipActive && _callMeta.active) {
             pushNativeMobileCallMetadata(true);
         }
     };
+
+    if (typeof window.addEventListener === 'function') {
+        window.addEventListener('spokes:host-view-visible-changed', () => {
+            refreshAllPipSurfaces();
+        });
+    }
 }

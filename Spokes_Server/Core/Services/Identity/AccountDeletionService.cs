@@ -5,10 +5,12 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Aggregate.Contexts;
+using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication;
-using Spokes_Server.Core.Services.Communication.Presence;
+using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Security;
+using Spokes_Server.Core.Services.Storage;
 
 namespace Spokes_Server.Core.Services.Identity;
 
@@ -18,11 +20,10 @@ public class AccountDeletionService
     private readonly CoreContext _core;
     private readonly CommunicationContext _communication;
     private readonly ProjectsContext _projects;
-    private readonly AccountingContext? _accounting;
-    private readonly PresenceStateService _presenceState;
     private readonly SessionService? _sessionService;
     private readonly GlobalKeystoreService? _globalKeystore;
     private readonly FileTokenService? _fileTokenService;
+    private readonly IFileService? _fileService;
     private readonly string _dataPath;
     private readonly ILogger<AccountDeletionService>? _logger;
 
@@ -32,22 +33,20 @@ public class AccountDeletionService
         CommunicationContext communication,
         ProjectsContext projects,
         IConfiguration config,
-        PresenceStateService presenceState,
         SessionService? sessionService = null,
         ILogger<AccountDeletionService>? logger = null,
-        AccountingContext? accounting = null,
         GlobalKeystoreService? globalKeystore = null,
-        FileTokenService? fileTokenService = null)
+        FileTokenService? fileTokenService = null,
+        IFileService? fileService = null)
     {
         _hr = hr;
         _core = core;
         _communication = communication;
         _projects = projects;
-        _accounting = accounting;
-        _presenceState = presenceState;
         _sessionService = sessionService;
         _globalKeystore = globalKeystore;
         _fileTokenService = fileTokenService;
+        _fileService = fileService;
         _dataPath = config["DataPath"] ?? "Data";
         _logger = logger;
     }
@@ -56,6 +55,11 @@ public class AccountDeletionService
 
     public void DeleteAccount(string employeeId, string? excludeSessionId = null)
     {
+        if (UserService.IsSoleActiveAdmin(_hr.Employees, employeeId))
+        {
+            throw new InvalidOperationException("Cannot delete the sole active administrator account. Promote another active administrator first.");
+        }
+
         _logger?.LogInformation("Starting account deletion workflow for employee {EmployeeId}", employeeId);
 
         // 1. Ensure System Deleted User exists
@@ -100,20 +104,25 @@ public class AccountDeletionService
                 if (excludeSessionId != null && session.Id == excludeSessionId)
                 {
                     // Keep the current session briefly for the final logout redirect, 
-                    // but anonymize it and mark it revoked.
+                    // but anonymize it, clear push credentials, and mark it revoked.
                     session.EmployeeId = SystemDeletedUserId;
                     session.HasVaultCookie = false;
+                    session.VaultNonce = Guid.NewGuid().ToString("N");
                     session.RevokedAt = DateTime.UtcNow;
-                    _core.DeviceSessions.Save(session);
+                    if (session.HasPush)
+                    {
+                        _core.DeviceSessions.ClearPushFields(session);
+                    }
+                    else
+                    {
+                        _core.DeviceSessions.Save(session);
+                    }
                 }
                 else
                 {
                     try
                     {
-                        if (_sessionService != null)
-                            _sessionService.TriggerRemoteLogout(session.Id);
-                        else
-                            _presenceState.TriggerRemoteLogout(session.Id);
+                        _sessionService?.TriggerRemoteLogout(session.Id);
                     }
                     catch (Exception ex)
                     {
@@ -122,12 +131,6 @@ public class AccountDeletionService
 
                     _core.DeviceSessions.Delete(session.Id);
                 }
-            }
-
-            var sessionsWithPush = _core.DeviceSessions.GetActiveByEmployeeId(employeeId).Where(s => s.HasPush).ToList();
-            foreach (var session in sessionsWithPush)
-            {
-                _core.DeviceSessions.ClearPushFields(session);
             }
         }
         catch (Exception ex)
@@ -147,18 +150,7 @@ public class AccountDeletionService
                 {
                     foreach (var attachment in msg.Attachments)
                     {
-                        try
-                        {
-                            var fullPath = Path.Combine(_dataPath, attachment.FilePath);
-                            if (File.Exists(fullPath))
-                            {
-                                File.Delete(fullPath);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger?.LogWarning(ex, "Failed to physically delete attachment file {FilePath} for message {MessageId} during account deletion", attachment.FilePath, msg.Id);
-                        }
+                        StoredFileCleanupHelper.DeleteFileWithThumbnail(_dataPath, _fileService, attachment.FilePath, _logger);
                     }
                     msg.Attachments.Clear();
 
@@ -226,10 +218,40 @@ public class AccountDeletionService
 
         try
         {
-            var reports = _communication.ReportedMessages.GetAll().Where(r => r.ReporterId == employeeId).ToList();
+            var reports = _communication.ReportedMessages.GetAll()
+                .Where(r => string.Equals(r.ReporterId, employeeId, StringComparison.Ordinal) ||
+                            string.Equals(r.ReportedUserId, employeeId, StringComparison.Ordinal))
+                .ToList();
             foreach (var report in reports)
             {
-                report.ReporterId = SystemDeletedUserId;
+                if (string.Equals(report.ReporterId, employeeId, StringComparison.Ordinal))
+                {
+                    report.ReporterId = SystemDeletedUserId;
+                }
+
+                if (string.Equals(report.ReportedUserId, employeeId, StringComparison.Ordinal))
+                {
+                    report.ReportedUserId = SystemDeletedUserId;
+                    if (report.Attachments != null)
+                    {
+                        foreach (var att in report.Attachments)
+                        {
+                            StoredFileCleanupHelper.DeleteFileWithThumbnail(_dataPath, _fileService, att.FilePath, _logger);
+                        }
+                        report.Attachments.Clear();
+                    }
+                    report.SnapshotContent = ReportedMessageResolution.DeletedContentPlaceholder;
+
+                    if (string.IsNullOrWhiteSpace(report.Status) ||
+                        string.Equals(report.Status, ReportedMessageStatus.Open, StringComparison.OrdinalIgnoreCase))
+                    {
+                        report.Status = ReportedMessageStatus.Resolved;
+                        report.ResolutionAction = ReportedMessageResolution.DeletedMessage;
+                        report.ResolvedBy = "System";
+                        report.ResolvedAt = DateTime.UtcNow;
+                    }
+                }
+
                 _communication.ReportedMessages.Save(report);
             }
         }
@@ -278,46 +300,40 @@ public class AccountDeletionService
         // 6. Hard-delete Private Data
         try
         {
-            foreach (var account in _communication.EmailAccounts.GetAll().ToList())
-            {
-                if (account.OwnerEmployeeId == employeeId && account.AllowedUserIds.Count == 0 && account.AllowedTeamIds.Count == 0)
+            CleanupOwnedOrSharedResources(
+                _communication.EmailAccounts.GetAll().ToList(),
+                employeeId,
+                a => a.OwnerEmployeeId,
+                a => a.AllowedUserIds,
+                a => a.AllowedTeamIds,
+                a =>
                 {
-                    _communication.EmailFolders.DeleteByAccount(account.Id);
-                    _communication.EmailMessages.DeleteByAccount(account.Id);
-                    _communication.EmailAccounts.Delete(account.Id);
-                }
-                else if (account.AllowedUserIds.Remove(employeeId))
-                {
-                    _communication.EmailAccounts.Save(account);
-                }
-            }
+                    _communication.EmailFolders.DeleteByAccount(a.Id);
+                    _communication.EmailMessages.DeleteByAccount(a.Id);
+                    _communication.EmailAccounts.Delete(a.Id);
+                },
+                a => _communication.EmailAccounts.Save(a));
 
             _communication.EmailFolders.DeleteByAccount(employeeId);
             _communication.EmailMessages.DeleteByAccount(employeeId);
 
-            foreach (var inbox in _communication.EmailInboxes.GetAll().ToList())
-            {
-                if (inbox.OwnerEmployeeId == employeeId && inbox.AllowedUserIds.Count == 0 && inbox.AllowedTeamIds.Count == 0)
-                {
-                    _communication.EmailInboxes.Delete(inbox.Id);
-                }
-                else if (inbox.AllowedUserIds.Remove(employeeId))
-                {
-                    _communication.EmailInboxes.Save(inbox);
-                }
-            }
+            CleanupOwnedOrSharedResources(
+                _communication.EmailInboxes.GetAll().ToList(),
+                employeeId,
+                i => i.OwnerEmployeeId,
+                i => i.AllowedUserIds,
+                i => i.AllowedTeamIds,
+                i => _communication.EmailInboxes.Delete(i.Id),
+                i => _communication.EmailInboxes.Save(i));
 
-            foreach (var identity in _communication.EmailSendingIdentities.GetAll().ToList())
-            {
-                if (identity.OwnerEmployeeId == employeeId && identity.AllowedUserIds.Count == 0 && identity.AllowedTeamIds.Count == 0)
-                {
-                    _communication.EmailSendingIdentities.Delete(identity.Id);
-                }
-                else if (identity.AllowedUserIds.Remove(employeeId))
-                {
-                    _communication.EmailSendingIdentities.Save(identity);
-                }
-            }
+            CleanupOwnedOrSharedResources(
+                _communication.EmailSendingIdentities.GetAll().ToList(),
+                employeeId,
+                id => id.OwnerEmployeeId,
+                id => id.AllowedUserIds,
+                id => id.AllowedTeamIds,
+                id => _communication.EmailSendingIdentities.Delete(id.Id),
+                id => _communication.EmailSendingIdentities.Save(id));
         }
         catch (Exception ex)
         {
@@ -332,6 +348,54 @@ public class AccountDeletionService
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Error deleting private contacts for employee {EmployeeId}", employeeId);
+        }
+
+        try
+        {
+            if (_communication.Albums != null)
+            {
+                foreach (var album in _communication.Albums.GetAll().ToList())
+                {
+                    if (string.Equals(album.OwnerId, employeeId, StringComparison.Ordinal))
+                    {
+                        _fileTokenService?.InvalidateContextTokens("albums", album.Id);
+                        if (album.Media != null)
+                        {
+                            foreach (var media in album.Media.ToList())
+                            {
+                                StoredFileCleanupHelper.DeleteFileWithThumbnail(_dataPath, _fileService, media.FilePath, _logger);
+                            }
+                        }
+
+                        _communication.Albums.Delete(album.Id);
+
+                        var albumUploadsDir = Path.Combine(_dataPath, "Uploads", "albums", album.Id);
+                        if (Directory.Exists(albumUploadsDir) &&
+                            Directory.GetFiles(albumUploadsDir).Length == 0 &&
+                            Directory.GetDirectories(albumUploadsDir).Length == 0)
+                        {
+                            Directory.Delete(albumUploadsDir);
+                        }
+                    }
+                    else
+                    {
+                        bool modified = album.ContributorUserIds != null && album.ContributorUserIds.Remove(employeeId);
+                        if (album.EncryptedAlbumKeys != null && album.EncryptedAlbumKeys.Remove(employeeId))
+                        {
+                            modified = true;
+                        }
+
+                        if (modified)
+                        {
+                            _communication.Albums.Save(album);
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Error cleaning up albums for employee {EmployeeId}", employeeId);
         }
 
         // 7. Delete User Records
@@ -373,5 +437,28 @@ public class AccountDeletionService
         }
 
         _logger?.LogInformation("Completed account deletion workflow for employee {EmployeeId}", employeeId);
+    }
+
+    private static void CleanupOwnedOrSharedResources<T>(
+        IEnumerable<T> items,
+        string employeeId,
+        Func<T, string?> getOwnerId,
+        Func<T, List<string>> getAllowedUsers,
+        Func<T, List<string>> getAllowedTeams,
+        Action<T> deleteItem,
+        Action<T> saveItem)
+    {
+        foreach (var item in items)
+        {
+            var allowedUsers = getAllowedUsers(item);
+            if (getOwnerId(item) == employeeId && allowedUsers.Count == 0 && getAllowedTeams(item).Count == 0)
+            {
+                deleteItem(item);
+            }
+            else if (allowedUsers.Remove(employeeId))
+            {
+                saveItem(item);
+            }
+        }
     }
 }

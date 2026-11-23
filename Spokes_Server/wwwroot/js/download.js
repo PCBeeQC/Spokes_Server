@@ -1,11 +1,60 @@
 (function () {
     'use strict';
 
-    const isNative = () => typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor?.isNativePlatform?.());
+    const isNative = () => Boolean(window.Capacitor && typeof window.Capacitor.getPlatform === 'function' && window.Capacitor.Plugins)
+        && (typeof window.isCapacitorNative === 'function' ? window.isCapacitorNative() : Boolean(window.Capacitor.isNativePlatform?.()));
+
+    const sanitizeDownloadFileName = (rawName, fallback = 'download') => {
+        const safeFallback = (typeof fallback === 'string' && fallback.trim()) ? fallback.trim() : 'download';
+        if (typeof rawName !== 'string' || !rawName.trim()) {
+            return safeFallback;
+        }
+        const normalized = rawName.replace(/\\/g, '/');
+        const segment = normalized.slice(normalized.lastIndexOf('/') + 1);
+        let cleaned = '';
+        for (let i = 0; i < segment.length; i++) {
+            const ch = segment[i];
+            const code = segment.charCodeAt(i);
+            if (code < 0x20 || code === 0x7F) continue;
+            if ((code >= 0x202A && code <= 0x202E) || (code >= 0x2066 && code <= 0x2069) || code === 0x200E || code === 0x200F || code === 0x061C) continue;
+            if ('<>:"/\\|?*'.includes(ch)) continue;
+            cleaned += ch;
+        }
+        cleaned = cleaned.trim().replace(/^\.+|\.+$/g, '');
+        while (cleaned.includes('..')) {
+            cleaned = cleaned.replace(/\.\./g, '_');
+        }
+        cleaned = cleaned.trim().replace(/^\.+|\.+$/g, '');
+        if (!cleaned) {
+            return safeFallback;
+        }
+        if (cleaned.length > 200) {
+            const lastDot = cleaned.lastIndexOf('.');
+            const ext = lastDot > 0 ? cleaned.slice(lastDot) : '';
+            if (ext && ext.length <= 20 && ext.length < 200) {
+                const stem = cleaned.slice(0, 200 - ext.length).replace(/[.\s]+$/, '');
+                cleaned = stem + ext;
+            } else {
+                cleaned = cleaned.slice(0, 200).replace(/[.\s]+$/, '');
+            }
+        }
+        return cleaned || safeFallback;
+    };
+
+    const redactUrlForLog = (rawUrl) => {
+        if (typeof rawUrl !== 'string' || !rawUrl) return '';
+        try {
+            const parsed = new URL(rawUrl, window.location.origin);
+            return `${parsed.origin}${parsed.pathname}`;
+        } catch {
+            return rawUrl.split('?')[0].split('#')[0];
+        }
+    };
 
     window.downloadFile = async (fileName, contentType, content) => {
     const TAG = '[Download:downloadFile]';
-    console.log(`${TAG} called. fileName=${fileName}, contentType=${contentType}, contentLength=${content?.length}`);
+    const safeName = sanitizeDownloadFileName(fileName, 'download');
+    console.log(`${TAG} called. fileName=${safeName}, contentType=${contentType}, contentLength=${content?.length}`);
     const blob = new Blob([content], { type: contentType });
     console.log(`${TAG} blob created. size=${blob.size}, type=${blob.type}`);
 
@@ -13,6 +62,9 @@
         console.log(`${TAG} native platform detected. platform=${window.Capacitor.getPlatform()}`);
         try {
             if (window.Capacitor.Plugins.Filesystem && window.Capacitor.Plugins.Share) {
+                if (blob.size <= 0) {
+                    throw new Error('Cannot share empty download');
+                }
                 console.log(`${TAG} both plugins available, converting blob to base64...`);
                 const base64Data = await new Promise((resolve, reject) => {
                     const reader = new FileReader();
@@ -29,20 +81,15 @@
                     reader.readAsDataURL(blob);
                 });
 
-                console.log(`${TAG} calling Filesystem.writeFile. path=${fileName || 'download'}, directory=CACHE`);
+                console.log(`${TAG} calling Filesystem.writeFile. path=${safeName}, directory=CACHE`);
                 const writeRes = await window.Capacitor.Plugins.Filesystem.writeFile({
-                    path: fileName || 'download',
+                    path: safeName,
                     data: base64Data,
                     directory: 'CACHE'
                 });
-                console.log(`${TAG} writeFile succeeded. uri=${writeRes?.uri}`);
+                console.log(`${TAG} writeFile succeeded. uri=${redactUrlForLog(writeRes?.uri)}`);
 
-                console.log(`${TAG} calling Share.share. url=${writeRes?.uri}`);
-                await window.Capacitor.Plugins.Share.share({
-                    title: fileName,
-                    url: writeRes.uri
-                });
-                console.log(`${TAG} Share.share completed successfully.`);
+                await shareCapacitorFile(writeRes.uri, safeName, TAG);
                 return;
             } else {
                 console.warn(`${TAG} plugins missing — skipping native path.`);
@@ -55,12 +102,23 @@
     }
 
     console.log(`${TAG} using web fallback (anchor.click). NOTE: this does nothing in mobile WebViews.`);
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = fileName;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    triggerBlobDownload(blob, safeName);
+};
+
+const shareCapacitorFile = async (uri, safeName, TAG) => {
+    console.log(`${TAG} calling Share.share.`);
+    await window.Capacitor.Plugins.Share.share({
+        title: safeName,
+        url: uri
+    });
+    console.log(`${TAG} Share.share completed successfully.`);
+};
+
+const fetchChecked = async (url, TAG) => {
+    console.log(`${TAG} fetching file...`);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Network response was not ok: ${response.status} ${response.statusText}`);
+    return response;
 };
 
 // Reusable fast chunked base64 converter to prevent call stack size exceeded
@@ -75,60 +133,80 @@ const bufferToBase64Chunked = (buffer) => {
     return window.btoa(binary);
 };
 
+const saveStreamToCapacitorCache = async (reader, savePath, emptyErrorMessage, TAG) => {
+    let isFirstChunk = true;
+    let totalBytes = 0;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            console.log(`${TAG} stream complete. totalBytes=${totalBytes}`);
+            break;
+        }
+
+        if (!value || value.byteLength === 0) {
+            continue;
+        }
+        totalBytes += value.byteLength;
+        const base64Chunk = bufferToBase64Chunked(value);
+
+        if (isFirstChunk) {
+            await window.Capacitor.Plugins.Filesystem.writeFile({
+                path: savePath,
+                data: base64Chunk,
+                directory: 'CACHE'
+            });
+            isFirstChunk = false;
+        } else {
+            await window.Capacitor.Plugins.Filesystem.appendFile({
+                path: savePath,
+                data: base64Chunk,
+                directory: 'CACHE'
+            });
+        }
+    }
+
+    if (totalBytes <= 0 || isFirstChunk) {
+        throw new Error(emptyErrorMessage);
+    }
+
+    console.log(`${TAG} calling Filesystem.getUri to get final URI...`);
+    const finalFile = await window.Capacitor.Plugins.Filesystem.getUri({
+        path: savePath,
+        directory: 'CACHE'
+    });
+    return finalFile.uri;
+};
+
+const triggerBlobDownload = (blob, safeName) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = safeName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+};
+
 window.downloadFileFromStream = async (fileName, contentStreamReference) => {
     const TAG = '[Download:downloadFileFromStream]';
-    console.log(`${TAG} called. fileName=${fileName}`);
+    const safeName = sanitizeDownloadFileName(fileName, 'download');
+    console.log(`${TAG} called. fileName=${safeName}`);
 
     if (isNative()) {
         console.log(`${TAG} native platform detected. platform=${window.Capacitor.getPlatform()}`);
         try {
             if (window.Capacitor.Plugins.Filesystem && window.Capacitor.Plugins.Share) {
                 console.log(`${TAG} streaming DotNet stream in chunks...`);
-                
                 const stream = await contentStreamReference.stream();
-                const reader = stream.getReader();
-                const savePath = fileName || 'download';
-                let isFirstChunk = true;
-                let totalBytes = 0;
+                const uri = await saveStreamToCapacitorCache(
+                    stream.getReader(),
+                    safeName,
+                    'Cannot save or share an empty stream.',
+                    TAG);
 
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) {
-                        console.log(`${TAG} stream complete. totalBytes=${totalBytes}`);
-                        break;
-                    }
-
-                    totalBytes += value.byteLength;
-                    const base64Chunk = bufferToBase64Chunked(value);
-
-                    if (isFirstChunk) {
-                        await window.Capacitor.Plugins.Filesystem.writeFile({
-                            path: savePath,
-                            data: base64Chunk,
-                            directory: 'CACHE'
-                        });
-                        isFirstChunk = false;
-                    } else {
-                        await window.Capacitor.Plugins.Filesystem.appendFile({
-                            path: savePath,
-                            data: base64Chunk,
-                            directory: 'CACHE'
-                        });
-                    }
-                }
-
-                console.log(`${TAG} calling Filesystem.getUri to get final URI...`);
-                const finalFile = await window.Capacitor.Plugins.Filesystem.getUri({
-                    path: savePath,
-                    directory: 'CACHE'
-                });
-
-                console.log(`${TAG} calling Share.share. url=${finalFile?.uri}`);
-                await window.Capacitor.Plugins.Share.share({
-                    title: fileName,
-                    url: finalFile.uri
-                });
-                console.log(`${TAG} Share.share completed successfully.`);
+                await shareCapacitorFile(uri, safeName, TAG);
                 return;
             } else {
                 console.warn(`${TAG} plugins missing — skipping native path.`);
@@ -143,24 +221,17 @@ window.downloadFileFromStream = async (fileName, contentStreamReference) => {
     console.log(`${TAG} arrayBuffer obtained. byteLength=${arrayBuffer.byteLength}`);
     const blob = new Blob([arrayBuffer]);
     console.log(`${TAG} blob created. size=${blob.size}`);
-    
+
     console.log(`${TAG} using web fallback (anchor.click). NOTE: this does nothing in mobile WebViews.`);
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = fileName || '';
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+    triggerBlobDownload(blob, safeName);
 };
 
 window.downloadFileFromUrl = async (fileName, url, forceShareMenu = false) => {
     const TAG = '[Download:downloadFileFromUrl]';
-    console.log(`${TAG} called. fileName=${fileName}, url=${url}`);
+    const safeName = sanitizeDownloadFileName(fileName, 'download');
+    console.log(`${TAG} called. fileName=${safeName}, url=${redactUrlForLog(url)}`);
     try {
-        console.log(`${TAG} fetching file...`);
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`Network response was not ok: ${response.status} ${response.statusText}`);
+        const response = await fetchChecked(url, TAG);
 
         if (isNative()) {
             const platform = window.Capacitor.getPlatform();
@@ -170,11 +241,11 @@ window.downloadFileFromUrl = async (fileName, url, forceShareMenu = false) => {
             if (platform === 'android' && window.Capacitor.Plugins.BridgeManager && !forceShareMenu) {
                 try {
                     const absoluteUrl = new URL(url, window.location.origin).href;
-                    console.log(`${TAG} calling BridgeManager.downloadToPublicStorage. absoluteUrl=${absoluteUrl}`);
+                    console.log(`${TAG} calling BridgeManager.downloadToPublicStorage. absoluteUrl=${redactUrlForLog(absoluteUrl)}`);
                     const authToken = await window.spokesAuth.getRefreshToken();
                     await window.Capacitor.Plugins.BridgeManager.downloadToPublicStorage({
                         url: absoluteUrl,
-                        fileName: fileName || 'download',
+                        fileName: safeName,
                         authToken: authToken
                     });
                     console.log(`${TAG} DownloadManager successfully enqueued the download.`);
@@ -195,50 +266,13 @@ window.downloadFileFromUrl = async (fileName, url, forceShareMenu = false) => {
 
                 try {
                     console.log(`${TAG} streaming network response in chunks...`);
-                    
-                    const reader = response.body.getReader();
-                    const savePath = fileName || 'download';
-                    let isFirstChunk = true;
-                    let totalBytes = 0;
+                    const uri = await saveStreamToCapacitorCache(
+                        response.body.getReader(),
+                        safeName,
+                        'Cannot save or share an empty file.',
+                        TAG);
 
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) {
-                            console.log(`${TAG} stream complete. totalBytes=${totalBytes}`);
-                            break;
-                        }
-
-                        totalBytes += value.byteLength;
-                        const base64Chunk = bufferToBase64Chunked(value);
-
-                        if (isFirstChunk) {
-                            await window.Capacitor.Plugins.Filesystem.writeFile({
-                                path: savePath,
-                                data: base64Chunk,
-                                directory: 'CACHE'
-                            });
-                            isFirstChunk = false;
-                        } else {
-                            await window.Capacitor.Plugins.Filesystem.appendFile({
-                                path: savePath,
-                                data: base64Chunk,
-                                directory: 'CACHE'
-                            });
-                        }
-                    }
-
-                    console.log(`${TAG} calling Filesystem.getUri to get final URI...`);
-                    const finalFile = await window.Capacitor.Plugins.Filesystem.getUri({
-                        path: savePath,
-                        directory: 'CACHE'
-                    });
-                    
-                    console.log(`${TAG} calling Share.share. url=${finalFile?.uri}`);
-                    await window.Capacitor.Plugins.Share.share({
-                        title: fileName,
-                        url: finalFile.uri
-                    });
-                    console.log(`${TAG} Share.share completed successfully.`);
+                    await shareCapacitorFile(uri, safeName, TAG);
                     return;
                 } catch (e) {
                     console.error(`${TAG} native share FAILED:`, e, e?.message, e?.stack);
@@ -255,13 +289,13 @@ window.downloadFileFromUrl = async (fileName, url, forceShareMenu = false) => {
         
         console.log(`${TAG} not native. Capacitor=${!!window.Capacitor}`);
         // Web Share API for desktop and mobile browsers
-        const file = new File([blob], fileName || 'shared_file', { type: blob.type });
+        const file = new File([blob], safeName || 'shared_file', { type: blob.type });
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
             try {
                 console.log(`${TAG} trying Web Share API...`);
                 await navigator.share({
                     files: [file],
-                    title: fileName
+                    title: safeName
                 });
                 console.log(`${TAG} Web Share API succeeded.`);
                 return; // Web share succeeded
@@ -275,14 +309,7 @@ window.downloadFileFromUrl = async (fileName, url, forceShareMenu = false) => {
         }
 
         console.log(`${TAG} using web fallback (anchor.click). NOTE: this does nothing in mobile WebViews.`);
-        const objectUrl = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = objectUrl;
-        anchor.download = fileName || '';
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        URL.revokeObjectURL(objectUrl);
+        triggerBlobDownload(blob, safeName);
     } catch (error) {
         if (error && error.message && error.message.toLowerCase().includes('cancel')) {
             console.log(`${TAG} action canceled by user. Ignoring.`);
@@ -296,55 +323,25 @@ window.downloadFileFromUrl = async (fileName, url, forceShareMenu = false) => {
 
 window.downloadMediaFromUrl = async (fileName, url) => {
     const TAG = '[Download:downloadMediaFromUrl]';
-    console.log(`${TAG} called. fileName=${fileName}, url=${url}`);
+    const safeName = sanitizeDownloadFileName(fileName, 'download');
+    console.log(`${TAG} called. fileName=${safeName}, url=${redactUrlForLog(url)}`);
     try {
-        console.log(`${TAG} fetching file...`);
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`Network response was not ok: ${response.status} ${response.statusText}`);
+        const response = await fetchChecked(url, TAG);
 
         if (isNative()) {
             console.log(`${TAG} native platform detected. platform=${window.Capacitor.getPlatform()}`);
             if (window.Capacitor.Plugins.Filesystem && window.Capacitor.Plugins.Media) {
                 try {
                     console.log(`${TAG} streaming network response in chunks...`);
-                    
-                    const reader = response.body.getReader();
-                    const savePath = fileName || 'download';
-                    let isFirstChunk = true;
-                    let totalBytes = 0;
+                    const uri = await saveStreamToCapacitorCache(
+                        response.body.getReader(),
+                        safeName,
+                        'Cannot save empty media file.',
+                        TAG);
 
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-
-                        totalBytes += value.byteLength;
-                        const base64Chunk = bufferToBase64Chunked(value);
-
-                        if (isFirstChunk) {
-                            await window.Capacitor.Plugins.Filesystem.writeFile({
-                                path: savePath,
-                                data: base64Chunk,
-                                directory: 'CACHE'
-                            });
-                            isFirstChunk = false;
-                        } else {
-                            await window.Capacitor.Plugins.Filesystem.appendFile({
-                                path: savePath,
-                                data: base64Chunk,
-                                directory: 'CACHE'
-                            });
-                        }
-                    }
-
-                    console.log(`${TAG} calling Filesystem.getUri to get final URI...`);
-                    const finalFile = await window.Capacitor.Plugins.Filesystem.getUri({
-                        path: savePath,
-                        directory: 'CACHE'
-                    });
-
-                    console.log(`${TAG} calling Media.savePhoto. path=${finalFile?.uri}`);
+                    console.log(`${TAG} calling Media.savePhoto.`);
                     await window.Capacitor.Plugins.Media.savePhoto({
-                        path: finalFile.uri
+                        path: uri
                     });
                     console.log(`${TAG} Media.savePhoto succeeded.`);
                     
@@ -357,11 +354,11 @@ window.downloadMediaFromUrl = async (fileName, url) => {
                 } catch (e) {
                     console.error(`${TAG} native media save FAILED:`, e, e?.message, e?.stack);
                     console.log(`${TAG} falling back to downloadFileFromUrl.`);
-                    return window.downloadFileFromUrl(fileName, url);
+                    return window.downloadFileFromUrl(safeName, url);
                 }
             } else {
                 console.warn(`${TAG} plugins missing (Filesystem=${!!window.Capacitor.Plugins?.Filesystem}, Media=${!!window.Capacitor.Plugins?.Media}) — falling back to downloadFileFromUrl.`);
-                return window.downloadFileFromUrl(fileName, url);
+                return window.downloadFileFromUrl(safeName, url);
             }
         }
 
@@ -369,15 +366,7 @@ window.downloadMediaFromUrl = async (fileName, url) => {
         console.log(`${TAG} fetch complete. blob size=${blob.size}, type=${blob.type}`);
 
         console.log(`${TAG} using web fallback (anchor.click). NOTE: this does nothing in mobile WebViews.`);
-        // Web fallback
-        const objectUrl = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = objectUrl;
-        anchor.download = fileName || '';
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        URL.revokeObjectURL(objectUrl);
+        triggerBlobDownload(blob, safeName);
     } catch (error) {
         console.error(`${TAG} OUTER download media failed:`, error, error?.message, error?.stack);
         console.log(`${TAG} last resort: opening URL in new tab.`);
@@ -387,10 +376,18 @@ window.downloadMediaFromUrl = async (fileName, url) => {
 
 window.downloadOrOpenDocument = async (fileName, url) => {
     const TAG = '[Download:downloadOrOpenDocument]';
-    console.log(`${TAG} called. fileName=${fileName}, url=${url}`);
+    const safeName = sanitizeDownloadFileName(fileName, 'download');
+    let downloadUrl = url;
+    if (typeof downloadUrl === 'string' && safeName && !/[?&]fn=/.test(downloadUrl)) {
+        if (downloadUrl.startsWith('/spokesapi/') || downloadUrl.startsWith('/internal/attachments/')) {
+            const sep = downloadUrl.includes('?') ? '&' : '?';
+            downloadUrl = `${downloadUrl}${sep}fn=${encodeURIComponent(safeName)}`;
+        }
+    }
+    console.log(`${TAG} called. fileName=${safeName}, url=${redactUrlForLog(downloadUrl)}`);
     if (isNative()) {
         console.log(`${TAG} native platform detected. Browser.open fails on relative URLs and lacks auth cookies. Redirecting to downloadFileFromUrl...`);
-        return window.downloadFileFromUrl(fileName, url);
+        return window.downloadFileFromUrl(safeName, downloadUrl);
     } else {
         console.log(`${TAG} not native. Capacitor=${!!window.Capacitor}`);
     }
@@ -398,8 +395,8 @@ window.downloadOrOpenDocument = async (fileName, url) => {
     console.log(`${TAG} using web fallback (anchor.click).`);
     // Web fallback - direct download
     const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = fileName || '';
+    anchor.href = downloadUrl;
+    anchor.download = safeName;
     anchor.target = '_blank';
     document.body.appendChild(anchor);
     anchor.click();
@@ -408,16 +405,8 @@ window.downloadOrOpenDocument = async (fileName, url) => {
 
 window.shareFileFromUrl = async (fileName, url) => {
     // Forces the Share Menu even on Android
-    return window.downloadFileFromUrl(fileName, url, true);
-};
-
-window.spokesDownload = {
-    downloadFile: window.downloadFile,
-    downloadFileFromStream: window.downloadFileFromStream,
-    downloadFileFromUrl: window.downloadFileFromUrl,
-    downloadMediaFromUrl: window.downloadMediaFromUrl,
-    downloadOrOpenDocument: window.downloadOrOpenDocument,
-    shareFileFromUrl: window.shareFileFromUrl
+    const safeName = sanitizeDownloadFileName(fileName, 'download');
+    return window.downloadFileFromUrl(safeName, url, true);
 };
 })();
 

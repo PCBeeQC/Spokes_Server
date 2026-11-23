@@ -34,7 +34,7 @@ public class SystemLogServiceTests : IDisposable
         return new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["DataPath"] = dataPath
+                ["DataPath"] = dataPath, ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"
             })
             .Build();
     }

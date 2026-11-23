@@ -42,6 +42,7 @@ public class Database
     public virtual BoardCardRepository BoardCards => ProjectsContext?.BoardCards!;
     public virtual BoardTemplateRepository BoardTemplates => ProjectsContext?.BoardTemplates!;
     public virtual ProjectDocumentRepository ProjectDocuments => ProjectsContext?.ProjectDocuments!;
+    public virtual ProjectReportRepository ProjectReports => ProjectsContext?.ProjectReports!;
 
     // HR Bounded Context
     public virtual EmployeeRepository Employees => HrContext?.Employees!;
@@ -50,6 +51,7 @@ public class Database
     public virtual WeeklyPlanRepository WeeklyPlans => HrContext?.WeeklyPlans!;
     public virtual TeamRepository Teams => HrContext?.Teams!;
     public virtual CalendarEventRepository CalendarEvents => HrContext?.CalendarEvents!;
+    public virtual PayRunRepository PayRuns => HrContext?.PayRuns!;
 
     // Accounting Bounded Context
     public virtual InvoiceRepository Invoices => AccountingContext?.Invoices!;
@@ -60,13 +62,20 @@ public class Database
     public virtual BillRepository Bills => AccountingContext?.Bills!;
     public virtual EmployerContributionRepository EmployerContributions => AccountingContext?.EmployerContributions!;
     public virtual RecurringExpenseRepository RecurringExpenses => AccountingContext?.RecurringExpenses!;
+    public virtual GlAccountRepository GlAccounts => AccountingContext?.GlAccounts!;
+    public virtual JournalEntryRepository JournalEntries => AccountingContext?.JournalEntries!;
+    public virtual BankStatementRepository BankStatements => AccountingContext?.BankStatements!;
+    public virtual TaxFilingPeriodRepository TaxFilingPeriods => AccountingContext?.TaxFilingPeriods!;
+    public virtual AccountingMigrationBatchRepository MigrationBatches => AccountingContext?.MigrationBatches!;
+    public virtual FinancialReportRepository FinancialReports => AccountingContext?.FinancialReports!;
+    public virtual DirectTransactionRepository DirectTransactions => AccountingContext?.DirectTransactions!;
+    public virtual FinancialAccountRepository FinancialAccounts => AccountingContext?.FinancialAccounts!;
 
     // Communication Bounded Context
     public virtual ChatChannelRepository ChatChannels => CommunicationContext?.ChatChannels!;
     public virtual ChatCategoryRepository ChatCategories => CommunicationContext?.ChatCategories!;
     public virtual ChatMessageRepository ChatMessages => CommunicationContext?.ChatMessages!;
     public virtual ChatReadStateRepository ChatReadStates => CommunicationContext?.ChatReadStates!;
-    public virtual UserClientStateRepository ClientStates => CommunicationContext?.ClientStates!;
     public virtual ReportedMessageRepository ReportedMessages => CommunicationContext?.ReportedMessages!;
     public virtual AlbumRepository Albums => CommunicationContext?.Albums!;
     public virtual EmailAccountRepository EmailAccounts => CommunicationContext?.EmailAccounts!;

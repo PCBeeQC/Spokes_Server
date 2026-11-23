@@ -1,11 +1,18 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
+using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Security;
 
 namespace Spokes_Server.Core.Services.Security;
 
@@ -14,7 +21,7 @@ namespace Spokes_Server.Core.Services.Security;
 /// Used strictly for UI-level decryptions in Chat.razor/etc. to prevent IDP-hopped 
 /// attacks from globally accessing a compromised Singleton keyset.
 /// </summary>
-public class ScopedKeystoreService
+public class ScopedKeystoreService : IDisposable
 {
     private readonly IDataProtectionProvider _dataProtection;
     private readonly ICryptoService _crypto;
@@ -24,6 +31,7 @@ public class ScopedKeystoreService
     private readonly DeviceSessionRepository? _deviceSessions;
     private readonly AuthenticationStateProvider? _authStateProvider;
     private readonly SessionService? _sessionService;
+    private readonly EmployeeRepository? _employees;
 
     public ScopedKeystoreService(
         IDataProtectionProvider dataProtection,
@@ -33,7 +41,8 @@ public class ScopedKeystoreService
         FileTokenService? fileTokenService = null,
         DeviceSessionRepository? deviceSessions = null,
         AuthenticationStateProvider? authStateProvider = null,
-        SessionService? sessionService = null)
+        SessionService? sessionService = null,
+        HrContext? hrContext = null)
     {
         _dataProtection = dataProtection;
         _crypto = crypto ?? new CryptoService();
@@ -43,20 +52,38 @@ public class ScopedKeystoreService
         _deviceSessions = deviceSessions;
         _authStateProvider = authStateProvider;
         _sessionService = sessionService;
+        _employees = hrContext?.Employees;
     }
 
     private string? _plainPrivateKey;
     private string? _employeeId;
     private Task? _deviceCookieInitTask;
     private bool _deviceCookieChecked;
+    private bool _pendingHttpCookieRenewal;
+    private readonly ConcurrentDictionary<string, string> _decryptedKeyCache = new(StringComparer.Ordinal);
+    private readonly object _rsaCacheLock = new();
+    private RSA? _cachedRsa;
+    private string? _cachedRsaSourceKey;
+
+    private readonly record struct SessionUnlockOutcome(
+        bool Unlocked,
+        bool NeedsRenewal,
+        bool IsLegacyUpgrade,
+        string? Password,
+        DeviceSession? Session);
 
     public bool IsUnlocked => !string.IsNullOrEmpty(_plainPrivateKey);
+    public bool HasPendingHttpCookieRenewal => _pendingHttpCookieRenewal;
 
     public event Action? OnUnlocked;
     public event Action? OnLocked;
 
     public void Unlock(string plainPrivateKey, string? employeeId = null)
     {
+        if (!string.Equals(_plainPrivateKey, plainPrivateKey, StringComparison.Ordinal))
+        {
+            ResetCachedCryptoState();
+        }
         _plainPrivateKey = plainPrivateKey;
         _deviceCookieChecked = true;
         if (!string.IsNullOrEmpty(employeeId))
@@ -73,6 +100,8 @@ public class ScopedKeystoreService
         _employeeId = null;
         _deviceCookieChecked = false;
         _deviceCookieInitTask = null;
+        _pendingHttpCookieRenewal = false;
+        ResetCachedCryptoState();
         if (!string.IsNullOrWhiteSpace(targetEmployeeId))
         {
             _fileTokenService?.InvalidateUserEncryptedTokens(targetEmployeeId);
@@ -84,12 +113,103 @@ public class ScopedKeystoreService
     public string? GetPrivateKey() => _plainPrivateKey;
 
     /// <summary>
+    /// Circuit-scoped cache for decrypted symmetric keys (e.g., channel epoch keys and album keys)
+    /// so repeated Blazor renders and child components never re-run 2048-bit RSA decryption.
+    /// Automatically cleared on <see cref="Lock"/>, key change in <see cref="Unlock"/>, and <see cref="Dispose"/>.
+    /// </summary>
+    public string? GetOrDecryptKey(string cacheKey, Func<string?, string?> decryptor)
+    {
+        if (string.IsNullOrEmpty(cacheKey))
+        {
+            return decryptor(_plainPrivateKey);
+        }
+
+        if (_decryptedKeyCache.TryGetValue(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
+        var decrypted = decryptor(_plainPrivateKey);
+        if (!string.IsNullOrEmpty(decrypted))
+        {
+            _decryptedKeyCache[cacheKey] = decrypted;
+        }
+
+        return decrypted;
+    }
+
+    /// <summary>
+    /// Decrypts an RSA-OAEP-SHA256 ciphertext using the circuit's unlocked private key,
+    /// reusing a cached parsed <see cref="RSA"/> key handle instead of reparsing RSA XML per call.
+    /// </summary>
+    public string? DecryptRsaWithCachedKey(string cipherText)
+    {
+        var privateKey = _plainPrivateKey;
+        if (string.IsNullOrEmpty(privateKey) || string.IsNullOrEmpty(cipherText))
+        {
+            return null;
+        }
+
+        if (_crypto is CryptoService && privateKey.Contains("<RSAKeyValue>", StringComparison.Ordinal))
+        {
+            lock (_rsaCacheLock)
+            {
+                if (_cachedRsa == null || !string.Equals(_cachedRsaSourceKey, privateKey, StringComparison.Ordinal))
+                {
+                    _cachedRsa?.Dispose();
+                    var rsa = RSA.Create();
+                    rsa.FromXmlString(privateKey);
+                    _cachedRsa = rsa;
+                    _cachedRsaSourceKey = privateKey;
+                }
+
+                var bytes = Convert.FromBase64String(cipherText);
+                var decrypted = _cachedRsa.Decrypt(bytes, RSAEncryptionPadding.OaepSHA256);
+                return Encoding.UTF8.GetString(decrypted);
+            }
+        }
+
+        return _crypto.DecryptRsa(cipherText, privateKey);
+    }
+
+    public void InvalidateCachedKey(string cacheKey)
+    {
+        if (!string.IsNullOrEmpty(cacheKey))
+        {
+            _decryptedKeyCache.TryRemove(cacheKey, out _);
+        }
+    }
+
+    public void ClearDecryptedKeyCache() => _decryptedKeyCache.Clear();
+
+    private void ResetCachedCryptoState()
+    {
+        _decryptedKeyCache.Clear();
+        lock (_rsaCacheLock)
+        {
+            _cachedRsa?.Dispose();
+            _cachedRsa = null;
+            _cachedRsaSourceKey = null;
+        }
+    }
+
+    public void Dispose()
+    {
+        _plainPrivateKey = null;
+        _employeeId = null;
+        _pendingHttpCookieRenewal = false;
+        ResetCachedCryptoState();
+    }
+
+    /// <summary>
     /// Attempts to silently re-hydrate the locked scoped session directly from the
     /// chat_vault_key HttpOnly cookie on HttpContext.Request.Cookies.
     /// This reads the cookie server-side during the initial HTTP request, bypassing
     /// the JS fetch round-trip entirely. Must be called during OnInitializedAsync
     /// while HttpContext is still available (before the circuit switches to WebSocket).
-    /// Honors remote device vault logouts by verifying DeviceSession.HasVaultCookie when available.
+    /// Honors remote device vault logouts by verifying DeviceSession.HasVaultCookie when available,
+    /// performs sliding renewal when past half-life, and supports one-time v1 -> v2 upgrade for
+    /// un-migrated server-v2026.11.0 sessions (HasVaultCookie == true with empty VaultNonce).
     /// </summary>
     public bool TryInitializeFromVaultCookie(
         HttpContext? httpContext,
@@ -100,10 +220,12 @@ public class ScopedKeystoreService
         if (httpContext == null) return false;
 
         // Check for vault key cookie or header first before doing any session evaluation or cookie deletion
-        if (!httpContext.Request.Cookies.TryGetValue("chat_vault_key", out var encryptedPwd) ||
+        bool fromCookie = true;
+        if (!httpContext.Request.Cookies.TryGetValue(VaultCookieProtector.VaultCookieName, out var encryptedPwd) ||
             string.IsNullOrEmpty(encryptedPwd))
         {
             // Fallback to header for native mobile
+            fromCookie = false;
             encryptedPwd = httpContext.Request.Headers["X-Chat-Vault-Key"].FirstOrDefault();
             if (string.IsNullOrEmpty(encryptedPwd))
             {
@@ -111,46 +233,187 @@ public class ScopedKeystoreService
             }
         }
 
-        if (_deviceSessions != null)
+        var sessionId = httpContext.User?.Identity?.IsAuthenticated == true
+            ? httpContext.User.FindFirst("SessionId")?.Value
+            : null;
+
+        var outcome = TryUnprotectAndUnlockWithSession(encryptedPwd, sessionId, employeeId, encryptedPrivateKey);
+        if (!outcome.Unlocked)
         {
-            var sessionId = httpContext.User?.FindFirst("SessionId")?.Value;
-            if (!string.IsNullOrEmpty(sessionId))
+            TryDeleteVaultCookie(httpContext);
+            return false;
+        }
+
+        if (outcome.NeedsRenewal && fromCookie && outcome.Session != null && !string.IsNullOrEmpty(outcome.Password))
+        {
+            if (!httpContext.Response.HasStarted)
             {
-                var session = _deviceSessions.GetById(sessionId);
-                if (session != null &&
-                    (session.RevokedAt != null ||
-                     !session.HasVaultCookie ||
-                     !string.Equals(session.EmployeeId, employeeId, StringComparison.OrdinalIgnoreCase)))
+                var refreshedToken = TryBuildRefreshedV2Token(outcome, employeeId);
+                if (!string.IsNullOrEmpty(refreshedToken))
                 {
-                    TryDeleteVaultCookie(httpContext);
-                    return false;
+                    VaultCookieProtector.AppendVaultCookie(httpContext.Response, refreshedToken);
                 }
+            }
+            else
+            {
+                // On Blazor WebSocket circuits Response.HasStarted is already true; defer cookie issuance
+                // (and legacy VaultNonce assignment) to POST /spokesapi/vault/renew via MainLayout.OnAfterRenderAsync.
+                _pendingHttpCookieRenewal = true;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// If the circuit unlocked from an HTTP cookie that needed sliding renewal or a one-time v1 -> v2 upgrade
+    /// while the WebSocket response had already started, triggers POST /spokesapi/vault/renew once over JS.
+    /// </summary>
+    public async Task RenewPendingHttpCookieAsync(IJSRuntime js)
+    {
+        if (!_pendingHttpCookieRenewal || !IsUnlocked) return;
+        _pendingHttpCookieRenewal = false;
+        try
+        {
+            await js.InvokeVoidAsync("spokesVault.renew");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[ScopedKeystore] Background vault cookie renewal skipped");
+        }
+    }
+
+    private string? TryBuildRefreshedV2Token(SessionUnlockOutcome outcome, string employeeId)
+    {
+        if (outcome.Session == null || string.IsNullOrEmpty(outcome.Password))
+        {
+            return null;
+        }
+
+        string? vaultNonce = outcome.IsLegacyUpgrade
+            ? (_deviceSessions != null ? SessionService.TryAssignLegacyVaultNonce(_deviceSessions, outcome.Session) : null)
+            : outcome.Session.VaultNonce;
+
+        if (string.IsNullOrEmpty(vaultNonce))
+        {
+            return null;
+        }
+
+        return VaultCookieProtector.Protect(
+            _dataProtection,
+            employeeId,
+            outcome.Session.Id,
+            vaultNonce,
+            outcome.Password);
+    }
+
+    private SessionUnlockOutcome TryUnprotectAndUnlockWithSession(
+        string? encryptedPwd,
+        string? sessionId,
+        string employeeId,
+        string encryptedPrivateKey)
+    {
+        if (string.IsNullOrEmpty(encryptedPwd) ||
+            _deviceSessions == null ||
+            string.IsNullOrWhiteSpace(sessionId) ||
+            string.IsNullOrEmpty(employeeId) ||
+            string.IsNullOrEmpty(encryptedPrivateKey))
+        {
+            return default;
+        }
+
+        var session = _deviceSessions.GetById(sessionId);
+        if (session == null ||
+            session.RevokedAt != null ||
+            session.ExpiresAt <= DateTime.UtcNow ||
+            !session.HasVaultCookie ||
+            !string.Equals(session.EmployeeId, employeeId, StringComparison.Ordinal))
+        {
+            return default;
+        }
+
+        if (_employees != null)
+        {
+            var liveEmployee = _employees.GetById(employeeId);
+            if (liveEmployee is not { IsActive: true, IsSuspended: false, IsBanned: false })
+            {
+                return default;
             }
         }
 
         try
         {
-            var protector = _dataProtection.CreateProtector("ChatVaultKey");
-            var pwd = protector.Unprotect(encryptedPwd);
-
-            var kek = _crypto.DeriveKeyFromPassword(pwd, employeeId);
-            var plainKey = _crypto.DecryptAes(encryptedPrivateKey, kek);
-
-            Unlock(plainKey, employeeId);
-
-            if (_globalKeystore != null && !_globalKeystore.IsUserUnlocked(employeeId))
+            if (!string.IsNullOrEmpty(session.VaultNonce))
             {
-                _globalKeystore.UnlockVault(employeeId, encryptedPrivateKey, pwd, _crypto);
-            }
+                var result = VaultCookieProtector.TryUnprotectAndValidate(
+                    _dataProtection,
+                    encryptedPwd,
+                    employeeId,
+                    session.Id,
+                    session.VaultNonce);
 
-            return true;
+                if (result == null)
+                {
+                    return default;
+                }
+
+                if (!TryResolvePlainPrivateKey(employeeId, encryptedPrivateKey, result.Payload.Password, cacheOnMiss: true, out var plainKey))
+                {
+                    return default;
+                }
+
+                Unlock(plainKey, employeeId);
+                return new SessionUnlockOutcome(true, result.NeedsRenewal, IsLegacyUpgrade: false, result.Payload.Password, session);
+            }
+            else
+            {
+                // Strict one-time upgrade path for pre-v2 (server-v2026.11.0) sessions loaded from disk
+                // with HasVaultCookie == true and no persisted VaultNonce.
+                var legacyPassword = VaultCookieProtector.TryUnprotectLegacy(_dataProtection, encryptedPwd);
+                if (string.IsNullOrEmpty(legacyPassword))
+                {
+                    return default;
+                }
+
+                if (!TryResolvePlainPrivateKey(employeeId, encryptedPrivateKey, legacyPassword, cacheOnMiss: true, out var plainKey))
+                {
+                    return default;
+                }
+
+                Unlock(plainKey, employeeId);
+                return new SessionUnlockOutcome(true, NeedsRenewal: true, IsLegacyUpgrade: true, legacyPassword, session);
+            }
         }
         catch (Exception ex)
         {
-            _logger?.LogDebug(ex, "[ScopedKeystore] Failed to decrypt vault key from cookie for employee {EmployeeId}", employeeId);
-            // Cookie invalid or tampered — vault stays locked.
+            _logger?.LogDebug(ex, "[ScopedKeystore] Failed to decrypt vault key from bound session payload for employee {EmployeeId}", employeeId);
+            return default;
+        }
+    }
+
+    private bool TryResolvePlainPrivateKey(string employeeId, string encryptedPrivateKey, string password, bool cacheOnMiss, out string plainKey)
+    {
+        if (_globalKeystore != null &&
+            _globalKeystore.TryGetVerifiedPrivateKey(employeeId, encryptedPrivateKey, password, out var cachedKey) &&
+            !string.IsNullOrEmpty(cachedKey))
+        {
+            plainKey = cachedKey;
+            return true;
+        }
+
+        if (!VaultCookieProtector.TryVerifyVaultPassword(_crypto, employeeId, encryptedPrivateKey, password, out var decrypted))
+        {
+            plainKey = string.Empty;
             return false;
         }
+
+        if (cacheOnMiss)
+        {
+            _globalKeystore?.StoreVerifiedPrivateKey(employeeId, encryptedPrivateKey, password, decrypted);
+        }
+
+        plainKey = decrypted;
+        return true;
     }
 
     private void TryDeleteVaultCookie(HttpContext httpContext)
@@ -159,13 +422,7 @@ public class ScopedKeystoreService
         {
             if (!httpContext.Response.HasStarted)
             {
-                httpContext.Response.Cookies.Delete("chat_vault_key", new CookieOptions
-                {
-                    Path = "/",
-                    HttpOnly = true,
-                    Secure = true,
-                    SameSite = SameSiteMode.Lax
-                });
+                VaultCookieProtector.DeleteVaultCookie(httpContext.Response);
             }
         }
         catch (Exception ex)
@@ -279,50 +536,44 @@ public class ScopedKeystoreService
     {
         if (IsUnlocked || string.IsNullOrEmpty(encryptedPwd)) return;
 
-        try
+        string? sessionId = null;
+        if (_authStateProvider != null)
         {
-            if (_authStateProvider != null && _deviceSessions != null)
+            try
             {
                 var authState = await _authStateProvider.GetAuthenticationStateAsync();
-                var sessionId = authState.User.FindFirst("SessionId")?.Value;
-                if (!string.IsNullOrEmpty(sessionId))
+                if (authState.User?.Identity?.IsAuthenticated == true)
                 {
-                    var session = _deviceSessions.GetById(sessionId);
-                    if (session != null &&
-                        (session.RevokedAt != null ||
-                         !session.HasVaultCookie ||
-                         !string.Equals(session.EmployeeId, employeeId, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        // The server explicitly logged this device out of the vault,
-                        // so clear the stale local preference instead of reviving the session.
-                        await ClearDeviceCookieAsync(js, employeeId);
-                        return;
-                    }
+                    sessionId = authState.User.FindFirst("SessionId")?.Value;
                 }
             }
-
-            // Decrypt the token securely from the server side
-            var protector = _dataProtection.CreateProtector("ChatVaultKey");
-            var pwd = protector.Unprotect(encryptedPwd);
-
-            // Derive and decrypt to prove validity
-            var kek = _crypto.DeriveKeyFromPassword(pwd, employeeId);
-            var plainKey = _crypto.DecryptAes(encryptedPrivateKey, kek);
-
-            Unlock(plainKey, employeeId);
-
-            // Also unlock GlobalKeystoreService for background push notification decryption.
-            // On mobile, the SSR cookie-based unlock in App.razor doesn't fire,
-            // so this is the primary unlock path for background services.
-            if (_globalKeystore != null && !_globalKeystore.IsUserUnlocked(employeeId))
+            catch (Exception ex)
             {
-                _globalKeystore.UnlockVault(employeeId, encryptedPrivateKey, pwd, _crypto);
+                _logger?.LogDebug(ex, "Failed to resolve authentication state while checking device vault key");
             }
         }
-        catch (Exception ex)
+
+        var outcome = TryUnprotectAndUnlockWithSession(encryptedPwd, sessionId, employeeId, encryptedPrivateKey);
+        if (!outcome.Unlocked)
         {
-            // Silently swallow; if cookie is invalid/missing, vault stays locked.
-            _logger?.LogDebug(ex, "TryUnlockFromProtectedDeviceKeyAsync failed");
+            await ClearDeviceCookieAsync(js);
+            return;
+        }
+
+        if (outcome.NeedsRenewal)
+        {
+            var refreshedToken = TryBuildRefreshedV2Token(outcome, employeeId);
+            if (!string.IsNullOrEmpty(refreshedToken))
+            {
+                try
+                {
+                    await js.InvokeVoidAsync("spokesVault.storeVaultKey", refreshedToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogDebug(ex, "[ScopedKeystore] Failed to persist refreshed device vault key");
+                }
+            }
         }
     }
 
@@ -336,21 +587,29 @@ public class ScopedKeystoreService
         string password,
         bool rememberDevice = true)
     {
-        if (employee == null || !employee.IsActive || employee.IsBanned || string.IsNullOrWhiteSpace(password) || string.IsNullOrEmpty(employee.EncryptedPrivateKey))
+        if (employee == null || string.IsNullOrWhiteSpace(password))
+        {
+            return false;
+        }
+
+        var effectiveEmployee = _employees != null ? _employees.GetById(employee.Id) : employee;
+        if (effectiveEmployee == null || !effectiveEmployee.IsActive || effectiveEmployee.IsBanned || string.IsNullOrEmpty(effectiveEmployee.EncryptedPrivateKey))
         {
             return false;
         }
 
         try
         {
-            var kek = _crypto.DeriveKeyFromPassword(password, employee.Id);
-            var plainKey = _crypto.DecryptAes(employee.EncryptedPrivateKey, kek);
-
-            Unlock(plainKey, employee.Id);
-
-            if (!employee.IsSuspended)
+            if (!TryResolvePlainPrivateKey(effectiveEmployee.Id, effectiveEmployee.EncryptedPrivateKey, password, cacheOnMiss: false, out var plainKey))
             {
-                _globalKeystore?.UnlockVault(employee.Id, employee.EncryptedPrivateKey, password, _crypto);
+                return false;
+            }
+
+            Unlock(plainKey, effectiveEmployee.Id);
+
+            if (!effectiveEmployee.IsSuspended)
+            {
+                _globalKeystore?.StoreVerifiedPrivateKey(effectiveEmployee.Id, effectiveEmployee.EncryptedPrivateKey, password, plainKey);
 
                 if (rememberDevice)
                 {
@@ -428,7 +687,7 @@ public class ScopedKeystoreService
         Lock(employeeId);
     }
 
-    public async Task ClearDeviceCookieAsync(IJSRuntime js, string employeeId)
+    public async Task ClearDeviceCookieAsync(IJSRuntime js)
     {
         try
         {

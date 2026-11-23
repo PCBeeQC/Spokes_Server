@@ -34,48 +34,26 @@ public class UiNotificationPresenter : IUiNotificationPresenter
     public bool IsOnEmailPage() =>
         _nav.Uri.Contains("/email", StringComparison.OrdinalIgnoreCase);
 
-    public void ShowChatNotification(InAppNotification notification)
-    {
-        _snackbar.Add<ChatNotificationContent>(
-            new Dictionary<string, object?>
+    public void ShowChatNotification(InAppNotification notification) =>
+        AddComponentSnackbar<ChatNotificationContent>(
+            new Dictionary<string, object>
             {
                 { "SenderName", notification.SenderName },
                 { "Content", notification.Content },
                 { "Initials", notification.Initials },
                 { "ChannelId", notification.ChannelId },
                 { "ChannelName", notification.ChannelName },
-                { "AvatarUrl", notification.SenderAvatarUrl },
+                { "AvatarUrl", notification.SenderAvatarUrl! },
                 { "IsReaction", notification.IsReaction },
                 { "IsGroupChat", notification.IsGroupChat },
-                { "ServerName", notification.ServerName }
-            }!,
-            Severity.Normal,
-            config =>
+                { "ServerName", notification.ServerName! }
+            },
+            visibleStateDuration: 5000,
+            () =>
             {
-                config.VisibleStateDuration = 5000;
-                config.ShowCloseIcon = true;
-                config.SnackbarVariant = Variant.Filled;
-                config.HideIcon = true;
-                config.OnClick = _ =>
-                {
-                    _soundService.StopCallRingtoneAsync();
-                    _nav.NavigateTo($"/chat/{notification.ChannelId}");
-                    return Task.CompletedTask;
-                };
+                _soundService.StopCallRingtoneAsync();
+                _nav.NavigateTo($"/chat/{notification.ChannelId}");
             });
-    }
-
-    public void ShowChatNotification(string senderName, string truncatedContent, string initials, string channelId, string channelName) =>
-        ShowChatNotification(new InAppNotification
-        {
-            RecipientUserId = string.Empty,
-            Title = senderName,
-            Content = truncatedContent,
-            SenderName = senderName,
-            Initials = initials,
-            ChannelId = channelId,
-            ChannelName = channelName
-        });
 
     public void ShowModerationAlert(string reporterName, string reason)
     {
@@ -96,33 +74,19 @@ public class UiNotificationPresenter : IUiNotificationPresenter
             });
     }
 
-    public void ShowEmailNotification(string fromName, string subject, string snippet)
-    {
-        _snackbar.Add<EmailNotificationContent>(
+    public void ShowEmailNotification(string fromName, string subject, string snippet) =>
+        AddComponentSnackbar<EmailNotificationContent>(
             new Dictionary<string, object>
             {
                 { "SenderName", fromName },
                 { "Subject", subject },
                 { "Snippet", snippet }
             },
-            Severity.Normal,
-            config =>
-            {
-                config.VisibleStateDuration = 5000;
-                config.ShowCloseIcon = true;
-                config.SnackbarVariant = Variant.Filled;
-                config.HideIcon = true;
-                config.OnClick = _ =>
-                {
-                    _nav.NavigateTo("/email");
-                    return Task.CompletedTask;
-                };
-            });
-    }
+            visibleStateDuration: 5000,
+            () => _nav.NavigateTo("/email"));
 
-    public void ShowCalendarNotification(CalendarNotificationModel notification)
-    {
-        _snackbar.Add<CalendarNotificationContent>(
+    public void ShowCalendarNotification(CalendarNotificationModel notification) =>
+        AddComponentSnackbar<CalendarNotificationContent>(
             new Dictionary<string, object>
             {
                 { "Title", string.IsNullOrWhiteSpace(notification.Title) ? "Untitled Event" : notification.Title },
@@ -132,16 +96,27 @@ public class UiNotificationPresenter : IUiNotificationPresenter
                 { "ServerName", notification.ServerName },
                 { "ServerIconUrl", notification.ServerIconUrl ?? "" }
             },
+            visibleStateDuration: 10000,
+            () => _nav.NavigateTo("/planning/calendar"));
+
+    private void AddComponentSnackbar<TComponent>(
+        Dictionary<string, object> parameters,
+        int visibleStateDuration,
+        Action onClick)
+        where TComponent : IComponent
+    {
+        _snackbar.Add<TComponent>(
+            parameters,
             Severity.Normal,
             config =>
             {
-                config.VisibleStateDuration = 10000;
+                config.VisibleStateDuration = visibleStateDuration;
                 config.ShowCloseIcon = true;
-                config.HideIcon = true;
                 config.SnackbarVariant = Variant.Filled;
+                config.HideIcon = true;
                 config.OnClick = _ =>
                 {
-                    _nav.NavigateTo("/planning/calendar");
+                    onClick();
                     return Task.CompletedTask;
                 };
             });

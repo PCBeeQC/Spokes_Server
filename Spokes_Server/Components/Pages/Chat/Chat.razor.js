@@ -1,91 +1,17 @@
 export function initFileHandlers(elementId, dotNetHelper, maxAllowedSize = 268435456) {
     window.spokesChatDiagnostics?.mark('Client: JS Chat.initFileHandlers');
     // We ignore elementId for the container now, and prefer our specific chat-drop-zone
-    const container = document.getElementById('chat-drop-zone');
-
-    if (!container) return;
-
-    container._maxAllowedSize = maxAllowedSize;
-
-    if (container._spokesFileHandlersInit) return;
-    container._spokesFileHandlersInit = true;
-
-    let dragCounter = 0;
-
-    container.addEventListener('dragenter', (e) => {
-        e.preventDefault();
-        dragCounter++;
-        dotNetHelper.invokeMethodAsync('SetDraggingState', true);
-    });
-
-    container.addEventListener('dragover', (e) => {
-        e.preventDefault();
-    });
-
-    container.addEventListener('dragleave', (e) => {
-        e.preventDefault();
-        dragCounter--;
-        if (dragCounter <= 0) {
-            dragCounter = 0;
-            dotNetHelper.invokeMethodAsync('SetDraggingState', false);
-        }
-    });
-
-    container.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dragCounter = 0;
-        dotNetHelper.invokeMethodAsync('SetDraggingState', false);
-
-        const files = e.dataTransfer.files;
-        if (files && files.length > 0) {
-            handleFiles(files, dotNetHelper, container._maxAllowedSize || maxAllowedSize);
-        }
-    });
-}
-
-async function handleFiles(fileList, dotNetHelper, maxAllowedSize = 268435456) {
-    const uploadUrl = await dotNetHelper.invokeMethodAsync('GetUploadUrl');
-    if (!uploadUrl) return;
-
-    if (fileList.length === 0) return;
-
-    for (const file of fileList) {
-        if (file.size > maxAllowedSize) {
-            const limitMb = Math.round(maxAllowedSize / 1024 / 1024);
-            const errorMsg = fileList.length > 1
-                ? `File "${file.name}" exceeds the allowed limit of ${limitMb}MB`
-                : `Total file size exceeds the allowed limit of ${limitMb}MB`;
-            dotNetHelper.invokeMethodAsync('OnPasteUploadError', errorMsg);
-            return;
-        }
-    }
-
-    for (const file of fileList) {
-        
-        await dotNetHelper.invokeMethodAsync('OnPasteUploadStarted');
-        try {
-            const proxyDotNetRef = {
-                invokeMethodAsync: async (methodName, ...args) => {
-                    if (methodName === 'OnProgressUpdateCallback') {
-                        return dotNetHelper.invokeMethodAsync('OnPasteProgressUpdate', ...args);
-                    }
-                }
-            };
-
-            const result = await window.spokesUpload.uploadFileObject(file, uploadUrl, proxyDotNetRef);
-            let jsonStr = typeof result === 'string' ? result : JSON.stringify(result);
-            await dotNetHelper.invokeMethodAsync('OnPasteUploadCompleted', jsonStr);
-        } catch (error) {
-            console.error("Error uploading dragged file:", error);
-            await dotNetHelper.invokeMethodAsync('OnPasteUploadError', error.message || "Upload failed");
-        }
-    }
+    window.spokesUpload?.initDropZone('chat-drop-zone', dotNetHelper, maxAllowedSize);
 }
 
 // ─── SCROLL ANCHORING & POSITION PRESERVATION ──────────────────────────────────
 
 let currentScrollAnchor = null;
 let isLoadOlderInFlight = false;
+let isViewportFillInFlight = false;
+let viewportFillSteps = 0;
+let activeChannelId = null;
+const MAX_VIEWPORT_FILL_STEPS = 4;
 
 function resolveElement(elOrId, fallbackId = 'chat-messages-container') {
     if (typeof elOrId === 'string') {
@@ -171,17 +97,11 @@ export function notifyOlderMessagesLoaded() {
 // ─── SCROLL LOADING ─────────────────────────────────────────────────────────
 
 let currentObserver = null;
-let observerTimeoutId = null;
 
 export function initScrollObserver(containerOrId, sentinelOrId, dotNetHelper) {
     window.spokesChatDiagnostics?.mark('Client: JS Chat.initScrollObserver');
     const container = resolveElement(containerOrId, 'chat-messages-container');
     const sentinel = resolveElement(sentinelOrId, 'chat-top-sentinel');
-
-    if (observerTimeoutId) {
-        clearTimeout(observerTimeoutId);
-        observerTimeoutId = null;
-    }
 
     if (currentObserver) {
         currentObserver.disconnect();
@@ -193,10 +113,9 @@ export function initScrollObserver(containerOrId, sentinelOrId, dotNetHelper) {
     currentObserver = new IntersectionObserver((entries) => {
         if (window._blazorDisconnected) return;
         entries.forEach(entry => {
-            if (entry.isIntersecting && !isLoadOlderInFlight) {
+            if (entry.isIntersecting && !isLoadOlderInFlight && !isViewportFillInFlight) {
                 // Guard: Only trigger lazy load if content actually overflows the container viewport.
-                // If container.scrollHeight <= container.clientHeight, the sentinel is visible simply because
-                // there aren't enough messages to fill the screen, not because the user scrolled to the top.
+                // Stage 2 viewport auto-fill (checkAndFillViewport) handles filling under-filled viewports.
                 if (container.scrollHeight > container.clientHeight + 10) {
                     isLoadOlderInFlight = true;
                     dotNetHelper.invokeMethodAsync('LoadOlderMessagesJS').catch(() => {
@@ -263,65 +182,317 @@ document.addEventListener('click', (e) => {
 
 // ─── LONG PRESS (MOBILE) ────────────────────────────────────────────────────
 
+const LONG_PRESS_DURATION_MS = 400;
+const LONG_PRESS_HIGHLIGHT_DELAY_MS = 90;
+const LONG_PRESS_MOVE_SLOP_PX = 10;
+const LONG_PRESS_HANDOFF_TIMEOUT_MS = 500;
+const LONG_PRESS_IGNORED_SELECTOR = 'input, textarea, select, [contenteditable="true"]';
+
+let longPressHost = null;
+let longPressDotNetHelper = null;
+let longPressCleanup = null;
+let longPressCancelActive = null;
+
+function setRowLongPressing(row, isPressing) {
+    if (!row) return;
+    if (isPressing) {
+        if (typeof row.setAttribute === 'function') {
+            row.setAttribute('data-long-pressing', 'true');
+        }
+    } else if (typeof row.removeAttribute === 'function') {
+        row.removeAttribute('data-long-pressing');
+    }
+}
+
+function resolveClosestTarget(rawTarget) {
+    const target = rawTarget && typeof rawTarget.closest === 'function'
+        ? rawTarget
+        : rawTarget?.parentElement;
+    return target && typeof target.closest === 'function' ? target : null;
+}
+
+function disposeLongPress() {
+    if (longPressCancelActive) {
+        longPressCancelActive(true);
+        longPressCancelActive = null;
+    }
+    if (longPressCleanup) {
+        longPressCleanup();
+        longPressCleanup = null;
+    }
+    longPressHost = null;
+    longPressDotNetHelper = null;
+}
+
 export function initLongPress(containerOrId, dotNetHelper) {
     window.spokesChatDiagnostics?.mark('Client: JS Chat.initLongPress');
     const container = resolveElement(containerOrId);
     if (!container) return;
 
-    if (container._longPressInit) return;
-    container._longPressInit = true;
+    // On channel switches the same #chat-messages-container element is reused: refresh the
+    // dotNetHelper reference and clear any in-flight press state without duplicating listeners.
+    if (longPressHost === container) {
+        longPressDotNetHelper = dotNetHelper;
+        if (longPressCancelActive) {
+            longPressCancelActive(true);
+        }
+        return;
+    }
 
-    let timer = null;
+    disposeLongPress();
+    longPressHost = container;
+    longPressDotNetHelper = dotNetHelper;
+
+    let highlightTimer = null;
+    let longPressTimer = null;
+    let handoffTimer = null;
+    let handoffRafId = null;
+    let preventClickHandler = null;
+    let preventClickTimer = null;
+    let pressingRow = null;
+    let startX = null;
+    let startY = null;
     let moved = false;
+    let triggered = false;
     let lastInteractionWasTouch = false;
 
-    container.addEventListener('touchstart', (e) => {
-        lastInteractionWasTouch = true;
-        const row = e.target.closest('[data-message-id]');
-        if (!row) return;
+    const clearPreventClick = () => {
+        if (preventClickTimer) {
+            clearTimeout(preventClickTimer);
+            preventClickTimer = null;
+        }
+        if (preventClickHandler) {
+            document.removeEventListener('click', preventClickHandler, true);
+            preventClickHandler = null;
+        }
+    };
 
-        moved = false;
-        const msgId = row.getAttribute('data-message-id');
+    const clearPendingTimers = () => {
+        if (highlightTimer) {
+            clearTimeout(highlightTimer);
+            highlightTimer = null;
+        }
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+        if (handoffTimer) {
+            clearTimeout(handoffTimer);
+            handoffTimer = null;
+        }
+        if (handoffRafId !== null && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(handoffRafId);
+            handoffRafId = null;
+        }
+    };
 
-        timer = setTimeout(() => {
-            if (!moved && !window._blazorDisconnected) {
-                window.getSelection()?.removeAllRanges();
-                if (window.triggerHaptic) { window.triggerHaptic('LIGHT'); } else { try { navigator.vibrate?.(30); } catch (_) { } }
-                dotNetHelper.invokeMethodAsync('OnMobileLongPress', msgId);
-
-                const preventClick = (ev) => {
-                    ev.stopPropagation();
-                    ev.preventDefault();
-                    document.removeEventListener('click', preventClick, true);
-                };
-                document.addEventListener('click', preventClick, true);
-                setTimeout(() => document.removeEventListener('click', preventClick, true), 600);
+    const clearActivePress = (forceClearTriggered = false) => {
+        if (triggered && !forceClearTriggered) {
+            // Long-press already fired and handed off to Blazor; retain data-long-pressing
+            // until OnMobileLongPress settles (or the safety cap expires) so lifting the finger
+            // does not blink before Blazor applies .message-row-action-target.
+            if (highlightTimer) {
+                clearTimeout(highlightTimer);
+                highlightTimer = null;
             }
-        }, 400);
-    }, { passive: true });
+            if (longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
+            return;
+        }
+        clearPendingTimers();
+        if (pressingRow) {
+            setRowLongPressing(pressingRow, false);
+            pressingRow = null;
+        }
+        startX = null;
+        startY = null;
+        moved = false;
+        triggered = false;
+    };
 
-    container.addEventListener('mousedown', (e) => {
+    const scheduleHandoffClear = (row, settledSuccessfully) => {
+        const finalize = () => {
+            if (pressingRow === row) {
+                clearActivePress(true);
+            } else {
+                setRowLongPressing(row, false);
+            }
+        };
+
+        if (!settledSuccessfully) {
+            finalize();
+            return;
+        }
+
+        if (row.classList && typeof row.classList.contains === 'function' && row.classList.contains('message-row-action-target')) {
+            finalize();
+            return;
+        }
+
+        if (typeof requestAnimationFrame === 'function') {
+            handoffRafId = requestAnimationFrame(() => {
+                handoffRafId = null;
+                finalize();
+            });
+        } else {
+            finalize();
+        }
+    };
+
+    const onTouchStart = (e) => {
+        lastInteractionWasTouch = true;
+        clearActivePress(true);
+
+        if (e.touches && e.touches.length !== 1) return;
+        const target = resolveClosestTarget(e.target);
+        if (!target || target.closest(LONG_PRESS_IGNORED_SELECTOR)) return;
+
+        const row = target.closest('.message-row[data-message-id]');
+        if (!row || !container.contains(row)) return;
+
+        const msgId = row.getAttribute('data-message-id');
+        if (!msgId) return;
+
+        pressingRow = row;
+        moved = false;
+        triggered = false;
+        const touch = e.touches && e.touches[0];
+        startX = touch && typeof touch.clientX === 'number' ? touch.clientX : null;
+        startY = touch && typeof touch.clientY === 'number' ? touch.clientY : null;
+
+        highlightTimer = setTimeout(() => {
+            highlightTimer = null;
+            if (!moved && pressingRow === row && row.isConnected && !window._blazorDisconnected) {
+                setRowLongPressing(row, true);
+            }
+        }, LONG_PRESS_HIGHLIGHT_DELAY_MS);
+
+        longPressTimer = setTimeout(() => {
+            longPressTimer = null;
+            if (highlightTimer) {
+                clearTimeout(highlightTimer);
+                highlightTimer = null;
+            }
+
+            if (moved || pressingRow !== row || !row.isConnected || window._blazorDisconnected || !longPressDotNetHelper) {
+                clearActivePress(true);
+                return;
+            }
+
+            triggered = true;
+            setRowLongPressing(row, true);
+            window.getSelection()?.removeAllRanges();
+            if (window.triggerHaptic) { window.triggerHaptic('LIGHT'); } else { try { navigator.vibrate?.(30); } catch (_) { } }
+
+            // Safety cap guarantees a stuck highlight can never persist if the circuit stalls or rAF is throttled.
+            handoffTimer = setTimeout(() => {
+                handoffTimer = null;
+                if (pressingRow === row) {
+                    clearActivePress(true);
+                } else {
+                    setRowLongPressing(row, false);
+                }
+            }, LONG_PRESS_HANDOFF_TIMEOUT_MS);
+
+            const invokePromise = longPressDotNetHelper.invokeMethodAsync('OnMobileLongPress', msgId);
+            if (invokePromise && typeof invokePromise.then === 'function') {
+                invokePromise.then(
+                    () => scheduleHandoffClear(row, true),
+                    () => scheduleHandoffClear(row, false)
+                );
+            } else {
+                scheduleHandoffClear(row, true);
+            }
+
+            clearPreventClick();
+            preventClickHandler = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                clearPreventClick();
+            };
+            document.addEventListener('click', preventClickHandler, true);
+            preventClickTimer = setTimeout(clearPreventClick, 600);
+        }, LONG_PRESS_DURATION_MS);
+    };
+
+    const onMouseDown = () => {
         lastInteractionWasTouch = false;
-    }, { passive: true });
+    };
 
-    container.addEventListener('touchmove', () => {
+    const onTouchMove = (e) => {
+        if (!pressingRow || triggered) return;
+        if (e.touches && e.touches.length !== 1) {
+            moved = true;
+            clearActivePress(true);
+            return;
+        }
+        const touch = e.touches && e.touches[0];
+        if (startX !== null && startY !== null && touch && typeof touch.clientX === 'number' && typeof touch.clientY === 'number') {
+            if (Math.hypot(touch.clientX - startX, touch.clientY - startY) <= LONG_PRESS_MOVE_SLOP_PX) {
+                return;
+            }
+        }
         moved = true;
-        if (timer) { clearTimeout(timer); timer = null; }
-    }, { passive: true });
+        clearActivePress(true);
+    };
 
-    container.addEventListener('touchend', () => {
-        if (timer) { clearTimeout(timer); timer = null; }
-    }, { passive: true });
+    const onTouchEnd = () => {
+        clearActivePress(false);
+    };
 
-    container.addEventListener('touchcancel', () => {
-        if (timer) { clearTimeout(timer); timer = null; }
-    }, { passive: true });
+    const onTouchCancel = () => {
+        clearActivePress(true);
+    };
 
-    container.addEventListener('contextmenu', (e) => {
-        if (lastInteractionWasTouch && e.target.closest('[data-message-id]')) {
+    const onScroll = () => {
+        if (!triggered) {
+            moved = true;
+            clearActivePress(true);
+        }
+    };
+
+    const onContextMenu = (e) => {
+        const target = resolveClosestTarget(e.target);
+        if (lastInteractionWasTouch && target && target.closest('.message-row[data-message-id]')) {
             e.preventDefault();
         }
-    });
+    };
+
+    const onWindowBlur = () => {
+        clearActivePress(true);
+    };
+
+    const onVisibilityChange = () => {
+        if (document.hidden) {
+            clearActivePress(true);
+        }
+    };
+
+    container.addEventListener('touchstart', onTouchStart, { passive: true });
+    container.addEventListener('mousedown', onMouseDown, { passive: true });
+    container.addEventListener('touchmove', onTouchMove, { passive: true });
+    container.addEventListener('touchend', onTouchEnd, { passive: true });
+    container.addEventListener('touchcancel', onTouchCancel, { passive: true });
+    container.addEventListener('scroll', onScroll, { passive: true });
+    container.addEventListener('contextmenu', onContextMenu);
+    window.addEventListener('blur', onWindowBlur);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    longPressCancelActive = clearActivePress;
+    longPressCleanup = () => {
+        clearPreventClick();
+        container.removeEventListener('touchstart', onTouchStart);
+        container.removeEventListener('mousedown', onMouseDown);
+        container.removeEventListener('touchmove', onTouchMove);
+        container.removeEventListener('touchend', onTouchEnd);
+        container.removeEventListener('touchcancel', onTouchCancel);
+        container.removeEventListener('scroll', onScroll);
+        container.removeEventListener('contextmenu', onContextMenu);
+        window.removeEventListener('blur', onWindowBlur);
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
 }
 
 
@@ -331,18 +502,31 @@ export function initLongPress(containerOrId, dotNetHelper) {
 let readReceiptObserver = null;
 let readReceiptMutationObserver = null;
 let readReceiptFocusHandler = null;
+let readReceiptTimeoutId = null;
+let pendingSeenIds = new Set();
+let pendingSeenFlushTimer = null;
+let pendingSeenChannelId = null;
+const READ_RECEIPT_COALESCE_MS = 350;
+
+function clearPendingSeenBatch() {
+    if (pendingSeenFlushTimer) {
+        clearTimeout(pendingSeenFlushTimer);
+        pendingSeenFlushTimer = null;
+    }
+    pendingSeenIds.clear();
+    pendingSeenChannelId = null;
+}
 
 function isWindowActivelyViewed() {
-    if (document.visibilityState !== 'visible') return false;
     if (window._spokesClientIdle === true) return false;
-    if (window._spokesElectronWindowFocused === false) return false;
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const isNative = typeof window.isCapacitorNative === 'function' && window.isCapacitorNative();
-    return isMobile || isNative || document.hasFocus();
+    return typeof window.isSpokesWindowFocused === 'function'
+        ? window.isSpokesWindowFocused()
+        : (document.visibilityState === 'visible' && document.hasFocus());
 }
 
 export function initReadReceiptObserver(containerOrId, dotNetHelper) {
     window.spokesChatDiagnostics?.mark('Client: JS Chat.initReadReceiptObserver');
+    clearPendingSeenBatch();
     if (readReceiptObserver) {
         readReceiptObserver.disconnect();
     }
@@ -350,6 +534,9 @@ export function initReadReceiptObserver(containerOrId, dotNetHelper) {
         readReceiptMutationObserver.disconnect();
     }
     if (readReceiptFocusHandler) {
+        if (window._spokesReobserveReadReceipts === readReceiptFocusHandler) {
+            delete window._spokesReobserveReadReceipts;
+        }
         window.removeEventListener('focus', readReceiptFocusHandler);
         document.removeEventListener('visibilitychange', readReceiptFocusHandler);
         readReceiptFocusHandler = null;
@@ -358,15 +545,34 @@ export function initReadReceiptObserver(containerOrId, dotNetHelper) {
     const container = resolveElement(containerOrId);
     if (!container) return;
 
+    const boundChannelId = activeChannelId || container.dataset?.channelId || null;
+
+    const flushPendingSeen = () => {
+        pendingSeenFlushTimer = null;
+        if (pendingSeenIds.size === 0 || window._blazorDisconnected) {
+            pendingSeenIds.clear();
+            return;
+        }
+        if (boundChannelId && activeChannelId && activeChannelId !== boundChannelId) {
+            pendingSeenIds.clear();
+            return;
+        }
+        const batch = Array.from(pendingSeenIds);
+        pendingSeenIds.clear();
+        dotNetHelper.invokeMethodAsync('HandleMessagesSeen', batch)
+            .catch(err => console.warn("HandleMessagesSeen failed", err));
+    };
+
     readReceiptObserver = new IntersectionObserver((entries) => {
         if (!isWindowActivelyViewed() || window._blazorDisconnected) return;
 
-        const seenIds = [];
+        let addedAny = false;
         entries.forEach(entry => {
             if (entry.isIntersecting) {
                 const msgId = entry.target.getAttribute('data-message-id');
                 if (msgId) {
-                    seenIds.push(msgId);
+                    pendingSeenIds.add(msgId);
+                    addedAny = true;
 
                     // Unobserve once seen while actively viewed to preserve performance
                     readReceiptObserver.unobserve(entry.target);
@@ -374,9 +580,12 @@ export function initReadReceiptObserver(containerOrId, dotNetHelper) {
             }
         });
 
-        if (seenIds.length > 0 && !window._blazorDisconnected) {
-            dotNetHelper.invokeMethodAsync('HandleMessagesSeen', seenIds)
-                .catch(err => console.warn("HandleMessagesSeen failed", err));
+        if (addedAny && !window._blazorDisconnected) {
+            pendingSeenChannelId = boundChannelId;
+            if (pendingSeenFlushTimer) {
+                clearTimeout(pendingSeenFlushTimer);
+            }
+            pendingSeenFlushTimer = setTimeout(flushPendingSeen, READ_RECEIPT_COALESCE_MS);
         }
     }, {
         root: container,
@@ -398,11 +607,17 @@ export function initReadReceiptObserver(containerOrId, dotNetHelper) {
             observeAllMessages();
         }
     };
+    window._spokesReobserveReadReceipts = readReceiptFocusHandler;
     window.addEventListener('focus', readReceiptFocusHandler);
     document.addEventListener('visibilitychange', readReceiptFocusHandler);
 
     // Short delay to allow layout to settle before observing
-    setTimeout(() => {
+    if (readReceiptTimeoutId) {
+        clearTimeout(readReceiptTimeoutId);
+        readReceiptTimeoutId = null;
+    }
+    readReceiptTimeoutId = setTimeout(() => {
+        readReceiptTimeoutId = null;
         if (!readReceiptObserver) return;
 
         observeAllMessages();
@@ -468,21 +683,231 @@ export function initScrollListener(containerOrId, dotNetHelper) {
     }, { passive: true });
 }
 
-export function initChatChannelView(containerOrId, sentinelOrId, dotNetHelper, maxAllowedSize, hasMoreMessages) {
+function scheduleViewportFill(containerOrId, dotNetHelper, expectedChannelId) {
+    if (!expectedChannelId || activeChannelId !== expectedChannelId) return;
+    if (viewportFillSteps >= MAX_VIEWPORT_FILL_STEPS || isViewportFillInFlight || isLoadOlderInFlight) return;
+    if (window._blazorDisconnected) return;
+
+    requestAnimationFrame(() => {
+        if (activeChannelId !== expectedChannelId || window._blazorDisconnected || isViewportFillInFlight || isLoadOlderInFlight) {
+            return;
+        }
+        const container = resolveElement(containerOrId);
+        if (!container || !container.isConnected || container.clientHeight <= 0) {
+            return;
+        }
+        if (container.scrollHeight >= container.clientHeight * 1.4) {
+            return;
+        }
+
+        isViewportFillInFlight = true;
+        viewportFillSteps++;
+        const fillStep = viewportFillSteps;
+        const fillStart = performance.now();
+        window.spokesChatDiagnostics?.mark(`Client: Stage2 ViewportFill #${fillStep} Start`);
+        dotNetHelper.invokeMethodAsync('FillViewportMessagesJS', expectedChannelId)
+            .then((stillHasMore) => {
+                isViewportFillInFlight = false;
+                const durMs = Math.round(performance.now() - fillStart);
+                window.spokesChatDiagnostics?.mark(`Client: Stage2 ViewportFill #${fillStep} Done (${durMs}ms, hasMore=${Boolean(stillHasMore)})`);
+                window.spokesPerf?.recordViewportFill?.({
+                    channelId: expectedChannelId,
+                    step: fillStep,
+                    durationMs: durMs,
+                    hasMore: Boolean(stillHasMore)
+                });
+                if (stillHasMore && activeChannelId === expectedChannelId && viewportFillSteps < MAX_VIEWPORT_FILL_STEPS) {
+                    scheduleViewportFill(containerOrId, dotNetHelper, expectedChannelId);
+                }
+            })
+            .catch(() => {
+                isViewportFillInFlight = false;
+            });
+    });
+}
+
+let sharedDesktopActionsEl = null;
+let sharedDesktopActionsTemplateKey = null;
+let delegatedActionsHost = null;
+let delegatedActionsDotNetHelper = null;
+let delegatedActionsCleanup = null;
+let sidebarKeyboardHost = null;
+let sidebarKeydownListener = null;
+
+function detachSharedDesktopActions() {
+    if (sharedDesktopActionsEl && sharedDesktopActionsEl.parentNode) {
+        sharedDesktopActionsEl.parentNode.removeChild(sharedDesktopActionsEl);
+    }
+}
+
+function disposeMessageDelegatedHandlers() {
+    if (delegatedActionsCleanup) {
+        delegatedActionsCleanup();
+        delegatedActionsCleanup = null;
+    }
+    delegatedActionsHost = null;
+    delegatedActionsDotNetHelper = null;
+}
+
+function ensureSharedDesktopActionsEl() {
+    const template = document.getElementById('spokes-desktop-message-actions-template');
+    if (!template) {
+        detachSharedDesktopActions();
+        sharedDesktopActionsEl = null;
+        sharedDesktopActionsTemplateKey = null;
+        return null;
+    }
+
+    const key = template.getAttribute('data-template-key') || '';
+    if (!sharedDesktopActionsEl || sharedDesktopActionsTemplateKey !== key) {
+        detachSharedDesktopActions();
+        const sourceRoot = template.content?.firstElementChild || template.firstElementChild;
+        sharedDesktopActionsEl = sourceRoot ? sourceRoot.cloneNode(true) : null;
+        sharedDesktopActionsTemplateKey = key;
+    }
+    return sharedDesktopActionsEl;
+}
+
+function attachSharedDesktopActionsToRow(row) {
+    if (!row) return;
+    // Mount exclusively into the idle JS-owned slot so Blazor popup transitions atomically
+    // replace the slot without child-index collisions or hover toolbar flicker.
+    const slot = row.querySelector('.message-actions-slot');
+    if (!slot) return;
+
+    const actionsEl = ensureSharedDesktopActionsEl();
+    if (!actionsEl) return;
+    if (actionsEl.parentNode !== slot) {
+        slot.appendChild(actionsEl);
+    }
+}
+
+function initSidebarKeyboardDelegation() {
+    const host = document.querySelector('.chat-page-container');
+    if (!host || host === sidebarKeyboardHost) return;
+    if (sidebarKeyboardHost && sidebarKeydownListener) {
+        sidebarKeyboardHost.removeEventListener('keydown', sidebarKeydownListener);
+    }
+    sidebarKeydownListener = (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const target = e.target;
+        if (!target || typeof target.matches !== 'function') return;
+        if (!target.matches('.mud-list-item-clickable[role="button"]')) return;
+        e.preventDefault();
+        target.click();
+    };
+    host.addEventListener('keydown', sidebarKeydownListener);
+    sidebarKeyboardHost = host;
+}
+
+function initMessageDelegatedHandlers(containerOrId, dotNetHelper) {
+    const container = resolveElement(containerOrId);
+    if (!container) return;
+
+    if (delegatedActionsHost === container) {
+        delegatedActionsDotNetHelper = dotNetHelper;
+        return;
+    }
+
+    disposeMessageDelegatedHandlers();
+    delegatedActionsHost = container;
+    delegatedActionsDotNetHelper = dotNetHelper;
+
+    const handleRowHoverOrFocus = (e) => {
+        const target = resolveClosestTarget(e.target);
+        if (!target) return;
+        const row = target.closest('.message-row[data-message-id]');
+        if (!row || !container.contains(row)) return;
+        attachSharedDesktopActionsToRow(row);
+    };
+
+    const handleContainerMouseLeave = () => {
+        detachSharedDesktopActions();
+    };
+
+    const handleContainerClick = (e) => {
+        const target = resolveClosestTarget(e.target);
+        if (!target) return;
+
+        const actionBtn = target.closest('.message-actions button[data-msg-action]');
+        if (!actionBtn || window._blazorDisconnected || !delegatedActionsDotNetHelper) return;
+
+        const row = actionBtn.closest('.message-row[data-message-id]');
+        const messageId = row?.getAttribute('data-message-id');
+        const action = actionBtn.getAttribute('data-msg-action');
+        if (!messageId || !action) return;
+
+        const emoji = actionBtn.getAttribute('data-emoji') || null;
+        const invokePromise = delegatedActionsDotNetHelper.invokeMethodAsync('HandleDesktopMessageActionJS', messageId, action, emoji);
+        if (invokePromise && typeof invokePromise.catch === 'function') {
+            invokePromise.catch(() => {});
+        }
+    };
+
+    container.addEventListener('pointerover', handleRowHoverOrFocus, { passive: true });
+    container.addEventListener('mouseover', handleRowHoverOrFocus, { passive: true });
+    container.addEventListener('focusin', handleRowHoverOrFocus, { passive: true });
+    container.addEventListener('mouseleave', handleContainerMouseLeave, { passive: true });
+    container.addEventListener('click', handleContainerClick);
+
+    delegatedActionsCleanup = () => {
+        container.removeEventListener('pointerover', handleRowHoverOrFocus);
+        container.removeEventListener('mouseover', handleRowHoverOrFocus);
+        container.removeEventListener('focusin', handleRowHoverOrFocus);
+        container.removeEventListener('mouseleave', handleContainerMouseLeave);
+        container.removeEventListener('click', handleContainerClick);
+    };
+}
+
+export function initChatChannelView(containerOrId, sentinelOrId, dotNetHelper, maxAllowedSize, hasMoreMessages, channelId = null) {
     window.spokesChatDiagnostics?.mark('Client: JS Chat.initChatChannelView');
+    detachSharedDesktopActions();
+    isLoadOlderInFlight = false;
+    isViewportFillInFlight = false;
+    viewportFillSteps = 0;
+    activeChannelId = channelId || (resolveElement(containerOrId)?.dataset?.channelId ?? null);
+    window.spokesCopyMessageCode = (messageId, codeBlockIndex) => {
+        if (!dotNetHelper || window._blazorDisconnected) return Promise.resolve(null);
+        return dotNetHelper.invokeMethodAsync('CopyMessageCodeBlockJS', String(messageId), Number(codeBlockIndex) || 0);
+    };
+    if (window.spokesMediaLoader && typeof window.spokesMediaLoader.cancelDetached === 'function') {
+        window.spokesMediaLoader.cancelDetached();
+    }
+    initSidebarKeyboardDelegation();
     scrollToBottomWhenLoaded(containerOrId);
     initFileHandlers('chat-messages-container', dotNetHelper, maxAllowedSize);
+    initMessageDelegatedHandlers(containerOrId, dotNetHelper);
     initLongPress(containerOrId, dotNetHelper);
     initScrollListener(containerOrId, dotNetHelper);
     if (hasMoreMessages) {
         initScrollObserver(containerOrId, sentinelOrId, dotNetHelper);
+        if (activeChannelId) {
+            scheduleViewportFill(containerOrId, dotNetHelper, activeChannelId);
+        }
     }
     initReadReceiptObserver(containerOrId, dotNetHelper);
 }
 
 export function dispose() {
+    disposeLongPress();
+    disposeMessageDelegatedHandlers();
+    detachSharedDesktopActions();
+    sharedDesktopActionsEl = null;
+    sharedDesktopActionsTemplateKey = null;
+    if (sidebarKeyboardHost && sidebarKeydownListener) {
+        sidebarKeyboardHost.removeEventListener('keydown', sidebarKeydownListener);
+        sidebarKeyboardHost = null;
+        sidebarKeydownListener = null;
+    }
+    clearPendingSeenBatch();
     isLoadOlderInFlight = false;
+    isViewportFillInFlight = false;
+    viewportFillSteps = 0;
+    activeChannelId = null;
     currentScrollAnchor = null;
+    if (window.spokesCopyMessageCode) {
+        delete window.spokesCopyMessageCode;
+    }
     if (readReceiptObserver) {
         readReceiptObserver.disconnect();
         readReceiptObserver = null;
@@ -491,9 +916,17 @@ export function dispose() {
         readReceiptMutationObserver.disconnect();
         readReceiptMutationObserver = null;
     }
-    if (observerTimeoutId) {
-        clearTimeout(observerTimeoutId);
-        observerTimeoutId = null;
+    if (readReceiptFocusHandler) {
+        if (window._spokesReobserveReadReceipts === readReceiptFocusHandler) {
+            delete window._spokesReobserveReadReceipts;
+        }
+        window.removeEventListener('focus', readReceiptFocusHandler);
+        document.removeEventListener('visibilitychange', readReceiptFocusHandler);
+        readReceiptFocusHandler = null;
+    }
+    if (readReceiptTimeoutId) {
+        clearTimeout(readReceiptTimeoutId);
+        readReceiptTimeoutId = null;
     }
     if (currentObserver) {
         currentObserver.disconnect();

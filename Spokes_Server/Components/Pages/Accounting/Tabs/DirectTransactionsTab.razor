@@ -1,0 +1,489 @@
+@using Spokes_Server.Components.Dialogs.Accounting
+@using Spokes_Server.Components.Dialogs.Common
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Security
+@inject Database Db
+@inject IDirectTransactionService TransactionService
+@inject IFinancialAccountService FinancialAccountService
+@inject IJurisdictionTemplateService JurisdictionService
+@inject UserService UserService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject FileUrlSigner FileUrls
+
+<MudGrid Spacing="3">
+    @* Top Action Bar *@
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+            <div class="d-flex justify-space-between align-center flex-wrap gap-3">
+                <div>
+                    <MudText Typo="Typo.h6">@BizLoc["Other Transactions (Money In, Money Out & Transfers)"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["Record payments received outside client invoices, payments made outside supplier bills, and transfers between your accounts. Double-entry ledger lines are posted automatically."]
+                    </MudText>
+                </div>
+
+                @if (_canWriteAccounting)
+                {
+                    <div class="d-flex align-center flex-wrap gap-2">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Success"
+                                   StartIcon="@Icons.Material.Filled.SouthWest"
+                                   OnClick="@(() => OpenTransactionDialogAsync(DirectTransactionDirection.MoneyIn))">
+                            @BizLoc["+ Money In"]
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Error"
+                                   StartIcon="@Icons.Material.Filled.NorthEast"
+                                   OnClick="@(() => OpenTransactionDialogAsync(DirectTransactionDirection.MoneyOut))">
+                            @BizLoc["+ Money Out"]
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Info"
+                                   StartIcon="@Icons.Material.Filled.SwapHoriz"
+                                   OnClick="@(() => OpenTransactionDialogAsync(DirectTransactionDirection.Transfer))">
+                            @BizLoc["+ Transfer"]
+                        </MudButton>
+                    </div>
+                }
+            </div>
+        </MudPaper>
+    </MudItem>
+
+    @* KPI Summary Strip *@
+    <MudItem xs="12">
+        <div class="d-flex flex-wrap gap-3">
+            <div style="flex: 1; min-width: 200px;">
+                <StatCard Title="@BizLoc["Money Received"]"
+                          Value="@PeriodMoneyIn.ToString("C2")"
+                          Icon="@Icons.Material.Filled.SouthWest"
+                          IconColor="Color.Success"
+                          Subtitle="@($"{PeriodMoneyInCount} {BizLoc["transaction(s)"].Value}")" />
+            </div>
+            <div style="flex: 1; min-width: 200px;">
+                <StatCard Title="@BizLoc["Payments Made"]"
+                          Value="@PeriodMoneyOut.ToString("C2")"
+                          Icon="@Icons.Material.Filled.NorthEast"
+                          IconColor="Color.Error"
+                          Subtitle="@($"{PeriodMoneyOutCount} {BizLoc["transaction(s)"].Value}")" />
+            </div>
+            <div style="flex: 1; min-width: 200px;">
+                <StatCard Title="@BizLoc["Net Other Cash Flow"]"
+                          Value="@((PeriodMoneyIn - PeriodMoneyOut).ToString("C2"))"
+                          Icon="@Icons.Material.Filled.AccountBalanceWallet"
+                          IconColor="@(PeriodMoneyIn >= PeriodMoneyOut ? Color.Success : Color.Warning)"
+                          Subtitle="@BizLoc["Selected period (excl. transfers)"]" />
+            </div>
+            <div style="flex: 1; min-width: 200px;">
+                <StatCard Title="@BizLoc["Account Transfers"]"
+                          Value="@PeriodTransfersTotal.ToString("C2")"
+                          Icon="@Icons.Material.Filled.SwapHoriz"
+                          IconColor="Color.Info"
+                          Subtitle="@($"{PeriodTransfersCount} {BizLoc["transfer(s)"].Value}")" />
+            </div>
+        </div>
+    </MudItem>
+
+    @* Register Table *@
+    <MudItem xs="12">
+        <MudTable Items="@FilteredTransactions"
+                  Dense="true"
+                  Hover="true"
+                  Striped="true"
+                  Outlined="true"
+                  Elevation="0"
+                  RowsPerPage="25">
+            <ToolBarContent>
+                <div class="d-flex align-center flex-wrap gap-2">
+                    <MudChipSet T="string" SelectedValue="@_directionFilter" SelectedValueChanged="OnFilterChanged" Variant="Variant.Filled">
+                        <MudChip Value="@("all")" Color="Color.Primary" Size="Size.Small">@BizLoc["All"] (@_activeInPeriod.Count)</MudChip>
+                        <MudChip Value="@DirectTransactionDirection.MoneyIn" Color="Color.Success" Size="Size.Small">@BizLoc["Money In"] (@PeriodMoneyInCount)</MudChip>
+                        <MudChip Value="@DirectTransactionDirection.MoneyOut" Color="Color.Error" Size="Size.Small">@BizLoc["Money Out"] (@PeriodMoneyOutCount)</MudChip>
+                        <MudChip Value="@DirectTransactionDirection.Transfer" Color="Color.Info" Size="Size.Small">@BizLoc["Transfers"] (@PeriodTransfersCount)</MudChip>
+                        <MudChip Value="@("void")" Color="Color.Default" Size="Size.Small">@BizLoc["Void"] (@_voidInPeriodCount)</MudChip>
+                    </MudChipSet>
+                </div>
+                <MudSpacer />
+                <div class="d-flex align-center flex-wrap gap-2">
+                    <div style="width: 145px;">
+                        <MudDatePicker @bind-Date="_startDate"
+                                       @bind-Date:after="LoadData"
+                                       Label="@BizLoc["From"]"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense" />
+                    </div>
+                    <div style="width: 145px;">
+                        <MudDatePicker @bind-Date="_endDate"
+                                       @bind-Date:after="LoadData"
+                                       Label="@BizLoc["To"]"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense" />
+                    </div>
+                    <MudTextField @bind-Value="_searchText"
+                                  Placeholder="@BizLoc["Search payee, ref, category..."]"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Class="mt-0" />
+                </div>
+            </ToolBarContent>
+
+            <HeaderContent>
+                <MudTh Style="width: 105px;">@BizLoc["Date"]</MudTh>
+                <MudTh Style="width: 130px;">@BizLoc["Ref #"]</MudTh>
+                <MudTh Style="width: 115px;">@BizLoc["Type"]</MudTh>
+                <MudTh>@BizLoc["Party & Description"]</MudTh>
+                <MudTh>@BizLoc["Category / Destination"]</MudTh>
+                <MudTh>@BizLoc["Account"]</MudTh>
+                <MudTh Style="text-align: right; width: 100px;">@BizLoc["Tax"]</MudTh>
+                <MudTh Style="text-align: right; width: 125px;">@BizLoc["Total"]</MudTh>
+                <MudTh Style="width: 110px;">@Loc["Status"]</MudTh>
+                <MudTh Style="text-align: right; width: 150px;">@Loc["Actions"]</MudTh>
+            </HeaderContent>
+
+            <RowTemplate Context="tx">
+                @{
+                    var isIn = tx.Direction == DirectTransactionDirection.MoneyIn;
+                    var isTransfer = tx.Direction == DirectTransactionDirection.Transfer;
+                    var (isLocked, lockReason) = TransactionService.IsTransactionLocked(tx);
+                }
+                <MudTd Style="white-space: nowrap;">@tx.Date.ToString("yyyy-MM-dd")</MudTd>
+                <MudTd Style="white-space: nowrap;">
+                    <MudText Typo="Typo.body2"><b>@tx.TransactionNumber</b></MudText>
+                    @if (!string.IsNullOrWhiteSpace(tx.Reference))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@tx.Reference</MudText>
+                    }
+                </MudTd>
+                <MudTd>
+                    <MudChip T="string"
+                             Size="Size.Small"
+                             Color="@(isIn ? Color.Success : (isTransfer ? Color.Info : Color.Error))"
+                             Variant="Variant.Outlined">
+                        @(isIn ? BizLoc["Money In"] : (isTransfer ? BizLoc["Transfer"] : BizLoc["Money Out"]))
+                    </MudChip>
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2">
+                        <b>@(!string.IsNullOrWhiteSpace(tx.PartyName) ? tx.PartyName : (isTransfer ? BizLoc["Internal Transfer"].Value : "—"))</b>
+                    </MudText>
+                    @if (!string.IsNullOrWhiteSpace(tx.Description))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@tx.Description</MudText>
+                    }
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2">@FormatCategorySummary(tx)</MudText>
+                    @if (!string.IsNullOrWhiteSpace(tx.ProjectId) && _projectNamesById.TryGetValue(tx.ProjectId, out var projLabel))
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info" Icon="@Icons.Material.Filled.Folder">
+                            @projLabel
+                        </MudChip>
+                    }
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.caption">@ResolveAccountLabel(tx.AccountGlCode)</MudText>
+                </MudTd>
+                <MudTd Style="text-align: right; white-space: nowrap;">
+                    @(tx.TaxAmount > 0m ? tx.TaxAmount.ToString("C2") : "—")
+                </MudTd>
+                <MudTd Style="text-align: right; white-space: nowrap; font-weight: 700;">
+                    <MudText Typo="Typo.body2" Color="@(tx.IsVoid ? Color.Default : (isIn ? Color.Success : (isTransfer ? Color.Info : Color.Error)))">
+                        <b>@(isIn ? "+" : (isTransfer ? "" : "-"))@tx.GrandTotal.ToString("C2")</b>
+                    </MudText>
+                    @if (!string.Equals(tx.Currency, _functionalCurrency, StringComparison.OrdinalIgnoreCase))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@tx.Currency</MudText>
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (tx.IsVoid)
+                    {
+                        <MudTooltip Text="@(string.IsNullOrWhiteSpace(tx.VoidReason) ? BizLoc["Voided"].Value : tx.VoidReason)">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error">@BizLoc["Void"]</MudChip>
+                        </MudTooltip>
+                    }
+                    else if (isLocked)
+                    {
+                        <MudTooltip Text="@(lockReason ?? BizLoc["Locked"].Value)">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Icon="@Icons.Material.Filled.Lock">@BizLoc["Reconciled"]</MudChip>
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">@BizLoc["Posted"]</MudChip>
+                    }
+                </MudTd>
+                <MudTd Style="text-align: right; white-space: nowrap;">
+                    <div class="d-flex justify-end align-center gap-1">
+                        @if (!string.IsNullOrWhiteSpace(tx.AttachmentPath))
+                        {
+                            <MudTooltip Text="@tx.AttachmentName">
+                                <MudIconButton Icon="@Icons.Material.Filled.AttachFile"
+                                               Size="Size.Small"
+                                               Color="Color.Info"
+                                               Href="@FileUrls.SignUrl(tx.AttachmentPath)"
+                                               Target="_blank" />
+                            </MudTooltip>
+                        }
+                        <MudIconButton Icon="@(isLocked || tx.IsVoid || !_canWriteAccounting ? Icons.Material.Filled.Visibility : Icons.Material.Filled.Edit)"
+                                       Size="Size.Small"
+                                       Color="Color.Primary"
+                                       OnClick="@(() => OpenEditTransactionDialogAsync(tx))" />
+                        @if (_canWriteAccounting && !tx.IsVoid && !isLocked)
+                        {
+                            <MudTooltip Text="@BizLoc["Void Transaction"]">
+                                <MudIconButton Icon="@Icons.Material.Filled.Block"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => VoidTransactionAsync(tx))" />
+                            </MudTooltip>
+                        }
+                    </div>
+                </MudTd>
+            </RowTemplate>
+
+            <NoRecordsContent>
+                <div class="pa-6 text-center">
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                        @BizLoc["No direct transactions in this period yet. Use '+ Money In', '+ Money Out', or '+ Transfer' to record cash movements outside invoices and bills."]
+                    </MudText>
+                </div>
+            </NoRecordsContent>
+
+            <PagerContent>
+                <MudTablePager PageSizeOptions="new[] { 25, 50, 100 }" />
+            </PagerContent>
+        </MudTable>
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter] public EventCallback OnTransactionChanged { get; set; }
+
+    private Employee? _currentUser;
+    private bool _canWriteAccounting;
+    private string _functionalCurrency = "CAD";
+
+    private DateTime? _startDate = new DateTime(DateTime.Today.Year, 1, 1);
+    private DateTime? _endDate = DateTime.Today;
+    private string _directionFilter = "all";
+    private string _searchText = string.Empty;
+
+    private List<DirectTransaction> _allTransactions = [];
+    private List<DirectTransaction> _activeInPeriod = [];
+    private int _voidInPeriodCount;
+    private Dictionary<string, string> _glNamesByCode = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, string> _projectNamesById = new(StringComparer.OrdinalIgnoreCase);
+
+    private decimal PeriodMoneyIn => _activeInPeriod
+        .Where(t => t.Direction == DirectTransactionDirection.MoneyIn)
+        .Sum(t => FinancialCalculationEngine.RoundCurrency(t.GrandTotal * (t.ExchangeRate > 0m ? t.ExchangeRate : 1.0m)));
+    private int PeriodMoneyInCount => _activeInPeriod.Count(t => t.Direction == DirectTransactionDirection.MoneyIn);
+
+    private decimal PeriodMoneyOut => _activeInPeriod
+        .Where(t => t.Direction == DirectTransactionDirection.MoneyOut)
+        .Sum(t => FinancialCalculationEngine.RoundCurrency(t.GrandTotal * (t.ExchangeRate > 0m ? t.ExchangeRate : 1.0m)));
+    private int PeriodMoneyOutCount => _activeInPeriod.Count(t => t.Direction == DirectTransactionDirection.MoneyOut);
+
+    private decimal PeriodTransfersTotal => _activeInPeriod
+        .Where(t => t.Direction == DirectTransactionDirection.Transfer)
+        .Sum(t => FinancialCalculationEngine.RoundCurrency(t.GrandTotal * (t.ExchangeRate > 0m ? t.ExchangeRate : 1.0m)));
+    private int PeriodTransfersCount => _activeInPeriod.Count(t => t.Direction == DirectTransactionDirection.Transfer);
+
+    private IEnumerable<DirectTransaction> FilteredTransactions
+    {
+        get
+        {
+            var start = _startDate?.Date;
+            var end = _endDate?.Date;
+
+            IEnumerable<DirectTransaction> query = _allTransactions.Where(t =>
+                (!start.HasValue || t.Date.Date >= start.Value) &&
+                (!end.HasValue || t.Date.Date <= end.Value));
+
+            query = _directionFilter switch
+            {
+                "void" => query.Where(t => t.IsVoid),
+                DirectTransactionDirection.MoneyIn => query.Where(t => !t.IsVoid && t.Direction == DirectTransactionDirection.MoneyIn),
+                DirectTransactionDirection.MoneyOut => query.Where(t => !t.IsVoid && t.Direction == DirectTransactionDirection.MoneyOut),
+                DirectTransactionDirection.Transfer => query.Where(t => !t.IsVoid && t.Direction == DirectTransactionDirection.Transfer),
+                _ => query.Where(t => !t.IsVoid)
+            };
+
+            if (!string.IsNullOrWhiteSpace(_searchText))
+            {
+                var term = _searchText.Trim();
+                query = query.Where(t =>
+                    t.TransactionNumber.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    t.PartyName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    t.Description.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    t.Reference.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    FormatCategorySummary(t).Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    ResolveAccountLabel(t.AccountGlCode).Contains(term, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return query;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        JurisdictionService.EnsureChartOfAccountsSeeded();
+        _functionalCurrency = JurisdictionService.GetActiveTemplate().DefaultCurrency;
+        await RefreshCurrentUserAsync();
+        LoadData();
+    }
+
+    private async Task RefreshCurrentUserAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canWriteAccounting = _currentUser?.IsActiveUnsuspended == true &&
+                              _currentUser.HasPermission(AppPermissions.Finance.AccessAccounting);
+    }
+
+    private void LoadData()
+    {
+        _glNamesByCode = (Db.GlAccounts?.GetAll() ?? [])
+            .Where(a => !string.IsNullOrWhiteSpace(a.Code))
+            .GroupBy(a => a.Code.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().GetLocalizedName(), StringComparer.OrdinalIgnoreCase);
+
+        _projectNamesById = (Db.Projects?.GetAll() ?? [])
+            .ToDictionary(p => p.Id, p => $"{p.ProjectNumber} — {p.Name}", StringComparer.OrdinalIgnoreCase);
+
+        _allTransactions = _currentUser != null
+            ? TransactionService.GetAll(_currentUser)
+            : [];
+
+        var start = _startDate?.Date;
+        var end = _endDate?.Date;
+        var inPeriod = _allTransactions
+            .Where(t => (!start.HasValue || t.Date.Date >= start.Value) && (!end.HasValue || t.Date.Date <= end.Value))
+            .ToList();
+
+        _activeInPeriod = inPeriod.Where(t => !t.IsVoid).ToList();
+        _voidInPeriodCount = inPeriod.Count(t => t.IsVoid);
+    }
+
+    private void OnFilterChanged(string? val)
+    {
+        _directionFilter = string.IsNullOrWhiteSpace(val) ? "all" : val;
+    }
+
+    private async Task OpenTransactionDialogAsync(string direction)
+    {
+        var parameters = new DialogParameters<DirectTransactionDialog>
+        {
+            { x => x.InitialDirection, direction }
+        };
+
+        var dialog = await DialogService.ShowAsync<DirectTransactionDialog>(
+            string.Empty,
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            LoadData();
+            Snackbar.Add(BizLoc["Transaction recorded and posted to the General Ledger."].Value, Severity.Success);
+            await OnTransactionChanged.InvokeAsync();
+        }
+    }
+
+    private async Task OpenEditTransactionDialogAsync(DirectTransaction tx)
+    {
+        var parameters = new DialogParameters<DirectTransactionDialog>
+        {
+            { x => x.ExistingTransaction, tx }
+        };
+
+        var dialog = await DialogService.ShowAsync<DirectTransactionDialog>(
+            string.Empty,
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+        {
+            LoadData();
+            Snackbar.Add(BizLoc["Transaction updated."].Value, Severity.Success);
+            await OnTransactionChanged.InvokeAsync();
+        }
+    }
+
+    private async Task VoidTransactionAsync(DirectTransaction tx)
+    {
+        var liveUser = await UserService.GetEmployeeAsync();
+        if (liveUser == null || !liveUser.IsActiveUnsuspended || !liveUser.HasPermission(AppPermissions.Finance.AccessAccounting))
+        {
+            Snackbar.Add(BizLoc["Active Finance.AccessAccounting permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, string.Format(BizLoc["Void {0} ({1})? Its General Ledger journal entry will be removed while preserving audit history."].Value, tx.TransactionNumber, tx.GrandTotal.ToString("C2")) },
+            { x => x.ButtonText, BizLoc["Void"].Value },
+            { x => x.Color, Color.Error },
+            { x => x.ShowReasonInput, true },
+            { x => x.ReasonRequired, true },
+            { x => x.ReasonLabel, BizLoc["Reason for Voiding"].Value },
+            { x => x.ReasonPlaceholder, BizLoc["e.g., Duplicate entry or entered with wrong account"].Value }
+        };
+
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>(
+            BizLoc["Void Transaction"].Value,
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: string reason } && !string.IsNullOrWhiteSpace(reason))
+        {
+            try
+            {
+                TransactionService.VoidTransaction(tx.Id, reason, liveUser);
+                LoadData();
+                Snackbar.Add(BizLoc["Transaction voided."].Value, Severity.Info);
+                await OnTransactionChanged.InvokeAsync();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Error);
+            }
+        }
+    }
+
+    private string ResolveAccountLabel(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return "—";
+        var friendly = FinancialAccountService.GetDisplayLabelByGlCode(code);
+        return string.IsNullOrWhiteSpace(friendly) ? "—" : friendly;
+    }
+
+    private string ResolveCategoryLabel(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return "—";
+        return _glNamesByCode.TryGetValue(code.Trim(), out var lbl) ? lbl : code;
+    }
+
+    private string FormatCategorySummary(DirectTransaction tx)
+    {
+        if (tx.Direction == DirectTransactionDirection.Transfer)
+        {
+            return $"→ {ResolveAccountLabel(tx.DestinationAccountGlCode)}";
+        }
+        if (tx.Lines is { Count: > 1 })
+        {
+            return $"{ResolveCategoryLabel(tx.Lines[0].GlAccountCode)} (+{tx.Lines.Count - 1})";
+        }
+        return ResolveCategoryLabel(tx.PrimaryCategoryGlCode);
+    }
+}

@@ -16,6 +16,7 @@ public class PageRouteAuthorizationTests
     [InlineData(typeof(Spokes_Server.Components.Pages.Chat.Chat), AppPermissions.Chat.Use)]
     [InlineData(typeof(MyCalendar), AppPermissions.Calendar.View)]
     [InlineData(typeof(MyTimesheet), AppPermissions.Timesheets.AccessTimesheet)]
+    [InlineData(typeof(Spokes_Server.Components.Pages.Business.BusinessSettings), AppPermissions.Business.ManageSettings)]
     public void Page_HasDeclaredAuthorizePolicy(Type pageType, string expectedPolicy)
     {
         var attributes = pageType.GetCustomAttributes<AuthorizeAttribute>(inherit: true).ToList();

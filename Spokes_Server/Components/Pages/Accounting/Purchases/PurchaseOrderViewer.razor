@@ -6,7 +6,11 @@
 @using Spokes_Server.Core.Models.HR
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Communication.Email
 @using Spokes_Server.Core.Services.Documents
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Pages.Email
 @using Spokes_Server.Components.Shared
@@ -16,9 +20,11 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject UserService UserService
+@inject IUserPrivacyService PrivacyService
 @inject DocumentPdfService PdfService
 @inject IAccountingService AccountingService
 @inject AuthenticationStateProvider AuthStateProvider
+@inject FileUrlSigner FileUrls
 @inject ILogger<PurchaseOrderViewer> Logger
 @implements IAsyncDisposable
 
@@ -56,7 +62,7 @@ else
             @if (PO.Status != PurchaseOrderStatus.Draft)
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenPdf">Open PDF</MudButton>
-                @if (CanManagePO)
+                @if (CanSendEmail)
                 {
                     <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Email"
                         OnClick="SendByEmail">Send by Email</MudButton>
@@ -319,7 +325,7 @@ else
                     @if (PO.ApplyTax)
                     {
                         <div class="d-flex justify-space-between mb-1">
-                            <MudText>@Template.Label_Tax (@(Math.Round(PO.TaxRate * 100,3))%):</MudText>
+                            <MudText>@Template.Label_Tax (@FinancialCalculationEngine.FormatTaxRatePercent(PO.TaxRate)%):</MudText>
                             <MudText>@FormatMoney(PO.TaxAmount)</MudText>
                         </div>
                     }
@@ -355,7 +361,7 @@ else
 
             @if (LinkedBills.Any())
             {
-                <MudTable Items="@LinkedBills" Hover="true" Dense="true">
+                <MudTable Elevation="0" Outlined="true" Items="@LinkedBills" Hover="true" Dense="true">
                     <HeaderContent>
                         <MudTh>Date</MudTh>
                         <MudTh>Description</MudTh>
@@ -403,7 +409,7 @@ else
                             @if (!string.IsNullOrEmpty(context.AttachmentPath))
                             {
                                 <MudIconButton Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" Color="Color.Secondary"
-                                    OnClick='@(() => JS.InvokeVoidAsync("window.open", context.AttachmentPath, "_blank"))' />
+                                    OnClick='@(() => JS.InvokeVoidAsync("window.open", FileUrls.SignUrl(context.AttachmentPath), "_blank"))' />
                             }
                         </MudTd>
                         <MudTd>
@@ -448,6 +454,7 @@ else
     private string IssuedByName = "";
     private string IssuedByEmail = "";
     private bool CanManagePO;
+    private bool CanSendEmail;
     private bool CanManageBills;
     private bool CanViewBills;
     private bool _isAdmin;
@@ -512,15 +519,22 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        var emp = await UserService.GetEmployeeAsync();
-        CanManagePO = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Purchases.ManagePOs) || emp.HasPermission(AppPermissions.Finance.AccessAccounting));
-        CanManageBills = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Purchases.ManageBills));
-        CanViewBills = emp != null && (emp.IsAdmin || emp.HasPermission(AppPermissions.Purchases.ViewBills) || CanManageBills || emp.HasPermission(AppPermissions.Purchases.ApproveBills));
+        var emp = await UserService.GetEmployeeAsync(allowSuspended: true);
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var isPdfRender = (emp?.IsSystem == true) || authState.User.HasClaim("Spokes_InternalRenderer", "true");
 
-        _isAdmin = emp?.IsAdmin ?? false;
+        CanManagePO = emp != null && emp.HasPermission(AppPermissions.Purchases.ManagePOs);
+        CanManageBills = emp != null && emp.HasPermission(AppPermissions.Purchases.ManageBills);
+        CanViewBills = emp != null && (emp.HasEffectivePermission(AppPermissions.Purchases.ViewBills, allowSuspended: true) ||
+                                       emp.HasEffectivePermission(AppPermissions.Purchases.ManageBills, allowSuspended: true) ||
+                                       emp.HasEffectivePermission(AppPermissions.Purchases.ApproveBills, allowSuspended: true));
+
+        _isAdmin = emp?.IsEffectiveAdmin ?? false;
 
         PO = Db.PurchaseOrders.GetById(Id);
         Profile = Db.CompanyProfile.Get();
+        var isFamilyEdition = string.Equals(Profile?.Edition, "Family", StringComparison.OrdinalIgnoreCase);
+        CanSendEmail = CanManagePO && !isFamilyEdition && emp != null && emp.HasEffectivePermission(AppPermissions.Email.Use, allowSuspended: false);
 
         if (PO != null && !string.IsNullOrEmpty(PO.TemplateId))
         {
@@ -545,19 +559,51 @@ else
                                            ?? matchedSupplier.Contacts.FirstOrDefault();
             }
 
-            var projectIds = PO.LineItems.Select(i => i.ProjectId).Distinct().ToList();
-            var projects = Db.Projects.GetAll().Where(p => projectIds.Contains(p.Id));
+            var projectIds = PO.LineItems
+                .Select(i => i.ProjectId)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct()
+                .ToList();
+            var projects = Db.Projects.GetAll()
+                .Where(p => projectIds.Contains(p.Id) &&
+                            (isPdfRender
+                                ? p.AccessPolicy == ProjectAccessPolicy.Public
+                                : ProjectAccessHelper.CanAccess(emp, p, Db.Teams, allowAccountingFinancialRead: false)));
             ProjectNames = projects.ToDictionary(p => p.Id, p => p.ProjectNumber);
 
-            var employee = Db.Employees.GetAll().FirstOrDefault(e => e.FullName == PO.IssuedBy);
+            IssuedByName = PO.IssuedBy;
+            IssuedByEmail = string.Empty;
+            var employee = Db.Employees.GetAll().FirstOrDefault(e =>
+                !e.IsSystem &&
+                e.IsActive &&
+                !e.IsBanned &&
+                e.Id != AccountDeletionService.SystemDeletedUserId &&
+                string.Equals(e.FullName, PO.IssuedBy, StringComparison.Ordinal));
             if (employee != null)
             {
                 IssuedByName = employee.FullName;
-                IssuedByEmail = employee.Email;
-            }
-            else
-            {
-                IssuedByName = PO.IssuedBy;
+                if (isPdfRender)
+                {
+                    var privacy = PrivacyService.GetPrivacyConfig();
+                    bool isGloballyDiscoverable = employee.IsAdmin
+                        ? (privacy.AdminVisibility == AdminVisibilityMode.AllAdmins ||
+                           (privacy.AdminVisibility == AdminVisibilityMode.DesignatedAdminsOnly &&
+                            privacy.DesignatedAdminIds.Contains(employee.Id)))
+                        : privacy.BaseScope == NetworkScope.All;
+                    if (employee.IsEmailPublic && isGloballyDiscoverable)
+                    {
+                        IssuedByEmail = employee.Email;
+                    }
+                }
+                else
+                {
+                    bool isSelfOrAuthorizedManager = emp is { IsSystem: false, IsActiveUnsuspended: true } &&
+                        (emp.Id == employee.Id || UserService.CanManageEmployeeTarget(emp, employee));
+                    if (isSelfOrAuthorizedManager || (employee.IsEmailPublic && PrivacyService.CanDiscoverUser(emp, employee)))
+                    {
+                        IssuedByEmail = employee.Email;
+                    }
+                }
             }
 
             LoadBills();
@@ -576,8 +622,10 @@ else
 
     private async Task EditPO()
     {
-        if (PO == null || !CanManagePO) return;
-        var parameters = new DialogParameters { ["PO"] = PO };
+        var emp = await UserService.GetEmployeeAsync();
+        if (PO == null || emp == null || !emp.HasPermission(AppPermissions.Purchases.ManagePOs)) return;
+        var origProjectIds = PO.LineItems.ToDictionary(i => i.Id, i => i.ProjectId ?? string.Empty);
+        var parameters = new DialogParameters { ["PO"] = PO.DeepClone() };
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
 
         var dialog = await DialogService.ShowAsync<PurchaseOrderDialog>("Edit PO", parameters, options);
@@ -585,6 +633,8 @@ else
 
         if (result != null && !result.Canceled)
         {
+            emp = await UserService.GetEmployeeAsync();
+            if (emp == null || !emp.HasPermission(AppPermissions.Purchases.ManagePOs)) return;
             if (result.Data is string s && s == "Deleted")
             {
                 PO!.Status = PurchaseOrderStatus.Void;
@@ -594,6 +644,18 @@ else
             }
             else if (result.Data is PurchaseOrder po)
             {
+                foreach (var item in po.LineItems)
+                {
+                    if (string.IsNullOrWhiteSpace(item.ProjectId)) continue;
+                    bool unchanged = origProjectIds.TryGetValue(item.Id, out var prevProjId) &&
+                                     string.Equals(prevProjId, item.ProjectId, StringComparison.OrdinalIgnoreCase);
+                    if (!unchanged && !ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, emp, item.ProjectId, allowAccountingFinancialRead: false))
+                    {
+                        Snackbar.Add("You do not have access to link one or more selected restricted projects.", Severity.Error);
+                        return;
+                    }
+                }
+
                 Db.PurchaseOrders.Save(po);
                 PO = po;
                 await OnInitializedAsync();
@@ -606,10 +668,15 @@ else
 
     private async Task UpdateStatusAsync(string newStatus)
     {
-        if (PO == null || !CanManagePO) return;
+        var emp = await UserService.GetEmployeeAsync();
+        if (PO == null || emp == null || !emp.HasPermission(AppPermissions.Purchases.ManagePOs))
+        {
+            CanManagePO = false;
+            return;
+        }
 
         // Admin-only revert from Final to Draft
-        if (PO.Status == PurchaseOrderStatus.Final && newStatus == PurchaseOrderStatus.Draft && !_isAdmin)
+        if (PO.Status == PurchaseOrderStatus.Final && newStatus == PurchaseOrderStatus.Draft && !emp.IsEffectiveAdmin)
         {
             Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
             return;
@@ -655,7 +722,8 @@ else
 
     private async Task AddBill()
     {
-        if (PO == null) return;
+        var emp = await UserService.GetEmployeeAsync();
+        if (PO == null || emp == null || !emp.HasPermission(AppPermissions.Purchases.ManageBills)) return;
         
         LoadBills(); // Ensure we have the latest totals
         
@@ -674,6 +742,12 @@ else
 
     private async Task VoidBill(Bill bill)
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.HasPermission(AppPermissions.Purchases.ManageBills))
+        {
+            Snackbar.Add("Missing Purchases.ManageBills permission to void bills.", Severity.Error);
+            return;
+        }
         var parameters = new DialogParameters<VoidBillDialog>
         {
             { x => x.Bill, bill }
@@ -683,9 +757,10 @@ else
 
         if (result is { Canceled: false, Data: string reason })
         {
-            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-            var userName = auth.User.Identity?.Name ?? "User";
-            AccountingService.VoidBill(bill, reason, userName);
+            emp = await UserService.GetEmployeeAsync();
+            if (emp == null || !emp.HasPermission(AppPermissions.Purchases.ManageBills)) return;
+            var userName = emp.FullName ?? emp.Email ?? "User";
+            AccountingService.VoidBill(bill, reason, userName, emp);
             Snackbar.Add("Bill voided successfully", Severity.Normal);
             LoadBills();
             if (PO != null)
@@ -698,6 +773,18 @@ else
 
     private async Task RecordPayment(Bill bill)
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.HasPermission(AppPermissions.Purchases.ManageBills))
+        {
+            Snackbar.Add("Missing Purchases.ManageBills permission to record bill payments.", Severity.Error);
+            return;
+        }
+        if (string.Equals(bill.Status, BillStatus.AwaitingApproval, StringComparison.OrdinalIgnoreCase) &&
+            !emp.HasPermission(AppPermissions.Purchases.ApproveBills))
+        {
+            Snackbar.Add("Missing Purchases.ApproveBills permission to pay unapproved bills.", Severity.Error);
+            return;
+        }
         var parameters = new DialogParameters<RecordPaymentDialog>
         {
             { x => x.Message, $"Record payment for {bill.Description}" },
@@ -709,13 +796,10 @@ else
 
         if (result != null && !result.Canceled && result.Data is PaymentRecord payment)
         {
-            bill.Payments.Add(payment);
-            if (bill.BalanceDue <= 0)
-            {
-                bill.Status = BillStatus.Paid;
-                bill.DatePaid = payment.Date;
-            }
-            Db.Bills.Save(bill);
+            emp = await UserService.GetEmployeeAsync();
+            if (emp == null || !emp.HasPermission(AppPermissions.Purchases.ManageBills)) return;
+            var userName = emp.FullName ?? emp.Email ?? "User";
+            AccountingService.RecordBillPayment(bill, payment, userName, emp);
             LoadBills();
             StateHasChanged();
         }
@@ -723,7 +807,14 @@ else
 
     private async Task OpenBillDialog(Bill bill)
     {
-        var parameters = new DialogParameters { ["Bill"] = bill };
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.HasPermission(AppPermissions.Purchases.ManageBills))
+        {
+            Snackbar.Add("Missing Purchases.ManageBills permission to manage bills.", Severity.Error);
+            return;
+        }
+        var priorStatus = bill.Status;
+        var parameters = new DialogParameters { ["Bill"] = bill.DeepClone() };
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true, CloseButton = true };
 
         var dialog = await DialogService.ShowAsync<BillEditorDialog>("Bill Details", parameters,
@@ -732,28 +823,24 @@ else
 
         if (result != null && !result.Canceled && result.Data is Bill b)
         {
-            Db.Bills.Save(b);
+            emp = await UserService.GetEmployeeAsync();
+            if (emp == null || !emp.HasPermission(AppPermissions.Purchases.ManageBills)) return;
+            var userName = emp.FullName ?? emp.Email ?? "User";
+            if (priorStatus == BillStatus.AwaitingApproval &&
+                b.Status != BillStatus.AwaitingApproval &&
+                b.Status != BillStatus.Void)
+            {
+                AccountingService.ApproveBill(b, userName, emp);
+            }
+            else
+            {
+                AccountingService.SaveBill(b, userName, emp);
+            }
         }
         LoadBills();
-        
         if (PO != null)
         {
-            if (PO.Status != PurchaseOrderStatus.Void && PO.Status != PurchaseOrderStatus.Draft)
-            {
-                if (PO.TotalBilled >= PO.GrandTotal && PO.GrandTotal > 0)
-                {
-                    PO.Status = PurchaseOrderStatus.FullyBilled;
-                }
-                else if (PO.TotalBilled > 0)
-                {
-                    PO.Status = PurchaseOrderStatus.PartiallyBilled;
-                }
-                else if (PO.Status == PurchaseOrderStatus.FullyBilled || PO.Status == PurchaseOrderStatus.PartiallyBilled)
-                {
-                    PO.Status = PurchaseOrderStatus.Final;
-                }
-            }
-            Db.PurchaseOrders.Save(PO);
+            PO = Db.PurchaseOrders.GetById(PO.Id) ?? PO;
         }
         StateHasChanged();
     }
@@ -766,10 +853,17 @@ else
             return true;
         }
 
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || !emp.IsActiveUnsuspended || !emp.HasEffectivePermission(AppPermissions.Purchases.ViewPOs, allowSuspended: false))
+        {
+            Snackbar.Add("PDF generation is unavailable while your account is suspended or in read-only mode.", Severity.Warning);
+            return false;
+        }
+
         try
         {
             Snackbar.Add("Generating PDF document...", Severity.Info);
-            PO.PdfPath = await PdfService.GeneratePurchaseOrderPdfAsync(PO, Nav.BaseUri);
+            PO.PdfPath = await PdfService.GeneratePurchaseOrderPdfAsync(PO, Nav.BaseUri, emp.Id);
             Db.PurchaseOrders.Save(PO);
             return true;
         }
@@ -784,6 +878,16 @@ else
     private async Task SendByEmail()
     {
         if (PO == null) return;
+        var emp = await UserService.GetEmployeeAsync();
+        var isFamilyEdition = string.Equals(Db.CompanyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase);
+        if (emp == null ||
+            isFamilyEdition ||
+            !emp.HasEffectivePermission(AppPermissions.Purchases.ManagePOs, allowSuspended: false) ||
+            !emp.HasEffectivePermission(AppPermissions.Email.Use, allowSuspended: false))
+        {
+            Snackbar.Add("Active Purchases.ManagePOs and Email.Use permissions are required to send purchase orders.", Severity.Error);
+            return;
+        }
 
         if (!await EnsurePdfExistsAsync())
         {
@@ -796,9 +900,9 @@ else
             ["Subject"] = $"Purchase Order #{PO.PoNumber} from {Profile?.CompanyName}",
             ["Body"] = $"<p>Dear {(!string.IsNullOrEmpty(SupplierContactName) ? SupplierContactName : "Supplier")},</p><p>Please find attached Purchase Order #{PO.PoNumber}.</p>",
             ["IsTemplate"] = true,
-            ["PreloadedFiles"] = new List<(string Path, string FileName)> 
-            { 
-                (PO.PdfPath, $"PO_{PO.PoNumber}.pdf") 
+            ["PreloadedDocumentAttachments"] = new List<OutboundDocumentAttachmentRef>
+            {
+                new(OutboundDocumentKind.PurchaseOrder, PO.Id, $"PO_{PO.PoNumber}.pdf")
             }
         };
 
@@ -817,10 +921,7 @@ else
 
         try
         {
-            var bytes = await System.IO.File.ReadAllBytesAsync(PO.PdfPath);
-            var base64 = Convert.ToBase64String(bytes);
-            var dataUrl = $"data:application/pdf;base64,{base64}";
-            await JS.InvokeVoidAsync("window.openBase64InNewTab", dataUrl, $"PO_{PO.PoNumber}.pdf");
+            await JS.OpenPdfFileInNewTabAsync(PO.PdfPath, $"PO_{PO.PoNumber}.pdf");
         }
         catch (Exception ex)
         {

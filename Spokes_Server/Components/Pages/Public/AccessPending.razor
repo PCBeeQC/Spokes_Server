@@ -2,11 +2,8 @@
 @layout LoginLayout
 @using Spokes_Server.Components.Layout
 @using System.Security.Claims
-@using Microsoft.Extensions.Localization
-@using Spokes_Server.Resources
 @inject AuthenticationStateProvider AuthStateProvider
 @inject NavigationManager Nav
-@inject IStringLocalizer<AppResources> Loc
 @inject AppLabelService AppLabels
 
 <PageTitle>@Loc["Access Pending"] - Spokes</PageTitle>
@@ -25,7 +22,7 @@
 
         <MudText Typo="Typo.subtitle2" Class="mb-2">@Loc["Your Account Details"]</MudText>
 
-        <MudSimpleTable Dense="true" Class="mb-6">
+        <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Class="mb-6">
             <tbody>
                 <tr>
                     <td><strong>@Loc["Name:"]</strong></td>

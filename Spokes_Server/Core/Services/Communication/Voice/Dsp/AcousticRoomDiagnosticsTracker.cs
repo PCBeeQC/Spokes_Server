@@ -20,7 +20,6 @@ internal sealed class AcousticRoomDiagnosticsTracker
 
     private int _currentBucketSubBlockCount;
     private long _currentBucketStartSample;
-    private float _currentBucketMaxVocalRms;
     private int _currentBucketClicksRejected;
 
     public void RecordEvent(string message) => _currentBucketEvents.Add(message);
@@ -33,7 +32,6 @@ internal sealed class AcousticRoomDiagnosticsTracker
         _timelineBuckets.Clear();
         _currentBucketSubBlockCount = 0;
         _currentBucketStartSample = globalSampleClock;
-        _currentBucketMaxVocalRms = 0f;
         _currentBucketClicksRejected = 0;
         _currentBucketEvents.Clear();
 
@@ -46,16 +44,8 @@ internal sealed class AcousticRoomDiagnosticsTracker
     public void AdvanceBucketIfMaster(
         AcousticParticipantStream self,
         IReadOnlyDictionary<string, AcousticParticipantStream> participants,
-        long subStartSample,
-        float selfVocalRms)
+        long subStartSample)
     {
-        if (selfVocalRms > _currentBucketMaxVocalRms &&
-            selfVocalRms > VocalActivityFloorRms &&
-            self.LastGateState != AcousticGateState.GatedBleed)
-        {
-            _currentBucketMaxVocalRms = selfVocalRms;
-        }
-
         // Only advance the room bucket counter once per 10ms step (driven by the first participant in dictionary order)
         var firstKey = participants.Keys.FirstOrDefault();
         if (!string.Equals(self.UserId, firstKey, StringComparison.Ordinal))
@@ -122,7 +112,6 @@ internal sealed class AcousticRoomDiagnosticsTracker
         }
 
         _currentBucketSubBlockCount = 0;
-        _currentBucketMaxVocalRms = 0f;
         _currentBucketClicksRejected = 0;
         _currentBucketEvents.Clear();
     }
@@ -167,6 +156,8 @@ internal sealed class AcousticRoomDiagnosticsTracker
                 ? Math.Round(AcousticDspMath.ToPowerRatioDb(p.BleedOutputEnergySum, p.GatedBleedSubFrames), 1)
                 : -90.0;
             double driftMs = Math.Round(p.TotalClockDriftCompensatedSamples * 1000.0 / SampleRate, 1);
+            double peakRawDbFs = AcousticDspMath.ToDbFs(p.PeakRawSample);
+            double makeupGainDb = Math.Round(20.0 * Math.Log10(Math.Max(p.Leveler.EffectiveGain * p.CurrentDoubleTalkMakeupScale, 1e-4f)), 1);
 
             participants.Add(new ParticipantRoomDspTelemetry(
                 p.UserId,
@@ -183,7 +174,10 @@ internal sealed class AcousticRoomDiagnosticsTracker
                 Math.Clamp(erleDb, 0.0, 60.0),
                 postResidualDbFs,
                 Math.Round(p.EstimatedCaptureLatencyMs ?? 0.0, 1),
-                Math.Round(p.ServerToClientDelayMs ?? 0.0, 1)));
+                Math.Round(p.ServerToClientDelayMs ?? 0.0, 1),
+                peakRawDbFs,
+                p.ClippedSampleCount,
+                makeupGainDb));
         }
 
         var decompositions = BuildDecompositions(participantsMap.Keys, matrix);
@@ -261,6 +255,11 @@ internal sealed class AcousticRoomDiagnosticsTracker
 
         foreach (var p in participants)
         {
+            if (p.ClippedSampleCount > 0 || p.PeakRawInputDbFs > -0.3)
+            {
+                warnings.Add($"Input clipping detected on {p.UserId}'s microphone (Peak={p.PeakRawInputDbFs:F1} dBFS, ClippedSamples={p.ClippedSampleCount}) — non-linear mic clipping distorts waveforms and degrades echo cancellation; lower hardware microphone boost.");
+            }
+
             if (!calibrations.Any(c => c.SourceUserId == p.UserId && !c.IsReciprocalPrior && c.Confidence >= 0.30))
             {
                 warnings.Add($"Direction from {p.UserId} -> roommates has not been directly calibrated yet (have {p.UserId} speak a short phrase).");

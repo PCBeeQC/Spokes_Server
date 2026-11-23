@@ -1,0 +1,27 @@
+@namespace Spokes_Server.Components.Pages.Planning
+
+<div class="d-flex justify-space-between align-center mb-4">
+    <MudText Typo="Typo.h5"><b>@Title</b></MudText>
+    <div class="d-flex align-center gap-2">
+        <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="OnPrevWeek" />
+        <MudText><b>@string.Format(BizLoc["W{0} - {1}"].Value, CurrentWeek, CurrentYear)</b></MudText>
+        <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="OnNextWeek" />
+        @if (IsSaving)
+        {
+            <MudText Typo="Typo.caption" Color="Color.Warning" Class="ml-2">@BizLoc["Saving..."]</MudText>
+        }
+        else
+        {
+            <MudText Typo="Typo.caption" Color="Color.Success" Class="ml-2">@BizLoc["Saved"]</MudText>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+    [Parameter] public int CurrentWeek { get; set; }
+    [Parameter] public int CurrentYear { get; set; }
+    [Parameter] public bool IsSaving { get; set; }
+    [Parameter] public EventCallback OnPrevWeek { get; set; }
+    [Parameter] public EventCallback OnNextWeek { get; set; }
+}

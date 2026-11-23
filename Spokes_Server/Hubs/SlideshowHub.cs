@@ -1,15 +1,13 @@
 namespace Spokes_Server.Hubs;
 
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Aggregate;
-using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
@@ -26,9 +24,7 @@ public class SlideshowHub : Hub
     private readonly Database _db;
     private readonly AlbumService _albumService;
     private readonly UserService _userService;
-    private readonly FileTokenService _fileTokenService;
     private readonly ScopedKeystoreService _keystoreService;
-    private readonly IChatChannelAccessService _chatAccess;
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<SlideshowHub> _logger;
 
@@ -37,9 +33,7 @@ public class SlideshowHub : Hub
         Database db,
         AlbumService albumService,
         UserService userService,
-        FileTokenService fileTokenService,
         ScopedKeystoreService keystoreService,
-        IChatChannelAccessService chatAccess,
         IServiceProvider serviceProvider,
         ILogger<SlideshowHub> logger)
     {
@@ -47,9 +41,7 @@ public class SlideshowHub : Hub
         _db = db;
         _albumService = albumService;
         _userService = userService;
-        _fileTokenService = fileTokenService;
         _keystoreService = keystoreService;
-        _chatAccess = chatAccess;
         _serviceProvider = serviceProvider;
         _logger = logger;
     }
@@ -64,6 +56,11 @@ public class SlideshowHub : Hub
         string? creatorIp = Context.Features?
             .Get<Microsoft.AspNetCore.Http.Connections.Features.IHttpContextFeature>()?
             .HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+        foreach (var oldSessionId in _sessionService.GetUnpairedSessionIdsByTvConnection(Context.ConnectionId))
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"session_{oldSessionId}");
+        }
 
         SlideshowSession session;
         try
@@ -99,13 +96,24 @@ public class SlideshowHub : Hub
     /// Called by the presenter's phone to pair with the TV screen.
     /// Requires authentication and validates album access permissions.
     /// </summary>
-    [Authorize]
+    [Authorize(Policy = AppPermissions.Albums.View)]
     public async Task<SpokesResult<string>> PairWithTv(string pin, string albumId, int initialIndex = 0)
     {
-        var employee = GetCurrentEmployee();
+        var employee = Context.User == null ? null : _userService.GetEmployee(Context.User);
         if (employee == null)
         {
             return SpokesResult<string>.Failure("Authentication required.", "UNAUTHORIZED");
+        }
+
+        if (!employee.IsActiveUnsuspended)
+        {
+            return SpokesResult<string>.Failure("User account is not permitted to present.", "FORBIDDEN");
+        }
+
+        if (!employee.HasPermission(AppPermissions.Albums.View))
+        {
+            _logger.LogWarning("User {UserId} missing Albums.View permission to present album {AlbumId}", employee.Id, albumId);
+            return SpokesResult<string>.Failure("You do not have permission to view or present this album.", "FORBIDDEN");
         }
 
         var album = _db.Albums.GetById(albumId);
@@ -114,11 +122,7 @@ public class SlideshowHub : Hub
             return SpokesResult<string>.Failure("Album not found.", "NOT_FOUND");
         }
 
-        bool hasAccess = album.OwnerId == employee.Id ||
-                         album.ContributorUserIds.Contains(employee.Id) ||
-                         album.SharedWithChannelIds.Any(cId => _chatAccess.GetUsersForChannel(cId).Contains(employee.Id));
-
-        if (!hasAccess)
+        if (!_albumService.CanUserViewAlbum(album, employee.Id))
         {
             _logger.LogWarning("User {UserId} unauthorized to present album {AlbumId}", employee.Id, albumId);
             return SpokesResult<string>.Failure("You do not have permission to view or present this album.", "FORBIDDEN");
@@ -129,6 +133,10 @@ public class SlideshowHub : Hub
         {
             string? privateKey = _keystoreService.IsUnlocked ? _keystoreService.GetPrivateKey() : null;
             plainAlbumKey = _albumService.GetPlainAlbumKey(album, employee.Id, privateKey);
+            if (string.IsNullOrEmpty(plainAlbumKey))
+            {
+                return SpokesResult<string>.Failure("Unlock your Vault before presenting an encrypted album.", "VAULT_LOCKED");
+            }
         }
 
         var allowedMedia = album.Media.ToDictionary(m => m.Id, m => System.IO.Path.GetFileName(m.FilePath));
@@ -141,40 +149,12 @@ public class SlideshowHub : Hub
 
         await Groups.AddToGroupAsync(Context.ConnectionId, $"session_{session!.SessionId}");
 
-        var items = new List<SlideshowMediaItem>();
-        var allEmployees = _db.Employees.GetAll();
-
-        foreach (var media in album.Media)
-        {
-            string baseUrl = $"/spokesapi/slideshow/{session.SessionId}/media/{media.Id}";
-
-            var uploader = allEmployees.FirstOrDefault(e => e.Id == media.AddedByUserId);
-            string uploaderName = uploader != null ? $"{uploader.FirstName} {uploader.LastName}".Trim() : string.Empty;
-
-            items.Add(new SlideshowMediaItem
-            {
-                Id = media.Id,
-                FileName = media.FileName,
-                Url = SlideshowSessionService.AppendSecretQuery(baseUrl, session.TvSecret),
-                ThumbnailUrl = SlideshowSessionService.AppendSecretQuery($"{baseUrl}/thumb", session.TvSecret),
-                ContentType = media.ContentType,
-                ImageWidth = media.ImageWidth,
-                ImageHeight = media.ImageHeight,
-                DurationSeconds = media.DurationSeconds,
-                AddedAt = media.AddedAt,
-                AddedByUserName = uploaderName,
-                FileSizeBytes = media.FileSizeBytes
-            });
-        }
-
-        var stagePayload = new SlideshowStagePayload
-        {
-            SessionId = session.SessionId,
-            AlbumId = album.Id,
-            AlbumTitle = album.Title,
-            InitialIndex = Math.Clamp(initialIndex, 0, Math.Max(0, items.Count - 1)),
-            Items = items
-        };
+        var stagePayload = SlideshowStagePayload.Create(
+            session.SessionId,
+            session.TvSecret,
+            album,
+            initialIndex,
+            SlideshowSessionService.AppendSecretQuery);
 
         // Notify in-memory and SignalR clients
         _sessionService.NotifySessionStarted(session.SessionId, stagePayload);
@@ -186,29 +166,24 @@ public class SlideshowHub : Hub
     /// <summary>
     /// Changes the active slide on the TV stage. Strictly limited to the session host.
     /// </summary>
-    public async Task NavigateSlide(string sessionId, int targetIndex)
-    {
-        if (!_sessionService.ValidateHostCommand(sessionId, Context.ConnectionId, out var session))
-        {
-            throw new HubException("Unauthorized to navigate this session.");
-        }
-
-        _sessionService.NotifySlideChanged(sessionId, targetIndex);
-        await Clients.Client(session!.TvConnectionId).SendAsync("SlideChanged", targetIndex);
-    }
+    public Task NavigateSlide(string sessionId, int targetIndex) =>
+        BroadcastSlideChangeAsync(sessionId, targetIndex, "Unauthorized to navigate this session.");
 
     /// <summary>
     /// Skips an unwanted or sensitive upcoming photo directly from the phone.
     /// </summary>
-    public async Task SkipNext(string sessionId, int nextIndex)
+    public Task SkipNext(string sessionId, int nextIndex) =>
+        BroadcastSlideChangeAsync(sessionId, nextIndex, "Unauthorized to skip slides in this session.");
+
+    private async Task BroadcastSlideChangeAsync(string sessionId, int targetIndex, string unauthorizedMessage)
     {
         if (!_sessionService.ValidateHostCommand(sessionId, Context.ConnectionId, out var session))
         {
-            throw new HubException("Unauthorized to skip slides in this session.");
+            throw new HubException(unauthorizedMessage);
         }
 
-        _sessionService.NotifySlideChanged(sessionId, nextIndex);
-        await Clients.Client(session!.TvConnectionId).SendAsync("SlideChanged", nextIndex);
+        _sessionService.NotifySlideChanged(sessionId, targetIndex);
+        await Clients.Client(session!.TvConnectionId).SendAsync("SlideChanged", targetIndex);
     }
 
     /// <summary>
@@ -237,57 +212,6 @@ public class SlideshowHub : Hub
 
         _sessionService.NotifyVideoControlUpdated(sessionId, isPlaying, currentTime, isMuted, isLooping);
         await Clients.Client(session!.TvConnectionId).SendAsync("VideoControlUpdated", isPlaying, currentTime, isMuted, isLooping);
-    }
-
-    /// <summary>
-    /// Called by the TV stage when the HTML5 video duration is loaded or known.
-    /// </summary>
-    [AllowAnonymous]
-    public async Task ReportTvVideoDuration(string sessionId, double duration)
-    {
-        var session = _sessionService.GetSessionById(sessionId);
-        if (session != null && !string.IsNullOrEmpty(session.TvConnectionId) && session.TvConnectionId == Context.ConnectionId)
-        {
-            _sessionService.NotifyTvVideoDurationKnown(sessionId, duration);
-            if (!string.IsNullOrEmpty(session.HostConnectionId))
-            {
-                await Clients.Client(session.HostConnectionId).SendAsync("TvVideoDurationKnown", duration);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Called by the TV stage during HTML5 video playback to report actual currentTime and play/pause state.
-    /// </summary>
-    [AllowAnonymous]
-    public async Task ReportTvVideoTime(string sessionId, double currentTime, bool isPlaying, double duration)
-    {
-        var session = _sessionService.GetSessionById(sessionId);
-        if (session != null && !string.IsNullOrEmpty(session.TvConnectionId) && session.TvConnectionId == Context.ConnectionId)
-        {
-            _sessionService.NotifyTvVideoTimeUpdated(sessionId, currentTime, isPlaying, duration);
-            if (!string.IsNullOrEmpty(session.HostConnectionId))
-            {
-                await Clients.Client(session.HostConnectionId).SendAsync("TvVideoTimeUpdated", currentTime, isPlaying, duration);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Called by the TV stage when HTML5 video playback completes.
-    /// </summary>
-    [AllowAnonymous]
-    public async Task ReportTvVideoEnded(string sessionId)
-    {
-        var session = _sessionService.GetSessionById(sessionId);
-        if (session != null && !string.IsNullOrEmpty(session.TvConnectionId) && session.TvConnectionId == Context.ConnectionId)
-        {
-            _sessionService.NotifyTvVideoEnded(sessionId);
-            if (!string.IsNullOrEmpty(session.HostConnectionId))
-            {
-                await Clients.Client(session.HostConnectionId).SendAsync("TvVideoEnded");
-            }
-        }
     }
 
     /// <summary>

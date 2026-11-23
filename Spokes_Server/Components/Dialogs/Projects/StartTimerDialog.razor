@@ -1,3 +1,5 @@
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Projects
 @inject Database Db
 @inject TimesheetTimerService TimerService
 @inject UserService UserService
@@ -50,8 +52,8 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _currentUser = await UserService.GetEmployeeAsync();
-        if (_currentUser == null)
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        if (_currentUser == null || !_currentUser.HasPermission(AppPermissions.Timesheets.AccessTimesheet))
         {
             MudDialog.Cancel();
             return;
@@ -63,22 +65,17 @@
 
     private void LoadProjects()
     {
-        if (_currentUser == null) return;
-
-        if (_currentUser.IsAdmin)
+        if (_currentUser == null || !_currentUser.IsActiveUnsuspended || !_currentUser.HasPermission(AppPermissions.Timesheets.AccessTimesheet))
         {
-            _projects = Db.Projects.GetAll()
-                .Where(p => p.IsActive || p.Status != ProjectStatus.Archived)
-                .OrderBy(p => p.DisplayName)
-                .ToList();
+            _projects = new();
             return;
         }
 
         _projects = Db.Projects.GetAll()
-            .Where(p => (p.IsActive || p.Status != ProjectStatus.Archived) &&
-            (p.AccessPolicy == ProjectAccessPolicy.Public ||
-            (p.AllowedUserIds != null && p.AllowedUserIds.Contains(_currentUser.Id)) ||
-            (!string.IsNullOrEmpty(_currentUser.TeamId) && p.AllowedTeamIds != null && p.AllowedTeamIds.Contains(_currentUser.TeamId))))
+            .Where(p => p.IsActive &&
+                        p.Status != ProjectStatus.Archived &&
+                        p.Status != ProjectStatus.Draft &&
+                        ProjectAccessHelper.CanLogTimeToProject(_currentUser, p, Db.Teams))
             .OrderBy(p => p.DisplayName)
             .ToList();
     }
@@ -96,10 +93,23 @@
         _selectedSubTaskId = null;
     }
 
-    private void Submit()
+    private async Task Submit()
     {
-        if (_currentUser == null || string.IsNullOrEmpty(_selectedProjectId) || string.IsNullOrEmpty(_selectedWorkTypeId))
+        if (string.IsNullOrEmpty(_selectedProjectId) || string.IsNullOrEmpty(_selectedWorkTypeId))
             return;
+
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        var targetProject = Db.Projects.GetById(_selectedProjectId);
+        if (_currentUser == null ||
+            targetProject is not { IsActive: true } ||
+            targetProject.Status == ProjectStatus.Archived ||
+            targetProject.Status == ProjectStatus.Draft ||
+            !ProjectAccessHelper.CanLogTimeToProject(_currentUser, targetProject, Db.Teams))
+        {
+            Snackbar.Add("You do not have permission to log time to this project.", Severity.Error);
+            MudDialog.Cancel();
+            return;
+        }
 
         var result = TimerService.Start(_currentUser.Id, _selectedProjectId, _selectedWorkTypeId, _selectedSubTaskId, _note);
         if (!result.IsSuccess)

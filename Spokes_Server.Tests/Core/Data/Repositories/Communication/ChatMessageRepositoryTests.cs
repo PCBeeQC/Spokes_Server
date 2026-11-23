@@ -119,23 +119,6 @@ public class ChatMessageRepositoryTests : RepositoryTestFixture<ChatMessageRepos
     }
 
     [Fact]
-    public void GetMessageCount_ReturnsIndexedCountEvenWhenCacheEmpty()
-    {
-        var channelDir = Path.Combine(_testDataDir, "chat", "c_count_test", "messages");
-        Directory.CreateDirectory(channelDir);
-
-        var msg1 = new ChatMessage { Id = "m_cnt1", ChannelId = "c_count_test", Content = "Msg 1", SentAt = DateTime.UtcNow.AddDays(-14) };
-        var msg2 = new ChatMessage { Id = "m_cnt2", ChannelId = "c_count_test", Content = "Msg 2", SentAt = DateTime.UtcNow.AddDays(-15) };
-        File.WriteAllText(Path.Combine(channelDir, "m_cnt1.json"), JsonSerializer.Serialize(msg1));
-        File.WriteAllText(Path.Combine(channelDir, "m_cnt2.json"), JsonSerializer.Serialize(msg2));
-
-        _repo.LoadFromDisk(); // Indexes messages (> 7 days cutoff means not loaded into _cache)
-
-        Assert.Equal(2, _repo.GetMessageCount("c_count_test"));
-        Assert.Equal(2, _repo.GetTotalMessageCount("c_count_test"));
-    }
-
-    [Fact]
     public void Search_FindsMatchingMessagesUsingIndex()
     {
         var channelDir = Path.Combine(_testDataDir, "chat", "c4", "messages");
@@ -352,37 +335,6 @@ public class ChatMessageRepositoryTests : RepositoryTestFixture<ChatMessageRepos
 
         Assert.Empty(_repo.GetByChannel("c-async"));
         Assert.Empty(_repo.GetIndexForChannel("c-async"));
-    }
-
-    [Fact]
-    public void GetReplies_ReturnsOrderedThreadReplies()
-    {
-        var parent = new ChatMessage { Id = "parent-1", ChannelId = "c-replies", Content = "Parent" };
-        var reply2 = new ChatMessage
-        {
-            Id = "rep-2",
-            ChannelId = "c-replies",
-            ReplyToId = "parent-1",
-            Content = "Reply 2",
-            SentAt = DateTime.UtcNow.AddMinutes(5)
-        };
-        var reply1 = new ChatMessage
-        {
-            Id = "rep-1",
-            ChannelId = "c-replies",
-            ReplyToId = "parent-1",
-            Content = "Reply 1",
-            SentAt = DateTime.UtcNow.AddMinutes(1)
-        };
-
-        _repo.Save(parent);
-        _repo.Save(reply2);
-        _repo.Save(reply1);
-
-        var replies = _repo.GetReplies("parent-1");
-        Assert.Equal(2, replies.Count);
-        Assert.Equal("rep-1", replies[0].Id);
-        Assert.Equal("rep-2", replies[1].Id);
     }
 
     [Fact]
@@ -707,20 +659,6 @@ public class ChatMessageRepositoryTests : RepositoryTestFixture<ChatMessageRepos
     }
 
     [Fact]
-    public void GetCachedByChannel_ReturnsOnlyCachedMessages()
-    {
-        var msg1 = new ChatMessage { Id = "cached_1", ChannelId = "c_cached", Content = "In Cache" };
-        _repo.Save(msg1);
-
-        var cached = _repo.GetCachedByChannel("c_cached");
-        Assert.Single(cached);
-        Assert.Equal("cached_1", cached[0].Id);
-
-        var empty = _repo.GetCachedByChannel("c_nonexistent");
-        Assert.Empty(empty);
-    }
-
-    [Fact]
     public void Save_IndexesMentionedAlbumIds()
     {
         var msg = new ChatMessage
@@ -735,5 +673,143 @@ public class ChatMessageRepositoryTests : RepositoryTestFixture<ChatMessageRepos
         var index = _repo.GetIndexForChannel("c_album");
         Assert.Single(index);
         Assert.Contains("alb_99", index[0].MentionedAlbumIds);
+    }
+
+    [Fact]
+    public async Task GetByChannelBeforeAsync_LoadsOlderMessagesWithoutBlockingAndRespectsPagination()
+    {
+        var baseTime = new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc);
+        for (int i = 0; i < 6; i++)
+        {
+            _repo.Save(new ChatMessage
+            {
+                Id = $"msg_page_{i}",
+                ChannelId = "c_page_async",
+                SenderId = "u1",
+                Content = $"Message {i}",
+                SentAt = baseTime.AddMinutes(i)
+            });
+        }
+        _writer.FlushAll();
+
+        var latestTwo = await _repo.GetByChannelAsync("c_page_async", 2);
+        Assert.Equal(2, latestTwo.Count);
+        var oldestInStage1 = latestTwo.MinBy(m => m.SentAt)!;
+
+        var olderBatch = await _repo.GetByChannelBeforeAsync("c_page_async", oldestInStage1.SentAt, 3);
+        Assert.Equal(3, olderBatch.Count);
+        Assert.All(olderBatch, m => Assert.True(m.SentAt < oldestInStage1.SentAt));
+        Assert.DoesNotContain(olderBatch, m => m.Id == latestTwo[0].Id || m.Id == latestTwo[1].Id);
+    }
+
+    [Fact]
+    public void ResolveAttachmentKeyEpoch_StripsBothStandardAndSmallThumbSuffixes()
+    {
+        _repo.Save(new ChatMessage
+        {
+            Id = "msg_epoch_thumb",
+            ChannelId = "c_epoch",
+            SenderId = "u1",
+            KeyEpoch = 7,
+            SentAt = DateTime.UtcNow,
+            Attachments =
+            [
+                new ChatAttachment
+                {
+                    FileName = "photo.jpg",
+                    FilePath = "/spokesapi/files/chat/c_epoch/photo.jpg",
+                    KeyEpoch = 7
+                }
+            ]
+        });
+
+        Assert.Equal(7, _repo.ResolveAttachmentKeyEpoch("c_epoch", "photo.jpg"));
+        Assert.Equal(7, _repo.ResolveAttachmentKeyEpoch("c_epoch", "photo.jpg_thumb.jpg"));
+        Assert.Equal(7, _repo.ResolveAttachmentKeyEpoch("c_epoch", "photo.jpg_thumb_sm.jpg"));
+    }
+
+    [Fact]
+    public async Task GetByChannelWithStatsAsync_FastPathsWarmCache_AndLoadsColdDiskMessagesOffCircuit()
+    {
+        var channelDir = Path.Combine(_testDataDir, "chat", "c_cold_stats", "messages");
+        Directory.CreateDirectory(channelDir);
+
+        var oldBase = DateTime.UtcNow.AddDays(-20);
+        for (int i = 0; i < 5; i++)
+        {
+            var msg = new ChatMessage
+            {
+                Id = $"cold_{i}",
+                ChannelId = "c_cold_stats",
+                SenderId = "u1",
+                Content = $"Cold message {i}",
+                SentAt = oldBase.AddMinutes(i)
+            };
+            File.WriteAllText(Path.Combine(channelDir, $"{msg.Id}.json"), JsonSerializer.Serialize(msg));
+        }
+
+        // LoadFromDisk builds the index for messages > 7 days old without seeding _cache
+        _repo.LoadFromDisk();
+
+        // Cold path: 3 disk reads, 0 cache hits, hasMore = true (2 older messages remain)
+        var coldResult = await _repo.GetByChannelWithStatsAsync("c_cold_stats", 3);
+        Assert.Equal(3, coldResult.Messages.Count);
+        Assert.Equal(0, coldResult.CacheHits);
+        Assert.Equal(3, coldResult.DiskReads);
+        Assert.True(coldResult.HasMore);
+        Assert.Equal(["cold_4", "cold_3", "cold_2"], coldResult.Messages.Select(m => m.Id).ToArray());
+
+        // Warm path: same 3 messages now hit cache synchronously with 0 disk reads
+        var warmTask = _repo.GetByChannelWithStatsAsync("c_cold_stats", 3);
+        Assert.True(warmTask.IsCompletedSuccessfully);
+        var warmResult = await warmTask;
+        Assert.Equal(3, warmResult.Messages.Count);
+        Assert.Equal(3, warmResult.CacheHits);
+        Assert.Equal(0, warmResult.DiskReads);
+        Assert.True(warmResult.HasMore);
+    }
+
+    [Fact]
+    public async Task PreWarmChannelHeadsAsync_WarmsNewestOldMessagesWithoutTouchingLoadFromDiskSemantics()
+    {
+        var oldBase = DateTime.UtcNow.AddDays(-45);
+        foreach (var channelId in new[] { "c_prewarm_a", "c_prewarm_b" })
+        {
+            var channelDir = Path.Combine(_testDataDir, "chat", channelId, "messages");
+            Directory.CreateDirectory(channelDir);
+            for (int i = 0; i < 6; i++)
+            {
+                var msg = new ChatMessage
+                {
+                    Id = $"{channelId}_m{i}",
+                    ChannelId = channelId,
+                    SenderId = "u1",
+                    Content = $"Historical message {i}",
+                    SentAt = oldBase.AddMinutes(i),
+                    IsDeleted = i == 5 // Deleted newest entry must be skipped
+                };
+                File.WriteAllText(Path.Combine(channelDir, $"{msg.Id}.json"), JsonSerializer.Serialize(msg));
+            }
+        }
+
+        // LoadFromDisk itself keeps >7d messages out of _cache
+        _repo.LoadFromDisk();
+        Assert.Empty(_repo.GetByChannel("c_prewarm_a"));
+        Assert.Empty(_repo.GetByChannel("c_prewarm_b"));
+
+        // Pre-warm newest 3 non-deleted messages per channel
+        int warmed = await _repo.PreWarmChannelHeadsAsync(messagesPerChannel: 3);
+        Assert.Equal(6, warmed);
+
+        // Subsequent channel open for newest 3 hits RAM synchronously with 0 disk reads
+        var loadTaskA = _repo.GetByChannelWithStatsAsync("c_prewarm_a", 3);
+        Assert.True(loadTaskA.IsCompletedSuccessfully);
+        var resA = await loadTaskA;
+        Assert.Equal(3, resA.CacheHits);
+        Assert.Equal(0, resA.DiskReads);
+        Assert.Equal(["c_prewarm_a_m4", "c_prewarm_a_m3", "c_prewarm_a_m2"], resA.Messages.Select(m => m.Id).ToArray());
+
+        // Second call is idempotent (0 additional disk reads)
+        Assert.Equal(0, await _repo.PreWarmChannelHeadsAsync(messagesPerChannel: 3));
     }
 }

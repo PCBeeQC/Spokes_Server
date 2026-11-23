@@ -22,16 +22,13 @@
         <MudSpacer />
 
         <!-- MEMBERS FACEPILE -->
-        <MudAvatarGroup Max="3" Spacing="3" MaxColor="Color.Primary">
-            @foreach (var memberId in Board.MemberIds)
-            {
-                var m = Db.Employees.GetById(memberId);
-                if (m != null)
-                {
-                    <MudAvatar Size="Size.Small" Color="Color.Secondary" title="@m.FullName">@m.FirstName[0]</MudAvatar>
-                }
-            }
-        </MudAvatarGroup>
+        <EmployeeAvatarGroup Employees="@GetBoardMembers()"
+                             Max="3"
+                             Size="Size.Small"
+                             OverflowStyle="AvatarOverflowStyle.Ellipsis"
+                             OverflowColor="Color.Primary"
+                             OnOverflowClick="ShareBoard"
+                             Style="--spokes-avatar-group-ring: var(--mud-palette-surface);" />
 
         <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.PersonAdd"
             OnClick="ShareBoard" Class="ml-2">
@@ -72,7 +69,7 @@
     }
 
     <!-- TABS -->
-    <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="px-0"
+    <MudTabs Elevation="0" Outlined="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="px-0"
         ActivePanelIndex="@GetActiveViewIndex()" ActivePanelIndexChanged="OnTabChanged">
         @foreach (var view in Board.Views)
         {
@@ -94,6 +91,20 @@
 
     private bool _isEditingTitle = false;
     private bool _isEditingDesc = false;
+
+    private List<Employee> GetBoardMembers()
+    {
+        List<Employee> members = [];
+        foreach (var memberId in Board.MemberIds)
+        {
+            var member = Db.Employees.GetById(memberId);
+            if (member != null)
+            {
+                members.Add(member);
+            }
+        }
+        return members;
+    }
 
     int GetActiveViewIndex()
     {
@@ -122,8 +133,7 @@
 
     async Task AddView()
     {
-        var parameters = new DialogParameters { ["BoardId"] = Board.Id };
-        var dialog = await DialogService.ShowAsync<AddViewDialog>("New View", parameters);
+        var dialog = await DialogService.ShowAsync<AddViewDialog>("New View");
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled && result.Data is BoardView newView)

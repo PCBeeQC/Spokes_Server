@@ -1,4 +1,5 @@
 using System;
+using Spokes_Server.Core.Services.Maintenance.Destinations;
 
 namespace Spokes_Server.Core.Services.Maintenance;
 
@@ -25,14 +26,5 @@ public record LocalBackupProgress(
 {
     public static LocalBackupProgress Idle => new(LocalBackupStage.Idle, 0, 0, 0, 0, 0);
 
-    public string FormattedProgress
-    {
-        get
-        {
-            if (TotalBytes <= 0) return $"{Percent:F0}%";
-            var processedMb = BytesProcessed / (1024.0 * 1024.0);
-            var totalMb = TotalBytes / (1024.0 * 1024.0);
-            return $"{processedMb:F1} MB / {totalMb:F1} MB ({Percent:F0}%)";
-        }
-    }
+    public string FormattedProgress => BackupFormatHelper.FormatTransferProgress(BytesProcessed, TotalBytes, Percent);
 }

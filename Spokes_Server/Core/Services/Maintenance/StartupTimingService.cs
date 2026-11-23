@@ -1,20 +1,14 @@
 namespace Spokes_Server.Core.Services.Maintenance;
 
-// DIAG-TEMP: single switch for the temporary chat transition diagnostics (server marks + client report).
-public static class ChatDiagnostics
-{
-    public static readonly bool Enabled = true;
-}
-
 public class StartupTiming
 {
     public string Name { get; set; } = string.Empty;
     public long Timestamp { get; set; }
-    // DIAG-TEMP: sub-millisecond Unix time used by chat transition reports
+    // Sub-millisecond Unix time used by on-demand chat transition reports
     public double TimestampMs { get; set; }
 }
 
-// DIAG-TEMP: incremental pull result for the client chat transition report.
+// Incremental pull result for the on-demand client chat transition report.
 public sealed class ChatTransitionDrainResult
 {
     public int TransitionId { get; init; }
@@ -28,14 +22,36 @@ public sealed class ChatTransitionDrainResult
 
 /// <summary>
 /// Circuit-scoped service that tracks startup and first-render milestones across layout,
-/// page, and sidebar components, allowing granular diagnostics in startup reports.
+/// page, and sidebar components, plus an opt-in per-circuit chat transition profiler
+/// (off by default; enabled in memory via browser console and reset automatically on page refresh).
 /// </summary>
 public class StartupTimingService
 {
     private readonly List<StartupTiming> _timings = [];
     private readonly object _lock = new();
+    private const int MaxBootTimings = 64;
 
-    // DIAG-TEMP: chat transition ring buffer (entries tagged by transition id, pulled by the client)
+    private volatile bool _isChatProfilerEnabled;
+
+    /// <summary>
+    /// True only when the user has explicitly enabled the chat-transition profiler for this circuit
+    /// (e.g. via <c>spokesPerf.enableChatDiagnostics()</c>). Always defaults to <c>false</c>.
+    /// </summary>
+    public bool IsChatProfilerEnabled => _isChatProfilerEnabled;
+
+    public void SetChatProfilerEnabled(bool enabled)
+    {
+        _isChatProfilerEnabled = enabled;
+        if (!enabled)
+        {
+            lock (_lock)
+            {
+                _transitions.Clear();
+            }
+        }
+    }
+
+    // Chat transition ring buffer (entries tagged by transition id, pulled by the client when profiler is enabled)
     private sealed class Transition
     {
         public int Id { get; init; }
@@ -55,7 +71,7 @@ public class StartupTimingService
 
     public static double NowMs() => (DateTime.UtcNow - DateTime.UnixEpoch).TotalMilliseconds;
 
-    /// <summary>DIAG-TEMP: live Chat page instances in this circuit (detects remount overlap).</summary>
+    /// <summary>Live Chat page instances in this circuit (detects remount overlap when profiler is active).</summary>
     public int ChatLiveInstances;
 
     private string? _pendingRouteGate;
@@ -137,7 +153,10 @@ public class StartupTimingService
             _routeSettledTimestampMs = ts;
             _timings.Add(new StartupTiming { Name = $"Server: Route Settled ({routeName})", Timestamp = ts });
         }
-        Mark($"Server: Route Settled ({routeName})");
+        if (_isChatProfilerEnabled)
+        {
+            Mark($"Server: Route Settled ({routeName})");
+        }
         return true;
     }
 
@@ -146,9 +165,15 @@ public class StartupTimingService
         var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         lock (_lock)
         {
-            _timings.Add(new StartupTiming { Name = name, Timestamp = ts });
+            if (!_routeSettled && _timings.Count < MaxBootTimings)
+            {
+                _timings.Add(new StartupTiming { Name = name, Timestamp = ts });
+            }
         }
-        Mark(name);
+        if (_isChatProfilerEnabled)
+        {
+            Mark(name);
+        }
     }
 
     public List<StartupTiming> GetTimings()
@@ -159,14 +184,14 @@ public class StartupTimingService
         }
     }
 
-    // ─── DIAG-TEMP: chat transition diagnostics ─────────────────────────────
+    // ─── On-demand chat transition profiler (opt-in per circuit) ───────────
 
     /// <summary>Id of the transition currently accepting marks, or 0 when none.</summary>
     public int CurrentTransitionId
     {
         get
         {
-            if (!ChatDiagnostics.Enabled) return 0;
+            if (!_isChatProfilerEnabled) return 0;
             var now = NowMs();
             lock (_lock)
             {
@@ -178,7 +203,7 @@ public class StartupTimingService
     /// <summary>Starts a new transition (client-initiated transitions start unnamed and are named by the first <see cref="EnsureTransition"/>).</summary>
     public int BeginTransition(string name, bool isNamed = true)
     {
-        if (!ChatDiagnostics.Enabled) return 0;
+        if (!_isChatProfilerEnabled) return 0;
         var now = NowMs();
         lock (_lock)
         {
@@ -199,7 +224,7 @@ public class StartupTimingService
     /// </summary>
     public int EnsureTransition(string name, string stepName)
     {
-        if (!ChatDiagnostics.Enabled) return 0;
+        if (!_isChatProfilerEnabled) return 0;
         var now = NowMs();
         int id;
         lock (_lock)
@@ -229,7 +254,7 @@ public class StartupTimingService
 
     public void Mark(string name, int? transitionId = null)
     {
-        if (!ChatDiagnostics.Enabled) return;
+        if (!_isChatProfilerEnabled) return;
         var now = NowMs();
         lock (_lock)
         {
@@ -246,7 +271,7 @@ public class StartupTimingService
     /// <summary>Marks "X Start" now and "X End (+N ms)" on dispose; open spans keep the client report from closing early.</summary>
     public IDisposable Span(string name, int? transitionId = null)
     {
-        if (!ChatDiagnostics.Enabled) return NoopSpan.Instance;
+        if (!_isChatProfilerEnabled) return NoopSpan.Instance;
         var id = transitionId ?? CurrentTransitionId;
         if (id == 0) return NoopSpan.Instance;
         lock (_lock)

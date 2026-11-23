@@ -1,0 +1,392 @@
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@inject Database Db
+@inject IFinancialAccountService FinancialAccountService
+@inject IJurisdictionTemplateService JurisdictionService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@FinancialAccountSelect.GetTypeIcon(_model.AccountType)" Color="@FinancialAccountSelect.GetTypeColor(_model.AccountType)" />
+            <MudText Typo="Typo.h6">
+                @(IsEdit ? BizLoc["Edit Financial Account"] : BizLoc["Add Financial Account"])
+            </MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudGrid Spacing="2">
+            <MudItem xs="12" sm="6">
+                <MudSelect T="string"
+                           Value="@_model.AccountType"
+                           ValueChanged="OnAccountTypeChanged"
+                           Label="@BizLoc["Account Type"]"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Dense="true">
+                    <MudSelectItem Value="@FinancialAccountType.Chequing">@BizLoc["Chequing Account"]</MudSelectItem>
+                    <MudSelectItem Value="@FinancialAccountType.Savings">@BizLoc["Savings Account"]</MudSelectItem>
+                    <MudSelectItem Value="@FinancialAccountType.CreditCard">@BizLoc["Credit Card"]</MudSelectItem>
+                    <MudSelectItem Value="@FinancialAccountType.LineOfCredit">@BizLoc["Line of Credit"]</MudSelectItem>
+                    <MudSelectItem Value="@FinancialAccountType.PaymentProcessor">@BizLoc["Payment Processor (Stripe / PayPal)"]</MudSelectItem>
+                    <MudSelectItem Value="@FinancialAccountType.Loan">@BizLoc["Loan / Financing"]</MudSelectItem>
+                    <MudSelectItem Value="@FinancialAccountType.CashOnHand">@BizLoc["Cash on Hand / Petty Cash"]</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+
+            @if (!IsEdit && _model.AccountType == FinancialAccountType.LineOfCredit && _chequingAccounts.Count > 0)
+            {
+                <MudItem xs="12">
+                    <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+                        <MudText Typo="Typo.subtitle2" Class="mb-2"><b>@BizLoc["How does this Line of Credit operate?"]</b></MudText>
+                        <MudRadioGroup T="bool" @bind-Value="_attachToChequing">
+                            <MudRadio T="bool" Value="true" Color="Color.Primary" Dense="true">
+                                @BizLoc["Attached directly to a Chequing account (allows negative balance up to credit limit on the same statement)"]
+                            </MudRadio>
+                            <MudRadio T="bool" Value="false" Color="Color.Primary" Dense="true">
+                                @BizLoc["Standalone Line of Credit (separate account & statement with transfers to/from Chequing)"]
+                            </MudRadio>
+                        </MudRadioGroup>
+                    </MudPaper>
+                </MudItem>
+            }
+
+            @if (_isAttachingCreditLineToExistingChequing)
+            {
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string"
+                               @bind-Value="_targetChequingId"
+                               Label="@BizLoc["Operating Chequing Account"]"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Dense="true"
+                               Required="true">
+                        @foreach (var chq in _chequingAccounts)
+                        {
+                            <MudSelectItem Value="@chq.Id">@chq.DisplayLabel</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudNumericField T="decimal?"
+                                     @bind-Value="_model.CreditLimit"
+                                     Label="@BizLoc["Credit Limit"]"
+                                     Variant="Variant.Outlined"
+                                     Margin="Margin.Dense"
+                                     Format="N2"
+                                     Min="0m"
+                                     Required="true"
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.AttachMoney" />
+                </MudItem>
+
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_model.Notes"
+                                  Label="@BizLoc["Notes (Optional)"]"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Lines="2" />
+                </MudItem>
+            }
+            else
+            {
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string"
+                               @bind-Value="_model.Currency"
+                               Label="@BizLoc["Currency"]"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Dense="true">
+                        @foreach (var cur in _supportedCurrencies)
+                        {
+                            <MudSelectItem Value="@cur">@cur</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_model.Name"
+                                  Label="@BizLoc["Account Name"]"
+                                  Placeholder="@GetNamePlaceholder()"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Required="true" />
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_model.InstitutionName"
+                                  Label="@BizLoc["Financial Institution (Optional)"]"
+                                  Placeholder="@BizLoc["e.g., Desjardins, RBC, Stripe"]"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" />
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_model.Last4Digits"
+                                  Label="@BizLoc["Last 4 Digits / Ref (Optional)"]"
+                                  Placeholder="4821"
+                                  MaxLength="8"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" />
+                </MudItem>
+
+                @if (_model.AccountType == FinancialAccountType.Chequing)
+                {
+                    <MudItem xs="12">
+                        <MudSwitch T="bool"
+                                   Value="@_hasAttachedCreditLine"
+                                   ValueChanged="OnHasAttachedCreditLineChanged"
+                                   Color="Color.Info"
+                                   Label="@BizLoc["Attached Operating Line of Credit / Overdraft"]" />
+                    </MudItem>
+
+                    @if (_hasAttachedCreditLine)
+                    {
+                        <MudItem xs="12" sm="6">
+                            <MudNumericField T="decimal?"
+                                             @bind-Value="_model.CreditLimit"
+                                             Label="@BizLoc["Credit Line Limit"]"
+                                             HelperText="@BizLoc["Allows this chequing account balance to go negative up to this limit on the same statement."]"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Format="N2"
+                                             Min="0m"
+                                             Adornment="Adornment.Start"
+                                             AdornmentIcon="@Icons.Material.Filled.AttachMoney" />
+                        </MudItem>
+                    }
+                }
+                else if (FinancialAccountType.SupportsCreditLimit(_model.AccountType))
+                {
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="decimal?"
+                                         @bind-Value="_model.CreditLimit"
+                                         Label="@BizLoc["Credit Limit (Optional)"]"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Format="N2"
+                                         Min="0m"
+                                         Adornment="Adornment.Start"
+                                         AdornmentIcon="@Icons.Material.Filled.AttachMoney" />
+                    </MudItem>
+                }
+
+                @if (FinancialAccountType.IsAssetType(_model.AccountType))
+                {
+                    <MudItem xs="12">
+                        <MudSwitch T="bool"
+                                   @bind-Value="_model.IsDefaultOperating"
+                                   Color="Color.Primary"
+                                   Label="@BizLoc["Default Operating Account (pre-selected for deposits, bill payments, payroll, and taxes)"]" />
+                    </MudItem>
+                }
+                else if (_model.AccountType == FinancialAccountType.CreditCard)
+                {
+                    <MudItem xs="12">
+                        <MudSwitch T="bool"
+                                   @bind-Value="_model.IsDefaultCreditCard"
+                                   Color="Color.Warning"
+                                   Label="@BizLoc["Default Credit Card (pre-selected when payment method is Credit Card)"]" />
+                    </MudItem>
+                }
+
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_model.Notes"
+                                  Label="@BizLoc["Notes (Optional)"]"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Lines="2" />
+                </MudItem>
+
+                @* Collapsed Advanced (Accountant) section — hidden by default from business owners *@
+                <MudItem xs="12">
+                    <MudExpansionPanels Elevation="0" Outlined="true">
+                        <MudExpansionPanel Text="@BizLoc["Advanced (Accountant)"]" Dense="true">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-2">
+                                @BizLoc["Leave blank to automatically create and synchronize a dedicated General Ledger account in the background, or select an existing GL account to link manually."]
+                            </MudText>
+                            <GlAccountSelect @bind-Value="_manualGlAccountCode"
+                                             ShowAccountCode="true"
+                                             FilterSubTypes="@(new[] { GlAccountSubType.Bank, GlAccountSubType.CreditCard, GlAccountSubType.LineOfCredit, GlAccountSubType.Loan, GlAccountSubType.OtherLiability })"
+                                             Label="@BizLoc["Linked General Ledger Account (Optional)"]"
+                                             Placeholder="@BizLoc["Auto-create dedicated GL account"]"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Clearable="true" />
+                        </MudExpansionPanel>
+                    </MudExpansionPanels>
+                </MudItem>
+            }
+        </MudGrid>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Save"
+                   OnClick="Save">
+            @Loc["Save"]
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public FinancialAccount? ExistingAccount { get; set; }
+
+    private bool IsEdit => ExistingAccount != null;
+    private FinancialAccount _model = new();
+    private List<string> _supportedCurrencies = ["CAD", "USD", "EUR"];
+    private List<FinancialAccount> _chequingAccounts = [];
+    private bool _hasAttachedCreditLine;
+    private bool _attachToChequing;
+    private string? _targetChequingId;
+    private string? _manualGlAccountCode;
+
+    private bool _isAttachingCreditLineToExistingChequing =>
+        !IsEdit && _model.AccountType == FinancialAccountType.LineOfCredit && _attachToChequing && _chequingAccounts.Count > 0;
+
+    protected override void OnInitialized()
+    {
+        var profile = Db.CompanyProfile?.Get();
+        var defaultCurrency = JurisdictionService.GetActiveTemplate().DefaultCurrency;
+        _supportedCurrencies = (profile?.SupportedCurrencies is { Count: > 0 } list ? list : ["CAD", "USD", "EUR"])
+            .Select(c => c.Trim().ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (!_supportedCurrencies.Contains(defaultCurrency, StringComparer.OrdinalIgnoreCase))
+        {
+            _supportedCurrencies.Insert(0, defaultCurrency);
+        }
+
+        _chequingAccounts = FinancialAccountService.GetActiveAccounts([FinancialAccountType.Chequing]);
+
+        if (ExistingAccount != null)
+        {
+            _model = new FinancialAccount
+            {
+                Id = ExistingAccount.Id,
+                Name = ExistingAccount.Name,
+                AccountType = ExistingAccount.AccountType,
+                Currency = string.IsNullOrWhiteSpace(ExistingAccount.Currency) ? defaultCurrency : ExistingAccount.Currency,
+                InstitutionName = ExistingAccount.InstitutionName,
+                Last4Digits = ExistingAccount.Last4Digits,
+                CreditLimit = ExistingAccount.CreditLimit,
+                LinkedGlAccountCode = ExistingAccount.LinkedGlAccountCode,
+                IsDefaultOperating = ExistingAccount.IsDefaultOperating,
+                IsDefaultCreditCard = ExistingAccount.IsDefaultCreditCard,
+                IsActive = ExistingAccount.IsActive,
+                Notes = ExistingAccount.Notes
+            };
+            _hasAttachedCreditLine = ExistingAccount.HasAttachedCreditLine;
+            _manualGlAccountCode = ExistingAccount.LinkedGlAccountCode;
+        }
+        else
+        {
+            _model = new FinancialAccount
+            {
+                AccountType = FinancialAccountType.Chequing,
+                Currency = defaultCurrency
+            };
+            _targetChequingId = _chequingAccounts.FirstOrDefault(c => c.IsDefaultOperating)?.Id
+                ?? _chequingAccounts.FirstOrDefault()?.Id;
+        }
+    }
+
+    private void OnAccountTypeChanged(string newType)
+    {
+        _model.AccountType = newType;
+        if (newType != FinancialAccountType.Chequing)
+        {
+            _hasAttachedCreditLine = false;
+        }
+        if (!FinancialAccountType.SupportsCreditLimit(newType))
+        {
+            _model.CreditLimit = null;
+        }
+        if (newType == FinancialAccountType.LineOfCredit && !IsEdit && _chequingAccounts.Count > 0)
+        {
+            _targetChequingId ??= _chequingAccounts.FirstOrDefault(c => c.IsDefaultOperating)?.Id
+                ?? _chequingAccounts.FirstOrDefault()?.Id;
+        }
+        else
+        {
+            _attachToChequing = false;
+        }
+    }
+
+    private void OnHasAttachedCreditLineChanged(bool enabled)
+    {
+        _hasAttachedCreditLine = enabled;
+        if (!enabled)
+        {
+            _model.CreditLimit = null;
+        }
+    }
+
+    private string GetNamePlaceholder() => _model.AccountType switch
+    {
+        FinancialAccountType.Chequing => BizLoc["e.g., Desjardins Operating CAD"].Value,
+        FinancialAccountType.Savings => BizLoc["e.g., Tax Reserve Savings"].Value,
+        FinancialAccountType.CreditCard => BizLoc["e.g., RBC Visa Corporate"].Value,
+        FinancialAccountType.LineOfCredit => BizLoc["e.g., BNC Operating Line of Credit"].Value,
+        FinancialAccountType.PaymentProcessor => BizLoc["e.g., Stripe CAD Clearing"].Value,
+        FinancialAccountType.Loan => BizLoc["e.g., Equipment Term Loan"].Value,
+        FinancialAccountType.CashOnHand => BizLoc["e.g., Office Petty Cash"].Value,
+        _ => BizLoc["Account Name"].Value
+    };
+
+    private void Save()
+    {
+        if (_isAttachingCreditLineToExistingChequing)
+        {
+            if (string.IsNullOrWhiteSpace(_targetChequingId) || _model.CreditLimit is not > 0m)
+            {
+                Snackbar.Add(BizLoc["Please select a chequing account and enter a credit limit greater than zero."].Value, Severity.Warning);
+                return;
+            }
+
+            var attachResult = FinancialAccountService.AttachCreditLineToChequing(_targetChequingId, _model.CreditLimit.Value, _model.Notes);
+            if (!attachResult.IsSuccess)
+            {
+                Snackbar.Add(attachResult.Error ?? BizLoc["Failed to attach line of credit."].Value, Severity.Error);
+                return;
+            }
+
+            Snackbar.Add(BizLoc["Operating line of credit linked to chequing account."].Value, Severity.Success);
+            MudDialog.Close(DialogResult.Ok(attachResult.Value));
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_model.Name))
+        {
+            Snackbar.Add(BizLoc["Account name is required."].Value, Severity.Warning);
+            return;
+        }
+
+        if (_model.AccountType == FinancialAccountType.Chequing && !_hasAttachedCreditLine)
+        {
+            _model.CreditLimit = null;
+        }
+
+        var result = IsEdit
+            ? FinancialAccountService.UpdateAccount(_model, _manualGlAccountCode)
+            : FinancialAccountService.CreateAccount(_model, _manualGlAccountCode);
+
+        if (!result.IsSuccess)
+        {
+            Snackbar.Add(result.Error ?? BizLoc["Failed to save financial account."].Value, Severity.Error);
+            return;
+        }
+
+        Snackbar.Add(IsEdit ? BizLoc["Financial account updated."].Value : BizLoc["Financial account added."].Value, Severity.Success);
+        MudDialog.Close(DialogResult.Ok(result.Value));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

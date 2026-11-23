@@ -12,6 +12,7 @@ using Spokes_Server.Core.Services.Communication.Notifications.Routing;
 using Spokes_Server.Core.Services.Communication.Presence;
 using Spokes_Server.Core.Services.Logging;
 using Spokes_Server.Core.Services.Communication.Chat;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Xunit;
@@ -36,7 +37,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_NotificationQueue_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -59,6 +60,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
         services.AddSingleton(new ChatMessageRepository(_persistence, _config, companyRepo));
         services.AddSingleton(new EmailMessageRepository(_persistence, _config));
         services.AddSingleton(new ChatStateService());
+        services.AddSingleton(new VoiceStateService());
         services.AddSingleton<PresenceStateService>();
         services.AddSingleton<IPushDecisionService>(sp => sp.GetRequiredService<PresenceStateService>());
 
@@ -83,19 +85,10 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
     }
 
     [Fact]
-    public void Constructor_InitializesCorrectly()
-    {
-        Assert.NotNull(_service);
-        Assert.NotNull(_queue);
-        Assert.NotNull(_persistence);
-        Assert.NotNull(_serviceProvider);
-    }
-
-    [Fact]
     public async Task ExecuteAsync_WithDueNotifications_SendsWebPushAndClearsQueue()
     {
         // Arrange
-        var employee = new Employee { Id = "emp-1", NotificationScheduleEnabled = false };
+        var employee = new Employee { Id = "emp-1", NotificationScheduleEnabled = false, IsActive = true, Permissions = [AppPermissions.Chat.Use] };
         var repo = _serviceProvider.GetRequiredService<EmployeeRepository>();
         repo.Save(employee);
 
@@ -129,7 +122,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
     public async Task ExecuteAsync_MultipleDueNotifications_SendsSummaryNotification()
     {
         // Arrange
-        var employee = new Employee { Id = "emp-1", NotificationScheduleEnabled = false };
+        var employee = new Employee { Id = "emp-1", NotificationScheduleEnabled = false, IsActive = true, Permissions = [AppPermissions.Chat.Use, AppPermissions.Email.Use] };
         var repo = _serviceProvider.GetRequiredService<EmployeeRepository>();
         repo.Save(employee);
 
@@ -213,6 +206,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
     public async Task ExecuteAsync_WithDelayedMobileNotifications_SendsMobilePush()
     {
         // Arrange
+        _serviceProvider.GetRequiredService<EmployeeRepository>().Save(new Employee { Id = "emp-1", IsActive = true });
         _queue.EnqueueDelayedMobilePush(new DelayedMobileNotification
         {
             UserId = "emp-1",
@@ -245,6 +239,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
     public async Task ExecuteAsync_WithDelayedChatPush_WhenMessageEvictedFromMemoryCache_LoadsFromDiskAndSendsPush()
     {
         // Arrange: write chat message directly to disk without adding to memory cache
+        _serviceProvider.GetRequiredService<EmployeeRepository>().Save(new Employee { Id = "emp-1", IsActive = true, Permissions = [AppPermissions.Chat.Use] });
         var channelDir = Path.Combine(_testDataDir, "chat", "c-evicted", "messages");
         Directory.CreateDirectory(channelDir);
 
@@ -290,6 +285,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
     {
         // Arrange
         var userId = "emp-active-desktop";
+        _serviceProvider.GetRequiredService<EmployeeRepository>().Save(new Employee { Id = userId, IsActive = true });
         var presenceState = _serviceProvider.GetRequiredService<PresenceStateService>();
         presenceState.RegisterConnection(new ConnectionRegistrationOptions
         {
@@ -320,14 +316,14 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
         _webPushMock.Verify(x => x.SendNotificationDirectAsync(It.Is<PushNotificationRequest>(r => r.UserId == userId)), Times.Never);
 
         // 2. Notification was NOT permanently discarded; it was postponed to the future
-        Assert.Empty(_queue.DequeueMaturedMobilePushes());
+        Assert.Empty(_queue.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1)));
     }
 
     [Fact]
     public async Task ExecuteAsync_WhenDeliveryFails_RequeuesNotificationWithoutDataLoss()
     {
         // Arrange
-        var employee = new Employee { Id = "emp-fail-1", NotificationScheduleEnabled = false };
+        var employee = new Employee { Id = "emp-fail-1", NotificationScheduleEnabled = false, IsActive = true, Permissions = [AppPermissions.Chat.Use] };
         var repo = _serviceProvider.GetRequiredService<EmployeeRepository>();
         repo.Save(employee);
 
@@ -357,7 +353,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
     public async Task ExecuteAsync_WhenDeliveryFailsRepeatedly_MovesToDeadLetterStore()
     {
         // Arrange
-        var employee = new Employee { Id = "emp-deadletter", NotificationScheduleEnabled = false };
+        var employee = new Employee { Id = "emp-deadletter", NotificationScheduleEnabled = false, IsActive = true, Permissions = [AppPermissions.Chat.Use] };
         var repo = _serviceProvider.GetRequiredService<EmployeeRepository>();
         repo.Save(employee);
 
@@ -391,6 +387,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
     {
         // Arrange
         var userId = "emp-mobile-fail";
+        _serviceProvider.GetRequiredService<EmployeeRepository>().Save(new Employee { Id = userId, IsActive = true });
         _webPushMock
             .Setup(x => x.SendNotificationDirectAsync(It.Is<PushNotificationRequest>(r => r.UserId == userId)))
             .ThrowsAsync(new HttpRequestException("Push server unavailable"));
@@ -410,7 +407,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
         await _service.StopAsync(CancellationToken.None);
 
         // Assert: Notification is not lost, but backoff was applied so it is no longer immediately matured
-        Assert.Empty(_queue.DequeueMaturedMobilePushes());
+        Assert.Empty(_queue.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1)));
         Assert.Empty(_queue.DeadLetterMobileNotifications);
     }
 
@@ -419,6 +416,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
     {
         // Arrange
         var userId = "emp-mobile-deadletter";
+        _serviceProvider.GetRequiredService<EmployeeRepository>().Save(new Employee { Id = userId, IsActive = true });
         _webPushMock
             .Setup(x => x.SendNotificationDirectAsync(It.Is<PushNotificationRequest>(r => r.UserId == userId)))
             .ThrowsAsync(new HttpRequestException("Unrecoverable error"));
@@ -439,7 +437,7 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
         await _service.StopAsync(CancellationToken.None);
 
         // Assert: Moved to dead letter store
-        Assert.Empty(_queue.DequeueMaturedMobilePushes());
+        Assert.Empty(_queue.LeaseMaturedMobilePushes(TimeSpan.FromMinutes(1)));
         Assert.Single(_queue.DeadLetterMobileNotifications);
         Assert.Equal(userId, _queue.DeadLetterMobileNotifications[0].UserId);
         Assert.Equal(NotificationQueueService.MaxDeliveryRetries, _queue.DeadLetterMobileNotifications[0].RetryCount);
@@ -456,6 +454,8 @@ public class NotificationQueueBackgroundServiceTests : IDisposable
         {
             Id = userId,
             NotificationScheduleEnabled = false,
+            IsActive = true,
+            Permissions = [AppPermissions.Chat.Use, AppPermissions.Email.Use],
             LastEmailVisitedAt = new DateTimeOffset(readOnMobileTime, TimeSpan.Zero)
         };
         _serviceProvider.GetRequiredService<EmployeeRepository>().Save(employee);

@@ -78,23 +78,6 @@ window.spokesQuill = {
             quill.setContents(delta, 'silent');
         }
     },
-    insertHtml: function (elementId, html) {
-        const quill = this.editors[elementId];
-        if (quill) {
-            const range = quill.getSelection(true);
-            const index = range ? range.index : quill.getLength();
-            const delta = quill.clipboard.convert({ html: html });
-            const Delta = Quill.import('delta');
-            const insertion = new Delta().retain(index).concat(delta);
-            quill.updateContents(insertion, 'user');
-        }
-    },
-    clear: function (elementId) {
-        const quill = this.editors[elementId];
-        if (quill) {
-            quill.setText('');
-        }
-    },
     destroy: function (elementId) {
         const quill = this.editors[elementId];
         if (quill) {

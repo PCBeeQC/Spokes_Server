@@ -101,4 +101,16 @@ public class FileUiHelperTests
         var icon = FileUiHelper.GetFileIcon(fileName);
         Assert.Equal(Icons.Material.Filled.InsertDriveFile, icon);
     }
+
+    [Theory]
+    [InlineData("audio.mp3", null, Icons.Material.Filled.AudioFile)]
+    [InlineData("file.bin", "image/webp", Icons.Material.Filled.Image)]
+    [InlineData("file.bin", "video/webm", Icons.Material.Filled.VideoFile)]
+    [InlineData("file.bin", "audio/mpeg", Icons.Material.Filled.AudioFile)]
+    [InlineData("file.bin", "application/pdf", Icons.Material.Filled.PictureAsPdf)]
+    public void GetFileIcon_WithContentTypeOrAudio_ReturnsExpectedIcon(string fileName, string? contentType, string expectedIcon)
+    {
+        var icon = FileUiHelper.GetFileIcon(fileName, contentType);
+        Assert.Equal(expectedIcon, icon);
+    }
 }

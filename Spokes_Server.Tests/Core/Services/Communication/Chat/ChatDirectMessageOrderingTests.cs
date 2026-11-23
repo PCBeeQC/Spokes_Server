@@ -29,7 +29,7 @@ public class ChatDirectMessageOrderingTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_DMOrder_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir } };
+        var configDict = new Dictionary<string, string> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
@@ -110,54 +110,4 @@ public class ChatDirectMessageOrderingTests : IDisposable
         Assert.Equal(messageTime, healedChannel.LastActivityAt);
     }
 
-    [Fact]
-    public void CategoryOrdering_DictatedByCustomOrder_WhileChannelsInsideSortByRecency()
-    {
-        // Setup categories
-        var catPublic = new ChatCategory { Id = "sys_public", Name = "Public", DisplayOrder = 0 };
-        var catDirect = new ChatCategory { Id = "sys_direct", Name = "Direct Messages", DisplayOrder = 1 };
-        var categories = new List<ChatCategory> { catPublic, catDirect };
-
-        // Setup user with custom category ordering placing sys_direct first
-        var user = new Employee
-        {
-            Id = "user1",
-            UsesCustomSidebarOrder = true,
-            CustomCategoryOrder = new Dictionary<string, int>
-            {
-                { "sys_direct", 0 }, // sys_direct moved to top
-                { "sys_public", 1 }
-            },
-            // Legacy DM IDs that might have been saved in the past
-            CustomChannelOrder = new Dictionary<string, int>
-            {
-                { "dm_old", 0 },
-                { "dm_new", 1 }
-            }
-        };
-
-        // Category ordering respects user custom order
-        var orderedCategories = categories
-            .OrderBy(c => user.CustomCategoryOrder.TryGetValue(c.Id, out int order) ? order : c.DisplayOrder + 1000)
-            .ToList();
-
-        Assert.Equal("sys_direct", orderedCategories[0].Id);
-        Assert.Equal("sys_public", orderedCategories[1].Id);
-
-        // Channels inside sys_direct MUST sort by recency, ignoring CustomChannelOrder
-        var dmOld = new ChatChannel { Id = "dm_old", ChannelType = ChatChannelType.Direct, LastActivityAt = DateTime.UtcNow.AddHours(-2) };
-        var dmNew = new ChatChannel { Id = "dm_new", ChannelType = ChatChannelType.Direct, LastActivityAt = DateTime.UtcNow.AddMinutes(-5) };
-
-        var dmChannels = new List<ChatChannel> { dmOld, dmNew };
-
-        // Sorting using the updated logic
-        var sortedDms = dmChannels
-            .OrderBy(c => c.IsVoiceChannel ? 1 : 0)
-            .ThenByDescending(c => c.LastActivityAt)
-            .ToList();
-
-        // Even though dm_old has CustomChannelOrder rank 0, dm_new is more recent so it MUST be first
-        Assert.Equal("dm_new", sortedDms[0].Id);
-        Assert.Equal("dm_old", sortedDms[1].Id);
-    }
 }

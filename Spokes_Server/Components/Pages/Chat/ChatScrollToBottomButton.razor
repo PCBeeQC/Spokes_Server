@@ -9,8 +9,17 @@
                 aria-label="@Loc["Scroll to bottom"]" />
     </div>
 </div>
+@{
+    _lastVisible = Visible;
+    _hasRenderedOnce = true;
+}
 
 @code {
     [Parameter] public bool Visible { get; set; }
     [Parameter] public EventCallback OnClick { get; set; }
+
+    private bool _lastVisible;
+    private bool _hasRenderedOnce;
+
+    protected override bool ShouldRender() => !_hasRenderedOnce || Visible != _lastVisible;
 }

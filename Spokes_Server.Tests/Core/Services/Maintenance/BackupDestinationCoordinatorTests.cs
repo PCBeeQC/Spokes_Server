@@ -30,7 +30,7 @@ public class BackupDestinationCoordinatorTests : IDisposable
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            { "DataPath", _testDir }
+            { "DataPath", _testDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" }
         }).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);

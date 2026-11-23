@@ -5,6 +5,26 @@ using Spokes_Server.Core.Security;
 
 public class RedirectHelperTests
 {
+    [Theory]
+    [InlineData("/access-denied")]
+    [InlineData("/access-denied?ReturnUrl=%2Fadmin")]
+    [InlineData("/access-pending")]
+    [InlineData("/banned")]
+    public void GetSafeRedirectUrl_BlocksRestrictedStatusPaths(string url)
+    {
+        var result = RedirectHelper.GetSafeRedirectUrl(url, "spokes.local", "/");
+        Assert.Equal("/", result);
+    }
+
+    [Fact]
+    public void GetSafeRedirectUrl_WithHttpContext_AllowsRelativePath()
+    {
+        var context = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        context.Request.Host = new Microsoft.AspNetCore.Http.HostString("spokes.local", 8080);
+
+        var result = RedirectHelper.GetSafeRedirectUrl("/planning/calendar", context, "/");
+        Assert.Equal("/planning/calendar", result);
+    }
     private HttpContext CreateHttpContext(string host)
     {
         var context = new DefaultHttpContext();

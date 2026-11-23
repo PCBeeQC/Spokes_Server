@@ -7,9 +7,12 @@
 @using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Data.Repositories.Accounting
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Projects
+@inject Database Db
 @inject PurchaseOrderRepository PurchaseOrders
 @inject NavigationManager Nav
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
 @inject UserService UserService
 
 <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4 pb-6">
@@ -118,8 +121,9 @@
         var emp = await UserService.GetEmployeeAsync();
         if (emp != null)
         {
-            CanManagePOs = emp.IsAdmin || emp.HasPermission(AppPermissions.Purchases.ManagePOs);
-            CanViewPOs = emp.IsAdmin || emp.HasPermission(AppPermissions.Purchases.ViewPOs) || CanManagePOs;
+            CanManagePOs = emp.HasPermission(AppPermissions.Purchases.ManagePOs);
+            CanViewPOs = emp.HasEffectivePermission(AppPermissions.Purchases.ViewPOs, allowSuspended: true)
+                || emp.HasEffectivePermission(AppPermissions.Purchases.ManagePOs, allowSuspended: true);
         }
 
         Refresh();
@@ -136,8 +140,24 @@
 
     private void OpenViewer(PurchaseOrder po) => Nav.NavigateTo($"/purchases/{po.Id}");
 
+    private async Task<bool> AuthorizePoMutationAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp?.HasPermission(AppPermissions.Purchases.ManagePOs) != true)
+        {
+            CanManagePOs = false;
+            Snackbar.Add("Your account is read-only or lacks permission to create purchase orders.", Severity.Error);
+            return false;
+        }
+
+        CanManagePOs = true;
+        return true;
+    }
+
     private async Task CreateNewPO()
     {
+        if (!await AuthorizePoMutationAsync()) return;
+
         var po = new PurchaseOrder { Date = DateTime.Today };
         var parameters = new DialogParameters { ["PO"] = po };
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true, CloseOnEscapeKey = false };
@@ -147,6 +167,25 @@
 
         if (result is { Canceled: false, Data: PurchaseOrder dataPo })
         {
+            var emp = await UserService.GetEmployeeAsync();
+            if (emp == null || !emp.HasPermission(AppPermissions.Purchases.ManagePOs))
+            {
+                CanManagePOs = false;
+                Snackbar.Add("Your account is read-only or lacks permission to create purchase orders.", Severity.Error);
+                return;
+            }
+
+            foreach (var item in dataPo.LineItems)
+            {
+                if (!string.IsNullOrWhiteSpace(item.ProjectId) &&
+                    !ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, emp, item.ProjectId, allowAccountingFinancialRead: false))
+                {
+                    Snackbar.Add("You do not have access to link one or more selected restricted projects.", Severity.Error);
+                    return;
+                }
+            }
+
+            CanManagePOs = true;
             PurchaseOrders.Save(dataPo);
             Refresh();
         }

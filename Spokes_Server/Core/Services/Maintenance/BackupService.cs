@@ -1,5 +1,4 @@
 using System.IO.Compression;
-using System.Security.Cryptography;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Services.Logging;
@@ -42,7 +41,6 @@ public class BackupService : BackgroundService
         "Polls",
         "chat",
         "chat-categories",
-        "clientstates",
         "physical-voice-rooms",
         "PublicContacts",
         "Communication",
@@ -60,7 +58,7 @@ public class BackupService : BackgroundService
     private readonly string _dataPath;
     private readonly DiskPersistenceService? _persistence;
     private readonly Database? _db;
-    private readonly IBackupEncryptionService? _encryption;
+    private readonly IBackupEncryptionService _encryption;
     private readonly BackupDestinationCoordinator? _destinationCoordinator;
     private readonly ISystemLogService? _systemLog;
 
@@ -277,11 +275,6 @@ public class BackupService : BackgroundService
             // Validate SPOKES_MASTER_PASSWORD BEFORE creating tempZipPath so no plaintext .tmp.zip is ever written when misconfigured
             if (encrypt)
             {
-                if (_encryption == null)
-                {
-                    throw new InvalidOperationException("Cannot encrypt backup: BackupEncryptionService is unavailable.");
-                }
-
                 masterPassword = ResolveMasterPassword(profile);
                 if (string.IsNullOrWhiteSpace(masterPassword))
                 {
@@ -394,9 +387,7 @@ public class BackupService : BackgroundService
             _logger.LogInformation("Backup created successfully: {Path}", finalBackupPath);
 
             var finalFileInfo = new FileInfo(finalBackupPath);
-            var sizeFormatted = finalFileInfo.Length < 1024 * 1024
-                ? $"{finalFileInfo.Length / 1024.0:F1} KB"
-                : $"{finalFileInfo.Length / (1024.0 * 1024.0):F1} MB";
+            var sizeFormatted = BackupFormatHelper.FormatKilobyteOrMegabyteSize(finalFileInfo.Length);
 
             _systemLog?.LogInfo("Backup",
                 $"Backup created successfully: {Path.GetFileName(finalBackupPath)}",
@@ -513,25 +504,6 @@ public class BackupService : BackgroundService
         }
     }
 
-    public async Task<byte[]?> GetBackupBytesAsync(string filePath)
-    {
-        if (string.IsNullOrWhiteSpace(filePath)) return null;
-
-        var backupDir = Path.GetFullPath(Path.Combine(_dataPath, "Backups"));
-        if (!backupDir.EndsWith(Path.DirectorySeparatorChar)) backupDir += Path.DirectorySeparatorChar;
-        var stagingDir = Path.Combine(backupDir, ".staging") + Path.DirectorySeparatorChar;
-
-        var fullPath = Path.GetFullPath(filePath);
-        if (File.Exists(fullPath) &&
-            fullPath.StartsWith(backupDir, StringComparison.OrdinalIgnoreCase) &&
-            !fullPath.StartsWith(stagingDir, StringComparison.OrdinalIgnoreCase) &&
-            !fullPath.EndsWith(".tmp.zip", StringComparison.OrdinalIgnoreCase))
-        {
-            return await File.ReadAllBytesAsync(fullPath);
-        }
-        return null;
-    }
-
     public string CreateRestoreUploadStagingPath(string extension = ".spkbackup")
     {
         var stagingRootDir = Path.GetFullPath(Path.Combine(_dataPath, "Backups", ".staging"));
@@ -577,23 +549,10 @@ public class BackupService : BackgroundService
         try
         {
             // Detect if archive is encrypted (.spkbackup or SPKENC01 magic bytes)
-            bool isEncrypted = false;
-            if (_encryption != null)
-            {
-                isEncrypted = _encryption.IsEncryptedFile(fullFilePath);
-            }
-            else if (fullFilePath.EndsWith(".spkbackup", StringComparison.OrdinalIgnoreCase))
-            {
-                isEncrypted = true;
-            }
+            bool isEncrypted = _encryption.IsEncryptedFile(fullFilePath);
 
             if (isEncrypted)
             {
-                if (_encryption == null)
-                {
-                    return BackupRestoreResult.Failed("Cannot restore encrypted backup: BackupEncryptionService is unavailable.");
-                }
-
                 var masterPassword = ResolveMasterPassword(_companyProfiles.Get(), backupPassword);
                 if (string.IsNullOrWhiteSpace(masterPassword))
                 {
@@ -924,7 +883,7 @@ public class BackupService : BackgroundService
         while (queue.Count > 0)
         {
             var (dir, depth) = queue.Dequeue();
-            if (depth > 0 && HasStrongSpokesRootMarker(dir))
+            if (depth > 0 && HasPrimarySpokesMarkers(dir))
             {
                 matches.Add(dir);
                 continue; // Do not descend into an identified Spokes root
@@ -939,19 +898,6 @@ public class BackupService : BackgroundService
         }
 
         return matches;
-    }
-
-    private static bool HasStrongSpokesRootMarker(string dir)
-    {
-        if (File.Exists(Path.Combine(dir, "Settings", "company.json")) ||
-            File.Exists(Path.Combine(dir, "Settings", "system_config.json")) ||
-            File.Exists(Path.Combine(dir, "Global", "ServerConfig.json")) ||
-            Directory.Exists(Path.Combine(dir, "keys")))
-        {
-            return true;
-        }
-
-        return HasPrimarySpokesMarkers(dir);
     }
 
     private static bool HasPrimarySpokesMarkers(string dir)
@@ -1165,15 +1111,7 @@ public class BackupFileInfo
     public string BackupType => IsManual ? "Manual" : "Auto";
     public bool IsEncrypted => FileName.EndsWith(".spkbackup", StringComparison.OrdinalIgnoreCase);
 
-    public string FormattedSize
-    {
-        get
-        {
-            if (SizeBytes < 1024) return $"{SizeBytes} B";
-            if (SizeBytes < 1024 * 1024) return $"{SizeBytes / 1024.0:F1} KB";
-            return $"{SizeBytes / (1024.0 * 1024.0):F1} MB";
-        }
-    }
+    public string FormattedSize => BackupFormatHelper.FormatBackupSize(SizeBytes);
 }
 
 public record BackupResult(bool Success, string? ZipPath, string? ErrorMessage, bool IsBusy = false)

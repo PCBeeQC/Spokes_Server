@@ -3,6 +3,7 @@
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Security
 @using Spokes_Server.Components.Dialogs.Common
 @using Spokes_Server.Components.Shared
 @using Microsoft.Extensions.Localization
@@ -14,6 +15,7 @@
 @inject ISnackbar Snackbar
 @inject UserService UserService
 @inject NavigationManager Nav
+@inject FileUrlSigner FileUrls
 @inject IStringLocalizer<AppResources> Loc
 
 <PageTitle>@Loc["Moderation Dashboard"]</PageTitle>
@@ -174,11 +176,11 @@
                                         {
                                             if (IsSafeAttachmentUrl(att.FilePath) && att.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
                                             {
-                                                <img src="@att.FilePath" alt="@att.FileName" style="max-height: 100px; max-width: 100%; border-radius: 4px;" />
+                                                <img src="@FileUrls.SignUrl(att.FilePath)" alt="@att.FileName" style="max-height: 100px; max-width: 100%; border-radius: 4px;" />
                                             }
                                             else if (IsSafeAttachmentUrl(att.FilePath) && att.ContentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
                                             {
-                                                <video playsinline webkit-playsinline src="@att.FilePath" controls style="max-height: 100px; max-width: 100%; border-radius: 4px;"></video>
+                                                <video playsinline webkit-playsinline src="@FileUrls.SignUrl(att.FilePath)" controls style="max-height: 100px; max-width: 100%; border-radius: 4px;"></video>
                                             }
                                             else
                                             {
@@ -200,7 +202,7 @@
                                     </div>
                                     <div class="d-flex align-center justify-space-between mt-1">
                                         <MudText Typo="Typo.body2">@Loc["Action:"] <strong>@item.LocalizedResolutionAction</strong></MudText>
-                                        <MudText Typo="Typo.body2">@Loc["By:"] <strong>@report.ResolvedBy</strong></MudText>
+                                        <MudText Typo="Typo.body2">@Loc["By:"] <strong>@item.ResolvedByName</strong></MudText>
                                     </div>
                                 </div>
                             }
@@ -208,26 +210,29 @@
                         <MudCardActions Class="px-4 pb-4 pt-0 justify-end gap-2 flex-wrap">
                             @if (isOpen)
                             {
-                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Default" OnClick="@(() => DismissReport(report))">@Loc["Dismiss"]</MudButton>
-                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" DropShadow="false" Style="font-weight: 600;" OnClick="@(() => DeleteMessageAsync(report))">@Loc["Delete Message"]</MudButton>
+                                @if (item.CanAct)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Default" OnClick="@(() => DismissReportAsync(report))">@Loc["Dismiss"]</MudButton>
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" DropShadow="false" Style="font-weight: 600;" OnClick="@(() => DeleteMessageAsync(report))">@Loc["Delete Message"]</MudButton>
+                                }
 
                                 if (item.ReportedUser != null && item.CanModerateReportedUser && UserService.CanModerateUserTarget(_currentUser, item.ReportedUser))
                                 {
-                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(item.ReportedUser.IsSuspended ? Color.Success : Color.Warning)" OnClick="@(() => ToggleSuspend(report.ReportedUserId))">
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(item.ReportedUser.IsSuspended ? Color.Success : Color.Warning)" OnClick="@(() => ToggleSuspend(item.ReportedUser.Id))">
                                         @(item.ReportedUser.IsSuspended ? Loc["Unsuspend User"] : Loc["Suspend User"])
                                     </MudButton>
-                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(item.ReportedUser.IsBanned ? Color.Success : Color.Error)" OnClick="@(() => ToggleBan(report.ReportedUserId))">
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(item.ReportedUser.IsBanned ? Color.Success : Color.Error)" OnClick="@(() => ToggleBan(item.ReportedUser.Id))">
                                         @(item.ReportedUser.IsBanned ? Loc["Unban User"] : Loc["Ban User"])
                                     </MudButton>
                                 }
                             }
-                            else
+                            else if (item.CanAct)
                             {
                                 <MudButton Size="Size.Small"
                                            Variant="Variant.Text"
                                            Color="Color.Default"
                                            StartIcon="@Icons.Material.Filled.DeleteOutline"
-                                           OnClick="@(() => RemoveHistoryReport(report))">
+                                           OnClick="@(() => RemoveHistoryReportAsync(report))">
                                     @Loc["Remove"]
                                 </MudButton>
                             }
@@ -346,7 +351,7 @@
 
     private void HandleReportChanged(ReportedMessage report)
     {
-        _ = SafeInvokeAsync(LoadData);
+        _ = SafeInvokeAsync(LoadDataAsync);
     }
 
     public override ValueTask DisposeAsync()
@@ -360,9 +365,16 @@
         return base.DisposeAsync();
     }
 
+    private async Task LoadDataAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        LoadData();
+    }
+
     private void LoadData()
     {
-        _counts = ModerationReports.GetCounts();
+        var viewerId = _currentUser?.Id;
+        _counts = ModerationReports.GetCounts(viewerId);
         var activeQueueTab = _currentTab == "history"
             ? ModerationQueueTab.History
             : ModerationQueueTab.Open;
@@ -371,7 +383,8 @@
             _historyStatusFilter,
             searchQuery: null,
             unknownUserLabel: Loc["Unknown"].Value,
-            localize: key => Loc[key].Value);
+            localize: key => Loc[key].Value,
+            viewerEmployeeId: viewerId);
         _filteredReports = ModerationReportFilterHelper.Filter(_activeBucketItems, _searchString);
         _loading = false;
     }
@@ -383,8 +396,9 @@
         _ => _counts.History
     };
 
-    private void DismissReport(ReportedMessage report)
+    private async Task DismissReportAsync(ReportedMessage report)
     {
+        _currentUser = await UserService.GetEmployeeAsync();
         if (_currentUser == null) return;
 
         var result = ModerationReports.DismissReport(report.Id, _currentUser.Id);
@@ -400,6 +414,7 @@
 
     private async Task DeleteMessageAsync(ReportedMessage report)
     {
+        _currentUser = await UserService.GetEmployeeAsync();
         if (_currentUser == null) return;
 
         var result = await ModerationReports.ResolveAndDeleteMessageAsync(report.Id, _currentUser.Id);
@@ -413,8 +428,9 @@
         LoadData();
     }
 
-    private void RemoveHistoryReport(ReportedMessage report)
+    private async Task RemoveHistoryReportAsync(ReportedMessage report)
     {
+        _currentUser = await UserService.GetEmployeeAsync();
         if (_currentUser == null) return;
 
         var result = ModerationReports.DeleteHistoryReport(report.Id, _currentUser.Id);
@@ -430,6 +446,7 @@
 
     private async Task PromptClearHistoryAsync()
     {
+        _currentUser = await UserService.GetEmployeeAsync();
         if (_currentUser == null || _counts.History == 0) return;
 
         var parameters = new DialogParameters<ConfirmDialog>
@@ -444,6 +461,9 @@
 
         if (dialogResult is { Canceled: false })
         {
+            _currentUser = await UserService.GetEmployeeAsync();
+            if (_currentUser == null) return;
+
             var clearResult = ModerationReports.ClearHistory(_currentUser.Id);
             if (!clearResult.IsSuccess)
             {

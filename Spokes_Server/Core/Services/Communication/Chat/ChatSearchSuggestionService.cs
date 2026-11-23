@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Identity;
+using Spokes_Server.Core.Services.Security;
 
 /// <summary>
 /// Model for a search filter autocomplete suggestion.
@@ -55,50 +57,24 @@ public static class ChatSearchSuggestionService
         string? query,
         int cursorPosition,
         string? currentUserId,
-        IEnumerable<Employee> channelMembers)
+        IEnumerable<Employee> channelMembers,
+        Func<Employee, bool>? canSeeEmail = null)
     {
         var suggestions = new List<SearchSuggestion>();
         var (token, tokenStart, tokenLength) = ExtractTokenAtCursor(query, cursorPosition);
+        var visibleMembers = channelMembers.Where(m =>
+            m.IsActive && !m.IsSystem && !m.IsBanned && m.Id != AccountDeletionService.SystemDeletedUserId);
+
+        bool CanMatchEmail(Employee m) =>
+            canSeeEmail != null
+                ? canSeeEmail(m)
+                : (m.IsEmailPublic || (!string.IsNullOrEmpty(currentUserId) && string.Equals(m.Id, currentUserId, StringComparison.Ordinal)));
 
         // 1. If currently inside a "from:" tag value: suggest channel members + "from:me" + "from:admin"
         if (token.StartsWith("from:", StringComparison.OrdinalIgnoreCase))
         {
             var valuePrefix = token[5..].Trim('"').TrimStart().ToLowerInvariant();
-
-            if (string.IsNullOrEmpty(valuePrefix) || "me".StartsWith(valuePrefix))
-            {
-                suggestions.Add(new SearchSuggestion("from:me", "from:me ", "My own messages", "Icons.Material.Filled.PersonPin", tokenStart, tokenLength));
-            }
-
-            if (string.IsNullOrEmpty(valuePrefix) || "admin".StartsWith(valuePrefix) || "administrator".StartsWith(valuePrefix))
-            {
-                var adminEmp = channelMembers.FirstOrDefault(m => m.IsAdmin);
-                var adminDesc = adminEmp != null ? $"Administrator ({adminEmp.FullName})" : "Administrator accounts";
-                suggestions.Add(new SearchSuggestion("from:admin", "from:admin ", adminDesc, "Icons.Material.Filled.AdminPanelSettings", tokenStart, tokenLength, adminEmp));
-            }
-
-            foreach (var m in channelMembers.Where(m => m.IsActive))
-            {
-                var fullName = m.FullName;
-                if (string.IsNullOrEmpty(valuePrefix) ||
-                    fullName.ToLowerInvariant().Contains(valuePrefix) ||
-                    (!string.IsNullOrEmpty(m.FirstName) && m.FirstName.ToLowerInvariant().Contains(valuePrefix)) ||
-                    (!string.IsNullOrEmpty(m.LastName) && m.LastName.ToLowerInvariant().Contains(valuePrefix)) ||
-                    (!string.IsNullOrEmpty(m.Email) && m.Email.ToLowerInvariant().Contains(valuePrefix)) ||
-                    (!string.IsNullOrEmpty(m.Position) && m.Position.ToLowerInvariant().Contains(valuePrefix)))
-                {
-                    var formattedValue = fullName.Contains(' ') ? $"from:\"{fullName}\" " : $"from:{fullName} ";
-                    var subtitle = m.IsAdmin ? $"Admin · {m.Position ?? m.Email}" : (m.Position ?? m.Email ?? "Member");
-                    suggestions.Add(new SearchSuggestion(
-                        fullName,
-                        formattedValue,
-                        subtitle,
-                        "Icons.Material.Filled.AccountCircle",
-                        tokenStart,
-                        tokenLength,
-                        m));
-                }
-            }
+            AddMemberTagSuggestions(suggestions, visibleMembers, CanMatchEmail, "from", "My own messages", "Icons.Material.Filled.PersonPin", "Icons.Material.Filled.AccountCircle", valuePrefix, tokenStart, tokenLength);
             return suggestions.Take(8).ToList();
         }
 
@@ -107,40 +83,7 @@ public static class ChatSearchSuggestionService
         {
             int colonIdx = token.IndexOf(':');
             var valuePrefix = token[(colonIdx + 1)..].Trim('"').TrimStart().ToLowerInvariant();
-
-            if (string.IsNullOrEmpty(valuePrefix) || "me".StartsWith(valuePrefix))
-            {
-                suggestions.Add(new SearchSuggestion("mentions:me", "mentions:me ", "Messages mentioning me", "Icons.Material.Filled.AlternateEmail", tokenStart, tokenLength));
-            }
-
-            if (string.IsNullOrEmpty(valuePrefix) || "admin".StartsWith(valuePrefix) || "administrator".StartsWith(valuePrefix))
-            {
-                var adminEmp = channelMembers.FirstOrDefault(m => m.IsAdmin);
-                var adminDesc = adminEmp != null ? $"Administrator ({adminEmp.FullName})" : "Administrator accounts";
-                suggestions.Add(new SearchSuggestion("mentions:admin", "mentions:admin ", adminDesc, "Icons.Material.Filled.AdminPanelSettings", tokenStart, tokenLength, adminEmp));
-            }
-
-            foreach (var m in channelMembers.Where(m => m.IsActive))
-            {
-                var fullName = m.FullName;
-                if (string.IsNullOrEmpty(valuePrefix) ||
-                    fullName.ToLowerInvariant().Contains(valuePrefix) ||
-                    (!string.IsNullOrEmpty(m.FirstName) && m.FirstName.ToLowerInvariant().Contains(valuePrefix)) ||
-                    (!string.IsNullOrEmpty(m.LastName) && m.LastName.ToLowerInvariant().Contains(valuePrefix)) ||
-                    (!string.IsNullOrEmpty(m.Email) && m.Email.ToLowerInvariant().Contains(valuePrefix)) ||
-                    (!string.IsNullOrEmpty(m.Position) && m.Position.ToLowerInvariant().Contains(valuePrefix)))
-                {
-                    var formattedValue = fullName.Contains(' ') ? $"mentions:\"{fullName}\" " : $"mentions:{fullName} ";
-                    suggestions.Add(new SearchSuggestion(
-                        fullName,
-                        formattedValue,
-                        string.IsNullOrEmpty(m.Position) ? (m.Email ?? "Member") : m.Position,
-                        "Icons.Material.Filled.AlternateEmail",
-                        tokenStart,
-                        tokenLength,
-                        m));
-                }
-            }
+            AddMemberTagSuggestions(suggestions, visibleMembers, CanMatchEmail, "mentions", "Messages mentioning me", "Icons.Material.Filled.AlternateEmail", "Icons.Material.Filled.AlternateEmail", valuePrefix, tokenStart, tokenLength);
             return suggestions.Take(8).ToList();
         }
 
@@ -299,5 +242,51 @@ public static class ChatSearchSuggestionService
         }
 
         return (token, tokenStart, tokenLength);
+    }
+
+    private static void AddMemberTagSuggestions(
+        List<SearchSuggestion> suggestions,
+        IEnumerable<Employee> visibleMembers,
+        Func<Employee, bool> canMatchEmail,
+        string tagPrefix,
+        string meDescription,
+        string meIcon,
+        string memberIcon,
+        string valuePrefix,
+        int tokenStart,
+        int tokenLength)
+    {
+        if (string.IsNullOrEmpty(valuePrefix) || "me".StartsWith(valuePrefix))
+        {
+            suggestions.Add(new SearchSuggestion($"{tagPrefix}:me", $"{tagPrefix}:me ", meDescription, meIcon, tokenStart, tokenLength));
+        }
+
+        if (string.IsNullOrEmpty(valuePrefix) || "admin".StartsWith(valuePrefix) || "administrator".StartsWith(valuePrefix))
+        {
+            suggestions.Add(new SearchSuggestion($"{tagPrefix}:admin", $"{tagPrefix}:admin ", "Administrator accounts", "Icons.Material.Filled.AdminPanelSettings", tokenStart, tokenLength));
+        }
+
+        foreach (var m in visibleMembers)
+        {
+            var fullName = m.FullName;
+            if (string.IsNullOrEmpty(valuePrefix) ||
+                fullName.ToLowerInvariant().Contains(valuePrefix) ||
+                (!string.IsNullOrEmpty(m.FirstName) && m.FirstName.ToLowerInvariant().Contains(valuePrefix)) ||
+                (!string.IsNullOrEmpty(m.LastName) && m.LastName.ToLowerInvariant().Contains(valuePrefix)) ||
+                (canMatchEmail(m) && !string.IsNullOrEmpty(m.Email) && m.Email.ToLowerInvariant().Contains(valuePrefix)) ||
+                (!string.IsNullOrEmpty(m.Position) && m.Position.ToLowerInvariant().Contains(valuePrefix)))
+            {
+                var formattedValue = fullName.Contains(' ') ? $"{tagPrefix}:\"{fullName}\" " : $"{tagPrefix}:{fullName} ";
+                var subtitle = !string.IsNullOrWhiteSpace(m.DisplaySubtitle) ? m.DisplaySubtitle : "Member";
+                suggestions.Add(new SearchSuggestion(
+                    fullName,
+                    formattedValue,
+                    subtitle,
+                    memberIcon,
+                    tokenStart,
+                    tokenLength,
+                    m));
+            }
+        }
     }
 }

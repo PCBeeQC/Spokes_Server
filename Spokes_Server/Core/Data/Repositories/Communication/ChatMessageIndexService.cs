@@ -56,8 +56,6 @@ public class ChatMessageIndexService
         }
     }
 
-    public IReadOnlyCollection<string> AllChannelIds => _channelIndexes.Keys.ToList();
-
     public Dictionary<string, List<ChatIndexEntry>> GetChannelIndexesSnapshot()
     {
         lock (_indexLock)
@@ -87,30 +85,6 @@ public class ChatMessageIndexService
         lock (_indexLock)
         {
             return _channelIndexes.TryGetValue(channelId, out var idx) ? idx.ToList() : [];
-        }
-    }
-
-    public bool HasMessagesBefore(string channelId, DateTime before)
-    {
-        lock (_indexLock)
-        {
-            if (_channelIndexes.TryGetValue(channelId, out var channelIndex))
-            {
-                return channelIndex.Any(e => !e.IsDeleted && e.SentAt < before);
-            }
-            return false;
-        }
-    }
-
-    public int GetTotalChannelMessageCount(string channelId)
-    {
-        lock (_indexLock)
-        {
-            if (_channelIndexes.TryGetValue(channelId, out var channelIndex))
-            {
-                return channelIndex.Count(e => !e.IsDeleted);
-            }
-            return 0;
         }
     }
 
@@ -223,8 +197,6 @@ public class ChatMessageIndexService
     {
         var channelIndex = _channelIndexes.GetOrAdd(item.ChannelId, _ => new List<ChatIndexEntry>());
         var existing = channelIndex.FirstOrDefault(x => x.Id == item.Id);
-        var previewText = item.IsEncrypted ? null : ChatPreviewFormatter.FormatAndTruncatePreview(item.Content, item.Attachments, 30);
-        var albumIds = item.MentionedAlbumIds != null && item.MentionedAlbumIds.Count > 0 ? item.MentionedAlbumIds.ToList() : new List<string>();
         if (existing != null)
         {
             existing.SentAt = item.SentAt;
@@ -232,30 +204,15 @@ public class ChatMessageIndexService
             existing.IsEncrypted = item.IsEncrypted;
             existing.SearchText = item.IsEncrypted ? null : item.Content?.ToLowerInvariant();
             existing.ReplyToId = item.ReplyToId;
-            existing.PreviewText = previewText;
-            existing.MentionedAlbumIds = albumIds;
+            existing.PreviewText = item.IsEncrypted ? null : ChatPreviewFormatter.FormatAndTruncatePreview(item.Content, item.Attachments, 30);
+            existing.MentionedAlbumIds = item.MentionedAlbumIds != null && item.MentionedAlbumIds.Count > 0 ? item.MentionedAlbumIds.ToList() : new List<string>();
             existing.HasImages = HasImageContent(item);
             existing.HasFiles = HasFileContent(item);
             existing.HasLinks = HasLinkContent(item);
         }
         else
         {
-            channelIndex.Add(new ChatIndexEntry
-            {
-                Id = item.Id,
-                ChannelId = item.ChannelId,
-                SenderId = item.SenderId,
-                SentAt = item.SentAt,
-                IsDeleted = item.IsDeleted,
-                IsEncrypted = item.IsEncrypted,
-                SearchText = item.IsEncrypted ? null : item.Content?.ToLowerInvariant(),
-                ReplyToId = item.ReplyToId,
-                PreviewText = previewText,
-                MentionedAlbumIds = albumIds,
-                HasImages = HasImageContent(item),
-                HasFiles = HasFileContent(item),
-                HasLinks = HasLinkContent(item)
-            });
+            channelIndex.Add(CreateChatIndexEntry(item));
         }
         RefreshChannelPreview(item.ChannelId, cachedMsg);
     }
@@ -277,6 +234,25 @@ public class ChatMessageIndexService
             {
                 channelIndex.RemoveAll(x => x.Id == item.Id);
                 RefreshChannelPreview(item.ChannelId);
+                SaveMasterIndex();
+            }
+        }
+    }
+
+    public void RemoveChannelIndex(string channelId)
+    {
+        if (string.IsNullOrEmpty(channelId))
+        {
+            return;
+        }
+
+        lock (_indexLock)
+        {
+            bool changed = _channelIndexes.TryRemove(channelId, out _);
+            _channelPreviews.TryRemove(channelId, out _);
+            _previewCache.TryRemove(channelId, out _);
+            if (changed)
+            {
                 SaveMasterIndex();
             }
         }
@@ -311,7 +287,9 @@ public class ChatMessageIndexService
         }
     }
 
-    private List<ChatIndexEntry> LoadIndexEntriesFromDisk(string channelId)
+    private List<ChatIndexEntry> LoadIndexEntriesFromDisk(
+        string channelId,
+        Dictionary<string, ChatMessage>? deserializedMessages = null)
     {
         var channelDir = Path.Combine(_basePath, channelId);
         var messagesDir = Path.Combine(channelDir, "messages");
@@ -329,27 +307,34 @@ public class ChatMessageIndexService
             if (item != null)
             {
                 channelIndexList.Add(CreateChatIndexEntry(item));
+                if (deserializedMessages != null)
+                {
+                    deserializedMessages[item.Id] = item;
+                }
             }
         }
 
         return channelIndexList;
     }
 
-    private ChatMessage? TryReadMessageFromFile(string file)
+    private ChatMessage? TryReadMessageFromFile(string file) =>
+        TryReadMessageFile(file, _logger, "[ChatMessageIndexService]");
+
+    internal static ChatMessage? TryReadMessageFile(string filePath, ILogger? logger, string logPrefix)
     {
         try
         {
-            var json = File.ReadAllText(file);
+            var json = File.ReadAllText(filePath);
             return JsonSerializer.Deserialize<ChatMessage>(json);
         }
         catch (JsonException ex)
         {
-            _logger?.LogWarning(ex, "[ChatMessageIndexService] Failed to deserialize message {File}", file);
+            logger?.LogWarning(ex, "{LogPrefix} Failed to deserialize message {FilePath}", logPrefix, filePath);
             return null;
         }
         catch (IOException ex)
         {
-            _logger?.LogWarning(ex, "[ChatMessageIndexService] IO error reading message {File}", file);
+            logger?.LogWarning(ex, "{LogPrefix} IO error reading message {FilePath}", logPrefix, filePath);
             return null;
         }
     }
@@ -357,6 +342,19 @@ public class ChatMessageIndexService
     /// <summary>
     /// Ensures indexes for all channel directories on disk (excluding orphaned) are built in memory.
     /// </summary>
+    private static readonly HashSet<string> NonChannelDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "orphaned",
+        "readstates"
+    };
+
+    private static bool IsChannelDirectory(string channelDir)
+    {
+        var channelId = Path.GetFileName(channelDir);
+        return !NonChannelDirectoryNames.Contains(channelId) &&
+               Directory.Exists(Path.Combine(channelDir, "messages"));
+    }
+
     public void EnsureAllChannelIndexesBuilt()
     {
         if (!Directory.Exists(_basePath)) return;
@@ -364,10 +362,9 @@ public class ChatMessageIndexService
         var channelDirs = Directory.GetDirectories(_basePath);
         foreach (var dir in channelDirs)
         {
-            var channelId = Path.GetFileName(dir);
-            if (channelId != "orphaned")
+            if (IsChannelDirectory(dir))
             {
-                EnsureIndexBuilt(channelId);
+                EnsureIndexBuilt(Path.GetFileName(dir));
             }
         }
     }
@@ -387,25 +384,13 @@ public class ChatMessageIndexService
 
         foreach (var channelDir in channelDirs)
         {
+            if (!IsChannelDirectory(channelDir)) continue;
+
             var channelId = Path.GetFileName(channelDir);
-            if (channelId == "orphaned") continue;
-
             var messagesDir = Path.Combine(channelDir, "messages");
-            if (!Directory.Exists(messagesDir)) continue;
 
-            var channelIndexList = new List<ChatIndexEntry>();
             var deserializedMessages = new Dictionary<string, ChatMessage>();
-            var files = Directory.GetFiles(messagesDir, "*.json");
-
-            foreach (var file in files)
-            {
-                var item = TryReadMessageFromFile(file);
-                if (item != null)
-                {
-                    channelIndexList.Add(CreateChatIndexEntry(item));
-                    deserializedMessages[item.Id] = item;
-                }
-            }
+            var channelIndexList = LoadIndexEntriesFromDisk(channelId, deserializedMessages);
 
             // Only return full bodies for the most recent initialLoadCount messages within 7 days
             var cutoff = DateTime.UtcNow.AddDays(-7);
@@ -489,26 +474,6 @@ public class ChatMessageIndexService
         return ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".svg" or ".bmp" or ".avif";
     }
 
-    public void EnsureIndexBuilt(string channelId, Func<string, List<ChatMessage>> channelMessagesLoader)
-    {
-        if (_channelIndexes.ContainsKey(channelId)) return;
-
-        lock (_indexLock)
-        {
-            if (_channelIndexes.ContainsKey(channelId)) return;
-
-            var messages = channelMessagesLoader(channelId);
-            var channelIndexList = new List<ChatIndexEntry>();
-            foreach (var item in messages)
-            {
-                channelIndexList.Add(CreateChatIndexEntry(item));
-            }
-            _channelIndexes[channelId] = channelIndexList;
-            RefreshChannelPreview(channelId);
-            SaveMasterIndex();
-        }
-    }
-
     public bool TryLoadMasterIndex(out Dictionary<string, List<ChatIndexEntry>>? loadedIndex)
     {
         loadedIndex = null;
@@ -521,6 +486,15 @@ public class ChatMessageIndexService
             loadedIndex = JsonSerializer.Deserialize<Dictionary<string, List<ChatIndexEntry>>>(json);
             if (loadedIndex != null)
             {
+                var cleanedKeys = loadedIndex.Keys
+                    .Where(k => NonChannelDirectoryNames.Contains(k))
+                    .ToList();
+
+                foreach (var badKey in cleanedKeys)
+                {
+                    loadedIndex.Remove(badKey);
+                }
+
                 lock (_indexLock)
                 {
                     foreach (var kvp in loadedIndex)
@@ -528,6 +502,12 @@ public class ChatMessageIndexService
                         _channelIndexes[kvp.Key] = kvp.Value.ToList();
                     }
                 }
+
+                if (cleanedKeys.Count > 0)
+                {
+                    SaveMasterIndex();
+                }
+
                 return true;
             }
         }

@@ -1,18 +1,14 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
-using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Spokes_Server.Core.Configuration;
-using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Services.Licensing;
 using Spokes_Server.Core.Services.Security;
@@ -25,7 +21,7 @@ public class GoogleDriveBackupProvider : IBackupDestinationProvider
     private readonly ServerConfigRepository _serverConfigs;
     private readonly LicenseValidationService _licenseValidation;
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly IConfiguration _configuration;
+    private readonly SpokesRelayClient _relayClient;
     private readonly EncryptionService _encryptionService;
     private readonly ILogger<GoogleDriveBackupProvider>? _logger;
 
@@ -36,6 +32,7 @@ public class GoogleDriveBackupProvider : IBackupDestinationProvider
         ServerConfigRepository serverConfigs,
         LicenseValidationService licenseValidation,
         IHttpClientFactory httpClientFactory,
+        SpokesRelayClient relayClient,
         IConfiguration configuration,
         ILogger<GoogleDriveBackupProvider>? logger = null,
         EncryptionService? encryptionService = null)
@@ -44,24 +41,10 @@ public class GoogleDriveBackupProvider : IBackupDestinationProvider
         _serverConfigs = serverConfigs;
         _licenseValidation = licenseValidation;
         _httpClientFactory = httpClientFactory;
-        _configuration = configuration;
-        _encryptionService = encryptionService ?? profiles?.EncryptionService ?? new EncryptionService(configuration);
+        _relayClient = relayClient ?? throw new ArgumentNullException(nameof(relayClient));
+        _encryptionService = BackupDestinationPruneHelper.ResolveEncryptionService(encryptionService, profiles, configuration);
         _logger = logger;
     }
-
-    private string GetRelayUrl()
-    {
-        var baseRelay = _configuration["Spokes:PushRelayUrl"] ?? SpokesConstants.PushRelayUrl;
-        // e.g. "https://push.spokes.sh/api/relay-push" -> "https://push.spokes.sh"
-        if (Uri.TryCreate(baseRelay, UriKind.Absolute, out var uri))
-        {
-            return $"{uri.Scheme}://{uri.Authority}";
-        }
-        return "https://push.spokes.sh";
-    }
-
-    private string GetRelayKey() =>
-        _configuration["SPOKES_RELAY_KEY"] ?? _configuration["Spokes:PushRelayKey"] ?? string.Empty;
 
     public async Task<string?> GetRelayAuthUrlAsync(string callbackUrl, CancellationToken cancellationToken = default)
     {
@@ -75,21 +58,15 @@ public class GoogleDriveBackupProvider : IBackupDestinationProvider
             return null;
         }
 
-        var relayUrl = $"{GetRelayUrl()}/api/relay-backup/google-auth-url?callback={Uri.EscapeDataString(callbackUrl)}";
-        var client = _httpClientFactory.CreateClient();
-        using var res = await client.GetAsync(relayUrl, cancellationToken);
+        var relayUrl = $"{_relayClient.ResolveEndpointUrl("/api/relay-backup/google-auth-url")}?callback={Uri.EscapeDataString(callbackUrl)}";
+        using var res = await _relayClient.GetAsync(relayUrl, cancellationToken);
         if (!res.IsSuccessStatusCode)
         {
             _logger?.LogWarning("[GoogleDriveBackup] Failed to fetch Google auth URL from relay: {Status}", res.StatusCode);
             return null;
         }
 
-        using var doc = await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
-        if (doc.RootElement.TryGetProperty("authUrl", out var prop))
-        {
-            return prop.GetString();
-        }
-        return null;
+        return res.TryGetString("authUrl", out var authUrl) ? authUrl : null;
     }
 
     public async Task<string?> GetFreshAccessTokenAsync(CancellationToken cancellationToken = default)
@@ -104,9 +81,7 @@ public class GoogleDriveBackupProvider : IBackupDestinationProvider
             return null;
         }
 
-        var relayUrl = $"{GetRelayUrl()}/api/relay-backup/google-token";
-        var client = _httpClientFactory.CreateClient();
-
+        var relayUrl = _relayClient.ResolveEndpointUrl("/api/relay-backup/google-token");
         var ticket = RelayTrialTicketService.GetTicketForCurrentKey(serverConfig);
         var fingerprint = RelayTrialTicketService.ComputeFingerprint(serverConfig.ServerMasterRsaPublicKey) ?? string.Empty;
 
@@ -116,40 +91,20 @@ public class GoogleDriveBackupProvider : IBackupDestinationProvider
             ServerFingerprint = fingerprint,
             LicensePayload = profile?.LicensePayload,
             TrialTicket = ticket,
-            RefreshToken = string.IsNullOrEmpty(config.RefreshToken)
-                ? string.Empty
-                : (_encryptionService.TryDecrypt(config.RefreshToken, out var decryptedToken) ? decryptedToken : config.RefreshToken)
+            RefreshToken = BackupDestinationPruneHelper.ResolveCredential(_encryptionService, config.RefreshToken)
         };
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, relayUrl)
-        {
-            Content = JsonContent.Create(requestBody)
-        };
-
-        var relayKey = GetRelayKey();
-        if (!string.IsNullOrEmpty(relayKey))
-        {
-            request.Headers.Add("X-Relay-Key", relayKey);
-        }
-
-        using var response = await client.SendAsync(request, cancellationToken);
+        using var response = await _relayClient.PostJsonAsync(relayUrl, requestBody, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            var err = await response.Content.ReadAsStringAsync(cancellationToken);
-            _logger?.LogError("[GoogleDriveBackup] Relay failed to refresh Google token (HTTP {Status}): {Error}", response.StatusCode, err);
+            _logger?.LogError("[GoogleDriveBackup] Relay failed to refresh Google token (HTTP {Status}): {Error}", response.StatusCode, response.RawBody);
             return null;
         }
 
-        using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
-        if (doc.RootElement.TryGetProperty("accessToken", out var tokenProp))
-        {
-            return tokenProp.GetString();
-        }
-
-        return null;
+        return response.TryGetString("accessToken", out var accessToken) ? accessToken : null;
     }
 
-    private async Task<string> GetOrCreateFolderIdAsync(HttpClient client, string accessToken, string folderName, CancellationToken cancellationToken)
+    private static async Task<string> GetOrCreateFolderIdAsync(HttpClient client, string accessToken, string folderName, CancellationToken cancellationToken)
     {
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
@@ -390,26 +345,8 @@ public class GoogleDriveBackupProvider : IBackupDestinationProvider
         }
     }
 
-    public async Task PruneBackupsAsync(int retentionCount, CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var backups = await ListBackupsAsync(cancellationToken);
-            var scheduled = backups.Where(b => !b.FileName.Contains("_Manual_", StringComparison.OrdinalIgnoreCase)).ToList();
-
-            if (scheduled.Count > retentionCount)
-            {
-                foreach (var old in scheduled.Skip(retentionCount))
-                {
-                    await DeleteBackupAsync(old.Id, cancellationToken);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "[GoogleDriveBackup] Pruning failed");
-        }
-    }
+    public Task PruneBackupsAsync(int retentionCount, CancellationToken cancellationToken = default) =>
+        BackupDestinationPruneHelper.PruneScheduledBackupsAsync(this, retentionCount, _logger, "GoogleDriveBackup", cancellationToken);
 
     public async Task<TestConnectionResult> TestConnectionAsync(CancellationToken cancellationToken = default)
     {

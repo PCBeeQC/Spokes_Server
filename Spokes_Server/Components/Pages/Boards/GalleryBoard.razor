@@ -32,7 +32,7 @@
                             @foreach (var prop in Board.Properties.Where(p => View.VisiblePropertyIds.Contains(p.Id)))
                             {
                                 <div class="d-flex align-center gap-2" style="overflow: hidden;">
-                                    <MudIcon Icon="@GetPropertyIcon(prop.Type)" Size="Size.Small"
+                                    <MudIcon Icon="@BoardUiHelper.GetPropertyIcon(prop.Type)" Size="Size.Small"
                                         Style="font-size: 1rem; opacity: 0.6;" />
                                     <MudText Typo="Typo.body2" Color="Color.Secondary"
                                         Style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
@@ -79,11 +79,6 @@
     [Parameter] public BoardView View { get; set; } = default!;
     [Parameter] public List<BoardCard> Cards { get; set; } = new();
 
-    protected override void OnParametersSet()
-    {
-        // No local data fetch needed
-    }
-
     async Task CreateNewCard()
     {
         var newCard = BoardService.CreateCard(Board.Id, "Untitled");
@@ -127,17 +122,4 @@
         }
         return "-";
     }
-
-    string GetPropertyIcon(BoardPropertyType type) => type switch
-    {
-        BoardPropertyType.Select => Icons.Material.Filled.ArrowDropDownCircle,
-        BoardPropertyType.Person => Icons.Material.Filled.Person,
-        BoardPropertyType.Date => Icons.Material.Filled.CalendarToday,
-        BoardPropertyType.Checkbox => Icons.Material.Filled.CheckBox,
-        BoardPropertyType.URL => Icons.Material.Filled.Link,
-        BoardPropertyType.Email => Icons.Material.Filled.Email,
-        BoardPropertyType.Number => Icons.Material.Filled.Numbers,
-        BoardPropertyType.Phone => Icons.Material.Filled.Phone,
-        _ => Icons.Material.Filled.ShortText
-    };
 }

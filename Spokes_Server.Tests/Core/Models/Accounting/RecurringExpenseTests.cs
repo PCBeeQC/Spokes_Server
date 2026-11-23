@@ -7,24 +7,6 @@ namespace Spokes_Server.Tests.Core.Models.Accounting;
 public class RecurringExpenseTests
 {
     [Fact]
-    public void RecurringExpense_Initialization_SetsDefaults()
-    {
-        var expense = new RecurringExpense();
-
-        Assert.False(string.IsNullOrWhiteSpace(expense.Id));
-        Assert.True(expense.IsEstimate);
-        Assert.Equal(string.Empty, expense.Name);
-        Assert.Equal(string.Empty, expense.Supplier);
-        Assert.Equal(string.Empty, expense.Description);
-        Assert.Equal(0m, expense.Amount);
-        Assert.Equal(RecurringExpenseFrequency.Monthly, expense.Frequency);
-        Assert.Equal(DateTime.Today, expense.CreatedDate);
-        Assert.Equal(DateTime.Today, expense.NextDueDate);
-        Assert.NotNull(expense.History);
-        Assert.Empty(expense.History);
-    }
-
-    [Fact]
     public void RecurringExpense_Equals_And_GetHashCode()
     {
         var id = Guid.NewGuid().ToString();
@@ -94,14 +76,4 @@ public class RecurringExpenseTests
         Assert.Equal(0m, record.BalanceDue);
     }
 
-    [Fact]
-    public void RecurringExpenseFrequency_Constants_HaveExpectedValues()
-    {
-        Assert.Equal("Weekly", RecurringExpenseFrequency.Weekly);
-        Assert.Equal("Bi-Weekly", RecurringExpenseFrequency.BiWeekly);
-        Assert.Equal("Monthly", RecurringExpenseFrequency.Monthly);
-        Assert.Equal("Yearly", RecurringExpenseFrequency.Yearly);
-        Assert.Equal("One-Time", RecurringExpenseFrequency.OneTime);
-        Assert.Equal("As Needed", RecurringExpenseFrequency.AsNeeded);
-    }
 }

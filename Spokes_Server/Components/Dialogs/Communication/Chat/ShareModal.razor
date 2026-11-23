@@ -40,13 +40,6 @@
 
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
-    
-    [Parameter] public string? SharedText { get; set; }
-    [Parameter] public string? SharedUrl { get; set; }
-    [Parameter] public string? SharedTitle { get; set; }
-    [Parameter] public List<SharedFile> SharedFiles { get; set; } = new();
-
-    [Parameter] public string? PreselectedChannelId { get; set; }
 
     [Inject] private Database Db { get; set; } = default!;
     [Inject] private UserService UserService { get; set; } = default!;
@@ -64,27 +57,22 @@
         var employee = await UserService.GetEmployeeAsync();
         _currentUserId = employee?.Id;
         
-        if (!string.IsNullOrEmpty(_currentUserId))
+        if (employee != null &&
+            employee.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Chat.Use) &&
+            !string.IsNullOrEmpty(_currentUserId))
         {
             Channels = ChatAccess.GetChannelsForUser(_currentUserId);
         }
         
-        if (!string.IsNullOrEmpty(PreselectedChannelId))
+        // Auto-select general channel or first channel
+        var general = Channels.FirstOrDefault(c => c.ChannelType == ChatChannelType.General && string.IsNullOrEmpty(c.CategoryId) && !c.AllowedTeamIds.Any() && !c.ParticipantIds.Any());
+        if (general != null)
         {
-            SelectedChannelId = PreselectedChannelId;
+            SelectedChannelId = general.Id;
         }
-        else
+        else if (Channels.Any())
         {
-            // Auto-select general channel or first channel
-            var general = Channels.FirstOrDefault(c => c.ChannelType == ChatChannelType.General && string.IsNullOrEmpty(c.CategoryId) && !c.AllowedTeamIds.Any() && !c.ParticipantIds.Any());
-            if (general != null)
-            {
-                SelectedChannelId = general.Id;
-            }
-            else if (Channels.Any())
-            {
-                SelectedChannelId = Channels.First().Id;
-            }
+            SelectedChannelId = Channels.First().Id;
         }
     }
 

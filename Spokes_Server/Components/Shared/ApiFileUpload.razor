@@ -1,9 +1,12 @@
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @using Microsoft.Extensions.Configuration
+@using Microsoft.Extensions.DependencyInjection
+@using Spokes_Server.Core.Services.Security
 @inject IConfiguration Config
 @inject IDialogService DialogService
 @inject ILogger<ApiFileUpload> Logger
+@inject IServiceProvider ServiceProvider
 @inject Spokes_Server.Core.Data.Repositories.Core.CompanyProfileRepository CompanyProfiles
 @inject StartupTimingService StartupTimings
 @implements IAsyncDisposable
@@ -202,32 +205,32 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        var maxAllowed = EffectiveMaxAllowedSize;
+        var maxDim = EffectiveDesktopMaxDim;
+        var quality = EffectiveDesktopQuality;
+
+        if (!firstRender && _lastMaxAllowedSize == maxAllowed && _lastMaxDim == maxDim && _lastQuality == quality)
+        {
+            return;
+        }
+
+        _lastMaxAllowedSize = maxAllowed;
+        _lastMaxDim = maxDim;
+        _lastQuality = quality;
+
         try
         {
-            var maxAllowed = EffectiveMaxAllowedSize;
-            var maxDim = EffectiveDesktopMaxDim;
-            var quality = EffectiveDesktopQuality;
-
-            if (firstRender || _lastMaxAllowedSize != maxAllowed || _lastMaxDim != maxDim || _lastQuality != quality)
-            {
-                _lastMaxAllowedSize = maxAllowed;
-                _lastMaxDim = maxDim;
-                _lastQuality = quality;
-                StartupTimings.AddChatTransition($"Server: ApiFileUpload.OnAfterRenderAsync ({_inputId}, firstRender={firstRender})");
-                await JS.InvokeVoidAsync("window.ensureUploadScriptsLoaded");
-                // Initialize or re-synchronize dynamic limits with the native JS file input handler
-                await JS.InvokeVoidAsync("spokesUpload.initializeInput", _inputId, _objRef, maxAllowed, maxDim, quality);
-            }
+            StartupTimings.AddChatTransition($"Server: ApiFileUpload.OnAfterRenderAsync ({_inputId}, firstRender={firstRender})");
+            await JS.InvokeVoidAsync("window.spokesInitializeUploadInput", _inputId, _objRef, maxAllowed, maxDim, quality);
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+        {
+            // Circuit disconnected or prerendering
         }
         catch
         {
-            try
-            {
-                // If spokesUpload was not yet defined, await upload script loader and retry initialization
-                await JS.InvokeVoidAsync("window.ensureUploadScriptsLoaded");
-                await JS.InvokeVoidAsync("spokesUpload.initializeInput", _inputId, _objRef, EffectiveMaxAllowedSize, EffectiveDesktopMaxDim, EffectiveDesktopQuality);
-            }
-            catch { /* Ignore prerendering errors */ }
+            // Reset latches so a subsequent render can retry initialization
+            _lastMaxAllowedSize = -1;
         }
     }
 
@@ -271,7 +274,10 @@
         _processingStatusText = null;
         await OnUploadStarted.InvokeAsync();
         await OnUploadStartedWithCount.InvokeAsync(fileCount);
-        StateHasChanged();
+        if (ShowProgress)
+        {
+            StateHasChanged();
+        }
     }
 
     [JSInvokable]
@@ -293,13 +299,18 @@
 
             if (results != null && results.Any())
             {
-                foreach (var r in results)
+                var verifier = ServiceProvider.GetRequiredService<UploadCompletionVerifier>();
+                var verification = await verifier.VerifyAndNormalizeAsync(results, this.Category, this.ContextId, this.UploadUrl);
+                if (!verification.IsSuccess || verification.VerifiedResults.Count == 0)
                 {
-                    r.Category = this.Category;
-                    r.ContextId = this.ContextId;
+                    Logger.LogWarning("Rejected upload completion callback for {InputId}: {Error}", _inputId, verification.ErrorMessage);
+                    await OnUploadError.InvokeAsync(verification.ErrorMessage ?? "Upload verification failed.");
+                    if (ShowProgress) StateHasChanged();
+                    return;
                 }
-                Logger.LogDebug("Upload complete. Processed {Count} result(s).", results.Count);
-                await OnUploadCompleted.InvokeAsync(results);
+
+                Logger.LogDebug("Upload complete. Verified {Count} result(s).", verification.VerifiedResults.Count);
+                await OnUploadCompleted.InvokeAsync(verification.VerifiedResults);
             }
             else 
             {
@@ -316,7 +327,10 @@
                 Snackbar.Add("Failed to process upload results.", Severity.Error);
         }
         
-        StateHasChanged();
+        if (ShowProgress)
+        {
+            StateHasChanged();
+        }
     }
 
     [JSInvokable]
@@ -332,7 +346,10 @@
             await OnUploadError.InvokeAsync(errorMessage);
         else
             Snackbar.Add(errorMessage, Severity.Error);
-        StateHasChanged();
+        if (ShowProgress)
+        {
+            StateHasChanged();
+        }
     }
 
     [JSInvokable]
@@ -352,7 +369,10 @@
         else
             await OnProgressUpdate.InvokeAsync(percentComplete);
 
-        await InvokeAsync(StateHasChanged);
+        if (ShowProgress)
+        {
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     [JSInvokable]
@@ -374,7 +394,10 @@
         else
             await OnProgressUpdate.InvokeAsync(percentComplete);
 
-        await InvokeAsync(StateHasChanged);
+        if (ShowProgress)
+        {
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     [JSInvokable]
@@ -397,7 +420,10 @@
         else
             await OnProgressUpdate.InvokeAsync(percentComplete);
 
-        await InvokeAsync(StateHasChanged);
+        if (ShowProgress)
+        {
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     [JSInvokable]
@@ -414,7 +440,10 @@
         else
             await OnProgressUpdate.InvokeAsync(100);
 
-        await InvokeAsync(StateHasChanged);
+        if (ShowProgress)
+        {
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     public async Task AbortUpload()
@@ -444,5 +473,6 @@
         public double? DurationSeconds { get; set; }
         public string Category { get; set; } = "";
         public string ContextId { get; set; } = "";
+        public string? UploadToken { get; set; }
     }
 }

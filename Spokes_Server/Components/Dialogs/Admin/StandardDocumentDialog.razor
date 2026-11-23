@@ -1,6 +1,7 @@
 @using Spokes_Server.Core.Data.Repositories.Documents
 @inject StandardDocumentRepository StandardDocuments
 @inject ISnackbar Snackbar
+@inject UserService UserService
 
 <MudDialog>
     <TitleContent>
@@ -24,7 +25,8 @@
             <DocumentBlocksEditor Blocks="Document.Blocks"
                 BlocksChanged="@(b => { Document.Blocks = b; RefreshTags(); })"
                 OnBlockAdded="OnBlockAdded"
-                OnBlockRenamed="OnBlockRenamed" />
+                OnBlockRenamed="OnBlockRenamed"
+                CloneCategory="signatures" CloneContextId="business" />
 
             <MudText Typo="Typo.subtitle2" Class="mb-2 mt-6">Document Body (Markdown)</MudText>
             <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
@@ -97,6 +99,12 @@
 
     private async Task Save()
     {
+        if (!await UserService.HasPermissionAsync(Spokes_Server.Core.Constants.AppPermissions.Business.ManageSettings))
+        {
+            Snackbar.Add("Your account is read-only or lacks permission to modify standard documents.", Severity.Error);
+            return;
+        }
+
         await form.ValidateAsync();
         if (form.IsValid)
         {

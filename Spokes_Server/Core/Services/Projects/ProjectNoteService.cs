@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Exceptions;
 using Spokes_Server.Core.Models.Communication;
@@ -19,27 +18,29 @@ public class ProjectNoteService
     private readonly ProjectNoteRepository _projectNotes;
     private readonly ProjectRepository _projects;
     private readonly IFileService _fileService;
-    private readonly ILogger<ProjectNoteService>? _logger;
+    private readonly Spokes_Server.Core.Data.Repositories.HR.TeamRepository? _teams;
 
     public ProjectNoteService(
         ProjectNoteRepository projectNotes,
         ProjectRepository projects,
         IFileService fileService,
-        ILogger<ProjectNoteService>? logger = null)
+        Spokes_Server.Core.Data.Repositories.HR.TeamRepository? teams = null)
     {
         _projectNotes = projectNotes;
         _projects = projects;
         _fileService = fileService;
-        _logger = logger;
+        _teams = teams;
     }
 
-    public virtual List<ProjectNote> GetNotesForProject(string projectId) =>
-        string.IsNullOrEmpty(projectId) ? [] : _projectNotes.GetByProject(projectId);
-
-    public virtual List<Project> SearchActiveProjects(string? query)
+    public virtual List<Project> SearchActiveProjects(string? query, Spokes_Server.Core.Models.HR.Employee? actor = null)
     {
+        if (actor == null)
+        {
+            return [];
+        }
+
         var projects = _projects.GetAll()
-            .Where(p => p.IsActive)
+            .Where(p => p.IsActive && ProjectAccessHelper.CanEditProject(actor, p, _teams))
             .OrderByDescending(p => p.CreatedAt);
 
         if (string.IsNullOrWhiteSpace(query))
@@ -52,29 +53,22 @@ public class ProjectNoteService
             .ToList();
     }
 
-    public virtual void SaveNote(ProjectNote note)
-    {
-        ArgumentNullException.ThrowIfNull(note);
-        _projectNotes.Save(note);
-    }
-
-    public virtual void DeleteNote(string noteId)
-    {
-        if (!string.IsNullOrEmpty(noteId))
-        {
-            _projectNotes.Delete(noteId);
-        }
-    }
-
     /// <summary>
     /// Attaches an email to a project timeline note using an encapsulated <see cref="AddEmailTimelineEntryRequest"/>.
     /// </summary>
-    public virtual async Task<ProjectNote> AddEmailToTimelineAsync(AddEmailTimelineEntryRequest request)
+    public virtual async Task<ProjectNote> AddEmailToTimelineAsync(
+        AddEmailTimelineEntryRequest request,
+        Spokes_Server.Core.Models.HR.Employee? actor = null)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         var project = _projects.GetById(request.ProjectId)
             ?? throw new DomainException($"Project {request.ProjectId} not found.", "PROJECT_NOT_FOUND");
+
+        if (!ProjectAccessHelper.CanEditProject(actor, project, _teams))
+        {
+            throw new DomainException("You do not have permission to modify this project.", "ACCESS_DENIED");
+        }
 
         if (!File.Exists(request.MimeFilePath))
             throw new FileNotFoundException("Email MIME file not found on disk.", request.MimeFilePath);
@@ -106,7 +100,7 @@ public class ProjectNoteService
             Content = fullContent,
             IsEmail = true,
             EmailHtmlPath = emlUrl,
-            CreatedBy = request.CreatedBy
+            CreatedBy = !string.IsNullOrWhiteSpace(actor?.FullName) ? actor.FullName : request.CreatedBy
         };
 
         _projectNotes.Save(note);

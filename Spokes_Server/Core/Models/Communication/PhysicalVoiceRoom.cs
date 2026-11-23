@@ -5,6 +5,25 @@ using System.Collections.Generic;
 using Spokes_Server.Core.Data;
 
 /// <summary>
+/// Controls how co-located roommates in a <see cref="PhysicalVoiceRoom"/> hear each other's audio.
+/// Remote callers outside the physical room always continue receiving server-cleaned audio via <c>processed-mic:*</c>.
+/// </summary>
+public enum PhysicalRoomAudioMode
+{
+    /// <summary>
+    /// Standard server-side cross-talk and echo isolation via LiveKit (<c>processed-mic:{userId}</c>).
+    /// </summary>
+    ServerCleanup = 0,
+
+    /// <summary>
+    /// Co-located Spokes Desktop clients stream encrypted 48 kHz 128-sample LAN UDP audio (&lt;20 ms)
+    /// and apply zero-lookahead causal local bleed gating, Power Wiener cancellation, and speech leveling.
+    /// Web and Mobile clients fall back to <see cref="ServerCleanup"/>.
+    /// </summary>
+    LowLatencyCleaned = 1
+}
+
+/// <summary>
 /// Represents a global physical room on the server (e.g., "Family Computer Room") where multiple
 /// co-located user devices share the same acoustic space and require server-side cross-talk and echo isolation.
 /// </summary>
@@ -17,6 +36,23 @@ public class PhysicalVoiceRoom : IDataEntity
     public string CreatedByUserId { get; set; } = string.Empty;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    private PhysicalRoomAudioMode _audioMode = PhysicalRoomAudioMode.LowLatencyCleaned;
+
+    /// <summary>
+    /// Configures whether co-located Spokes Desktop roommates on the same LAN use low-latency direct LAN audio
+    /// (&lt;20 ms cleaned by default) with automatic fallback to <see cref="PhysicalRoomAudioMode.ServerCleanup"/>
+    /// whenever non-Desktop or non-LAN roommates are connected in the room, or always use server-side cleanup.
+    /// Any legacy/unknown numeric value (such as historical mode <c>2</c>) deserialized from disk safely normalizes
+    /// to <see cref="PhysicalRoomAudioMode.LowLatencyCleaned"/>.
+    /// </summary>
+    public PhysicalRoomAudioMode AudioMode
+    {
+        get => _audioMode;
+        set => _audioMode = value == PhysicalRoomAudioMode.ServerCleanup
+            ? PhysicalRoomAudioMode.ServerCleanup
+            : PhysicalRoomAudioMode.LowLatencyCleaned;
+    }
 
     /// <summary>
     /// Enrolled (EmployeeId + DeviceId) pairs belonging to this physical room.

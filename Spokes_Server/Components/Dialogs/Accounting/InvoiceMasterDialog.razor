@@ -1,10 +1,40 @@
+@using Spokes_Server.Core.Models.Common
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Components.Dialogs.Common
 @inject Database Db
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @inject BillingOrchestrationService BillingOrchestrator
+@inject UserService UserService
 
 <MudDialog>
     <DialogContent>
         <MudForm>
+            @if (InvoiceStatus.CanUnlockEdit(Invoice.Status) && !Invoice.Payments.Any() && !Invoice.WriteOffs.Any() && CanApproveInvoice && _canApproveAuthorized)
+            {
+                <MudAlert Severity="@(_isReadOnly ? Severity.Info : Severity.Warning)" Dense="true" Class="mb-3">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-2" style="width: 100%;">
+                        <span>
+                            @(_isReadOnly
+                                ? BizLoc["This invoice is in Final status and is currently in Read-Only mode. Toggle Edit Mode to make changes."]
+                                : BizLoc["Edit Mode is unlocked for this Final invoice. Saving will require confirmation and regenerate the PDF."])
+                        </span>
+                        <MudSwitch T="bool"
+                                   Value="@(!_isReadOnly)"
+                                   ValueChanged="@(v => _isReadOnly = !v)"
+                                   Color="Color.Warning"
+                                   Label="@BizLoc["Edit Mode"]"
+                                   Size="Size.Small" />
+                    </div>
+                </MudAlert>
+            }
+            else if (_isReadOnly)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                    @string.Format(BizLoc["This invoice is in Read-Only mode ({0}). You can inspect how it was built and copy Markdown text."].Value, Invoice.Status)
+                </MudAlert>
+            }
+
             <MudGrid Class="mb-4">
                 <MudItem xs="3">
                     <MudTextField @bind-Value="Invoice.InvoiceNumber" Label="Invoice #" Required="true" ReadOnly="true"
@@ -12,15 +42,15 @@
                 </MudItem>
                 <MudItem xs="3">
                     <MudDatePicker @bind-Date="Date" Label="Issue Date" Variant="Variant.Outlined"
-                        Margin="Margin.Dense" />
+                        Margin="Margin.Dense" ReadOnly="@_isReadOnly" Disabled="@_isReadOnly" />
                 </MudItem>
                 <MudItem xs="3">
                     <MudDatePicker @bind-Date="DueDate" Label="Due Date" Variant="Variant.Outlined"
-                        Margin="Margin.Dense" />
+                        Margin="Margin.Dense" ReadOnly="@_isReadOnly" Disabled="@_isReadOnly" />
                 </MudItem>
                 <MudItem xs="3">
                     <MudSelect @bind-Value="Invoice.TemplateId" Label="Document Template" Variant="Variant.Outlined" Margin="Margin.Dense"
-                        HelperText="Leave empty to use default">
+                        HelperText="Leave empty to use default" Disabled="@_isReadOnly">
                         <MudSelectItem Value="@((string?)null)">Default</MudSelectItem>
                         @foreach (var t in Templates)
                         {
@@ -28,13 +58,19 @@
                         }
                     </MudSelect>
                 </MudItem>
-                <MudItem xs="12">
+                <MudItem xs="9">
                     <MudTextField @bind-Value="Invoice.Note" Label="Description / Memo" Variant="Variant.Outlined"
-                        Margin="Margin.Dense" Lines="1" />
+                        Margin="Margin.Dense" Lines="1" ReadOnly="@_isReadOnly" />
+                </MudItem>
+                <MudItem xs="3" Class="d-flex align-center">
+                    <div class="d-flex align-center gap-2">
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@BizLoc["Status:"]</MudText>
+                        <StatusChip Status="@Invoice.Status" />
+                    </div>
                 </MudItem>
             </MudGrid>
 
-            <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
+            <MudTabs Elevation="0" Outlined="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
 
                 <!-- TIME / LABOR -->
                 <MudTabPanel Text="Time / Labor" Icon="@Icons.Material.Filled.AccessTime">
@@ -57,11 +93,14 @@
                                 <MudTd>@context.AvailableHours.ToString("N1")</MudTd>
                                 <MudTd>@context.Rate.ToString("C")</MudTd>
                                 <MudTd>
-                                    <MudNumericField @bind-Value="context.HoursToBill" Min="0" Max="@context.AvailableHours" Margin="Margin.Dense" Variant="Variant.Outlined" Step="0.5M" />
+                                    <MudNumericField @bind-Value="context.HoursToBill" Min="0" Max="@context.AvailableHours" Margin="Margin.Dense" Variant="Variant.Outlined" Step="0.5M" ReadOnly="@_isReadOnly" />
                                 </MudTd>
                                 <MudTd><b>@((context.HoursToBill * context.Rate).ToString("C"))</b></MudTd>
                                 <MudTd>
-                                    <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary" Size="Size.Small" OnClick="@(() => context.HoursToBill = context.AvailableHours)" title="Add all available hours" />
+                                    @if (!_isReadOnly)
+                                    {
+                                        <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary" Size="Size.Small" OnClick="@(() => context.HoursToBill = context.AvailableHours)" title="Add all available hours" />
+                                    }
                                 </MudTd>
                             </RowTemplate>
                         </MudTable>
@@ -79,26 +118,32 @@
                         </HeaderContent>
                         <RowTemplate>
                             <MudTd>
-                                <MudTextField @bind-Value="context.Description" Margin="Margin.Dense" Underline="false" Placeholder="Role/Task detail..." />
+                                <MudTextField @bind-Value="context.Description" Margin="Margin.Dense" Underline="false" Placeholder="Role/Task detail..." ReadOnly="@_isReadOnly" />
                             </MudTd>
                             <MudTd>
-                                <MudTextField @bind-Value="context.Note" Margin="Margin.Dense" Underline="false" Placeholder="Note..." />
+                                <MudTextField @bind-Value="context.Note" Margin="Margin.Dense" Underline="false" Placeholder="Note..." ReadOnly="@_isReadOnly" />
                             </MudTd>
                             <MudTd>
-                                <MudNumericField @bind-Value="context.Quantity" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" />
+                                <MudNumericField @bind-Value="context.Quantity" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" />
                             </MudTd>
                             <MudTd>
-                                <MudNumericField @bind-Value="context.UnitPrice" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" />
+                                <MudNumericField @bind-Value="context.UnitPrice" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" />
                             </MudTd>
                             <MudTd>@context.Total.ToString("C")</MudTd>
                             <MudTd>
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => CustomLaborLines.Remove(context))" />
+                                @if (!_isReadOnly)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => CustomLaborLines.Remove(context))" />
+                                }
                             </MudTd>
                         </RowTemplate>
                         <FooterContent>
-                            <MudTd colspan="6">
-                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => CustomLaborLines.Add(new InvoiceLine { Type = "Labor", Description = "Custom Labor" }))" Size="Size.Small" Color="Color.Primary">Add Custom Labor</MudButton>
-                            </MudTd>
+                            @if (!_isReadOnly)
+                            {
+                                <MudTd colspan="6">
+                                    <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => CustomLaborLines.Add(new InvoiceLine { Type = "Labor", Description = "Custom Labor" }))" Size="Size.Small" Color="Color.Primary">Add Custom Labor</MudButton>
+                                </MudTd>
+                            }
                         </FooterContent>
                     </MudTable>
                 </MudTabPanel>
@@ -108,7 +153,7 @@
                     @if (UnbilledItems.Any())
                     {
                         <MudText Typo="Typo.subtitle2" Class="mb-2">Unbilled Project Expenses & POs</MudText>
-                        <MudTable Items="@UnbilledItems" MultiSelection="true" @bind-SelectedItems="SelectedItems" Dense="true" Hover="true" Elevation="0" Outlined="true" Class="mb-4">
+                        <MudTable Items="@UnbilledItems" MultiSelection="true" SelectedItems="@SelectedItems" SelectedItemsChanged="@((HashSet<BillingExpenseItem> items) => UpdateSelectedExpenses(items))" Dense="true" Hover="true" Elevation="0" Outlined="true" Class="mb-4">
                             <HeaderContent>
                                 <MudTh>Project</MudTh>
                                 <MudTh>Date</MudTh>
@@ -139,29 +184,35 @@
                         </HeaderContent>
                         <RowTemplate>
                             <MudTd>
-                                <MudTextField @bind-Value="context.Description" Margin="Margin.Dense" Underline="false" Placeholder="Item Name" />
+                                <MudTextField @bind-Value="context.Description" Margin="Margin.Dense" Underline="false" Placeholder="Item Name" ReadOnly="@_isReadOnly" />
                             </MudTd>
                             <MudTd>
-                                <MudNumericField Value="@context.OriginalUnitCost" ValueChanged="@((decimal v) => UpdateMaterialCost(context, v))" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" />
+                                <MudNumericField Value="@context.OriginalUnitCost" ValueChanged="@((decimal v) => UpdateMaterialCost(context, v))" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" />
                             </MudTd>
                             <MudTd>
-                                <MudNumericField Value="@(context.MarkupPercentage * 100)" ValueChanged="@((decimal v) => UpdateMaterialMarkup(context, v))" Format="N1" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" />
+                                <MudNumericField Value="@(context.MarkupPercentage * 100)" ValueChanged="@((decimal v) => UpdateMaterialMarkup(context, v))" Format="N1" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" />
                             </MudTd>
                             <MudTd>
-                                <MudNumericField Value="@context.UnitPrice" ValueChanged="@((decimal v) => UpdateMaterialPrice(context, v))" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" />
+                                <MudNumericField Value="@context.UnitPrice" ValueChanged="@((decimal v) => UpdateMaterialPrice(context, v))" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" />
                             </MudTd>
                             <MudTd>
-                                <MudNumericField @bind-Value="context.Quantity" Format="N0" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" />
+                                <MudNumericField @bind-Value="context.Quantity" Format="N0" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" />
                             </MudTd>
                             <MudTd>@context.Total.ToString("C")</MudTd>
                             <MudTd>
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => CustomMaterialLines.Remove(context))" />
+                                @if (!_isReadOnly)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => CustomMaterialLines.Remove(context))" />
+                                }
                             </MudTd>
                         </RowTemplate>
                         <FooterContent>
-                            <MudTd colspan="7">
-                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => CustomMaterialLines.Add(new InvoiceLine { Type = "Material", Quantity = 1, MarkupPercentage = 0.15m }))" Size="Size.Small" Color="Color.Primary">Add Custom Item</MudButton>
-                            </MudTd>
+                            @if (!_isReadOnly)
+                            {
+                                <MudTd colspan="7">
+                                    <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => CustomMaterialLines.Add(new InvoiceLine { Type = "Material", Quantity = 1, MarkupPercentage = 0.15m }))" Size="Size.Small" Color="Color.Primary">Add Custom Item</MudButton>
+                                </MudTd>
+                            }
                         </FooterContent>
                     </MudTable>
                 </MudTabPanel>
@@ -177,7 +228,7 @@
                         @if (AvailableTerms.Any())
                         {
                             <MudText Typo="Typo.subtitle2" Class="mb-2 mt-2">Unbilled Milestones</MudText>
-                            <MudTable Items="@AvailableTerms" MultiSelection="true" @bind-SelectedItems="SelectedTerms" Hover="true" Dense="true" Elevation="0" Outlined="true" Class="mb-4">
+                            <MudTable Items="@AvailableTerms" MultiSelection="true" SelectedItems="@SelectedTerms" SelectedItemsChanged="@((HashSet<BillingMilestoneSelection> terms) => UpdateSelectedTerms(terms))" Hover="true" Dense="true" Elevation="0" Outlined="true" Class="mb-4">
                                 <HeaderContent>
                                     <MudTh>Description</MudTh>
                                     <MudTh>%</MudTh>
@@ -186,7 +237,7 @@
                                 </HeaderContent>
                                 <RowTemplate>
                                     <MudTd>
-                                        <MudTextField @bind-Value="context.InvoiceDescription" Margin="Margin.Dense" Underline="false" />
+                                        <MudTextField @bind-Value="context.InvoiceDescription" Margin="Margin.Dense" Underline="false" ReadOnly="@_isReadOnly" />
                                     </MudTd>
                                     <MudTd>@context.Term.Percentage%</MudTd>
                                     <MudTd>@context.Term.Amount.ToString("C")</MudTd>
@@ -260,9 +311,9 @@
                                 @if (context.IsTaskBased) { <MudChip T="string" Size="Size.Small" Color="Color.Info">Task Block</MudChip> }
                                 else { <MudChip T="string" Size="Size.Small" Color="Color.Default">Custom</MudChip> }
                             </MudTd>
-                            <MudTd><MudTextField @bind-Value="context.Description" Margin="Margin.Dense" Underline="false" /></MudTd>
+                            <MudTd><MudTextField @bind-Value="context.Description" Margin="Margin.Dense" Underline="false" ReadOnly="@_isReadOnly" /></MudTd>
                             <MudTd>
-                                @if (context.IsTaskBased) { <MudNumericField @bind-Value="context.Hours" Min="0" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" /> }
+                                @if (context.IsTaskBased) { <MudNumericField @bind-Value="context.Hours" Min="0" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" /> }
                                 else { <MudText>-</MudText> }
                             </MudTd>
                             <MudTd>
@@ -271,24 +322,30 @@
                             </MudTd>
                             <MudTd>
                                 @if (context.IsTaskBased) { <b>@context.Total.ToString("C")</b> }
-                                else { <MudNumericField @bind-Value="context.ManualAmount" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" /> }
+                                else { <MudNumericField @bind-Value="context.ManualAmount" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" /> }
                             </MudTd>
                             <MudTd>
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => PrePayItems.Remove(context))" />
+                                @if (!_isReadOnly)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => PrePayItems.Remove(context))" />
+                                }
                             </MudTd>
                         </RowTemplate>
                         <FooterContent>
-                            <MudTd colspan="6">
-                                <div class="d-flex gap-2">
-                                    <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => PrePayItems.Add(new BillingPrePayItem { Description = "Pre-payment", IsTaskBased = false }))" Size="Size.Small" Variant="Variant.Outlined">Add Custom Amount</MudButton>
-                                    <MudMenu Label="Add Task Block" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" Size="Size.Small">
-                                        @foreach (var t in WorkTypes.Values)
-                                        {
-                                            <MudMenuItem OnClick="@(() => AddTaskPrePay(t))">@t.Name</MudMenuItem>
-                                        }
-                                    </MudMenu>
-                                </div>
-                            </MudTd>
+                            @if (!_isReadOnly)
+                            {
+                                <MudTd colspan="6">
+                                    <div class="d-flex gap-2">
+                                        <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => PrePayItems.Add(new BillingPrePayItem { Description = "Pre-payment", IsTaskBased = false }))" Size="Size.Small" Variant="Variant.Outlined">Add Custom Amount</MudButton>
+                                        <MudMenu Label="Add Task Block" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" Size="Size.Small">
+                                            @foreach (var t in WorkTypes.Values)
+                                            {
+                                                <MudMenuItem OnClick="@(() => AddTaskPrePay(t))">@t.Name</MudMenuItem>
+                                            }
+                                        </MudMenu>
+                                    </div>
+                                </MudTd>
+                            }
                         </FooterContent>
                     </MudTable>
                 </MudTabPanel>
@@ -304,23 +361,31 @@
                             <MudTh Style="width: 60px;"></MudTh>
                         </HeaderContent>
                         <RowTemplate>
-                            <MudTd><MudTextField @bind-Value="context.Description" Margin="Margin.Dense" Underline="false" /></MudTd>
-                            <MudTd><MudNumericField @bind-Value="context.Quantity" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" /></MudTd>
-                            <MudTd><MudNumericField @bind-Value="context.UnitPrice" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" /></MudTd>
+                            <MudTd><MudTextField @bind-Value="context.Description" Margin="Margin.Dense" Underline="false" ReadOnly="@_isReadOnly" /></MudTd>
+                            <MudTd><MudNumericField @bind-Value="context.Quantity" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" /></MudTd>
+                            <MudTd><MudNumericField @bind-Value="context.UnitPrice" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" /></MudTd>
                             <MudTd><MudText>@context.Total.ToString("C")</MudText></MudTd>
-                            <MudTd><MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => GeneralLines.Remove(context))" /></MudTd>
+                            <MudTd>
+                                @if (!_isReadOnly)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => GeneralLines.Remove(context))" />
+                                }
+                            </MudTd>
                         </RowTemplate>
                         <FooterContent>
-                            <MudTd colspan="5">
-                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => GeneralLines.Add(new InvoiceLine { Type = "General", Quantity = 1 }))" Size="Size.Small" Color="Color.Primary">Add Line</MudButton>
-                            </MudTd>
+                            @if (!_isReadOnly)
+                            {
+                                <MudTd colspan="5">
+                                    <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => GeneralLines.Add(new InvoiceLine { Type = "General", Quantity = 1 }))" Size="Size.Small" Color="Color.Primary">Add Line</MudButton>
+                                </MudTd>
+                            }
                         </FooterContent>
                     </MudTable>
                 </MudTabPanel>
 
                 <!-- PAYMENT TERMS -->
                 <MudTabPanel Text="Payment Terms" Icon="@Icons.Material.Filled.Assignment">
-                    <Spokes_Server.Components.Shared.MarkdownEditor @bind-Value="Invoice.PaymentTerms" />
+                    <Spokes_Server.Components.Shared.MarkdownEditor @bind-Value="Invoice.PaymentTerms" ReadOnly="@_isReadOnly" />
                 </MudTabPanel>
 
                 <!-- CREDITS -->
@@ -346,11 +411,16 @@
                                 <MudTd>@context.OriginalAmount.ToString("C")</MudTd>
                                 <MudTd>@context.RemainingBalance.ToString("C")</MudTd>
                                 <MudTd>
-                                    <MudNumericField @bind-Value="context.AmountToApply" Min="0" Max="@context.RemainingBalance" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" />
+                                    <MudNumericField @bind-Value="context.AmountToApply" Min="0" Max="@context.RemainingBalance" Format="N2" Margin="Margin.Dense" HideSpinButtons="true" Underline="false" ReadOnly="@_isReadOnly" />
                                 </MudTd>
                             </RowTemplate>
                         </MudTable>
                     }
+                </MudTabPanel>
+
+                <!-- HISTORY -->
+                <MudTabPanel Text="@BizLoc["History"]" Icon="@Icons.Material.Filled.History">
+                    <DocumentHistoryTab Entries="@Invoice.History" />
                 </MudTabPanel>
 
             </MudTabs>
@@ -370,16 +440,12 @@
                                 <MudTh>Amount</MudTh>
                                 <MudTh>Method</MudTh>
                                 <MudTh>Reference</MudTh>
-                                <MudTh></MudTh>
                             </HeaderContent>
                             <RowTemplate Context="payment">
                                 <MudTd>@payment.Date.ToShortDateString()</MudTd>
                                 <MudTd>@payment.Amount.ToString("C2")</MudTd>
                                 <MudTd>@payment.Method</MudTd>
                                 <MudTd>@payment.Reference</MudTd>
-                                <MudTd>
-                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => Invoice.Payments.Remove(payment))" />
-                                </MudTd>
                             </RowTemplate>
                         </MudTable>
                     }
@@ -411,7 +477,7 @@
                 <div class="d-flex gap-4" style="min-width: 250px; justify-content: space-between;">
                     <MudText>Tax Rate:</MudText>
                     <div style="width: 100px;">
-                        <MudNumericField Value="@(Invoice.TaxRate * 100)" ValueChanged="@((decimal v) => Invoice.TaxRate = v / 100)" Format="N3" Margin="Margin.Dense" HideSpinButtons="true" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" />
+                        <MudNumericField Value="@(Invoice.TaxRate * 100)" ValueChanged="@((decimal v) => { if (!_isReadOnly) Invoice.TaxRate = v / 100; })" Format="@FinancialCalculationEngine.TaxRatePercentFormat" Margin="Margin.Dense" HideSpinButtons="true" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" ReadOnly="@_isReadOnly" />
                     </div>
                 </div>
                 <div class="d-flex gap-4" style="min-width: 250px; justify-content: space-between;">
@@ -426,18 +492,32 @@
         </MudForm>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Close">Close</MudButton>
-        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Save Invoice</MudButton>
+        @if (_isReadOnly)
+        {
+            <MudButton OnClick="Close">@Loc["Close"]</MudButton>
+        }
+        else
+        {
+            <MudButton OnClick="Close">@Loc["Cancel"]</MudButton>
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">@BizLoc["Save Invoice"]</MudButton>
+        }
     </DialogActions>
 </MudDialog>
 
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public Invoice Invoice { get; set; } = default!;
+    [Parameter] public bool CanEditDraft { get; set; } = false;
+    [Parameter] public bool CanApproveInvoice { get; set; } = false;
+
+    private bool _isReadOnly = true;
+    private bool _canEditDraftAuthorized;
+    private bool _canApproveAuthorized;
+    private Spokes_Server.Core.Models.HR.Employee? _currentActor;
 
     // Wrappers
-    private DateTime? Date { get => Invoice.Date; set { if (value.HasValue) Invoice.Date = value.Value; } }
-    private DateTime? DueDate { get => Invoice.DueDate; set { if (value.HasValue) Invoice.DueDate = value.Value; } }
+    private DateTime? Date { get => Invoice.Date; set { if (!_isReadOnly && value.HasValue) Invoice.Date = value.Value; } }
+    private DateTime? DueDate { get => Invoice.DueDate; set { if (!_isReadOnly && value.HasValue) Invoice.DueDate = value.Value; } }
 
     private List<DocumentTemplate> Templates = new();
     private Dictionary<string, WorkType> WorkTypes = new();
@@ -469,7 +549,7 @@
     // --- Calculations ---
     private decimal CalculatedLaborTotal => LaborGroups.Sum(x => x.HoursToBill * x.Rate) + CustomLaborLines.Sum(x => x.Total) + _laborSelections.Values.SelectMany(x => x).Sum(x => x.Total);
     private decimal CalculatedExpenseTotal => SelectedItems.Sum(x => x.Total) + CustomMaterialLines.Sum(x => x.Total) + _itemSelections.Values.SelectMany(x => x).Sum(x => x.Total);
-    private decimal CalculatedQuotesTotal => SelectedTerms.Sum(x => x.PreTaxAmount) + _laborSelections.Values.SelectMany(x => x).Sum(x => x.Total) + _itemSelections.Values.SelectMany(x => x).Sum(x => x.Total); // Wait, quote total should not double count. I should remove quotes labor and items from CalculatedLaborTotal and CalculatedExpenseTotal!
+    private decimal CalculatedQuotesTotal => SelectedTerms.Sum(x => x.PreTaxAmount) + _laborSelections.Values.SelectMany(x => x).Sum(x => x.Total) + _itemSelections.Values.SelectMany(x => x).Sum(x => x.Total);
     private decimal CalculatedOtherTotal => PrePayItems.Sum(x => x.Total) + GeneralLines.Sum(x => x.Total);
     
     private decimal CalculatedSubTotal => CalculatedLaborTotal + CalculatedExpenseTotal + SelectedTerms.Sum(x => x.PreTaxAmount) + CalculatedOtherTotal;
@@ -477,8 +557,9 @@
     private decimal TaxableAmount => Math.Max(0, CalculatedSubTotal - CreditToApply);
     private decimal FinalTotal => TaxableAmount * (1 + Invoice.TaxRate);
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        _currentActor = await UserService.GetEmployeeAsync();
         Templates = Db.DocumentTemplates.GetAll();
         WorkTypes = Db.WorkTypes.GetAll().ToDictionary(w => w.Id, w => w);
 
@@ -497,6 +578,21 @@
 
         PrimaryProject ??= Projects.FirstOrDefault();
 
+        var canViewProjects = _currentActor != null &&
+                              Projects.Any() &&
+                              Projects.All(p => UserService.CanViewProject(_currentActor, p, allowAccountingFinancialRead: true));
+
+        _canApproveAuthorized = canViewProjects && CanApproveInvoice && _currentActor!.HasPermission(AppPermissions.Finance.ApproveInvoices);
+        _canEditDraftAuthorized = canViewProjects && CanEditDraft &&
+                                  (_currentActor!.HasPermission(AppPermissions.Finance.AccessAccounting) ||
+                                   _currentActor.HasPermission(AppPermissions.Finance.ApproveInvoices));
+        _isReadOnly = Invoice.Status == InvoiceStatus.Draft ? !_canEditDraftAuthorized : true;
+
+        if (!canViewProjects)
+        {
+            return;
+        }
+
         LoadAvailableCredits();
         LoadExistingInvoiceLines();
         LoadUnbilledData();
@@ -505,7 +601,7 @@
 
     private void LoadAvailableCredits()
     {
-        AvailableCredits = BillingOrchestrator.CalculateAvailablePrepaymentCredits(Projects, Invoice);
+        AvailableCredits = BillingOrchestrator.CalculateAvailablePrepaymentCredits(Projects, Invoice, _currentActor);
     }
 
     private void LoadExistingInvoiceLines()
@@ -545,8 +641,8 @@
 
     private void LoadUnbilledData()
     {
-        LaborGroups = BillingOrchestrator.LoadUnbilledLabor(Projects, Invoice, WorkTypes);
-        UnbilledItems = BillingOrchestrator.LoadUnbilledExpenses(Projects, Invoice, DefaultMarkupRate);
+        LaborGroups = BillingOrchestrator.LoadUnbilledLabor(Projects, Invoice, WorkTypes, _currentActor);
+        UnbilledItems = BillingOrchestrator.LoadUnbilledExpenses(Projects, Invoice, DefaultMarkupRate, _currentActor);
 
         var currentInvoicePoIds = Invoice.BilledPoItemIds.ToHashSet();
         var currentInvoiceExpenseIds = Invoice.BilledExpenseItemIds.ToHashSet();
@@ -558,7 +654,7 @@
 
     private void LoadMilestonesAndQuotes()
     {
-        var result = BillingOrchestrator.LoadMilestonesAndQuotes(Projects, Invoice);
+        var result = BillingOrchestrator.LoadMilestonesAndQuotes(Projects, Invoice, _currentActor);
         AcceptedQuotes = result.AcceptedQuotes;
         AvailableTerms = result.AvailableTerms;
         _laborSelections = result.LaborSelections;
@@ -566,41 +662,155 @@
         SelectedTerms = AvailableTerms.Where(v => v.Term.InvoiceId == Invoice.Id).ToHashSet();
     }
 
+    private void UpdateSelectedExpenses(HashSet<BillingExpenseItem> items)
+    {
+        if (_isReadOnly) return;
+        SelectedItems = items;
+    }
+
+    private void UpdateSelectedTerms(HashSet<BillingMilestoneSelection> terms)
+    {
+        if (_isReadOnly) return;
+        SelectedTerms = terms;
+    }
+
     private HashSet<QuoteLaborItem> GetSelectedLaborForQuote(string quoteId) => _laborSelections.TryGetValue(quoteId, out var set) ? set : new HashSet<QuoteLaborItem>();
-    private void UpdateSelectedLabor(string quoteId, HashSet<QuoteLaborItem> newSelection) => _laborSelections[quoteId] = newSelection;
+    private void UpdateSelectedLabor(string quoteId, HashSet<QuoteLaborItem> newSelection)
+    {
+        if (_isReadOnly) return;
+        _laborSelections[quoteId] = newSelection;
+    }
     private HashSet<QuoteItemRow> GetSelectedItemsForQuote(string quoteId) => _itemSelections.TryGetValue(quoteId, out var set) ? set : new HashSet<QuoteItemRow>();
-    private void UpdateSelectedItems(string quoteId, HashSet<QuoteItemRow> newSelection) => _itemSelections[quoteId] = newSelection;
+    private void UpdateSelectedItems(string quoteId, HashSet<QuoteItemRow> newSelection)
+    {
+        if (_isReadOnly) return;
+        _itemSelections[quoteId] = newSelection;
+    }
 
     private void UpdateMaterialCost(InvoiceLine line, decimal cost)
     {
+        if (_isReadOnly) return;
         line.OriginalUnitCost = cost;
         line.UnitPrice = cost * (1 + line.MarkupPercentage);
     }
     private void UpdateMaterialMarkup(InvoiceLine line, decimal markupPercent)
     {
+        if (_isReadOnly) return;
         line.MarkupPercentage = markupPercent / 100m;
         line.UnitPrice = line.OriginalUnitCost * (1 + line.MarkupPercentage);
     }
     private void UpdateMaterialPrice(InvoiceLine line, decimal price)
     {
+        if (_isReadOnly) return;
         line.UnitPrice = price;
         if (line.OriginalUnitCost != 0) line.MarkupPercentage = (line.UnitPrice / line.OriginalUnitCost) - 1;
     }
 
     private void AddTaskPrePay(WorkType t)
     {
+        if (_isReadOnly) return;
         var rate = PrimaryProject?.GetEffectiveRate(t.Id, t.DefaultRate, null) ?? t.DefaultRate;
         PrePayItems.Add(new BillingPrePayItem { Description = $"Block of Hours: {t.Name}", IsTaskBased = true, WorkTypeId = t.Id, Rate = rate, Hours = 0 });
     }
 
     private void Close() => MudDialog.Cancel();
 
-    private void Submit()
+    private async Task<Spokes_Server.Core.Models.HR.Employee?> AuthorizeInvoiceSubmitAsync()
     {
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProjects = ResolveAuthorizedProjects();
+        if (emp == null || Invoice == null || !liveProjects.Any() || liveProjects.Any(p => !UserService.CanViewProject(emp, p, allowAccountingFinancialRead: true)))
+        {
+            _isReadOnly = true;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+
+        var liveExisting = string.IsNullOrEmpty(Invoice.Id) ? null : Db.Invoices.GetById(Invoice.Id);
+        var currentStatus = liveExisting?.Status ?? Invoice.Status;
+        if (liveExisting != null && liveExisting.Payments.Any())
+        {
+            _isReadOnly = true;
+            Snackbar.Add("Invoices with recorded payments cannot be modified.", Severity.Warning);
+            return null;
+        }
+
+        var hasPermission = string.Equals(currentStatus, InvoiceStatus.Draft, StringComparison.OrdinalIgnoreCase)
+            ? _canEditDraftAuthorized && (emp.HasPermission(AppPermissions.Finance.AccessAccounting) || emp.HasPermission(AppPermissions.Finance.ApproveInvoices))
+            : _canApproveAuthorized && emp.HasPermission(AppPermissions.Finance.ApproveInvoices);
+
+        if (!hasPermission)
+        {
+            _isReadOnly = true;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+
+        return emp;
+    }
+
+    private List<Project> ResolveAuthorizedProjects()
+    {
+        if (!string.IsNullOrEmpty(Invoice.ProjectGroupId))
+        {
+            var group = Db.ProjectGroups.GetById(Invoice.ProjectGroupId);
+            if (group == null) return [];
+            return group.ProjectIds
+                .Select(id => Db.Projects.GetById(id))
+                .Where(p => p != null)
+                .Cast<Project>()
+                .ToList();
+        }
+
+        var project = string.IsNullOrEmpty(Invoice.ProjectId) ? null : Db.Projects.GetById(Invoice.ProjectId);
+        return project != null ? [project] : [];
+    }
+
+    private async Task Submit()
+    {
+        if (_isReadOnly) return;
+
+        var preActor = await AuthorizeInvoiceSubmitAsync();
+        if (preActor == null) return;
+
+        if (Invoice.Status == InvoiceStatus.Final)
+        {
+            var parameters = new DialogParameters<ConfirmDialog>
+            {
+                { x => x.ContentText, BizLoc["This invoice is already in Final status. Saving changes will update the finalized invoice and invalidate any cached PDF. Do you want to save your changes?"].Value },
+                { x => x.ButtonText, BizLoc["Save Changes"].Value },
+                { x => x.Color, Color.Warning },
+                { x => x.ShowReasonInput, true },
+                { x => x.ReasonRequired, false },
+                { x => x.ReasonLabel, BizLoc["Edit Note / Reason (optional)"].Value },
+                { x => x.ReasonPlaceholder, BizLoc["Describe what was updated..."].Value }
+            };
+
+            var dialog = await DialogService.ShowAsync<ConfirmDialog>(BizLoc["Confirm Final Invoice Edit"].Value, parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            var result = await dialog.Result;
+            if (result == null || result.Canceled) return;
+
+            var reason = result.Data as string;
+            Invoice.History.Add(new DocumentHistoryEntry
+            {
+                Timestamp = DateTime.UtcNow,
+                Action = DocumentHistoryActions.EditedInFinal,
+                OldStatus = Invoice.Status,
+                NewStatus = Invoice.Status,
+                ChangedBy = preActor.FullName ?? preActor.Email ?? "System",
+                Summary = "Edited invoice while in Final status",
+                Reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim()
+            });
+        }
+
+        var saveActor = await AuthorizeInvoiceSubmitAsync();
+        if (saveActor == null) return;
+
         var template = (!string.IsNullOrEmpty(Invoice.TemplateId)) ? Db.DocumentTemplates.GetById(Invoice.TemplateId) : Db.DocumentTemplates.GetDefault();
 
         var request = new BillingSubmissionRequest
         {
+            Actor = saveActor,
             Invoice = Invoice,
             Template = template,
             DefaultMarkupRate = DefaultMarkupRate,

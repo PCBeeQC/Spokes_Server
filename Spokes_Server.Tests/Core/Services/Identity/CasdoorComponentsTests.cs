@@ -38,6 +38,8 @@ public class CasdoorComponentsTests : IDisposable
         var conf = generator.GenerateAppConf("https://test.spokes.sh", "/test/data", "prod");
 
         Assert.Contains("origin = \"https://test.spokes.sh\"", conf);
+        Assert.Contains("httpaddr = 127.0.0.1", conf);
+        Assert.Contains("httpport = 8000", conf);
         Assert.Contains("runmode = prod", conf);
         Assert.Contains("driverName = sqlite", conf);
         Assert.Contains("dataSourceName = file:/test/data/casdoor.db?cache=shared", conf.Replace('\\', '/'));

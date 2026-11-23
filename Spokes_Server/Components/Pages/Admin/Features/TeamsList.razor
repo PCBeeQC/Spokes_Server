@@ -1,5 +1,7 @@
 @using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Communication.Chat
 @using Spokes_Server.Components.Pages.Admin
 @using Spokes_Server.Components.Shared
 @inject Database Db
@@ -9,9 +11,11 @@
 @inject NavigationManager Nav
 @inject UserService UserService
 @inject IUserPrivacyService PrivacyService
+@inject IChatService ChatService
+@inject IChatAuthorizationService ChatAuth
 
 <div class="d-flex flex-wrap gap-4 align-center mb-6">
-    <MudTextField @bind-Value="searchString" Placeholder="@string.Format(Loc["Search {0}"].Value, AppLabels.Teams)" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="flex-grow-1" Style="max-width: 600px; background-color: var(--mud-palette-surface);" />
+    <MudTextField @bind-Value="searchString" Immediate="true" Clearable="true" Placeholder="@string.Format(Loc["Search {0}"].Value, AppLabels.Teams)" Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" IconSize="Size.Medium" Class="flex-grow-1" Style="max-width: 600px; background-color: var(--mud-palette-surface);" />
     <MudSpacer />
     @if (_isAdminOrManager)
     {
@@ -26,9 +30,9 @@
     {
         <MudItem xs="12" sm="6" md="4" lg="3">
             <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column directory-card" Style="border-radius: 16px;">
-                <MudCardContent Class="pa-4 flex-grow-1 cursor-pointer" @onclick="@(() => ViewTeam(context))">
+                <MudCardContent Class="pt-4 px-4 pb-3 flex-grow-1 cursor-pointer" @onclick="@(() => ViewTeam(context))">
                     <div class="d-flex gap-4">
-                        <TeamAvatar Team="@context" Size="Size.Large" Style="width: 56px; height: 56px; font-size: 1.5rem; flex-shrink: 0;" />
+                        <TeamAvatar Team="@context" Size="Size.Large" Style="width: 56px; height: 56px; flex-shrink: 0;" />
                         <div class="d-flex flex-column justify-center" style="min-width: 0; flex: 1;">
                             <div class="d-flex align-center gap-1" style="width: 100%;">
                                 <MudText Typo="Typo.subtitle1" Class="flex-grow-1 text-truncate" Style="font-weight: 700;">@context.Name</MudText>
@@ -54,9 +58,12 @@
                         </div>
                     </div>
                 </MudCardContent>
-                <MudCardActions Class="px-4 pb-4 pt-0 d-flex justify-space-between align-center">
+                <MudCardActions Class="px-4 pb-3 pt-0 d-flex justify-space-between align-center">
                     <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" OnClick="@(() => ViewTeam(context))">@string.Format(Loc["View {0}"].Value, AppLabels.Team)</MudButton>
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="rounded-pill px-4" Style="text-transform: none; font-weight: 600;" DropShadow="false" OnClick="@(() => InitiateTeamMessage(context))">@Loc["Message"]</MudButton>
+                    @if (CanMessageTeam(context))
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="rounded-pill px-4" Style="text-transform: none; font-weight: 600;" DropShadow="false" OnClick="@(() => InitiateTeamMessage(context))">@Loc["Message"]</MudButton>
+                    }
                 </MudCardActions>
             </MudCard>
         </MudItem>
@@ -64,17 +71,49 @@
 </MudGrid>
 
 @code {
+    [Parameter] public bool ReadOnly { get; set; } = false;
+
     private List<Team> TeamList = [];
     private List<Employee> Employees = [];
     private string searchString = "";
     private Employee? _currentUser;
-    private bool _isAdminOrManager => _currentUser?.IsAdmin == true || _currentUser?.HasPermission(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageUsers) == true;
+    private bool _isAdminOrManager => !ReadOnly && _currentUser != null && (_currentUser.IsEffectiveAdmin || _currentUser.HasPermission(AppPermissions.Hr.ManageEmployees) || _currentUser.HasPermission(AppPermissions.Admin.ManageUsers));
+
+    private bool CanMessageTeam(Team team) => CanUserMessageTeam(_currentUser, team);
+
+    private bool CanUserMessageTeam(Employee? user, Team team)
+    {
+        if (user == null || !user.IsActive || user.IsBanned ||
+            !user.HasEffectivePermission(AppPermissions.Chat.Use, allowSuspended: true))
+        {
+            return false;
+        }
+
+        var existingChannel = Db.ChatChannels.GetTeamChannel(team.Id);
+        if (existingChannel != null)
+        {
+            return ChatAuth.CanUserAccessChannel(existingChannel, user);
+        }
+
+        return !user.IsSuspended &&
+               user.HasPermission(AppPermissions.Chat.CreateChannels) &&
+               (user.IsAdmin || ChatAuth.GetUserTeamIds(user).Contains(team.Id));
+    }
 
     protected override async Task OnInitializedAsync()
     {
-        _currentUser = await UserService.GetEmployeeAsync();
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
         Employees = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
         RefreshList();
+    }
+
+    private async Task<bool> AuthorizeTeamManageAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        if (!ReadOnly && _isAdminOrManager) return true;
+        Snackbar.Add(Loc["Access Denied"].Value, Severity.Warning);
+        StateHasChanged();
+        return false;
     }
 
     private bool FilterFunc(Team element)
@@ -96,18 +135,20 @@
 
     private string GetEmployeeName(string id)
     {
-        var e = Employees.FirstOrDefault(x => x.Id == id);
-        return e?.FullName ?? "-";
+        if (string.IsNullOrEmpty(id)) return "-";
+        var e = Employees.FirstOrDefault(x => x.Id == id) ?? Db.Employees.GetById(id);
+        if (e == null) return "-";
+        return PrivacyService.CanDiscoverUser(_currentUser, e) ? e.FullName : AppLabels.Employee;
     }
 
     private int GetMemberCount(Team team)
     {
-        int count = Employees.Count(e => e.TeamId == team.Id);
+        int count = Employees.Count(e => e.TeamId == team.Id && PrivacyService.CanDiscoverUser(_currentUser, e));
         // Include leader if they are not explicitly a member
         if (!string.IsNullOrEmpty(team.LeaderId))
         {
             var leader = Employees.FirstOrDefault(e => e.Id == team.LeaderId);
-            if (leader != null && leader.TeamId != team.Id)
+            if (leader != null && leader.TeamId != team.Id && PrivacyService.CanDiscoverUser(_currentUser, leader))
             {
                 count++;
             }
@@ -117,14 +158,14 @@
 
     private async Task AddTeam()
     {
+        if (!await AuthorizeTeamManageAsync()) return;
         var t = new Team();
         var result = await ShowDialog(t, string.Format(Loc["Create New {0}"].Value, AppLabels.Team));
         if (result != null)
         {
+            if (!await AuthorizeTeamManageAsync()) return;
+            if (!TryNormalizeTeamLeaderForSave(result.Team, liveExistingTeam: null)) return;
             Db.Teams.Save(result.Team);
-
-            // Channel creation is now manual via Chat Sidebar
-            // Db.ChatChannels.GetOrCreateTeamChannel(t.Id, t.Name);
 
             UpdateMembers(result.Team.Id, result.MemberIds);
 
@@ -134,8 +175,9 @@
 
     private async Task ViewTeam(Team team)
     {
-        var leader = Employees.FirstOrDefault(e => e.Id == team.LeaderId);
-        var members = Employees.Where(e => e.TeamId == team.Id).ToList();
+        var rawLeader = !string.IsNullOrEmpty(team.LeaderId) ? Employees.FirstOrDefault(e => e.Id == team.LeaderId) : null;
+        var leader = rawLeader != null && PrivacyService.CanDiscoverUser(_currentUser, rawLeader) ? rawLeader : null;
+        var members = PrivacyService.FilterDiscoverableEmployees(_currentUser, Employees.Where(e => e.TeamId == team.Id)).ToList();
         if (leader != null && !members.Any(m => m.Id == leader.Id))
         {
             members.Add(leader);
@@ -154,47 +196,105 @@
 
     private async Task EditTeam(Team team)
     {
+        if (!await AuthorizeTeamManageAsync()) return;
         // Clone to avoid live edit
-        var clone = System.Text.Json.JsonSerializer.Deserialize<Team>(System.Text.Json.JsonSerializer.Serialize(team));
+        var clone = team.DeepClone();
         if (clone == null) return;
         var result = await ShowDialog(clone, string.Format(Loc["Edit {0}"].Value, AppLabels.Team));
         if (result != null)
         {
+            if (!await AuthorizeTeamManageAsync()) return;
+            var liveTeam = Db.Teams.GetById(team.Id);
+            if (liveTeam == null) return;
+            if (!TryNormalizeTeamLeaderForSave(result.Team, liveTeam)) return;
             Db.Teams.Save(result.Team);
             UpdateMembers(result.Team.Id, result.MemberIds);
             RefreshList();
         }
     }
 
+    private bool TryNormalizeTeamLeaderForSave(Team targetTeam, Team? liveExistingTeam)
+    {
+        if (liveExistingTeam != null && !string.IsNullOrEmpty(liveExistingTeam.LeaderId))
+        {
+            var existingLeader = Db.Employees.GetById(liveExistingTeam.LeaderId);
+            if (existingLeader != null &&
+                (!UserService.CanManageEmployeeTarget(_currentUser, existingLeader) ||
+                 !PrivacyService.CanDiscoverUser(_currentUser, existingLeader)))
+            {
+                targetTeam.LeaderId = liveExistingTeam.LeaderId;
+                return true;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(targetTeam.LeaderId))
+        {
+            var chosenLeader = Db.Employees.GetById(targetTeam.LeaderId);
+            if (chosenLeader is not { IsActive: true } ||
+                !UserService.CanManageEmployeeTarget(_currentUser, chosenLeader) ||
+                !PrivacyService.CanDiscoverUser(_currentUser, chosenLeader))
+            {
+                Snackbar.Add(Loc["Unauthorized team leader selection."].Value, Severity.Error);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private void UpdateMembers(string teamId, List<string> newMemberIds)
     {
-        // 1. Find existing members of this team
-        var currentMembers = Employees.Where(e => e.TeamId == teamId).ToList();
+        var allLiveEmployees = Db.Employees.GetAll();
+        var desiredSet = new HashSet<string>(newMemberIds);
 
-        // 2. Remove those who are NO LONGER in the list
-        foreach (var member in currentMembers)
+        // 1. Remove members who are NO LONGER in the list, preserving Admins & undiscoverable targets
+        foreach (var member in allLiveEmployees.Where(e => e.TeamId == teamId))
         {
-            if (!newMemberIds.Contains(member.Id))
+            if (!desiredSet.Contains(member.Id))
             {
+                if (!UserService.CanManageEmployeeTarget(_currentUser, member) ||
+                    !PrivacyService.CanDiscoverUser(_currentUser, member))
+                {
+                    continue;
+                }
+
                 member.TeamId = string.Empty;
                 Db.Employees.Save(member);
             }
         }
 
-        // 3. Add those who are NEW to the list
-        foreach (var id in newMemberIds)
+        // 2. Add members who are NEW to the list, strictly enforcing target manageability & discoverability
+        foreach (var id in desiredSet)
         {
-            var emp = Employees.FirstOrDefault(e => e.Id == id);
-            if (emp != null && emp.TeamId != teamId)
+            var emp = Db.Employees.GetById(id);
+            if (emp is { IsActive: true } &&
+                emp.TeamId != teamId &&
+                UserService.CanManageEmployeeTarget(_currentUser, emp) &&
+                PrivacyService.CanDiscoverUser(_currentUser, emp))
             {
                 emp.TeamId = teamId;
                 Db.Employees.Save(emp);
             }
         }
+
+        Employees = Db.Employees.GetAll().Where(e => e.IsActive).ToList();
     }
 
     private async Task DeleteTeam(Team team)
     {
+        if (!await AuthorizeTeamManageAsync()) return;
+        var liveTeam = Db.Teams.GetById(team.Id);
+        if (liveTeam == null) return;
+
+        var hasUnmanageable = Db.Employees.GetAll().Any(e =>
+            (e.TeamId == team.Id || e.Id == liveTeam.LeaderId) &&
+            !UserService.CanManageEmployeeTarget(_currentUser, e));
+        if (hasUnmanageable && !(_currentUser?.IsEffectiveAdmin ?? false))
+        {
+            Snackbar.Add(Loc["Access Denied"].Value, Severity.Error);
+            return;
+        }
+
         var parameters = new DialogParameters
         {
             ["ContentText"] = string.Format(Loc["Are you sure you want to delete {0}? Members will need to be reassigned."].Value, team.Name),
@@ -208,6 +308,19 @@
 
         if (result is { Canceled: false })
         {
+            if (!await AuthorizeTeamManageAsync()) return;
+            liveTeam = Db.Teams.GetById(team.Id);
+            if (liveTeam == null) return;
+
+            hasUnmanageable = Db.Employees.GetAll().Any(e =>
+                (e.TeamId == team.Id || e.Id == liveTeam.LeaderId) &&
+                !UserService.CanManageEmployeeTarget(_currentUser, e));
+            if (hasUnmanageable && !(_currentUser?.IsEffectiveAdmin ?? false))
+            {
+                Snackbar.Add(Loc["Access Denied"].Value, Severity.Error);
+                return;
+            }
+
             Db.Teams.Delete(team.Id);
             RefreshList();
             Snackbar.Add(string.Format(Loc["{0} deleted"].Value, AppLabels.Team), Severity.Success);
@@ -216,10 +329,26 @@
 
     private async Task<TeamDialog.TeamDialogResult?> ShowDialog(Team team, string title)
     {
+        var manageableEmployees = Db.Employees.GetAll()
+            .Where(e => e.IsActive &&
+                        UserService.CanManageEmployeeTarget(_currentUser, e) &&
+                        PrivacyService.CanDiscoverUser(_currentUser, e))
+            .ToList();
+
+        var existingLeader = !string.IsNullOrEmpty(team.LeaderId) ? Db.Employees.GetById(team.LeaderId) : null;
+        bool lockLeader = existingLeader != null &&
+                          (!UserService.CanManageEmployeeTarget(_currentUser, existingLeader) ||
+                           !PrivacyService.CanDiscoverUser(_currentUser, existingLeader));
+        string lockedLeaderLabel = existingLeader == null
+            ? string.Empty
+            : (PrivacyService.CanDiscoverUser(_currentUser, existingLeader) ? existingLeader.FullName : AppLabels.Employee);
+
         var parameters = new DialogParameters
         {
             ["Team"] = team,
-            ["Employees"] = Employees
+            ["Employees"] = manageableEmployees,
+            ["LockLeader"] = lockLeader,
+            ["LockedLeaderLabel"] = lockedLeaderLabel
         };
 
         var dialog = await DialogService.ShowAsync<TeamDialog>(title, parameters);
@@ -232,12 +361,33 @@
         return null;
     }
 
-    private void InitiateTeamMessage(Team team)
+    private async Task InitiateTeamMessage(Team team)
     {
-        var channel = Db.ChatChannels.GetOrCreateTeamChannel(team.Id, team.Name);
-        if (channel != null)
+        var liveUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _currentUser = liveUser;
+        if (!CanUserMessageTeam(liveUser, team))
         {
-            Nav.NavigateTo($"/chat/{channel.Id}");
+            Snackbar.Add(Loc["Access Denied"].Value, Severity.Warning);
+            StateHasChanged();
+            return;
+        }
+
+        var existingChannel = Db.ChatChannels.GetTeamChannel(team.Id);
+        if (existingChannel != null)
+        {
+            Nav.NavigateTo($"/chat/{existingChannel.Id}");
+            return;
+        }
+
+        try
+        {
+            var created = ChatService.CreateTeamChannel(liveUser!.Id, [team.Id]);
+            Nav.NavigateTo($"/chat/{created.Id}");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Snackbar.Add(Loc["Access Denied"].Value, Severity.Warning);
+            StateHasChanged();
         }
     }
 }

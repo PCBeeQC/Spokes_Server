@@ -71,71 +71,23 @@ public static class ServerUrlResolver
             return false;
         }
 
-        var headers = context.Request.Headers;
-        bool hasSameOriginFetchSite = false;
-
-        if (headers.TryGetValue("Sec-Fetch-Site", out var secFetchSite))
-        {
-            var siteValue = secFetchSite.ToString().Trim();
-            if (!string.IsNullOrEmpty(siteValue))
-            {
-                if (siteValue.Equals("same-origin", StringComparison.OrdinalIgnoreCase))
-                {
-                    hasSameOriginFetchSite = true;
-                }
-                else if (!siteValue.Equals("none", StringComparison.OrdinalIgnoreCase))
-                {
-                    return false;
-                }
-            }
-        }
-
         Uri? publicUri = TryParseHttpAuthorityUri(configuredPublicUrl);
         var requestHost = context.Request.Host.Host;
-        if (publicUri == null)
+        if (publicUri == null && !HasValidRequestHost(requestHost))
         {
-            if (string.IsNullOrWhiteSpace(requestHost) ||
-                Uri.CheckHostName(requestHost) == UriHostNameType.Unknown ||
-                ContainsUnsafeHostChars(requestHost))
-            {
-                return false;
-            }
+            return false;
         }
 
-        bool hasValidOrigin = false;
-        if (headers.TryGetValue("Origin", out var originValues))
+        if (!TryValidateSameOriginHeaders(
+                context,
+                uri => MatchesExpectedAuthority(uri, context, publicUri),
+                out bool hasSameOriginFetchSite,
+                out bool hasOriginOrRefererProof))
         {
-            var origin = originValues.ToString().Trim();
-            if (!string.IsNullOrEmpty(origin))
-            {
-                if (origin.Equals("null", StringComparison.OrdinalIgnoreCase) ||
-                    !Uri.TryCreate(origin, UriKind.Absolute, out var originUri) ||
-                    !MatchesExpectedAuthority(originUri, context, publicUri))
-                {
-                    return false;
-                }
-
-                hasValidOrigin = true;
-            }
+            return false;
         }
 
-        bool hasValidReferer = false;
-        if (headers.TryGetValue("Referer", out var refererValues))
-        {
-            var referer = refererValues.ToString().Trim();
-            if (!string.IsNullOrEmpty(referer))
-            {
-                if (!Uri.TryCreate(referer, UriKind.Absolute, out var refererUri) ||
-                    !MatchesExpectedAuthority(refererUri, context, publicUri))
-                {
-                    return false;
-                }
-
-                hasValidReferer = true;
-            }
-        }
-
-        if (hasValidOrigin || hasValidReferer)
+        if (hasOriginOrRefererProof)
         {
             return true;
         }
@@ -173,6 +125,118 @@ public static class ServerUrlResolver
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Validates origin metadata for presence/push beacons.
+    /// Cookie-only requests (without a verified capability token) enforce strict <see cref="IsSameOriginRequest"/>.
+    /// Requests carrying a verified cryptographic capability token still reject cross-site Fetch Metadata and foreign
+    /// origins, while tolerating TLS-terminating reverse proxies (https -&gt; http without X-Forwarded-Proto) and
+    /// local/LAN access when ServerPublicUrl points to an external hostname.
+    /// </summary>
+    public static bool IsTrustedPresenceBeaconRequest(
+        HttpContext? context,
+        string? configuredPublicUrl = null,
+        bool hasVerifiedCapabilityToken = false)
+    {
+        if (!hasVerifiedCapabilityToken)
+        {
+            return IsSameOriginRequest(context, configuredPublicUrl);
+        }
+
+        if (context?.Request == null)
+        {
+            return false;
+        }
+
+        if (IsSameOriginRequest(context, configuredPublicUrl))
+        {
+            return true;
+        }
+
+        Uri? publicUri = TryParseHttpAuthorityUri(configuredPublicUrl);
+        bool hasValidRequestHost = HasValidRequestHost(context.Request.Host.Host);
+        if (publicUri == null && !hasValidRequestHost)
+        {
+            return false;
+        }
+
+        if (!TryValidateSameOriginHeaders(
+                context,
+                uri => MatchesBootstrapAuthorityAllowingTlsProxy(uri, context, publicUri) ||
+                       MatchesRequestAuthorityAllowingTlsProxy(uri, context),
+                out bool hasSameOriginFetchSite,
+                out bool hasOriginOrRefererProof))
+        {
+            return false;
+        }
+
+        return hasOriginOrRefererProof || (hasSameOriginFetchSite && hasValidRequestHost);
+    }
+
+    private static bool HasValidRequestHost(string? requestHost) =>
+        !string.IsNullOrWhiteSpace(requestHost) &&
+        Uri.CheckHostName(requestHost) != UriHostNameType.Unknown &&
+        !ContainsUnsafeHostChars(requestHost);
+
+    private static bool TryValidateSameOriginHeaders(
+        HttpContext context,
+        Func<Uri, bool> isAllowedAuthority,
+        out bool hasSameOriginFetchSite,
+        out bool hasOriginOrRefererProof)
+    {
+        hasSameOriginFetchSite = false;
+        hasOriginOrRefererProof = false;
+
+        var headers = context.Request.Headers;
+        if (headers.TryGetValue("Sec-Fetch-Site", out var secFetchSite))
+        {
+            var siteValue = secFetchSite.ToString().Trim();
+            if (!string.IsNullOrEmpty(siteValue))
+            {
+                if (siteValue.Equals("same-origin", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasSameOriginFetchSite = true;
+                }
+                else if (!siteValue.Equals("none", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+        }
+
+        if (headers.TryGetValue("Origin", out var originValues))
+        {
+            var origin = originValues.ToString().Trim();
+            if (!string.IsNullOrEmpty(origin))
+            {
+                if (origin.Equals("null", StringComparison.OrdinalIgnoreCase) ||
+                    !Uri.TryCreate(origin, UriKind.Absolute, out var originUri) ||
+                    !isAllowedAuthority(originUri))
+                {
+                    return false;
+                }
+
+                hasOriginOrRefererProof = true;
+            }
+        }
+
+        if (headers.TryGetValue("Referer", out var refererValues))
+        {
+            var referer = refererValues.ToString().Trim();
+            if (!string.IsNullOrEmpty(referer))
+            {
+                if (!Uri.TryCreate(referer, UriKind.Absolute, out var refererUri) ||
+                    !isAllowedAuthority(refererUri))
+                {
+                    return false;
+                }
+
+                hasOriginOrRefererProof = true;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -276,9 +340,33 @@ public static class ServerUrlResolver
             return true;
         }
 
+        return MatchesRequestAuthorityAllowingTlsProxy(candidate, context);
+    }
+
+    private static bool MatchesRequestAuthorityAllowingTlsProxy(Uri candidate, HttpContext context)
+    {
         var reqHost = context.Request.Host.Host;
         if (string.IsNullOrWhiteSpace(reqHost) ||
+            Uri.CheckHostName(reqHost) == UriHostNameType.Unknown ||
+            ContainsUnsafeHostChars(reqHost))
+        {
+            return false;
+        }
+
+        if (MatchesExpectedAuthority(candidate, context, publicUri: null))
+        {
+            return true;
+        }
+
+        if (!candidate.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(candidate.Host, reqHost, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.Request.Scheme) &&
+            !context.Request.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+            !context.Request.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

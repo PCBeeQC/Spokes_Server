@@ -27,7 +27,7 @@ public class SoundServiceTests : IDisposable
         Directory.CreateDirectory(_testDataDir);
 
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { { "DataPath", _testDataDir } })
+            .AddInMemoryCollection(new Dictionary<string, string?> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } })
             .Build();
 
         var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -130,5 +130,33 @@ public class SoundServiceTests : IDisposable
         _mockJs.Verify(js => js.InvokeAsync<IJSVoidResult>(
             "SoundManager.play",
             It.Is<object[]>(args => (string)args[0] == "channel_leave" && (bool)args[1] == false)), Times.Once);
+    }
+
+    [Fact]
+    public async Task IsCallRingtonePlaying_TracksActiveCallRingtoneAndResetsOnStop()
+    {
+        Assert.False(_soundService.IsCallRingtonePlaying);
+
+        // Non-call sound does not flag call ringtone active
+        await _soundService.PlaySoundAsync("spokesnotif1.wav", isPreview: false);
+        Assert.False(_soundService.IsCallRingtonePlaying);
+
+        // Preview of a call ringtone does not flag active call ringtone
+        await _soundService.PlayNotificationSoundAsync(
+            NotificationCategories.Call,
+            "mixkit_vintage_telephone_ringtone_1356",
+            isPreview: true);
+        Assert.False(_soundService.IsCallRingtonePlaying);
+
+        // Non-preview call ringtone sets IsCallRingtonePlaying = true
+        await _soundService.PlayNotificationSoundAsync(
+            NotificationCategories.Call,
+            "mixkit_vintage_telephone_ringtone_1356",
+            isPreview: false);
+        Assert.True(_soundService.IsCallRingtonePlaying);
+
+        // StopCallRingtoneAsync resets IsCallRingtonePlaying = false
+        await _soundService.StopCallRingtoneAsync();
+        Assert.False(_soundService.IsCallRingtonePlaying);
     }
 }

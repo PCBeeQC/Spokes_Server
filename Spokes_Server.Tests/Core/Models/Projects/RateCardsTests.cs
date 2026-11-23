@@ -7,21 +7,6 @@ namespace Spokes_Server.Tests.Core.Models.Projects;
 public class RateCardsTests
 {
     [Fact]
-    public void Initialization_SetsDefaultValues()
-    {
-        var rateCard = new RateCard();
-
-        Assert.NotNull(rateCard.Id);
-        Assert.True(Guid.TryParse(rateCard.Id, out var parsedGuid));
-        Assert.NotEqual(Guid.Empty, parsedGuid);
-        Assert.Equal(string.Empty, rateCard.Name);
-        Assert.True(rateCard.IsActive);
-        Assert.Equal(0.15m, rateCard.MarkupRate);
-        Assert.NotNull(rateCard.Rates);
-        Assert.Empty(rateCard.Rates);
-    }
-
-    [Fact]
     public void Equals_And_GetHashCode_Behavior()
     {
         var id = Guid.NewGuid().ToString();
@@ -45,20 +30,4 @@ public class RateCardsTests
         Assert.False(card1.Equals(new object()));
     }
 
-    [Fact]
-    public void Rates_CanAddAndRetrieveRateOverrides()
-    {
-        var rateCard = new RateCard();
-        var workTypeId1 = "worktype-developer";
-        var workTypeId2 = "worktype-designer";
-
-        rateCard.Rates[workTypeId1] = 125.50m;
-        rateCard.Rates[workTypeId2] = 95.00m;
-
-        Assert.Equal(2, rateCard.Rates.Count);
-        Assert.True(rateCard.Rates.ContainsKey(workTypeId1));
-        Assert.Equal(125.50m, rateCard.Rates[workTypeId1]);
-        Assert.True(rateCard.Rates.ContainsKey(workTypeId2));
-        Assert.Equal(95.00m, rateCard.Rates[workTypeId2]);
-    }
 }

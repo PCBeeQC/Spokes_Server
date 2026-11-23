@@ -179,7 +179,7 @@ public class Mp4FastStartService : IMp4FastStartService
             // 5. moov is AFTER mdat. Relocate moov to before mdat!
             // Adjust stco (32-bit) and co64 (64-bit) chunk offsets in moov by moov.TotalSize
             long shiftOffset = moovBox.TotalSize;
-            AdjustChunkOffsets(moovBytes, shiftOffset);
+            AdjustContainerChunkOffsets(moovBytes.AsSpan(moovBox.HeaderSize), moovBytes, moovBox.HeaderSize, shiftOffset);
 
             // 6. Write new fast-start stream:
             // [Boxes before mdat] -> [relocated moov] -> [mdat and subsequent boxes excluding original moov]
@@ -254,60 +254,63 @@ public class Mp4FastStartService : IMp4FastStartService
         }
     }
 
-    private static void AdjustChunkOffsets(byte[] moovBytes, long shift)
+    private static bool TryReadBoxHeader(ReadOnlySpan<byte> span, int pos, out string boxType, out int headerSize, out long totalSize)
     {
-        var span = moovBytes.AsSpan();
-        int pos = 8; // skip moov box header
+        boxType = string.Empty;
+        headerSize = 8;
+        totalSize = 0;
 
-        while (pos + 8 <= span.Length)
+        if (pos + 8 > span.Length) return false;
+
+        uint boxSize = BinaryPrimitives.ReadUInt32BigEndian(span.Slice(pos, 4));
+        boxType = Encoding.ASCII.GetString(span.Slice(pos + 4, 4));
+        totalSize = boxSize;
+
+        if (boxSize == 1 && pos + 16 <= span.Length)
         {
-            uint boxSize = BinaryPrimitives.ReadUInt32BigEndian(span.Slice(pos, 4));
-            string boxType = Encoding.ASCII.GetString(moovBytes, pos + 4, 4);
-
-            int headerSize = 8;
-            long totalSize = boxSize;
-            if (boxSize == 1 && pos + 16 <= span.Length)
-            {
-                headerSize = 16;
-                totalSize = (long)BinaryPrimitives.ReadUInt64BigEndian(span.Slice(pos + 8, 8));
-            }
-
-            if (totalSize < headerSize || pos + totalSize > span.Length)
-            {
-                break;
-            }
-
-            if (boxType is "trak" or "mdia" or "minf" or "stbl")
-            {
-                // Descend into container box
-                AdjustContainerChunkOffsets(span.Slice(pos + headerSize, (int)(totalSize - headerSize)), moovBytes, pos + headerSize, shift);
-            }
-
-            pos += (int)totalSize;
+            headerSize = 16;
+            totalSize = (long)BinaryPrimitives.ReadUInt64BigEndian(span.Slice(pos + 8, 8));
         }
+
+        return totalSize >= headerSize && pos + totalSize <= span.Length;
+    }
+
+    private static bool TryReadDurationSeconds(ReadOnlySpan<byte> content, out uint timescale, out double? durationSeconds)
+    {
+        timescale = 0;
+        durationSeconds = null;
+        if (content.Length < 20) return false;
+
+        byte version = content[0];
+        if (version == 0)
+        {
+            timescale = BinaryPrimitives.ReadUInt32BigEndian(content.Slice(12, 4));
+            uint duration = BinaryPrimitives.ReadUInt32BigEndian(content.Slice(16, 4));
+            if (timescale > 0 && duration > 0 && duration != uint.MaxValue)
+            {
+                durationSeconds = Math.Round((double)duration / timescale, 2);
+                return true;
+            }
+        }
+        else if (version == 1 && content.Length >= 32)
+        {
+            timescale = BinaryPrimitives.ReadUInt32BigEndian(content.Slice(20, 4));
+            ulong duration = BinaryPrimitives.ReadUInt64BigEndian(content.Slice(24, 8));
+            if (timescale > 0 && duration > 0 && duration != ulong.MaxValue)
+            {
+                durationSeconds = Math.Round((double)duration / timescale, 2);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void AdjustContainerChunkOffsets(ReadOnlySpan<byte> container, byte[] rootBytes, int containerAbsOffset, long shift)
     {
         int pos = 0;
-        while (pos + 8 <= container.Length)
+        while (TryReadBoxHeader(container, pos, out var boxType, out int headerSize, out long totalSize))
         {
-            uint boxSize = BinaryPrimitives.ReadUInt32BigEndian(container.Slice(pos, 4));
-            string boxType = Encoding.ASCII.GetString(rootBytes, containerAbsOffset + pos + 4, 4);
-
-            int headerSize = 8;
-            long totalSize = boxSize;
-            if (boxSize == 1 && pos + 16 <= container.Length)
-            {
-                headerSize = 16;
-                totalSize = (long)BinaryPrimitives.ReadUInt64BigEndian(container.Slice(pos + 8, 8));
-            }
-
-            if (totalSize < headerSize || pos + totalSize > container.Length)
-            {
-                break;
-            }
-
             int currentAbsPos = containerAbsOffset + pos;
 
             if (boxType is "trak" or "mdia" or "minf" or "stbl")
@@ -372,44 +375,20 @@ public class Mp4FastStartService : IMp4FastStartService
             int pos = 0;
             uint movieTimescale = 0;
 
-            while (pos + 8 <= span.Length)
+            while (TryReadBoxHeader(span, pos, out var boxType, out int headerSize, out long totalSize))
             {
-                uint boxSize = BinaryPrimitives.ReadUInt32BigEndian(span.Slice(pos, 4));
-                string boxType = Encoding.ASCII.GetString(moovBytes, moovHeaderSize + pos + 4, 4);
-
-                int headerSize = 8;
-                long totalSize = boxSize;
-                if (boxSize == 1 && pos + 16 <= span.Length)
-                {
-                    headerSize = 16;
-                    totalSize = (long)BinaryPrimitives.ReadUInt64BigEndian(span.Slice(pos + 8, 8));
-                }
-
-                if (totalSize < headerSize || pos + totalSize > span.Length) break;
-
                 int contentOffset = pos + headerSize;
                 int contentLength = (int)(totalSize - headerSize);
 
-                if (boxType == "mvhd" && contentLength >= 20)
+                if (boxType == "mvhd")
                 {
-                    byte version = span[contentOffset];
-                    if (version == 0 && contentLength >= 20)
+                    if (TryReadDurationSeconds(span.Slice(contentOffset, contentLength), out uint parsedTimescale, out double? parsedDuration))
                     {
-                        movieTimescale = BinaryPrimitives.ReadUInt32BigEndian(span.Slice(contentOffset + 12, 4));
-                        uint duration = BinaryPrimitives.ReadUInt32BigEndian(span.Slice(contentOffset + 16, 4));
-                        if (movieTimescale > 0 && duration > 0 && duration != uint.MaxValue)
-                        {
-                            durationSeconds = Math.Round((double)duration / movieTimescale, 2);
-                        }
+                        durationSeconds = parsedDuration;
                     }
-                    else if (version == 1 && contentLength >= 32)
+                    if (parsedTimescale > 0)
                     {
-                        movieTimescale = BinaryPrimitives.ReadUInt32BigEndian(span.Slice(contentOffset + 20, 4));
-                        ulong duration = BinaryPrimitives.ReadUInt64BigEndian(span.Slice(contentOffset + 24, 8));
-                        if (movieTimescale > 0 && duration > 0 && duration != ulong.MaxValue)
-                        {
-                            durationSeconds = Math.Round((double)duration / movieTimescale, 2);
-                        }
+                        movieTimescale = parsedTimescale;
                     }
                 }
                 else if (boxType == "trak")
@@ -450,21 +429,8 @@ public class Mp4FastStartService : IMp4FastStartService
         isPortrait = false;
 
         int pos = 0;
-        while (pos + 8 <= trakSpan.Length)
+        while (TryReadBoxHeader(trakSpan, pos, out var boxType, out int headerSize, out long totalSize))
         {
-            uint boxSize = BinaryPrimitives.ReadUInt32BigEndian(trakSpan.Slice(pos, 4));
-            string boxType = Encoding.ASCII.GetString(trakSpan.Slice(pos + 4, 4));
-
-            int headerSize = 8;
-            long totalSize = boxSize;
-            if (boxSize == 1 && pos + 16 <= trakSpan.Length)
-            {
-                headerSize = 16;
-                totalSize = (long)BinaryPrimitives.ReadUInt64BigEndian(trakSpan.Slice(pos + 8, 8));
-            }
-
-            if (totalSize < headerSize || pos + totalSize > trakSpan.Length) break;
-
             int contentOffset = pos + headerSize;
             int contentLength = (int)(totalSize - headerSize);
 
@@ -537,48 +503,15 @@ public class Mp4FastStartService : IMp4FastStartService
     {
         durationSeconds = null;
         int pos = 0;
-        while (pos + 8 <= mdiaSpan.Length)
+        while (TryReadBoxHeader(mdiaSpan, pos, out var boxType, out int headerSize, out long totalSize))
         {
-            uint boxSize = BinaryPrimitives.ReadUInt32BigEndian(mdiaSpan.Slice(pos, 4));
-            string boxType = Encoding.ASCII.GetString(mdiaSpan.Slice(pos + 4, 4));
-
-            int headerSize = 8;
-            long totalSize = boxSize;
-            if (boxSize == 1 && pos + 16 <= mdiaSpan.Length)
-            {
-                headerSize = 16;
-                totalSize = (long)BinaryPrimitives.ReadUInt64BigEndian(mdiaSpan.Slice(pos + 8, 8));
-            }
-
-            if (totalSize < headerSize || pos + totalSize > mdiaSpan.Length) break;
-
             if (boxType == "mdhd")
             {
                 int contentOffset = pos + headerSize;
                 int contentLength = (int)(totalSize - headerSize);
-                if (contentLength >= 20)
+                if (TryReadDurationSeconds(mdiaSpan.Slice(contentOffset, contentLength), out _, out durationSeconds))
                 {
-                    byte version = mdiaSpan[contentOffset];
-                    if (version == 0 && contentLength >= 20)
-                    {
-                        uint timescale = BinaryPrimitives.ReadUInt32BigEndian(mdiaSpan.Slice(contentOffset + 12, 4));
-                        uint duration = BinaryPrimitives.ReadUInt32BigEndian(mdiaSpan.Slice(contentOffset + 16, 4));
-                        if (timescale > 0 && duration > 0 && duration != uint.MaxValue)
-                        {
-                            durationSeconds = Math.Round((double)duration / timescale, 2);
-                            return;
-                        }
-                    }
-                    else if (version == 1 && contentLength >= 32)
-                    {
-                        uint timescale = BinaryPrimitives.ReadUInt32BigEndian(mdiaSpan.Slice(contentOffset + 20, 4));
-                        ulong duration = BinaryPrimitives.ReadUInt64BigEndian(mdiaSpan.Slice(contentOffset + 24, 8));
-                        if (timescale > 0 && duration > 0 && duration != ulong.MaxValue)
-                        {
-                            durationSeconds = Math.Round((double)duration / timescale, 2);
-                            return;
-                        }
-                    }
+                    return;
                 }
             }
 

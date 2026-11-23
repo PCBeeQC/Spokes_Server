@@ -41,22 +41,29 @@ public static class TimesheetDateRangeHelper
         {
             return new DateRange(start.AddDays(7 * direction), end.AddDays(7 * direction));
         }
-        else if (totalDays >= 28 && totalDays <= 31)
+
+        if (totalDays >= 28 && totalDays <= 31)
         {
             var newStart = start.AddMonths(direction);
             var daysInMonth = DateTime.DaysInMonth(newStart.Year, newStart.Month);
             return new DateRange(new DateTime(newStart.Year, newStart.Month, 1), new DateTime(newStart.Year, newStart.Month, daysInMonth));
         }
-        else
-        {
-            return new DateRange(start.AddDays((int)totalDays * direction), end.AddDays((int)totalDays * direction));
-        }
+
+        return new DateRange(start.AddDays((int)totalDays * direction), end.AddDays((int)totalDays * direction));
     }
+
+    public static DateTime GetMondayOfWeek(DateTime date)
+    {
+        var diff = (7 + (date.DayOfWeek - DayOfWeek.Monday)) % 7;
+        return date.Date.AddDays(-diff);
+    }
+
+    public static DateOnly GetMondayOfWeek(DateOnly date) =>
+        DateOnly.FromDateTime(GetMondayOfWeek(date.ToDateTime(TimeOnly.MinValue)));
 
     public static DateRange GetWeekRange(DateTime date)
     {
-        var diff = (7 + (date.DayOfWeek - DayOfWeek.Monday)) % 7;
-        var monday = date.Date.AddDays(-diff);
+        var monday = GetMondayOfWeek(date);
         return new DateRange(monday, monday.AddDays(6));
     }
 

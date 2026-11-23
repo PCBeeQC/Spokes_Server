@@ -1,5 +1,6 @@
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Dialogs.Communication.Email
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Services.Communication.Email
 @inject IDialogService DialogService
@@ -35,20 +36,20 @@
                     </MudTooltip>
                 }
 
-                @if ((OnPreviousMessage.HasDelegate || OnNextMessage.HasDelegate) && (OnReply.HasDelegate || OnReplyAll.HasDelegate || OnForward.HasDelegate))
+                @if ((OnPreviousMessage.HasDelegate || OnNextMessage.HasDelegate) && !IsReadOnly && (OnReply.HasDelegate || OnReplyAll.HasDelegate || OnForward.HasDelegate))
                 {
                     <MudHidden Breakpoint="Breakpoint.Xs">
                         <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
                     </MudHidden>
                 }
 
-                @if (OnReply.HasDelegate)
+                @if (!IsReadOnly && OnReply.HasDelegate)
                 {
                     <MudTooltip Text="@Loc["Reply"]">
                         <MudIconButton Icon="@Icons.Material.Filled.Reply" Size="Size.Medium" Color="Color.Primary" OnClick="OnReply" />
                     </MudTooltip>
                 }
-                @if (OnReplyAll.HasDelegate || OnForward.HasDelegate)
+                @if (!IsReadOnly && (OnReplyAll.HasDelegate || OnForward.HasDelegate))
                 {
                     <MudHidden Breakpoint="Breakpoint.SmAndDown">
                         @if (OnReplyAll.HasDelegate)
@@ -66,14 +67,14 @@
                     </MudHidden>
                 }
 
-                @if (OnMarkAsUnread.HasDelegate || (ShowFolderActions && _treeItems.Any() && OnMoveTo.HasDelegate))
+                @if (!IsReadOnly && (OnMarkAsUnread.HasDelegate || (ShowFolderActions && _treeItems.Any() && OnMoveTo.HasDelegate)))
                 {
                     <MudHidden Breakpoint="Breakpoint.Xs">
                         <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
                     </MudHidden>
                 }
 
-                @if (OnMarkAsUnread.HasDelegate)
+                @if (!IsReadOnly && OnMarkAsUnread.HasDelegate)
                 {
                     <MudHidden Breakpoint="Breakpoint.SmAndDown">
                         <MudTooltip Text="@Loc["Mark as Unread"]">
@@ -82,7 +83,7 @@
                     </MudHidden>
                 }
 
-                @if (ShowFolderActions && _treeItems.Any() && OnMoveTo.HasDelegate)
+                @if (!IsReadOnly && ShowFolderActions && _treeItems.Any() && OnMoveTo.HasDelegate)
                 {
                     <MudHidden Breakpoint="Breakpoint.SmAndDown">
                         <MudMenu Icon="@Icons.Material.Filled.DriveFileMove" title="@Loc["Move to Folder"]" Size="Size.Medium" AnchorOrigin="Origin.BottomLeft"
@@ -111,7 +112,7 @@
                     </MudHidden>
                 }
 
-                @if (ShowDelete && OnDelete.HasDelegate)
+                @if (!IsReadOnly && ShowDelete && OnDelete.HasDelegate)
                 {
                     <MudHidden Breakpoint="Breakpoint.Xs">
                         <MudDivider Vertical="true" FlexItem="true" Class="mx-2 my-2" />
@@ -122,7 +123,7 @@
                     </MudTooltip>
                 }
 
-                @if (CanAddToTimeline && OnAddToTimeline.HasDelegate)
+                @if (!IsReadOnly && CanAddToTimeline && OnAddToTimeline.HasDelegate)
                 {
                     <MudHidden Breakpoint="Breakpoint.SmAndDown">
                         <MudTooltip Text="@Loc["Add to Project Timeline"]">
@@ -132,35 +133,38 @@
                 }
 
                 <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Medium">
-                    @if (OnArchive.HasDelegate)
+                    @if (!IsReadOnly && OnArchive.HasDelegate)
                     {
                         <MudMenuItem Icon="@Icons.Material.Filled.Inventory2" OnClick="OnArchive">@Loc["Archive"]</MudMenuItem>
                     }
-                    @if (OnJunk.HasDelegate)
+                    @if (!IsReadOnly && OnJunk.HasDelegate)
                     {
                         <MudMenuItem Icon="@Icons.Material.Filled.Report" OnClick="OnJunk">@Loc["Junk"]</MudMenuItem>
                     }
                     <MudMenuItem Icon="@Icons.Material.Filled.Print" OnClick="OnPrint">@Loc["Print"]</MudMenuItem>
                     
                     <MudHidden Breakpoint="Breakpoint.MdAndUp">
-                        <MudDivider />
-                        @if (OnReplyAll.HasDelegate)
+                        @if (!IsReadOnly && (OnReplyAll.HasDelegate || OnForward.HasDelegate || OnMarkAsUnread.HasDelegate || (CanAddToTimeline && OnAddToTimeline.HasDelegate) || (ShowFolderActions && _treeItems.Any() && OnMoveTo.HasDelegate)))
+                        {
+                            <MudDivider />
+                        }
+                        @if (!IsReadOnly && OnReplyAll.HasDelegate)
                         {
                             <MudMenuItem Icon="@Icons.Material.Filled.ReplyAll" OnClick="OnReplyAll">@Loc["Reply All"]</MudMenuItem>
                         }
-                        @if (OnForward.HasDelegate)
+                        @if (!IsReadOnly && OnForward.HasDelegate)
                         {
                             <MudMenuItem Icon="@Icons.Material.Filled.Forward" OnClick="OnForward">@Loc["Forward"]</MudMenuItem>
                         }
-                        @if (OnMarkAsUnread.HasDelegate)
+                        @if (!IsReadOnly && OnMarkAsUnread.HasDelegate)
                         {
                             <MudMenuItem Icon="@Icons.Material.Filled.MarkEmailUnread" OnClick="OnMarkAsUnread">@Loc["Mark as Unread"]</MudMenuItem>
                         }
-                        @if (CanAddToTimeline && OnAddToTimeline.HasDelegate)
+                        @if (!IsReadOnly && CanAddToTimeline && OnAddToTimeline.HasDelegate)
                         {
                             <MudMenuItem Icon="@Icons.Material.Filled.PlaylistAdd" OnClick="OnAddToTimeline">@Loc["Add to Timeline"]</MudMenuItem>
                         }
-                        @if (ShowFolderActions && _treeItems.Any() && OnMoveTo.HasDelegate)
+                        @if (!IsReadOnly && ShowFolderActions && _treeItems.Any() && OnMoveTo.HasDelegate)
                         {
                             <div class="px-2 pt-2">
                                 <MudText Typo="Typo.subtitle2" Class="px-2">@Loc["Move to..."]</MudText>
@@ -190,7 +194,7 @@
             </MudStack>
 
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                @if (!string.IsNullOrWhiteSpace(SelectedMessage.UnsubscribeUrl) || !string.IsNullOrWhiteSpace(SelectedMessage.UnsubscribeMailto))
+                @if (!IsReadOnly && (!string.IsNullOrWhiteSpace(SelectedMessage.UnsubscribeUrl) || !string.IsNullOrWhiteSpace(SelectedMessage.UnsubscribeMailto)))
                 {
                     <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Secondary"
                                StartIcon="@Icons.Material.Filled.Unsubscribe" OnClick="HandleUnsubscribeAsync">
@@ -203,7 +207,7 @@
                                    Color="@(_overrideThemeIsDark.HasValue ? Color.Primary : Color.Default)"
                                    OnClick="@(() => _overrideThemeIsDark = !IsCurrentlyDark)" />
                 </MudTooltip>
-                @if (OnToggleFlag.HasDelegate)
+                @if (!IsReadOnly && OnToggleFlag.HasDelegate)
                 {
                     <MudTooltip Text="@(SelectedMessage.IsFlagged ? Loc["Remove Flag"] : Loc["Flag Message"])">
                         <MudIconButton
@@ -305,7 +309,7 @@
             }
 
             <!-- Privacy Shield Banner -->
-            @if (_remoteImagesBlocked && !SelectedMessage.AllowRemoteImages)
+            @if (_remoteImagesBlocked && !IsRemoteImagesAllowedForCurrentViewer && !IsReadOnly)
             {
                 <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined" Class="mt-3 mb-0">
                     <div class="d-flex align-center justify-space-between flex-wrap gap-2">
@@ -344,7 +348,7 @@
             {
                 <div class="email-body-content">
                     <EmailContentRenderer HtmlContent="@MessageBody"
-                                          AllowRemoteImages="@SelectedMessage.AllowRemoteImages"
+                                          AllowRemoteImages="@IsRemoteImagesAllowedForCurrentViewer"
                                           ThemeMode="@(IsCurrentlyDark ? "dark" : "light")"
                                           OnRemoteImagesBlocked="HandleRemoteImagesBlocked" />
                 </div>
@@ -375,7 +379,6 @@
 
 @code {
     [Parameter] public EmailMessage? SelectedMessage { get; set; }
-    [Parameter] public string? SelectedMessageId { get; set; }
     [Parameter] public string? TimeZoneId { get; set; }
     [Parameter] public string MessageBody { get; set; } = "";
     [Parameter] public bool IsLoadingBody { get; set; }
@@ -383,6 +386,7 @@
     [Parameter] public string? CurrentFolderPath { get; set; }
     [Parameter] public string? AccountId { get; set; }
     [Parameter] public string? EmployeeId { get; set; }
+    [Parameter] public bool IsReadOnly { get; set; }
     [Parameter] public bool ShowFolderActions { get; set; } = true;
     [Parameter] public bool ShowDelete { get; set; } = true;
 
@@ -408,6 +412,14 @@
     [Parameter] public EventCallback OnNextMessage { get; set; }
     [Parameter] public EventCallback OnPreviousMessage { get; set; }
     [Parameter] public bool IsDarkMode { get; set; } = true;
+    [Parameter] public IReadOnlySet<string>? AllowedRemoteImageMessageIds { get; set; }
+    [Parameter] public EventCallback<string> OnRemoteImagesAllowed { get; set; }
+
+    private readonly HashSet<string> _localAllowedRemoteImageMessageIds = new(StringComparer.OrdinalIgnoreCase);
+    private bool IsRemoteImagesAllowedForCurrentViewer =>
+        SelectedMessage != null &&
+        ((AllowedRemoteImageMessageIds?.Contains(SelectedMessage.Id) ?? false) ||
+         _localAllowedRemoteImageMessageIds.Contains(SelectedMessage.Id));
 
     private List<TreeItemData<EmailFolder>> _treeItems = [];
     private List<string> _unmatchedAddresses = [];
@@ -452,14 +464,15 @@
 
     private bool CanCreateVirtualInboxForSelectedMessage()
     {
-        if (SelectedMessage == null || string.IsNullOrEmpty(SelectedMessage.AccountId)) return false;
+        if (IsReadOnly || SelectedMessage == null || string.IsNullOrEmpty(SelectedMessage.AccountId)) return false;
+        if (string.Equals(Db.CompanyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase)) return false;
         var emp = !string.IsNullOrEmpty(EmployeeId) ? Db.Employees.GetById(EmployeeId) : null;
-        if (emp != null && emp.IsAdmin) return true;
+        if (emp is not { IsActiveUnsuspended: true } || !emp.HasPermission(AppPermissions.Email.Use)) return false;
+        if (emp.IsAdmin) return true;
         var settings = Db.CompanyProfile.GetEmailSettings();
         if (!settings.AllowUsersToCreateVirtualInboxes) return false;
-        if (string.IsNullOrEmpty(EmployeeId)) return false;
         var account = Db.EmailAccounts.GetById(SelectedMessage.AccountId);
-        return account != null && account.CanUserAccess(EmployeeId, InboxService.GetUserTeamIds(EmployeeId));
+        return account != null && account.CanUserAccess(emp.Id, InboxService.GetUserTeamIds(emp.Id));
     }
 
     private void HandleRemoteImagesBlocked(bool blocked)
@@ -471,12 +484,17 @@
         }
     }
 
-    private void AllowRemoteImagesForMessage()
+    private async Task AllowRemoteImagesForMessage()
     {
-        if (SelectedMessage == null) return;
-        SelectedMessage.AllowRemoteImages = true;
+        if (IsReadOnly || SelectedMessage == null) return;
+        var emp = !string.IsNullOrEmpty(EmployeeId) ? Db.Employees.GetById(EmployeeId) : null;
+        if (emp is not { IsActiveUnsuspended: true }) return;
+        _localAllowedRemoteImageMessageIds.Add(SelectedMessage.Id);
         _remoteImagesBlocked = false;
-        Db.EmailMessages.Save(SelectedMessage);
+        if (OnRemoteImagesAllowed.HasDelegate)
+        {
+            await OnRemoteImagesAllowed.InvokeAsync(SelectedMessage.Id);
+        }
         StateHasChanged();
     }
 
@@ -508,6 +526,7 @@
 
         if (result is { Canceled: false, Data: EmailInbox saved })
         {
+            if (!CanCreateVirtualInboxForSelectedMessage()) return;
             Db.EmailInboxes.Save(saved);
             _unmatchedAddresses = InboxService.GetUnmatchedAddressesForMessage(SelectedMessage);
             if (OnInboxCreated.HasDelegate)
@@ -520,7 +539,7 @@
 
     private async Task HandleUnsubscribeAsync()
     {
-        if (SelectedMessage == null) return;
+        if (IsReadOnly || SelectedMessage == null) return;
 
         if (!string.IsNullOrWhiteSpace(SelectedMessage.UnsubscribeUrl))
         {
@@ -664,27 +683,8 @@
         return $"{bytes / 1024 / 1024} MB";
     }
 
-    private string FormatDate(DateTimeOffset date)
-    {
-        DateTime localDate;
-        if (!string.IsNullOrWhiteSpace(TimeZoneId))
-        {
-            try
-            {
-                localDate = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(date, TimeZoneId).DateTime;
-            }
-            catch
-            {
-                localDate = date.LocalDateTime;
-            }
-        }
-        else
-        {
-            localDate = date.LocalDateTime;
-        }
-
-        return localDate.ToString("g");
-    }
+    private string FormatDate(DateTimeOffset date) =>
+        TimeZoneHelper.ConvertOffsetToLocalTime(TimeZoneId, date).ToString("g");
 
     private async Task OpenContactDialog(string email, string name)
     {

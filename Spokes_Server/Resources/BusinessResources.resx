@@ -74,9 +74,6 @@
   <data name="Stop Timer" xml:space="preserve">
     <value>Stop Timer</value>
   </data>
-  <data name="PROJECTS" xml:space="preserve">
-    <value>PROJECTS</value>
-  </data>
   <data name="Linked to Project" xml:space="preserve">
     <value>Linked to Project</value>
   </data>
@@ -94,9 +91,6 @@
   </data>
   <data name="Project Statuses" xml:space="preserve">
     <value>Project Statuses</value>
-  </data>
-  <data name="Timesheets" xml:space="preserve">
-    <value>Timesheets</value>
   </data>
   <!-- HR & Employee Details -->
   <data name="HR Details" xml:space="preserve">
@@ -418,9 +412,6 @@
   <data name="Invoice #" xml:space="preserve">
     <value>Invoice #</value>
   </data>
-  <data name="Last checked:" xml:space="preserve">
-    <value>Last checked:</value>
-  </data>
   <data name="Link Email to Existing Bill" xml:space="preserve">
     <value>Link Email to Existing Bill</value>
   </data>
@@ -558,9 +549,6 @@
   </data>
   <data name="Statements" xml:space="preserve">
     <value>Statements</value>
-  </data>
-  <data name="Status" xml:space="preserve">
-    <value>Status</value>
   </data>
   <data name="Supplier" xml:space="preserve">
     <value>Supplier</value>
@@ -976,9 +964,6 @@
   <data name="Business Address" xml:space="preserve">
     <value>Business Address</value>
   </data>
-  <data name="Configure default rates, tax percentages, and supported billing currencies." xml:space="preserve">
-    <value>Configure default rates, tax percentages, and supported billing currencies.</value>
-  </data>
   <data name="Configure how employee hour banks and overtime thresholds are calculated." xml:space="preserve">
     <value>Configure how employee hour banks and overtime thresholds are calculated.</value>
   </data>
@@ -1026,9 +1011,6 @@
   </data>
   <data name="Features" xml:space="preserve">
     <value>Features</value>
-  </data>
-  <data name="Financial Defaults" xml:space="preserve">
-    <value>Financial Defaults</value>
   </data>
   <data name="HR &amp; Overtime" xml:space="preserve">
     <value>HR &amp; Overtime</value>
@@ -1087,9 +1069,6 @@
   <data name="Rounding Interval" xml:space="preserve">
     <value>Rounding Interval</value>
   </data>
-  <data name="Set standard prefix codes for generated quotes and invoices." xml:space="preserve">
-    <value>Set standard prefix codes for generated quotes and invoices.</value>
-  </data>
   <data name="Time Rounding" xml:space="preserve">
     <value>Time Rounding</value>
   </data>
@@ -1111,272 +1090,11 @@
   <data name="Date Format" xml:space="preserve">
     <value>Date Format</value>
   </data>
-  <data name="System-wide date display format" xml:space="preserve">
-    <value>System-wide date display format</value>
-  </data>
-  <data name="1 = Canada" xml:space="preserve">
-    <value>1 = Canada</value>
-  </data>
-  <data name="12001 is universal for Sage 50 Canada" xml:space="preserve">
-    <value>12001 is universal for Sage 50 Canada</value>
-  </data>
-  <data name="Account #" xml:space="preserve">
-    <value>Account #</value>
-  </data>
-  <data name="Accounts Payable (A/P)" xml:space="preserve">
-    <value>Accounts Payable (A/P)</value>
-  </data>
-  <data name="Accounts Receivable (A/R)" xml:space="preserve">
-    <value>Accounts Receivable (A/R)</value>
-  </data>
-  <data name="All Payables" xml:space="preserve">
-    <value>All Payables</value>
-  </data>
-  <data name="Auto-Match Spokes Names to Baseline" xml:space="preserve">
-    <value>Auto-Match Spokes Names to Baseline</value>
-  </data>
-  <data name="Automatically create/update Spokes Suppliers when importing Sage Vendors" xml:space="preserve">
-    <value>Automatically create/update Spokes Suppliers when importing Sage Vendors</value>
-  </data>
-  <data name="Blocking Export Errors" xml:space="preserve">
-    <value>Blocking Export Errors</value>
-  </data>
-  <data name="Cannot export: please resolve blocking validation errors first." xml:space="preserve">
-    <value>Cannot export: please resolve blocking validation errors first.</value>
-  </data>
   <data name="Chart of Accounts" xml:space="preserve">
     <value>Chart of Accounts</value>
   </data>
   <data name="Client" xml:space="preserve">
     <value>Client</value>
-  </data>
-  <data name="Client Invoices" xml:space="preserve">
-    <value>Client Invoices</value>
-  </data>
-  <data name="Combined Tax Code (QC)" xml:space="preserve">
-    <value>Combined Tax Code (QC)</value>
-  </data>
-  <data name="Commission" xml:space="preserve">
-    <value>Commission</value>
-  </data>
-  <data name="Commissions" xml:space="preserve">
-    <value>Commissions</value>
-  </data>
-  <data name="Configure how Spokes transactions map to your Sage 50 Canadian Edition Chart of Accounts, tax authorities, and customer/vendor records." xml:space="preserve">
-    <value>Configure how Spokes transactions map to your Sage 50 Canadian Edition Chart of Accounts, tax authorities, and customer/vendor records.</value>
-  </data>
-  <data name="Configure Sage GL &amp; Baseline" xml:space="preserve">
-    <value>Configure Sage GL &amp; Baseline</value>
-  </data>
-  <data name="Control Accounts &amp; Default GL Accounts" xml:space="preserve">
-    <value>Control Accounts &amp; Default GL Accounts</value>
-  </data>
-  <data name="Country Code" xml:space="preserve">
-    <value>Country Code</value>
-  </data>
-  <data name="Default Commissions GL" xml:space="preserve">
-    <value>Default Commissions GL</value>
-  </data>
-  <data name="Default Employee Expenses GL" xml:space="preserve">
-    <value>Default Employee Expenses GL</value>
-  </data>
-  <data name="Default Kilometrage GL" xml:space="preserve">
-    <value>Default Kilometrage GL</value>
-  </data>
-  <data name="Default Purchase / COGS GL" xml:space="preserve">
-    <value>Default Purchase / COGS GL</value>
-  </data>
-  <data name="Default Recurring Bills GL" xml:space="preserve">
-    <value>Default Recurring Bills GL</value>
-  </data>
-  <data name="Default Sales Revenue GL" xml:space="preserve">
-    <value>Default Sales Revenue GL</value>
-  </data>
-  <data name="Download Sage 50 (.imp)" xml:space="preserve">
-    <value>Download Sage 50 (.imp)</value>
-  </data>
-  <data name="Edit Expense Report" xml:space="preserve">
-    <value>Edit Expense Report</value>
-  </data>
-  <data name="Edit Recurring Bill" xml:space="preserve">
-    <value>Edit Recurring Bill</value>
-  </data>
-  <data name="Edit Supplier Bill" xml:space="preserve">
-    <value>Edit Supplier Bill</value>
-  </data>
-  <data name="Expense Report" xml:space="preserve">
-    <value>Expense Report</value>
-  </data>
-  <data name="Expense Reports" xml:space="preserve">
-    <value>Expense Reports</value>
-  </data>
-  <data name="Export client sales invoices, supplier bills, recurring bills, employee expense reports, and commissions directly into Sage 50 Canadian Edition (.imp format) or CSV." xml:space="preserve">
-    <value>Export client sales invoices, supplier bills, recurring bills, employee expense reports, and commissions directly into Sage 50 Canadian Edition (.imp format) or CSV.</value>
-  </data>
-  <data name="Export Invoices (CSV)" xml:space="preserve">
-    <value>Export Invoices (CSV)</value>
-  </data>
-  <data name="Export Payables (CSV)" xml:space="preserve">
-    <value>Export Payables (CSV)</value>
-  </data>
-  <data name="Exported" xml:space="preserve">
-    <value>Exported</value>
-  </data>
-  <data name="From Date" xml:space="preserve">
-    <value>From Date</value>
-  </data>
-  <data name="GL &amp; Tax Setup" xml:space="preserve">
-    <value>GL &amp; Tax Setup</value>
-  </data>
-  <data name="Imported GL Accounts" xml:space="preserve">
-    <value>Imported GL Accounts</value>
-  </data>
-  <data name="In Sage 50 Canadian Edition, use File &gt; Import/Export &gt; Export Records to export your Customers, Vendors, Chart of Accounts, or Inventory &amp; Services (.csv, .txt, or .imp), then upload them here to establish your baseline." xml:space="preserve">
-    <value>In Sage 50 Canadian Edition, use File &gt; Import/Export &gt; Export Records to export your Customers, Vendors, Chart of Accounts, or Inventory &amp; Services (.csv, .txt, or .imp), then upload them here to establish your baseline.</value>
-  </data>
-  <data name="Include &lt;customers&gt; &amp; &lt;vendors&gt; blocks in .imp" xml:space="preserve">
-    <value>Include &lt;customers&gt; &amp; &lt;vendors&gt; blocks in .imp</value>
-  </data>
-  <data name="Include Already Exported" xml:space="preserve">
-    <value>Include Already Exported</value>
-  </data>
-  <data name="Inventory &amp; Services" xml:space="preserve">
-    <value>Inventory &amp; Services</value>
-  </data>
-  <data name="Invoice / Ref #" xml:space="preserve">
-    <value>Invoice / Ref #</value>
-  </data>
-  <data name="No client invoices match the filter criteria." xml:space="preserve">
-    <value>No client invoices match the filter criteria.</value>
-  </data>
-  <data name="No clients found." xml:space="preserve">
-    <value>No clients found.</value>
-  </data>
-  <data name="No payable transactions match the filter criteria." xml:space="preserve">
-    <value>No payable transactions match the filter criteria.</value>
-  </data>
-  <data name="No suppliers or payees found." xml:space="preserve">
-    <value>No suppliers or payees found.</value>
-  </data>
-  <data name="No transactions to export" xml:space="preserve">
-    <value>No transactions to export</value>
-  </data>
-  <data name="Payable Stream" xml:space="preserve">
-    <value>Payable Stream</value>
-  </data>
-  <data name="Payables &amp; Bills" xml:space="preserve">
-    <value>Payables &amp; Bills</value>
-  </data>
-  <data name="Pending Export" xml:space="preserve">
-    <value>Pending Export</value>
-  </data>
-  <data name="Please fill in all required GL and tax settings." xml:space="preserve">
-    <value>Please fill in all required GL and tax settings.</value>
-  </data>
-  <data name="Pre-flight validation passed: all transactions are ready for Sage 50 import." xml:space="preserve">
-    <value>Pre-flight validation passed: all transactions are ready for Sage 50 import.</value>
-  </data>
-  <data name="Pre-Flight Validation Warnings" xml:space="preserve">
-    <value>Pre-Flight Validation Warnings</value>
-  </data>
-  <data name="Quebec Tax Authorities (TPS &amp; TVQ)" xml:space="preserve">
-    <value>Quebec Tax Authorities (TPS &amp; TVQ)</value>
-  </data>
-  <data name="Recurring &amp; One-Time Bills" xml:space="preserve">
-    <value>Recurring &amp; One-Time Bills</value>
-  </data>
-  <data name="Recurring Bill" xml:space="preserve">
-    <value>Recurring Bill</value>
-  </data>
-  <data name="Sage 50 Accounting Export" xml:space="preserve">
-    <value>Sage 50 Accounting Export</value>
-  </data>
-  <data name="Sage 50 Baseline Import" xml:space="preserve">
-    <value>Sage 50 Baseline Import</value>
-  </data>
-  <data name="Sage 50 Customer Name" xml:space="preserve">
-    <value>Sage 50 Customer Name</value>
-  </data>
-  <data name="Sage 50 Export Configuration" xml:space="preserve">
-    <value>Sage 50 Export Configuration</value>
-  </data>
-  <data name="Sage 50 export settings saved" xml:space="preserve">
-    <value>Sage 50 export settings saved</value>
-  </data>
-  <data name="Sage 50 Vendor Name" xml:space="preserve">
-    <value>Sage 50 Vendor Name</value>
-  </data>
-  <data name="Sage 50 Version Code" xml:space="preserve">
-    <value>Sage 50 Version Code</value>
-  </data>
-  <data name="Sage Customers" xml:space="preserve">
-    <value>Sage Customers</value>
-  </data>
-  <data name="Sage Export Status" xml:space="preserve">
-    <value>Sage Export Status</value>
-  </data>
-  <data name="Sage Vendors" xml:space="preserve">
-    <value>Sage Vendors</value>
-  </data>
-  <data name="Selected transactions unmarked and ready for re-export." xml:space="preserve">
-    <value>Selected transactions unmarked and ready for re-export.</value>
-  </data>
-  <data name="Spokes Client" xml:space="preserve">
-    <value>Spokes Client</value>
-  </data>
-  <data name="Spokes Supplier / Payee" xml:space="preserve">
-    <value>Spokes Supplier / Payee</value>
-  </data>
-  <data name="Stream" xml:space="preserve">
-    <value>Stream</value>
-  </data>
-  <data name="SubTotal" xml:space="preserve">
-    <value>SubTotal</value>
-  </data>
-  <data name="Supplier &amp; PO Bills" xml:space="preserve">
-    <value>Supplier &amp; PO Bills</value>
-  </data>
-  <data name="Supplier Bill" xml:space="preserve">
-    <value>Supplier Bill</value>
-  </data>
-  <data name="The following errors must be resolved before generating a Sage 50 (.imp) file:" xml:space="preserve">
-    <value>The following errors must be resolved before generating a Sage 50 (.imp) file:</value>
-  </data>
-  <data name="To Date" xml:space="preserve">
-    <value>To Date</value>
-  </data>
-  <data name="TPS (5%)" xml:space="preserve">
-    <value>TPS (5%)</value>
-  </data>
-  <data name="TPS / GST GL Account" xml:space="preserve">
-    <value>TPS / GST GL Account</value>
-  </data>
-  <data name="TPS / GST Tax Authority Name" xml:space="preserve">
-    <value>TPS / GST Tax Authority Name</value>
-  </data>
-  <data name="TVQ (9.975%)" xml:space="preserve">
-    <value>TVQ (9.975%)</value>
-  </data>
-  <data name="TVQ / QST GL Account" xml:space="preserve">
-    <value>TVQ / QST GL Account</value>
-  </data>
-  <data name="TVQ / QST Tax Authority Name" xml:space="preserve">
-    <value>TVQ / QST Tax Authority Name</value>
-  </data>
-  <data name="Unmark Exported" xml:space="preserve">
-    <value>Unmark Exported</value>
-  </data>
-  <data name="Upload Accounts" xml:space="preserve">
-    <value>Upload Accounts</value>
-  </data>
-  <data name="Upload Customers" xml:space="preserve">
-    <value>Upload Customers</value>
-  </data>
-  <data name="Upload Items" xml:space="preserve">
-    <value>Upload Items</value>
-  </data>
-  <data name="Upload Vendors" xml:space="preserve">
-    <value>Upload Vendors</value>
   </data>
   <data name="All {0}" xml:space="preserve">
     <value>All {0}</value>
@@ -1423,101 +1141,8 @@
   <data name="Type @ to see available context tags for dynamic client/company content." xml:space="preserve">
     <value>Type @ to see available context tags for dynamic client/company content.</value>
   </data>
-  <data name="Accounting Defaults (Sage 50)" xml:space="preserve">
-    <value>Accounting Defaults (Sage 50)</value>
-  </data>
-  <data name="Adjust GL accounts, Sage Vendor/Customer names, or tax breakdowns directly inline below (changes are remembered automatically for future exports), or click a row to open its full editor:" xml:space="preserve">
-    <value>Adjust GL accounts, Sage Vendor/Customer names, or tax breakdowns directly inline below (changes are remembered automatically for future exports), or click a row to open its full editor:</value>
-  </data>
-  <data name="and remembered default for client." xml:space="preserve">
-    <value>and remembered default for client.</value>
-  </data>
-  <data name="and remembered default for vendor." xml:space="preserve">
-    <value>and remembered default for vendor.</value>
-  </data>
-  <data name="Auto-resolve Sage Service Item IDs from Linked GL" xml:space="preserve">
-    <value>Auto-resolve Sage Service Item IDs from Linked GL</value>
-  </data>
-  <data name="Client -&gt; Sage Customer &amp; Revenue GL Mappings" xml:space="preserve">
-    <value>Client -&gt; Sage Customer &amp; Revenue GL Mappings</value>
-  </data>
-  <data name="Default Expense GL" xml:space="preserve">
-    <value>Default Expense GL</value>
-  </data>
-  <data name="Default Expense GL Account" xml:space="preserve">
-    <value>Default Expense GL Account</value>
-  </data>
-  <data name="Default Revenue GL" xml:space="preserve">
-    <value>Default Revenue GL</value>
-  </data>
-  <data name="Edit Client Invoice" xml:space="preserve">
-    <value>Edit Client Invoice</value>
-  </data>
-  <data name="Entity &amp; GL Mappings" xml:space="preserve">
-    <value>Entity &amp; GL Mappings</value>
-  </data>
-  <data name="Expense GL" xml:space="preserve">
-    <value>Expense GL</value>
-  </data>
   <data name="Inherit Company Default" xml:space="preserve">
     <value>Inherit Company Default</value>
-  </data>
-  <data name="Map Spokes Client and Supplier names to their exact 35-character Sage 50 names and assign their default GL accounts so transactions require zero manual entry." xml:space="preserve">
-    <value>Map Spokes Client and Supplier names to their exact 35-character Sage 50 names and assign their default GL accounts so transactions require zero manual entry.</value>
-  </data>
-  <data name="Mark Tax-Exempt (0% Tax)" xml:space="preserve">
-    <value>Mark Tax-Exempt (0% Tax)</value>
-  </data>
-  <data name="Marked payable as tax-exempt (0% tax)." xml:space="preserve">
-    <value>Marked payable as tax-exempt (0% tax).</value>
-  </data>
-  <data name="Open Full Editor..." xml:space="preserve">
-    <value>Open Full Editor...</value>
-  </data>
-  <data name="Quick Tax Adjustment" xml:space="preserve">
-    <value>Quick Tax Adjustment</value>
-  </data>
-  <data name="Recalculate Standard QC Tax (5% + 9.975%)" xml:space="preserve">
-    <value>Recalculate Standard QC Tax (5% + 9.975%)</value>
-  </data>
-  <data name="Revenue GL" xml:space="preserve">
-    <value>Revenue GL</value>
-  </data>
-  <data name="Sage 50 Vendor Name (Optional)" xml:space="preserve">
-    <value>Sage 50 Vendor Name (Optional)</value>
-  </data>
-  <data name="Sage Customer" xml:space="preserve">
-    <value>Sage Customer</value>
-  </data>
-  <data name="Sage Customer Name" xml:space="preserve">
-    <value>Sage Customer Name</value>
-  </data>
-  <data name="Sage Vendor / Payee" xml:space="preserve">
-    <value>Sage Vendor / Payee</value>
-  </data>
-  <data name="Sage Vendor Name" xml:space="preserve">
-    <value>Sage Vendor Name</value>
-  </data>
-  <data name="Saved Expense GL" xml:space="preserve">
-    <value>Saved Expense GL</value>
-  </data>
-  <data name="Saved Revenue GL" xml:space="preserve">
-    <value>Saved Revenue GL</value>
-  </data>
-  <data name="Saved Sage Customer mapping and remembered for client." xml:space="preserve">
-    <value>Saved Sage Customer mapping and remembered for client.</value>
-  </data>
-  <data name="Saved Sage Vendor mapping and remembered default." xml:space="preserve">
-    <value>Saved Sage Vendor mapping and remembered default.</value>
-  </data>
-  <data name="Supplier / Payee -&gt; Sage Vendor &amp; Expense GL Mappings" xml:space="preserve">
-    <value>Supplier / Payee -&gt; Sage Vendor &amp; Expense GL Mappings</value>
-  </data>
-  <data name="Updated tax breakdown to standard QC taxes (5% TPS + 9.975% TVQ)." xml:space="preserve">
-    <value>Updated tax breakdown to standard QC taxes (5% TPS + 9.975% TVQ).</value>
-  </data>
-  <data name="Upload One or Multiple Sage 50 Files" xml:space="preserve">
-    <value>Upload One or Multiple Sage 50 Files</value>
   </data>
   <data name="Change Landing Page" xml:space="preserve">
     <value>Change Landing Page</value>
@@ -1633,9 +1258,6 @@
   <data name="Amount Paid" xml:space="preserve">
     <value>Amount Paid</value>
   </data>
-  <data name="Are you sure you want to delete the payment of {0} received on {1}?" xml:space="preserve">
-    <value>Are you sure you want to delete the payment of {0} received on {1}?</value>
-  </data>
   <data name="Delete Payment" xml:space="preserve">
     <value>Delete Payment</value>
   </data>
@@ -1704,5 +1326,3692 @@
   </data>
   <data name="You do not have permission to manage invoice payments." xml:space="preserve">
     <value>You do not have permission to manage invoice payments.</value>
+  </data>
+  <data name="A quote must be marked Final before it can be Accepted or Rejected." xml:space="preserve">
+    <value>A quote must be marked Final before it can be Accepted or Rejected.</value>
+  </data>
+  <data name="Are you sure you want to delete the payment of {0} received on {1}? Please provide a reason." xml:space="preserve">
+    <value>Are you sure you want to delete the payment of {0} received on {1}? Please provide a reason.</value>
+  </data>
+  <data name="Cannot revert a paid prepayment invoice while its credits are applied to other invoices." xml:space="preserve">
+    <value>Cannot revert a paid prepayment invoice while its credits are applied to other invoices.</value>
+  </data>
+  <data name="Changed By" xml:space="preserve">
+    <value>Changed By</value>
+  </data>
+  <data name="Confirm Final Invoice Edit" xml:space="preserve">
+    <value>Confirm Final Invoice Edit</value>
+  </data>
+  <data name="Confirm Final Quote Edit" xml:space="preserve">
+    <value>Confirm Final Quote Edit</value>
+  </data>
+  <data name="Confirm Payment Reduction" xml:space="preserve">
+    <value>Confirm Payment Reduction</value>
+  </data>
+  <data name="Confirm Status Change" xml:space="preserve">
+    <value>Confirm Status Change</value>
+  </data>
+  <data name="Date &amp; Time" xml:space="preserve">
+    <value>Date &amp; Time</value>
+  </data>
+  <data name="Describe what was updated..." xml:space="preserve">
+    <value>Describe what was updated...</value>
+  </data>
+  <data name="Details &amp; Reason" xml:space="preserve">
+    <value>Details &amp; Reason</value>
+  </data>
+  <data name="Edit Invoice" xml:space="preserve">
+    <value>Edit Invoice</value>
+  </data>
+  <data name="Edit Mode" xml:space="preserve">
+    <value>Edit Mode</value>
+  </data>
+  <data name="Edit Mode is unlocked for this Final invoice. Saving will require confirmation and regenerate the PDF." xml:space="preserve">
+    <value>Edit Mode is unlocked for this Final invoice. Saving will require confirmation and regenerate the PDF.</value>
+  </data>
+  <data name="Edit Mode is unlocked for this Final quote. Saving will require confirmation and regenerate the PDF." xml:space="preserve">
+    <value>Edit Mode is unlocked for this Final quote. Saving will require confirmation and regenerate the PDF.</value>
+  </data>
+  <data name="Edit Note / Reason (optional)" xml:space="preserve">
+    <value>Edit Note / Reason (optional)</value>
+  </data>
+  <data name="Edit Quote" xml:space="preserve">
+    <value>Edit Quote</value>
+  </data>
+  <data name="Edited in Final" xml:space="preserve">
+    <value>Edited in Final</value>
+  </data>
+  <data name="Explain why this invoice status is being reverted..." xml:space="preserve">
+    <value>Explain why this invoice status is being reverted...</value>
+  </data>
+  <data name="Explain why this payment is being removed..." xml:space="preserve">
+    <value>Explain why this payment is being removed...</value>
+  </data>
+  <data name="Explain why this quote status is being reverted or changed..." xml:space="preserve">
+    <value>Explain why this quote status is being reverted or changed...</value>
+  </data>
+  <data name="History" xml:space="preserve">
+    <value>History</value>
+  </data>
+  <data name="Invoice Builder &amp; Details" xml:space="preserve">
+    <value>Invoice Builder &amp; Details</value>
+  </data>
+  <data name="No lifecycle history recorded yet." xml:space="preserve">
+    <value>No lifecycle history recorded yet.</value>
+  </data>
+  <data name="No rendering uploaded." xml:space="preserve">
+    <value>No rendering uploaded.</value>
+  </data>
+  <data name="Payment Deleted" xml:space="preserve">
+    <value>Payment Deleted</value>
+  </data>
+  <data name="Payment Recorded" xml:space="preserve">
+    <value>Payment Recorded</value>
+  </data>
+  <data name="Payment Updated" xml:space="preserve">
+    <value>Payment Updated</value>
+  </data>
+  <data name="Please provide a reason for changing the invoice status from {0} to {1}." xml:space="preserve">
+    <value>Please provide a reason for changing the invoice status from {0} to {1}.</value>
+  </data>
+  <data name="Please provide a reason for changing the quote status from {0} to {1}." xml:space="preserve">
+    <value>Please provide a reason for changing the quote status from {0} to {1}.</value>
+  </data>
+  <data name="Quote Builder &amp; Details" xml:space="preserve">
+    <value>Quote Builder &amp; Details</value>
+  </data>
+  <data name="Reason / Note:" xml:space="preserve">
+    <value>Reason / Note:</value>
+  </data>
+  <data name="Reason for deleting payment" xml:space="preserve">
+    <value>Reason for deleting payment</value>
+  </data>
+  <data name="Reason for reducing payment" xml:space="preserve">
+    <value>Reason for reducing payment</value>
+  </data>
+  <data name="Reason for status change" xml:space="preserve">
+    <value>Reason for status change</value>
+  </data>
+  <data name="Reducing this payment from {0} to {1} may change the invoice status. Please provide a reason." xml:space="preserve">
+    <value>Reducing this payment from {0} to {1} may change the invoice status. Please provide a reason.</value>
+  </data>
+  <data name="Save Invoice" xml:space="preserve">
+    <value>Save Invoice</value>
+  </data>
+  <data name="Save Quote" xml:space="preserve">
+    <value>Save Quote</value>
+  </data>
+  <data name="Status Changed" xml:space="preserve">
+    <value>Status Changed</value>
+  </data>
+  <data name="Status Reverted" xml:space="preserve">
+    <value>Status Reverted</value>
+  </data>
+  <data name="Status:" xml:space="preserve">
+    <value>Status:</value>
+  </data>
+  <data name="This invoice is already in Final status. Saving changes will update the finalized invoice and invalidate any cached PDF. Do you want to save your changes?" xml:space="preserve">
+    <value>This invoice is already in Final status. Saving changes will update the finalized invoice and invalidate any cached PDF. Do you want to save your changes?</value>
+  </data>
+  <data name="This invoice is in Final status and is currently in Read-Only mode. Toggle Edit Mode to make changes." xml:space="preserve">
+    <value>This invoice is in Final status and is currently in Read-Only mode. Toggle Edit Mode to make changes.</value>
+  </data>
+  <data name="This invoice is in Read-Only mode ({0}). You can inspect how it was built and copy Markdown text." xml:space="preserve">
+    <value>This invoice is in Read-Only mode ({0}). You can inspect how it was built and copy Markdown text.</value>
+  </data>
+  <data name="This quote is already in Final status. Saving changes will update the finalized quote and invalidate any cached PDF. Do you want to save your changes?" xml:space="preserve">
+    <value>This quote is already in Final status. Saving changes will update the finalized quote and invalidate any cached PDF. Do you want to save your changes?</value>
+  </data>
+  <data name="This quote is in Final status and is currently in Read-Only mode. Toggle Edit Mode to make changes." xml:space="preserve">
+    <value>This quote is in Final status and is currently in Read-Only mode. Toggle Edit Mode to make changes.</value>
+  </data>
+  <data name="This quote is in Read-Only mode ({0}). You can inspect how it was built and copy Markdown text." xml:space="preserve">
+    <value>This quote is in Read-Only mode ({0}). You can inspect how it was built and copy Markdown text.</value>
+  </data>
+  <data name="Transition / Action" xml:space="preserve">
+    <value>Transition / Action</value>
+  </data>
+  <data name="View / Edit" xml:space="preserve">
+    <value>View / Edit</value>
+  </data>
+  <data name="View Details" xml:space="preserve">
+    <value>View Details</value>
+  </data>
+  <data name="-- Select Real Inbox --" xml:space="preserve">
+    <value>-- Select Real Inbox --</value>
+  </data>
+  <data name="All messages in Real Inbox" xml:space="preserve">
+    <value>All messages in Real Inbox</value>
+  </data>
+  <data name="Company billing inbox settings saved" xml:space="preserve">
+    <value>Company billing inbox settings saved</value>
+  </data>
+  <data name="Configure the central company-wide billing mailbox by selecting an Email Account (Real Inbox) and optional Virtual Inbox filter. Incoming invoices sent to this mailbox are monitored and automatically extracted into draft bills." xml:space="preserve">
+    <value>Configure the central company-wide billing mailbox by selecting an Email Account (Real Inbox) and optional Virtual Inbox filter. Incoming invoices sent to this mailbox are monitored and automatically extracted into draft bills.</value>
+  </data>
+  <data name="Enable Company Billing Inbox Automated Ingestion" xml:space="preserve">
+    <value>Enable Company Billing Inbox Automated Ingestion</value>
+  </data>
+  <data name="Folder to Monitor" xml:space="preserve">
+    <value>Folder to Monitor</value>
+  </data>
+  <data name="Force Redownload Mailbox" xml:space="preserve">
+    <value>Force Redownload Mailbox</value>
+  </data>
+  <data name="Identity used when composing or replying to suppliers from the Bill Inbox" xml:space="preserve">
+    <value>Identity used when composing or replying to suppliers from the Bill Inbox</value>
+  </data>
+  <data name="Last Batch Ingested:" xml:space="preserve">
+    <value>Last Batch Ingested:</value>
+  </data>
+  <data name="Last Checked:" xml:space="preserve">
+    <value>Last Checked:</value>
+  </data>
+  <data name="Mailbox has not been synced yet." xml:space="preserve">
+    <value>Mailbox has not been synced yet.</value>
+  </data>
+  <data name="Mailbox Sync Issue:" xml:space="preserve">
+    <value>Mailbox Sync Issue:</value>
+  </data>
+  <data name="New Real Inbox" xml:space="preserve">
+    <value>New Real Inbox</value>
+  </data>
+  <data name="Optionally restrict bill ingestion to a specific Virtual Inbox alias on this account" xml:space="preserve">
+    <value>Optionally restrict bill ingestion to a specific Virtual Inbox alias on this account</value>
+  </data>
+  <data name="Outbound Sending Identity" xml:space="preserve">
+    <value>Outbound Sending Identity</value>
+  </data>
+  <data name="Please select a Real Inbox (Email Account) when automated ingestion is enabled." xml:space="preserve">
+    <value>Please select a Real Inbox (Email Account) when automated ingestion is enabled.</value>
+  </data>
+  <data name="Real Inbox (Email Account)" xml:space="preserve">
+    <value>Real Inbox (Email Account)</value>
+  </data>
+  <data name="Redownloading..." xml:space="preserve">
+    <value>Redownloading...</value>
+  </data>
+  <data name="Re-fetches recent emails directly from IMAP to repair missing email bodies, cache raw MIME, and re-run bill extraction." xml:space="preserve">
+    <value>Re-fetches recent emails directly from IMAP to repair missing email bodies, cache raw MIME, and re-run bill extraction.</value>
+  </data>
+  <data name="Select the IMAP mailbox to monitor for incoming supplier bills" xml:space="preserve">
+    <value>Select the IMAP mailbox to monitor for incoming supplier bills</value>
+  </data>
+  <data name="Sync Interval (Minutes)" xml:space="preserve">
+    <value>Sync Interval (Minutes)</value>
+  </data>
+  <data name="Use Inbox Default Identity" xml:space="preserve">
+    <value>Use Inbox Default Identity</value>
+  </data>
+  <data name="Virtual Inbox Filter (Optional)" xml:space="preserve">
+    <value>Virtual Inbox Filter (Optional)</value>
+  </data>
+  <data name="Add Real Inbox" xml:space="preserve">
+    <value>Add Real Inbox</value>
+  </data>
+  <data name="All Invoices" xml:space="preserve">
+    <value>All Invoices</value>
+  </data>
+  <data name="Cash" xml:space="preserve">
+    <value>Cash</value>
+  </data>
+  <data name="Check" xml:space="preserve">
+    <value>Check</value>
+  </data>
+  <data name="Client Invoice #{0}" xml:space="preserve">
+    <value>Client Invoice #{0}</value>
+  </data>
+  <data name="Credit Card" xml:space="preserve">
+    <value>Credit Card</value>
+  </data>
+  <data name="Electronic / EFT" xml:space="preserve">
+    <value>Electronic / EFT</value>
+  </data>
+  <data name="Email linked to invoice #{0} and marked as dealt with!" xml:space="preserve">
+    <value>Email linked to invoice #{0} and marked as dealt with!</value>
+  </data>
+  <data name="Email linked to invoice #{0}, payment of {1} recorded, and marked as dealt with!" xml:space="preserve">
+    <value>Email linked to invoice #{0}, payment of {1} recorded, and marked as dealt with!</value>
+  </data>
+  <data name="Incoming Payment Receipt" xml:space="preserve">
+    <value>Incoming Payment Receipt</value>
+  </data>
+  <data name="Interac e-Transfer" xml:space="preserve">
+    <value>Interac e-Transfer</value>
+  </data>
+  <data name="Link Email to Existing Invoice" xml:space="preserve">
+    <value>Link Email to Existing Invoice</value>
+  </data>
+  <data name="Link to Existing Invoice" xml:space="preserve">
+    <value>Link to Existing Invoice</value>
+  </data>
+  <data name="Linked invoice not found." xml:space="preserve">
+    <value>Linked invoice not found.</value>
+  </data>
+  <data name="No matching invoices found." xml:space="preserve">
+    <value>No matching invoices found.</value>
+  </data>
+  <data name="Paid in Full" xml:space="preserve">
+    <value>Paid in Full</value>
+  </data>
+  <data name="Project" xml:space="preserve">
+    <value>Project</value>
+  </data>
+  <data name="Record payment on this invoice" xml:space="preserve">
+    <value>Record payment on this invoice</value>
+  </data>
+  <data name="Reference / Notes" xml:space="preserve">
+    <value>Reference / Notes</value>
+  </data>
+  <data name="Search client, project, invoice #, amount..." xml:space="preserve">
+    <value>Search client, project, invoice #, amount...</value>
+  </data>
+  <data name="Select an existing invoice in Spokes to link with this incoming payment receipt. The payment receipt will be recorded and the email will be marked as dealt with." xml:space="preserve">
+    <value>Select an existing invoice in Spokes to link with this incoming payment receipt. The payment receipt will be recorded and the email will be marked as dealt with.</value>
+  </data>
+  <data name="View Linked Invoice" xml:space="preserve">
+    <value>View Linked Invoice</value>
+  </data>
+  <data name="Wire Transfer" xml:space="preserve">
+    <value>Wire Transfer</value>
+  </data>
+  <data name="Balance Due:" xml:space="preserve">
+    <value>Balance Due:</value>
+  </data>
+  <data name="Due:" xml:space="preserve">
+    <value>Due:</value>
+  </data>
+  <data name="Link to Invoice #{0}" xml:space="preserve">
+    <value>Link to Invoice #{0}</value>
+  </data>
+  <data name="Remaining balance after payment: {0}" xml:space="preserve">
+    <value>Remaining balance after payment: {0}</value>
+  </data>
+  <data name="Select an Invoice to Link" xml:space="preserve">
+    <value>Select an Invoice to Link</value>
+  </data>
+  <data name="Selected:" xml:space="preserve">
+    <value>Selected:</value>
+  </data>
+  <data name="Total:" xml:space="preserve">
+    <value>Total:</value>
+  </data>
+  <data name="Will mark invoice as Paid in Full" xml:space="preserve">
+    <value>Will mark invoice as Paid in Full</value>
+  </data>
+  <data name="{0} Columns ({1} of {2})" xml:space="preserve">
+    <value>{0} Columns ({1} of {2})</value>
+  </data>
+  <data name="{0} Expenses" xml:space="preserve">
+    <value>{0} Expenses</value>
+  </data>
+  <data name="{0} Representative Name" xml:space="preserve">
+    <value>{0} Representative Name</value>
+  </data>
+  <data name="100% Since Inception" xml:space="preserve">
+    <value>100% Since Inception</value>
+  </data>
+  <data name="Additional Project Sections" xml:space="preserve">
+    <value>Additional Project Sections</value>
+  </data>
+  <data name="Approval &amp; Signature Block" xml:space="preserve">
+    <value>Approval &amp; Signature Block</value>
+  </data>
+  <data name="Are you sure you want to delete report #{0} ({1})?" xml:space="preserve">
+    <value>Are you sure you want to delete report #{0} ({1})?</value>
+  </data>
+  <data name="Are you sure you want to delete report #{0} ({1})? This cannot be undone." xml:space="preserve">
+    <value>Are you sure you want to delete report #{0} ({1})? This cannot be undone.</value>
+  </data>
+  <data name="As-Of Cutoff Date" xml:space="preserve">
+    <value>As-Of Cutoff Date</value>
+  </data>
+  <data name="Author" xml:space="preserve">
+    <value>Author</value>
+  </data>
+  <data name="Back to Project" xml:space="preserve">
+    <value>Back to Project</value>
+  </data>
+  <data name="Base Amount" xml:space="preserve">
+    <value>Base Amount</value>
+  </data>
+  <data name="Basis" xml:space="preserve">
+    <value>Basis</value>
+  </data>
+  <data name="beneficiaries" xml:space="preserve">
+    <value>beneficiaries</value>
+  </data>
+  <data name="Beneficiary" xml:space="preserve">
+    <value>Beneficiary</value>
+  </data>
+  <data name="Best regards," xml:space="preserve">
+    <value>Best regards,</value>
+  </data>
+  <data name="By Month" xml:space="preserve">
+    <value>By Month</value>
+  </data>
+  <data name="By Month — Detailed Items &amp; Monthly Subtotals" xml:space="preserve">
+    <value>By Month — Detailed Items &amp; Monthly Subtotals</value>
+  </data>
+  <data name="By Month — Monthly Summary Table Only" xml:space="preserve">
+    <value>By Month — Monthly Summary Table Only</value>
+  </data>
+  <data name="By Supplier — Grouped by Vendor" xml:space="preserve">
+    <value>By Supplier — Grouped by Vendor</value>
+  </data>
+  <data name="Captured:" xml:space="preserve">
+    <value>Captured:</value>
+  </data>
+  <data name="Chronological" xml:space="preserve">
+    <value>Chronological</value>
+  </data>
+  <data name="Chronological — Flat List" xml:space="preserve">
+    <value>Chronological — Flat List</value>
+  </data>
+  <data name="Client / Recipient Representative Name" xml:space="preserve">
+    <value>Client / Recipient Representative Name</value>
+  </data>
+  <data name="Client Billable Rates &amp; Invoicing (Client-Facing)" xml:space="preserve">
+    <value>Client Billable Rates &amp; Invoicing (Client-Facing)</value>
+  </data>
+  <data name="Client Progress (Billable)" xml:space="preserve">
+    <value>Client Progress (Billable)</value>
+  </data>
+  <data name="Closing Notes &amp; Next Steps" xml:space="preserve">
+    <value>Closing Notes &amp; Next Steps</value>
+  </data>
+  <data name="Company Default Template" xml:space="preserve">
+    <value>Company Default Template</value>
+  </data>
+  <data name="Complete Internal Audit" xml:space="preserve">
+    <value>Complete Internal Audit</value>
+  </data>
+  <data name="Create Project Report" xml:space="preserve">
+    <value>Create Project Report</value>
+  </data>
+  <data name="Delete Project Report" xml:space="preserve">
+    <value>Delete Project Report</value>
+  </data>
+  <data name="Detailed by {0} (Rows per Period)" xml:space="preserve">
+    <value>Detailed by {0} (Rows per Period)</value>
+  </data>
+  <data name="Detailed by Task &amp; Subtask (Rows per Period)" xml:space="preserve">
+    <value>Detailed by Task &amp; Subtask (Rows per Period)</value>
+  </data>
+  <data name="Display Confidential Watermark / Badge" xml:space="preserve">
+    <value>Display Confidential Watermark / Badge</value>
+  </data>
+  <data name="Displays high-level budget, invoiced revenue, labor/procurement totals, and profitability cards." xml:space="preserve">
+    <value>Displays high-level budget, invoiced revenue, labor/procurement totals, and profitability cards.</value>
+  </data>
+  <data name="Document Styling &amp; Confidentiality" xml:space="preserve">
+    <value>Document Styling &amp; Confidentiality</value>
+  </data>
+  <data name="Document Template" xml:space="preserve">
+    <value>Document Template</value>
+  </data>
+  <data name="Duplicate" xml:space="preserve">
+    <value>Duplicate</value>
+  </data>
+  <data name="Duplicated as {0} (Snapshot as of today)" xml:space="preserve">
+    <value>Duplicated as {0} (Snapshot as of today)</value>
+  </data>
+  <data name="e.g. 2026 Project Status &amp; Financial Bilan" xml:space="preserve">
+    <value>e.g. 2026 Project Status &amp; Financial Bilan</value>
+  </data>
+  <data name="Edit Project Report" xml:space="preserve">
+    <value>Edit Project Report</value>
+  </data>
+  <data name="Error generating PDF: {0}" xml:space="preserve">
+    <value>Error generating PDF: {0}</value>
+  </data>
+  <data name="Excludes any activity after this date" xml:space="preserve">
+    <value>Excludes any activity after this date</value>
+  </data>
+  <data name="Executive Summary / Management Commentary" xml:space="preserve">
+    <value>Executive Summary / Management Commentary</value>
+  </data>
+  <data name="Expenses Grouping" xml:space="preserve">
+    <value>Expenses Grouping</value>
+  </data>
+  <data name="Failed to generate PDF: {0}" xml:space="preserve">
+    <value>Failed to generate PDF: {0}</value>
+  </data>
+  <data name="Failed to regenerate PDF: {0}" xml:space="preserve">
+    <value>Failed to regenerate PDF: {0}</value>
+  </data>
+  <data name="Financial &amp; KPI Summary" xml:space="preserve">
+    <value>Financial &amp; KPI Summary</value>
+  </data>
+  <data name="Financial Mode" xml:space="preserve">
+    <value>Financial Mode</value>
+  </data>
+  <data name="Generating official PDF..." xml:space="preserve">
+    <value>Generating official PDF...</value>
+  </data>
+  <data name="Generating PDF for attachment..." xml:space="preserve">
+    <value>Generating PDF for attachment...</value>
+  </data>
+  <data name="Hello" xml:space="preserve">
+    <value>Hello</value>
+  </data>
+  <data name="Hours &amp; Activity Only" xml:space="preserve">
+    <value>Hours &amp; Activity Only</value>
+  </data>
+  <data name="Hours &amp; Quantities Only (No Currency Amounts)" xml:space="preserve">
+    <value>Hours &amp; Quantities Only (No Currency Amounts)</value>
+  </data>
+  <data name="Include Cash Flow &amp; Paid vs. Spent Position" xml:space="preserve">
+    <value>Include Cash Flow &amp; Paid vs. Spent Position</value>
+  </data>
+  <data name="Include Periodic Breakdown (By Week / Month)" xml:space="preserve">
+    <value>Include Periodic Breakdown (By Week / Month)</value>
+  </data>
+  <data name="Internal Cost, Revenue &amp; Net Profit (Management Bilan)" xml:space="preserve">
+    <value>Internal Cost, Revenue &amp; Net Profit (Management Bilan)</value>
+  </data>
+  <data name="Internal Project" xml:space="preserve">
+    <value>Internal Project</value>
+  </data>
+  <data name="Invoices" xml:space="preserve">
+    <value>Invoices</value>
+  </data>
+  <data name="items" xml:space="preserve">
+    <value>items</value>
+  </data>
+  <data name="Key Project Milestones &amp; Timeline Notes" xml:space="preserve">
+    <value>Key Project Milestones &amp; Timeline Notes</value>
+  </data>
+  <data name="Labor &amp; Time Breakdown" xml:space="preserve">
+    <value>Labor &amp; Time Breakdown</value>
+  </data>
+  <data name="Last Year ({0})" xml:space="preserve">
+    <value>Last Year ({0})</value>
+  </data>
+  <data name="Leave blank for full project since inception" xml:space="preserve">
+    <value>Leave blank for full project since inception</value>
+  </data>
+  <data name="Management Bilan ({0}/Week + Purchases/Month)" xml:space="preserve">
+    <value>Management Bilan ({0}/Week + Purchases/Month)</value>
+  </data>
+  <data name="Monthly" xml:space="preserve">
+    <value>Monthly</value>
+  </data>
+  <data name="Narrative &amp; Notes" xml:space="preserve">
+    <value>Narrative &amp; Notes</value>
+  </data>
+  <data name="New Project Report" xml:space="preserve">
+    <value>New Project Report</value>
+  </data>
+  <data name="No project reports created yet. Click 'New Project Report' to generate a point-in-time bilan." xml:space="preserve">
+    <value>No project reports created yet. Click 'New Project Report' to generate a point-in-time bilan.</value>
+  </data>
+  <data name="Only Submitted / Paid Expense Reports" xml:space="preserve">
+    <value>Only Submitted / Paid Expense Reports</value>
+  </data>
+  <data name="Open PDF" xml:space="preserve">
+    <value>Open PDF</value>
+  </data>
+  <data name="Optional closing remarks, recommendations, or terms..." xml:space="preserve">
+    <value>Optional closing remarks, recommendations, or terms...</value>
+  </data>
+  <data name="Page Break Controls" xml:space="preserve">
+    <value>Page Break Controls</value>
+  </data>
+  <data name="Period Granularity" xml:space="preserve">
+    <value>Period Granularity</value>
+  </data>
+  <data name="Period Start Date (Optional)" xml:space="preserve">
+    <value>Period Start Date (Optional)</value>
+  </data>
+  <data name="Periodic Presentation Layout" xml:space="preserve">
+    <value>Periodic Presentation Layout</value>
+  </data>
+  <data name="Please enter a report title." xml:space="preserve">
+    <value>Please enter a report title.</value>
+  </data>
+  <data name="Please find attached report #{0} ({1}) for {2} as of {3}." xml:space="preserve">
+    <value>Please find attached report #{0} ({1}) for {2} as of {3}.</value>
+  </data>
+  <data name="Point-in-time project status, labor, and financial reports (Bilan de Projet) preserved at their cutoff date." xml:space="preserve">
+    <value>Point-in-time project status, labor, and financial reports (Bilan de Projet) preserved at their cutoff date.</value>
+  </data>
+  <data name="Print / PDF" xml:space="preserve">
+    <value>Print / PDF</value>
+  </data>
+  <data name="Project Inception" xml:space="preserve">
+    <value>Project Inception</value>
+  </data>
+  <data name="Project report #{0} created." xml:space="preserve">
+    <value>Project report #{0} created.</value>
+  </data>
+  <data name="Project report deleted." xml:space="preserve">
+    <value>Project report deleted.</value>
+  </data>
+  <data name="Project report not found." xml:space="preserve">
+    <value>Project report not found.</value>
+  </data>
+  <data name="Project Reports" xml:space="preserve">
+    <value>Project Reports</value>
+  </data>
+  <data name="Project Status &amp; Financial Report" xml:space="preserve">
+    <value>Project Status &amp; Financial Report</value>
+  </data>
+  <data name="Purchases" xml:space="preserve">
+    <value>Purchases</value>
+  </data>
+  <data name="Purchases &amp; Procurement" xml:space="preserve">
+    <value>Purchases &amp; Procurement</value>
+  </data>
+  <data name="Purchases Grouping" xml:space="preserve">
+    <value>Purchases Grouping</value>
+  </data>
+  <data name="Quick Period:" xml:space="preserve">
+    <value>Quick Period:</value>
+  </data>
+  <data name="Quotes, Invoices &amp; Client POs History" xml:space="preserve">
+    <value>Quotes, Invoices &amp; Client POs History</value>
+  </data>
+  <data name="Recalculate snapshot data using current project records up to the report's As-Of date" xml:space="preserve">
+    <value>Recalculate snapshot data using current project records up to the report's As-Of date</value>
+  </data>
+  <data name="Refresh Data" xml:space="preserve">
+    <value>Refresh Data</value>
+  </data>
+  <data name="Refresh Snapshot Data" xml:space="preserve">
+    <value>Refresh Snapshot Data</value>
+  </data>
+  <data name="Regenerating missing PDF..." xml:space="preserve">
+    <value>Regenerating missing PDF...</value>
+  </data>
+  <data name="Regenerating official PDF..." xml:space="preserve">
+    <value>Regenerating official PDF...</value>
+  </data>
+  <data name="Report #" xml:space="preserve">
+    <value>Report #</value>
+  </data>
+  <data name="Report marked as {0}" xml:space="preserve">
+    <value>Report marked as {0}</value>
+  </data>
+  <data name="Report Period / As-Of" xml:space="preserve">
+    <value>Report Period / As-Of</value>
+  </data>
+  <data name="Report Presets:" xml:space="preserve">
+    <value>Report Presets:</value>
+  </data>
+  <data name="Report snapshot updated for the selected date range." xml:space="preserve">
+    <value>Report snapshot updated for the selected date range.</value>
+  </data>
+  <data name="Report snapshot updated." xml:space="preserve">
+    <value>Report snapshot updated.</value>
+  </data>
+  <data name="Report Title" xml:space="preserve">
+    <value>Report Title</value>
+  </data>
+  <data name="Return to Projects" xml:space="preserve">
+    <value>Return to Projects</value>
+  </data>
+  <data name="Sales Commissions Breakdown" xml:space="preserve">
+    <value>Sales Commissions Breakdown</value>
+  </data>
+  <data name="Sections &amp; Content" xml:space="preserve">
+    <value>Sections &amp; Content</value>
+  </data>
+  <data name="Send by Email" xml:space="preserve">
+    <value>Send by Email</value>
+  </data>
+  <data name="Send Project Report by Email" xml:space="preserve">
+    <value>Send Project Report by Email</value>
+  </data>
+  <data name="Show Labor Rates &amp; Financial Totals" xml:space="preserve">
+    <value>Show Labor Rates &amp; Financial Totals</value>
+  </data>
+  <data name="Show Net / Tax / Total Breakdown" xml:space="preserve">
+    <value>Show Net / Tax / Total Breakdown</value>
+  </data>
+  <data name="Snapshot Window:" xml:space="preserve">
+    <value>Snapshot Window:</value>
+  </data>
+  <data name="Start Billing History on a New Page" xml:space="preserve">
+    <value>Start Billing History on a New Page</value>
+  </data>
+  <data name="Start Labor Breakdown on a New Page" xml:space="preserve">
+    <value>Start Labor Breakdown on a New Page</value>
+  </data>
+  <data name="Start Purchases Breakdown on a New Page" xml:space="preserve">
+    <value>Start Purchases Breakdown on a New Page</value>
+  </data>
+  <data name="Summarize key achievements, budget status, scope changes, or upcoming milestones..." xml:space="preserve">
+    <value>Summarize key achievements, budget status, scope changes, or upcoming milestones...</value>
+  </data>
+  <data name="Summary by {0} (Hours &amp; Share)" xml:space="preserve">
+    <value>Summary by {0} (Hours &amp; Share)</value>
+  </data>
+  <data name="Summary by Task &amp; Subtask (Budget vs. Actual)" xml:space="preserve">
+    <value>Summary by Task &amp; Subtask (Budget vs. Actual)</value>
+  </data>
+  <data name="Template &amp; Print" xml:space="preserve">
+    <value>Template &amp; Print</value>
+  </data>
+  <data name="This Month" xml:space="preserve">
+    <value>This Month</value>
+  </data>
+  <data name="This Quarter" xml:space="preserve">
+    <value>This Quarter</value>
+  </data>
+  <data name="This report is marked as Final and cannot be edited directly. Unlock or revert to Draft to make changes." xml:space="preserve">
+    <value>This report is marked as Final and cannot be edited directly. Unlock or revert to Draft to make changes.</value>
+  </data>
+  <data name="This Year ({0})" xml:space="preserve">
+    <value>This Year ({0})</value>
+  </data>
+  <data name="Unlock &amp; Edit" xml:space="preserve">
+    <value>Unlock &amp; Edit</value>
+  </data>
+  <data name="Update Snapshot Now" xml:space="preserve">
+    <value>Update Snapshot Now</value>
+  </data>
+  <data name="Weekly (ISO Weeks)" xml:space="preserve">
+    <value>Weekly (ISO Weeks)</value>
+  </data>
+  <data name="You changed the report period dates. Click Refresh Snapshot Data to recalculate figures for the new dates." xml:space="preserve">
+    <value>You changed the report period dates. Click Refresh Snapshot Data to recalculate figures for the new dates.</value>
+  </data>
+  <data name="You do not have permission to view this project report." xml:space="preserve">
+    <value>You do not have permission to view this project report.</value>
+  </data>
+  <data name="Confirm Final Report Edit" xml:space="preserve">
+    <value>Confirm Final Report Edit</value>
+  </data>
+  <data name="Explain why this report status is being reverted..." xml:space="preserve">
+    <value>Explain why this report status is being reverted...</value>
+  </data>
+  <data name="Please provide a reason for changing the report status from {0} to {1}." xml:space="preserve">
+    <value>Please provide a reason for changing the report status from {0} to {1}.</value>
+  </data>
+  <data name="This report is already in Final status. Saving changes will update the finalized report and invalidate any cached PDF. Do you want to save your changes?" xml:space="preserve">
+    <value>This report is already in Final status. Saving changes will update the finalized report and invalidate any cached PDF. Do you want to save your changes?</value>
+  </data>
+  <data name="Exclude Taxes (Pre-Tax / Subtotal Only)" xml:space="preserve">
+    <value>Exclude Taxes (Pre-Tax / Subtotal Only)</value>
+  </data>
+  <data name="Include Taxes — Display Separately (Subtotal + Tax + Total)" xml:space="preserve">
+    <value>Include Taxes — Display Separately (Subtotal + Tax + Total)</value>
+  </data>
+  <data name="Include Taxes (Combined Grand Total)" xml:space="preserve">
+    <value>Include Taxes (Combined Grand Total)</value>
+  </data>
+  <data name="Reports" xml:space="preserve">
+    <value>Reports</value>
+  </data>
+  <data name="Taxes in Financial Summary" xml:space="preserve">
+    <value>Taxes in Financial Summary</value>
+  </data>
+  <data name="Client / External" xml:space="preserve">
+    <value>Client / External</value>
+  </data>
+  <data name="Controls cover page labels (Project Client vs. Prepared For)" xml:space="preserve">
+    <value>Controls cover page labels (Project Client vs. Prepared For)</value>
+  </data>
+  <data name="Controls whether internal costs/margins, client billable amounts, or only hours/quantities are shown" xml:space="preserve">
+    <value>Controls whether internal costs/margins, client billable amounts, or only hours/quantities are shown</value>
+  </data>
+  <data name="Forward Planning &amp; Capacity" xml:space="preserve">
+    <value>Forward Planning &amp; Capacity</value>
+  </data>
+  <data name="Internal / Management" xml:space="preserve">
+    <value>Internal / Management</value>
+  </data>
+  <data name="Report Audience" xml:space="preserve">
+    <value>Report Audience</value>
+  </data>
+  <data name="Salaries &amp; Contributions" xml:space="preserve">
+    <value>Salaries &amp; Contributions</value>
+  </data>
+  <data name="Summary Matrix (Periods × {0})" xml:space="preserve">
+    <value>Summary Matrix (Periods × {0})</value>
+  </data>
+  <data name="Total Cost / h" xml:space="preserve">
+    <value>Total Cost / h</value>
+  </data>
+  <data name="Add Status" xml:space="preserve">
+    <value>Add Status</value>
+  </data>
+  <data name="Business Settings" xml:space="preserve">
+    <value>Business Settings</value>
+  </data>
+  <data name="Configure client-specific or specialized billing rate cards overriding default task rates." xml:space="preserve">
+    <value>Configure client-specific or specialized billing rate cards overriding default task rates.</value>
+  </data>
+  <data name="Create Template" xml:space="preserve">
+    <value>Create Template</value>
+  </data>
+  <data name="Define default work types, sub-tasks, and standard hourly rates for quotes and timesheets." xml:space="preserve">
+    <value>Define default work types, sub-tasks, and standard hourly rates for quotes and timesheets.</value>
+  </data>
+  <data name="Documents &amp; Templates" xml:space="preserve">
+    <value>Documents &amp; Templates</value>
+  </data>
+  <data name="HR &amp; People" xml:space="preserve">
+    <value>HR &amp; People</value>
+  </data>
+  <data name="Manage {0} profiles, {1}, organizational structure, and compensation." xml:space="preserve">
+    <value>Manage {0} profiles, {1}, organizational structure, and compensation.</value>
+  </data>
+  <data name="Manage standard block-based document templates (Contracts, NDAs, Policies, and Project Reports)." xml:space="preserve">
+    <value>Manage standard block-based document templates (Contracts, NDAs, Policies, and Project Reports).</value>
+  </data>
+  <data name="No standard documents found." xml:space="preserve">
+    <value>No standard documents found.</value>
+  </data>
+  <data name="Rate Cards" xml:space="preserve">
+    <value>Rate Cards</value>
+  </data>
+  <data name="Standard Documents" xml:space="preserve">
+    <value>Standard Documents</value>
+  </data>
+  <data name="Status Name" xml:space="preserve">
+    <value>Status Name</value>
+  </data>
+  <data name="System Mapping" xml:space="preserve">
+    <value>System Mapping</value>
+  </data>
+  <data name="System Type" xml:space="preserve">
+    <value>System Type</value>
+  </data>
+  <data name="Task Definitions" xml:space="preserve">
+    <value>Task Definitions</value>
+  </data>
+  <data name="Tasks &amp; Rate Cards" xml:space="preserve">
+    <value>Tasks &amp; Rate Cards</value>
+  </data>
+  <data name="Timesheets &amp; Overtime" xml:space="preserve">
+    <value>Timesheets &amp; Overtime</value>
+  </data>
+  <data name="Language" xml:space="preserve">
+    <value>Language</value>
+  </data>
+  <data name="Updated" xml:space="preserve">
+    <value>Updated</value>
+  </data>
+  <data name="100% allocated across active client projects" xml:space="preserve">
+    <value>100% allocated across active client projects</value>
+  </data>
+  <data name="12-Month Window" xml:space="preserve">
+    <value>12-Month Window</value>
+  </data>
+  <data name="Accountant Overhead &amp; Allocation Summary" xml:space="preserve">
+    <value>Accountant Overhead &amp; Allocation Summary</value>
+  </data>
+  <data name="Add Business Overhead Bill (12-Mo Amortized)" xml:space="preserve">
+    <value>Add Business Overhead Bill (12-Mo Amortized)</value>
+  </data>
+  <data name="Add Overhead Bill" xml:space="preserve">
+    <value>Add Overhead Bill</value>
+  </data>
+  <data name="Add Recurring Cost" xml:space="preserve">
+    <value>Add Recurring Cost</value>
+  </data>
+  <data name="Add Recurring Fixed Cost" xml:space="preserve">
+    <value>Add Recurring Fixed Cost</value>
+  </data>
+  <data name="All employee hours (loaded cost) and purchases logged to internal projects are included in the Business Overhead Pool." xml:space="preserve">
+    <value>All employee hours (loaded cost) and purchases logged to internal projects are included in the Business Overhead Pool.</value>
+  </data>
+  <data name="Allocated" xml:space="preserve">
+    <value>Allocated</value>
+  </data>
+  <data name="Allocated to client projects proportionally by direct labor hours." xml:space="preserve">
+    <value>Allocated to client projects proportionally by direct labor hours.</value>
+  </data>
+  <data name="amortized (12-mo)" xml:space="preserve">
+    <value>amortized (12-mo)</value>
+  </data>
+  <data name="Annual View (12 Months)" xml:space="preserve">
+    <value>Annual View (12 Months)</value>
+  </data>
+  <data name="Bill History" xml:space="preserve">
+    <value>Bill History</value>
+  </data>
+  <data name="Bills" xml:space="preserve">
+    <value>Bills</value>
+  </data>
+  <data name="Business Overhead Bill" xml:space="preserve">
+    <value>Business Overhead Bill</value>
+  </data>
+  <data name="Company Pool" xml:space="preserve">
+    <value>Company Pool</value>
+  </data>
+  <data name="Description / Invoice #" xml:space="preserve">
+    <value>Description / Invoice #</value>
+  </data>
+  <data name="Details" xml:space="preserve">
+    <value>Details</value>
+  </data>
+  <data name="Direct Client Hours" xml:space="preserve">
+    <value>Direct Client Hours</value>
+  </data>
+  <data name="Direct Client Hours (Period)" xml:space="preserve">
+    <value>Direct Client Hours (Period)</value>
+  </data>
+  <data name="direct client labor" xml:space="preserve">
+    <value>direct client labor</value>
+  </data>
+  <data name="Edit Business Overhead Bill" xml:space="preserve">
+    <value>Edit Business Overhead Bill</value>
+  </data>
+  <data name="Edit One-Time Overhead Expense" xml:space="preserve">
+    <value>Edit One-Time Overhead Expense</value>
+  </data>
+  <data name="Edit Recurring Fixed Cost" xml:space="preserve">
+    <value>Edit Recurring Fixed Cost</value>
+  </data>
+  <data name="Effective Overhead Rate (Pre-Tax)" xml:space="preserve">
+    <value>Effective Overhead Rate (Pre-Tax)</value>
+  </data>
+  <data name="Expense Name" xml:space="preserve">
+    <value>Expense Name</value>
+  </data>
+  <data name="Fixed &amp; Amortized Bills (Pre-Tax)" xml:space="preserve">
+    <value>Fixed &amp; Amortized Bills (Pre-Tax)</value>
+  </data>
+  <data name="Frequency" xml:space="preserve">
+    <value>Frequency</value>
+  </data>
+  <data name="GL Account" xml:space="preserve">
+    <value>GL Account</value>
+  </data>
+  <data name="Hours Logged" xml:space="preserve">
+    <value>Hours Logged</value>
+  </data>
+  <data name="Incl. Tax:" xml:space="preserve">
+    <value>Incl. Tax:</value>
+  </data>
+  <data name="Include Business Overhead Allocation (Prorated Monthly by Direct Hours)" xml:space="preserve">
+    <value>Include Business Overhead Allocation (Prorated Monthly by Direct Hours)</value>
+  </data>
+  <data name="Internal &amp; Unbillable Project Labor" xml:space="preserve">
+    <value>Internal &amp; Unbillable Project Labor</value>
+  </data>
+  <data name="Internal &amp; Unbillable Projects Overhead" xml:space="preserve">
+    <value>Internal &amp; Unbillable Projects Overhead</value>
+  </data>
+  <data name="Internal / Unbillable Hours" xml:space="preserve">
+    <value>Internal / Unbillable Hours</value>
+  </data>
+  <data name="internal labor" xml:space="preserve">
+    <value>internal labor</value>
+  </data>
+  <data name="Internal Project Cost (Pre-Tax)" xml:space="preserve">
+    <value>Internal Project Cost (Pre-Tax)</value>
+  </data>
+  <data name="Internal Project Purchases &amp; Expenses" xml:space="preserve">
+    <value>Internal Project Purchases &amp; Expenses</value>
+  </data>
+  <data name="Latest Bill Status" xml:space="preserve">
+    <value>Latest Bill Status</value>
+  </data>
+  <data name="Loaded Labor Cost" xml:space="preserve">
+    <value>Loaded Labor Cost</value>
+  </data>
+  <data name="Monthly Amortized (Pre-Tax)" xml:space="preserve">
+    <value>Monthly Amortized (Pre-Tax)</value>
+  </data>
+  <data name="Monthly Prorated (Pre-Tax)" xml:space="preserve">
+    <value>Monthly Prorated (Pre-Tax)</value>
+  </data>
+  <data name="Monthly View" xml:space="preserve">
+    <value>Monthly View</value>
+  </data>
+  <data name="No internal projects found." xml:space="preserve">
+    <value>No internal projects found.</value>
+  </data>
+  <data name="No one-time business overhead bills recorded yet." xml:space="preserve">
+    <value>No one-time business overhead bills recorded yet.</value>
+  </data>
+  <data name="No operating overhead recorded for this period yet. Add recurring costs, overhead bills, or internal project time to populate the overhead pool." xml:space="preserve">
+    <value>No operating overhead recorded for this period yet. Add recurring costs, overhead bills, or internal project time to populate the overhead pool.</value>
+  </data>
+  <data name="No recurring fixed costs configured yet." xml:space="preserve">
+    <value>No recurring fixed costs configured yet.</value>
+  </data>
+  <data name="Non-project business purchases, legal/accounting fees, annual licenses, and shop tooling spread evenly across 12 calendar months." xml:space="preserve">
+    <value>Non-project business purchases, legal/accounting fees, annual licenses, and shop tooling spread evenly across 12 calendar months.</value>
+  </data>
+  <data name="One-Time Overhead Bills (12-Mo Amortized)" xml:space="preserve">
+    <value>One-Time Overhead Bills (12-Mo Amortized)</value>
+  </data>
+  <data name="One-Time Overhead Bills (Amortized Over 12 Months)" xml:space="preserve">
+    <value>One-Time Overhead Bills (Amortized Over 12 Months)</value>
+  </data>
+  <data name="One-Time Profile" xml:space="preserve">
+    <value>One-Time Profile</value>
+  </data>
+  <data name="Overhead bill saved and amortized over 12 months." xml:space="preserve">
+    <value>Overhead bill saved and amortized over 12 months.</value>
+  </data>
+  <data name="Overhead item deleted." xml:space="preserve">
+    <value>Overhead item deleted.</value>
+  </data>
+  <data name="Overhead Pillar" xml:space="preserve">
+    <value>Overhead Pillar</value>
+  </data>
+  <data name="Overhead Pool Distribution" xml:space="preserve">
+    <value>Overhead Pool Distribution</value>
+  </data>
+  <data name="Overhead Rate / Direct Hour" xml:space="preserve">
+    <value>Overhead Rate / Direct Hour</value>
+  </data>
+  <data name="Pre-Tax" xml:space="preserve">
+    <value>Pre-Tax</value>
+  </data>
+  <data name="Pre-Tax Amount" xml:space="preserve">
+    <value>Pre-Tax Amount</value>
+  </data>
+  <data name="Pre-Tax Prorated Breakdown" xml:space="preserve">
+    <value>Pre-Tax Prorated Breakdown</value>
+  </data>
+  <data name="Prorated Estimate" xml:space="preserve">
+    <value>Prorated Estimate</value>
+  </data>
+  <data name="Purchases &amp; Expenses (Pre-Tax)" xml:space="preserve">
+    <value>Purchases &amp; Expenses (Pre-Tax)</value>
+  </data>
+  <data name="Recurring Fixed Cost Profiles" xml:space="preserve">
+    <value>Recurring Fixed Cost Profiles</value>
+  </data>
+  <data name="Recurring fixed cost saved." xml:space="preserve">
+    <value>Recurring fixed cost saved.</value>
+  </data>
+  <data name="Recurring fixed cost updated." xml:space="preserve">
+    <value>Recurring fixed cost updated.</value>
+  </data>
+  <data name="Recurring Fixed Costs" xml:space="preserve">
+    <value>Recurring Fixed Costs</value>
+  </data>
+  <data name="Recurring profile deleted." xml:space="preserve">
+    <value>Recurring profile deleted.</value>
+  </data>
+  <data name="Rent, utilities, insurance, software subscriptions, and telecom bills prorated monthly." xml:space="preserve">
+    <value>Rent, utilities, insurance, software subscriptions, and telecom bills prorated monthly.</value>
+  </data>
+  <data name="Search supplier, description, invoice #..." xml:space="preserve">
+    <value>Search supplier, description, invoice #...</value>
+  </data>
+  <data name="Share %" xml:space="preserve">
+    <value>Share %</value>
+  </data>
+  <data name="Start Business Overhead Allocation on a New Page" xml:space="preserve">
+    <value>Start Business Overhead Allocation on a New Page</value>
+  </data>
+  <data name="Taxes" xml:space="preserve">
+    <value>Taxes</value>
+  </data>
+  <data name="Total (Incl. Tax)" xml:space="preserve">
+    <value>Total (Incl. Tax)</value>
+  </data>
+  <data name="Total Business Overhead Pool" xml:space="preserve">
+    <value>Total Business Overhead Pool</value>
+  </data>
+  <data name="Total Overhead Contribution" xml:space="preserve">
+    <value>Total Overhead Contribution</value>
+  </data>
+  <data name="Account" xml:space="preserve">
+    <value>Account</value>
+  </data>
+  <data name="Account code and name are required." xml:space="preserve">
+    <value>Account code and name are required.</value>
+  </data>
+  <data name="Account Name" xml:space="preserve">
+    <value>Account Name</value>
+  </data>
+  <data name="Accountant hand-off package generated." xml:space="preserve">
+    <value>Accountant hand-off package generated.</value>
+  </data>
+  <data name="Accounting Defaults" xml:space="preserve">
+    <value>Accounting Defaults</value>
+  </data>
+  <data name="Active Jurisdiction:" xml:space="preserve">
+    <value>Active Jurisdiction:</value>
+  </data>
+  <data name="Add Account" xml:space="preserve">
+    <value>Add Account</value>
+  </data>
+  <data name="Add Custom GL Account" xml:space="preserve">
+    <value>Add Custom GL Account</value>
+  </data>
+  <data name="Annual cumulative earnings and statutory deductions per employee for year-end accountant filing." xml:space="preserve">
+    <value>Annual cumulative earnings and statutory deductions per employee for year-end accountant filing.</value>
+  </data>
+  <data name="Applied jurisdiction template: {0}" xml:space="preserve">
+    <value>Applied jurisdiction template: {0}</value>
+  </data>
+  <data name="Approve &amp; Post" xml:space="preserve">
+    <value>Approve &amp; Post</value>
+  </data>
+  <data name="Approve &amp; Post to General Ledger" xml:space="preserve">
+    <value>Approve &amp; Post to General Ledger</value>
+  </data>
+  <data name="As of" xml:space="preserve">
+    <value>As of</value>
+  </data>
+  <data name="Assets" xml:space="preserve">
+    <value>Assets</value>
+  </data>
+  <data name="Auto-match complete ({0} matched)." xml:space="preserve">
+    <value>Auto-match complete ({0} matched).</value>
+  </data>
+  <data name="Balance Sheet" xml:space="preserve">
+    <value>Balance Sheet</value>
+  </data>
+  <data name="Balanced (Assets = Liabilities + Equity)" xml:space="preserve">
+    <value>Balanced (Assets = Liabilities + Equity)</value>
+  </data>
+  <data name="Bank Description" xml:space="preserve">
+    <value>Bank Description</value>
+  </data>
+  <data name="Bank Reconciliation" xml:space="preserve">
+    <value>Bank Reconciliation</value>
+  </data>
+  <data name="Bank statement imported and auto-matched." xml:space="preserve">
+    <value>Bank statement imported and auto-matched.</value>
+  </data>
+  <data name="Bank statement reconciliation finalized and locked." xml:space="preserve">
+    <value>Bank statement reconciliation finalized and locked.</value>
+  </data>
+  <data name="Calculate collected sales taxes vs. input tax credits (ITCs/CTIs) for any period, lock filed returns, and record remittance payments." xml:space="preserve">
+    <value>Calculate collected sales taxes vs. input tax credits (ITCs/CTIs) for any period, lock filed returns, and record remittance payments.</value>
+  </data>
+  <data name="Calculate Return" xml:space="preserve">
+    <value>Calculate Return</value>
+  </data>
+  <data name="Code" xml:space="preserve">
+    <value>Code</value>
+  </data>
+  <data name="Code (e.g. 5350)" xml:space="preserve">
+    <value>Code (e.g. 5350)</value>
+  </data>
+  <data name="Collected on Sales" xml:space="preserve">
+    <value>Collected on Sales</value>
+  </data>
+  <data name="Computes progressive income tax, capped statutory contributions (QPP/CPP, EI, QPIP, FSS, CNESST), and posts balanced GL entries." xml:space="preserve">
+    <value>Computes progressive income tax, capped statutory contributions (QPP/CPP, EI, QPIP, FSS, CNESST), and posts balanced GL entries.</value>
+  </data>
+  <data name="Cost of Services / Direct Costs" xml:space="preserve">
+    <value>Cost of Services / Direct Costs</value>
+  </data>
+  <data name="Credit GL" xml:space="preserve">
+    <value>Credit GL</value>
+  </data>
+  <data name="Credits" xml:space="preserve">
+    <value>Credits</value>
+  </data>
+  <data name="Credits:" xml:space="preserve">
+    <value>Credits:</value>
+  </data>
+  <data name="Current Period Net Income" xml:space="preserve">
+    <value>Current Period Net Income</value>
+  </data>
+  <data name="Date Range" xml:space="preserve">
+    <value>Date Range</value>
+  </data>
+  <data name="Debit GL" xml:space="preserve">
+    <value>Debit GL</value>
+  </data>
+  <data name="Debits" xml:space="preserve">
+    <value>Debits</value>
+  </data>
+  <data name="Debits:" xml:space="preserve">
+    <value>Debits:</value>
+  </data>
+  <data name="Deductions:" xml:space="preserve">
+    <value>Deductions:</value>
+  </data>
+  <data name="Description / Memo" xml:space="preserve">
+    <value>Description / Memo</value>
+  </data>
+  <data name="Download Accountant Package (.ZIP)" xml:space="preserve">
+    <value>Download Accountant Package (.ZIP)</value>
+  </data>
+  <data name="Eligible Purchases:" xml:space="preserve">
+    <value>Eligible Purchases:</value>
+  </data>
+  <data name="Employee DAS" xml:space="preserve">
+    <value>Employee DAS</value>
+  </data>
+  <data name="Employee Deductions" xml:space="preserve">
+    <value>Employee Deductions</value>
+  </data>
+  <data name="Employee Withheld" xml:space="preserve">
+    <value>Employee Withheld</value>
+  </data>
+  <data name="Employer Burden" xml:space="preserve">
+    <value>Employer Burden</value>
+  </data>
+  <data name="Employer Burden:" xml:space="preserve">
+    <value>Employer Burden:</value>
+  </data>
+  <data name="Employer Contributions" xml:space="preserve">
+    <value>Employer Contributions</value>
+  </data>
+  <data name="Ending Balance" xml:space="preserve">
+    <value>Ending Balance</value>
+  </data>
+  <data name="Entry #" xml:space="preserve">
+    <value>Entry #</value>
+  </data>
+  <data name="Failed to import statement:" xml:space="preserve">
+    <value>Failed to import statement:</value>
+  </data>
+  <data name="File &amp; Lock Period" xml:space="preserve">
+    <value>File &amp; Lock Period</value>
+  </data>
+  <data name="Filed &amp; Paid Tax Returns" xml:space="preserve">
+    <value>Filed &amp; Paid Tax Returns</value>
+  </data>
+  <data name="Finalize Reconciliation" xml:space="preserve">
+    <value>Finalize Reconciliation</value>
+  </data>
+  <data name="General Ledger Journal Entries" xml:space="preserve">
+    <value>General Ledger Journal Entries</value>
+  </data>
+  <data name="Generate Pay Run" xml:space="preserve">
+    <value>Generate Pay Run</value>
+  </data>
+  <data name="GIFI / Tax Code" xml:space="preserve">
+    <value>GIFI / Tax Code</value>
+  </data>
+  <data name="GL Account added." xml:space="preserve">
+    <value>GL Account added.</value>
+  </data>
+  <data name="Gross Pay" xml:space="preserve">
+    <value>Gross Pay</value>
+  </data>
+  <data name="Gross Profit" xml:space="preserve">
+    <value>Gross Profit</value>
+  </data>
+  <data name="Gross:" xml:space="preserve">
+    <value>Gross:</value>
+  </data>
+  <data name="Import Bank Statement" xml:space="preserve">
+    <value>Import Bank Statement</value>
+  </data>
+  <data name="Import CPA Adjusting CSV" xml:space="preserve">
+    <value>Import CPA Adjusting CSV</value>
+  </data>
+  <data name="Imported {0} CPA adjusting journal entries." xml:space="preserve">
+    <value>Imported {0} CPA adjusting journal entries.</value>
+  </data>
+  <data name="Income Statement (P&amp;L)" xml:space="preserve">
+    <value>Income Statement (P&amp;L)</value>
+  </data>
+  <data name="Income Statement (Profit &amp; Loss)" xml:space="preserve">
+    <value>Income Statement (Profit &amp; Loss)</value>
+  </data>
+  <data name="Income Tax" xml:space="preserve">
+    <value>Income Tax</value>
+  </data>
+  <data name="Input Tax Credits" xml:space="preserve">
+    <value>Input Tax Credits</value>
+  </data>
+  <data name="Input Tax Credits (ITCs/CTIs)" xml:space="preserve">
+    <value>Input Tax Credits (ITCs/CTIs)</value>
+  </data>
+  <data name="Journal Entries" xml:space="preserve">
+    <value>Journal Entries</value>
+  </data>
+  <data name="Journal entry posted and transaction reconciled." xml:space="preserve">
+    <value>Journal entry posted and transaction reconciled.</value>
+  </data>
+  <data name="Jurisdiction Template" xml:space="preserve">
+    <value>Jurisdiction Template</value>
+  </data>
+  <data name="Jurisdiction:" xml:space="preserve">
+    <value>Jurisdiction:</value>
+  </data>
+  <data name="Ledger synchronized ({0} journal entries verified)." xml:space="preserve">
+    <value>Ledger synchronized ({0} journal entries verified).</value>
+  </data>
+  <data name="Liabilities &amp; Equity" xml:space="preserve">
+    <value>Liabilities &amp; Equity</value>
+  </data>
+  <data name="Manual journal entry posted." xml:space="preserve">
+    <value>Manual journal entry posted.</value>
+  </data>
+  <data name="matched" xml:space="preserve">
+    <value>matched</value>
+  </data>
+  <data name="Net Income" xml:space="preserve">
+    <value>Net Income</value>
+  </data>
+  <data name="Net Income:" xml:space="preserve">
+    <value>Net Income:</value>
+  </data>
+  <data name="Net Pay" xml:space="preserve">
+    <value>Net Pay</value>
+  </data>
+  <data name="Net pay disbursement recorded in the General Ledger." xml:space="preserve">
+    <value>Net pay disbursement recorded in the General Ledger.</value>
+  </data>
+  <data name="Net Pay:" xml:space="preserve">
+    <value>Net Pay:</value>
+  </data>
+  <data name="Net Refund Claim:" xml:space="preserve">
+    <value>Net Refund Claim:</value>
+  </data>
+  <data name="Net Remittance" xml:space="preserve">
+    <value>Net Remittance</value>
+  </data>
+  <data name="Net Remittance / (Refund)" xml:space="preserve">
+    <value>Net Remittance / (Refund)</value>
+  </data>
+  <data name="Net Remittance Due:" xml:space="preserve">
+    <value>Net Remittance Due:</value>
+  </data>
+  <data name="No bank statements imported yet." xml:space="preserve">
+    <value>No bank statements imported yet.</value>
+  </data>
+  <data name="No pay runs generated yet. Select a pay period above and click 'Generate Pay Run'." xml:space="preserve">
+    <value>No pay runs generated yet. Select a pay period above and click 'Generate Pay Run'.</value>
+  </data>
+  <data name="No posted journal activity up to this date. Click 'Sync Ledger' to post existing operational documents." xml:space="preserve">
+    <value>No posted journal activity up to this date. Click 'Sync Ledger' to post existing operational documents.</value>
+  </data>
+  <data name="No tax filing periods filed yet. Use the calculator above to generate and file your first sales tax return." xml:space="preserve">
+    <value>No tax filing periods filed yet. Use the calculator above to generate and file your first sales tax return.</value>
+  </data>
+  <data name="Operating Expenses" xml:space="preserve">
+    <value>Operating Expenses</value>
+  </data>
+  <data name="Out of Balance" xml:space="preserve">
+    <value>Out of Balance</value>
+  </data>
+  <data name="Pay Date" xml:space="preserve">
+    <value>Pay Date</value>
+  </data>
+  <data name="Pay Date:" xml:space="preserve">
+    <value>Pay Date:</value>
+  </data>
+  <data name="Pay Period" xml:space="preserve">
+    <value>Pay Period</value>
+  </data>
+  <data name="Pay Run" xml:space="preserve">
+    <value>Pay Run</value>
+  </data>
+  <data name="Pay run approved and posted to General Ledger." xml:space="preserve">
+    <value>Pay run approved and posted to General Ledger.</value>
+  </data>
+  <data name="Pay run approved and posted to the General Ledger." xml:space="preserve">
+    <value>Pay run approved and posted to the General Ledger.</value>
+  </data>
+  <data name="Pay Runs" xml:space="preserve">
+    <value>Pay Runs</value>
+  </data>
+  <data name="Pay Stubs" xml:space="preserve">
+    <value>Pay Stubs</value>
+  </data>
+  <data name="Payment Reference" xml:space="preserve">
+    <value>Payment Reference</value>
+  </data>
+  <data name="Payroll &amp; Pay Runs" xml:space="preserve">
+    <value>Payroll &amp; Pay Runs</value>
+  </data>
+  <data name="Payroll &amp; Source Deductions (DAS)" xml:space="preserve">
+    <value>Payroll &amp; Source Deductions (DAS)</value>
+  </data>
+  <data name="Period" xml:space="preserve">
+    <value>Period</value>
+  </data>
+  <data name="Period Credits" xml:space="preserve">
+    <value>Period Credits</value>
+  </data>
+  <data name="Period Debits" xml:space="preserve">
+    <value>Period Debits</value>
+  </data>
+  <data name="Period End" xml:space="preserve">
+    <value>Period End</value>
+  </data>
+  <data name="Period Start" xml:space="preserve">
+    <value>Period Start</value>
+  </data>
+  <data name="Please enter a valid amount and select both Debit and Credit GL accounts." xml:space="preserve">
+    <value>Please enter a valid amount and select both Debit and Credit GL accounts.</value>
+  </data>
+  <data name="Post" xml:space="preserve">
+    <value>Post</value>
+  </data>
+  <data name="Post Manual / Adjusting Journal Entry" xml:space="preserve">
+    <value>Post Manual / Adjusting Journal Entry</value>
+  </data>
+  <data name="Rate" xml:space="preserve">
+    <value>Rate</value>
+  </data>
+  <data name="Reconciled" xml:space="preserve">
+    <value>Reconciled</value>
+  </data>
+  <data name="Record Remittance Paid" xml:space="preserve">
+    <value>Record Remittance Paid</value>
+  </data>
+  <data name="Reg. Hours" xml:space="preserve">
+    <value>Reg. Hours</value>
+  </data>
+  <data name="Revenue" xml:space="preserve">
+    <value>Revenue</value>
+  </data>
+  <data name="Run #" xml:space="preserve">
+    <value>Run #</value>
+  </data>
+  <data name="Run Auto-Match" xml:space="preserve">
+    <value>Run Auto-Match</value>
+  </data>
+  <data name="Sales Before Tax:" xml:space="preserve">
+    <value>Sales Before Tax:</value>
+  </data>
+  <data name="Sales Tax Filing" xml:space="preserve">
+    <value>Sales Tax Filing</value>
+  </data>
+  <data name="Sales Tax Filing &amp; Remittance (TPS/GST · TVQ/QST · HST/VAT)" xml:space="preserve">
+    <value>Sales Tax Filing &amp; Remittance (TPS/GST · TVQ/QST · HST/VAT)</value>
+  </data>
+  <data name="Select or Import a Bank Statement" xml:space="preserve">
+    <value>Select or Import a Bank Statement</value>
+  </data>
+  <data name="Source" xml:space="preserve">
+    <value>Source</value>
+  </data>
+  <data name="Source Deductions (DAS) Remittance Summary" xml:space="preserve">
+    <value>Source Deductions (DAS) Remittance Summary</value>
+  </data>
+  <data name="Statutory DAS" xml:space="preserve">
+    <value>Statutory DAS</value>
+  </data>
+  <data name="Sub-Type" xml:space="preserve">
+    <value>Sub-Type</value>
+  </data>
+  <data name="Sync Jurisdiction Statutory Contributions" xml:space="preserve">
+    <value>Sync Jurisdiction Statutory Contributions</value>
+  </data>
+  <data name="Sync Ledger" xml:space="preserve">
+    <value>Sync Ledger</value>
+  </data>
+  <data name="Synchronized statutory employer contributions from active jurisdiction template." xml:space="preserve">
+    <value>Synchronized statutory employer contributions from active jurisdiction template.</value>
+  </data>
+  <data name="System Role" xml:space="preserve">
+    <value>System Role</value>
+  </data>
+  <data name="Tax Authority" xml:space="preserve">
+    <value>Tax Authority</value>
+  </data>
+  <data name="Tax Code" xml:space="preserve">
+    <value>Tax Code</value>
+  </data>
+  <data name="Tax Collected (Sales)" xml:space="preserve">
+    <value>Tax Collected (Sales)</value>
+  </data>
+  <data name="Tax remittance payment recorded in the General Ledger." xml:space="preserve">
+    <value>Tax remittance payment recorded in the General Ledger.</value>
+  </data>
+  <data name="Tax return filed and period locked." xml:space="preserve">
+    <value>Tax return filed and period locked.</value>
+  </data>
+  <data name="Tax Return Worksheet:" xml:space="preserve">
+    <value>Tax Return Worksheet:</value>
+  </data>
+  <data name="Total Assets" xml:space="preserve">
+    <value>Total Assets</value>
+  </data>
+  <data name="Total employee withholdings + employer contributions owed to each tax authority." xml:space="preserve">
+    <value>Total employee withholdings + employer contributions owed to each tax authority.</value>
+  </data>
+  <data name="Total Liabilities" xml:space="preserve">
+    <value>Total Liabilities</value>
+  </data>
+  <data name="Total Liabilities &amp; Equity" xml:space="preserve">
+    <value>Total Liabilities &amp; Equity</value>
+  </data>
+  <data name="Total Operating Expenses" xml:space="preserve">
+    <value>Total Operating Expenses</value>
+  </data>
+  <data name="Total Remittance" xml:space="preserve">
+    <value>Total Remittance</value>
+  </data>
+  <data name="Total Revenue" xml:space="preserve">
+    <value>Total Revenue</value>
+  </data>
+  <data name="Trial Balance" xml:space="preserve">
+    <value>Trial Balance</value>
+  </data>
+  <data name="Upload an OFX, QFX, or CSV statement to reconcile bank transactions with Invoices, Bills, Expenses, and Pay Runs." xml:space="preserve">
+    <value>Upload an OFX, QFX, or CSV statement to reconcile bank transactions with Invoices, Bills, Expenses, and Pay Runs.</value>
+  </data>
+  <data name="Upload OFX, QFX, or CSV bank statements to automatically match deposits and payments against Spokes." xml:space="preserve">
+    <value>Upload OFX, QFX, or CSV bank statements to automatically match deposits and payments against Spokes.</value>
+  </data>
+  <data name="Upload Statement (.OFX / .QFX / .CSV)" xml:space="preserve">
+    <value>Upload Statement (.OFX / .QFX / .CSV)</value>
+  </data>
+  <data name="Year-End Tax Slips Summary (T4 / Relevé 1 / W-2)" xml:space="preserve">
+    <value>Year-End Tax Slips Summary (T4 / Relevé 1 / W-2)</value>
+  </data>
+  <data name="YTD Gross" xml:space="preserve">
+    <value>YTD Gross</value>
+  </data>
+  <data name="YTD Net" xml:space="preserve">
+    <value>YTD Net</value>
+  </data>
+  <data name="= True Available Cash" xml:space="preserve">
+    <value>= True Available Cash</value>
+  </data>
+  <data name="Accounting &amp; Invoicing" xml:space="preserve">
+    <value>Accounting &amp; Invoicing</value>
+  </data>
+  <data name="Accounting, Tax &amp; Jurisdiction" xml:space="preserve">
+    <value>Accounting, Tax &amp; Jurisdiction</value>
+  </data>
+  <data name="Accrue in Vacation Bank" xml:space="preserve">
+    <value>Accrue in Vacation Bank</value>
+  </data>
+  <data name="Active Projects in Production" xml:space="preserve">
+    <value>Active Projects in Production</value>
+  </data>
+  <data name="Add 0, 1, 2, or more sales taxes. Each tax automatically appears on Invoices, Bills, Expense Reports, and Sales Tax Returns." xml:space="preserve">
+    <value>Add 0, 1, 2, or more sales taxes. Each tax automatically appears on Invoices, Bills, Expense Reports, and Sales Tax Returns.</value>
+  </data>
+  <data name="Add Bracket" xml:space="preserve">
+    <value>Add Bracket</value>
+  </data>
+  <data name="Add Contribution Rule" xml:space="preserve">
+    <value>Add Contribution Rule</value>
+  </data>
+  <data name="Add GL Account" xml:space="preserve">
+    <value>Add GL Account</value>
+  </data>
+  <data name="Add Income Tax Table" xml:space="preserve">
+    <value>Add Income Tax Table</value>
+  </data>
+  <data name="Add Item" xml:space="preserve">
+    <value>Add Item</value>
+  </data>
+  <data name="Add Sales Tax" xml:space="preserve">
+    <value>Add Sales Tax</value>
+  </data>
+  <data name="Alert" xml:space="preserve">
+    <value>Alert</value>
+  </data>
+  <data name="All active projects are within budget and up to date." xml:space="preserve">
+    <value>All active projects are within budget and up to date.</value>
+  </data>
+  <data name="All finalized pay runs have been disbursed." xml:space="preserve">
+    <value>All finalized pay runs have been disbursed.</value>
+  </data>
+  <data name="All imported bank statement lines are reconciled." xml:space="preserve">
+    <value>All imported bank statement lines are reconciled.</value>
+  </data>
+  <data name="All Projects" xml:space="preserve">
+    <value>All Projects</value>
+  </data>
+  <data name="All submitted employee expenses reimbursed." xml:space="preserve">
+    <value>All submitted employee expenses reimbursed.</value>
+  </data>
+  <data name="All submitted timesheets approved." xml:space="preserve">
+    <value>All submitted timesheets approved.</value>
+  </data>
+  <data name="Amount / Pay" xml:space="preserve">
+    <value>Amount / Pay</value>
+  </data>
+  <data name="Amount Due" xml:space="preserve">
+    <value>Amount Due</value>
+  </data>
+  <data name="Annual" xml:space="preserve">
+    <value>Annual</value>
+  </data>
+  <data name="Annual Gross Salary" xml:space="preserve">
+    <value>Annual Gross Salary</value>
+  </data>
+  <data name="Annual Tier Threshold (km, optional)" xml:space="preserve">
+    <value>Annual Tier Threshold (km, optional)</value>
+  </data>
+  <data name="Audit History" xml:space="preserve">
+    <value>Audit History</value>
+  </data>
+  <data name="Authority" xml:space="preserve">
+    <value>Authority</value>
+  </data>
+  <data name="Authority / Payee" xml:space="preserve">
+    <value>Authority / Payee</value>
+  </data>
+  <data name="Bank cash minus money alreadyspoken for (Sales Taxes, Payroll DAS, and immediate 14-day payables)" xml:space="preserve">
+    <value>Bank cash minus money alreadyspoken for (Sales Taxes, Payroll DAS, and immediate 14-day payables)</value>
+  </data>
+  <data name="Bill Prefix" xml:space="preserve">
+    <value>Bill Prefix</value>
+  </data>
+  <data name="bill(s) in queue waiting for approval" xml:space="preserve">
+    <value>bill(s) in queue waiting for approval</value>
+  </data>
+  <data name="Bi-Weekly (26/yr)" xml:space="preserve">
+    <value>Bi-Weekly (26/yr)</value>
+  </data>
+  <data name="Bonus / Comm." xml:space="preserve">
+    <value>Bonus / Comm.</value>
+  </data>
+  <data name="Book-Closing Lock Date (Optional)" xml:space="preserve">
+    <value>Book-Closing Lock Date (Optional)</value>
+  </data>
+  <data name="Bookkeeping Health Checklist" xml:space="preserve">
+    <value>Bookkeeping Health Checklist</value>
+  </data>
+  <data name="Books 100% Up to Date" xml:space="preserve">
+    <value>Books 100% Up to Date</value>
+  </data>
+  <data name="Cash Collected (MTD)" xml:space="preserve">
+    <value>Cash Collected (MTD)</value>
+  </data>
+  <data name="Categorize &amp; Post" xml:space="preserve">
+    <value>Categorize &amp; Post</value>
+  </data>
+  <data name="Ceiling ($)" xml:space="preserve">
+    <value>Ceiling ($)</value>
+  </data>
+  <data name="Client Invoices" xml:space="preserve">
+    <value>Client Invoices</value>
+  </data>
+  <data name="Clone &amp; Customize" xml:space="preserve">
+    <value>Clone &amp; Customize</value>
+  </data>
+  <data name="Cloned template. Edit any rules below and click 'Save &amp; Activate Template'." xml:space="preserve">
+    <value>Cloned template. Edit any rules below and click 'Save &amp; Activate Template'.</value>
+  </data>
+  <data name="Closing Balance" xml:space="preserve">
+    <value>Closing Balance</value>
+  </data>
+  <data name="Collected GL" xml:space="preserve">
+    <value>Collected GL</value>
+  </data>
+  <data name="Collected on Invoices minus Input Tax Credits on Bills &amp; Expenses" xml:space="preserve">
+    <value>Collected on Invoices minus Input Tax Credits on Bills &amp; Expenses</value>
+  </data>
+  <data name="Combined Sales Tax:" xml:space="preserve">
+    <value>Combined Sales Tax:</value>
+  </data>
+  <data name="Company Bills &amp; Overhead" xml:space="preserve">
+    <value>Company Bills &amp; Overhead</value>
+  </data>
+  <data name="Company Tax Registration Numbers (Printed on Invoices)" xml:space="preserve">
+    <value>Company Tax Registration Numbers (Printed on Invoices)</value>
+  </data>
+  <data name="Compensation &amp; Vacation Policy" xml:space="preserve">
+    <value>Compensation &amp; Vacation Policy</value>
+  </data>
+  <data name="Compensation Type" xml:space="preserve">
+    <value>Compensation Type</value>
+  </data>
+  <data name="Configure fiscal year start, book-closing lock date, commission defaults, and supported billing currencies." xml:space="preserve">
+    <value>Configure fiscal year start, book-closing lock date, commission defaults, and supported billing currencies.</value>
+  </data>
+  <data name="Configure standard prefix codes for quotes, invoices, purchase orders, bills, pay runs, and project reports." xml:space="preserve">
+    <value>Configure standard prefix codes for quotes, invoices, purchase orders, bills, pay runs, and project reports.</value>
+  </data>
+  <data name="Contribution" xml:space="preserve">
+    <value>Contribution</value>
+  </data>
+  <data name="Contributions" xml:space="preserve">
+    <value>Contributions</value>
+  </data>
+  <data name="Country Code" xml:space="preserve">
+    <value>Country Code</value>
+  </data>
+  <data name="CPA Account Mapping Standard" xml:space="preserve">
+    <value>CPA Account Mapping Standard</value>
+  </data>
+  <data name="Currency" xml:space="preserve">
+    <value>Currency</value>
+  </data>
+  <data name="Currency Symbol" xml:space="preserve">
+    <value>Currency Symbol</value>
+  </data>
+  <data name="Current Month Operating Pulse" xml:space="preserve">
+    <value>Current Month Operating Pulse</value>
+  </data>
+  <data name="Custom / Standard Account Codes Only" xml:space="preserve">
+    <value>Custom / Standard Account Codes Only</value>
+  </data>
+  <data name="Custom Recurring Deductions &amp; Benefits" xml:space="preserve">
+    <value>Custom Recurring Deductions &amp; Benefits</value>
+  </data>
+  <data name="DAS:" xml:space="preserve">
+    <value>DAS:</value>
+  </data>
+  <data name="Default External Commission (%)" xml:space="preserve">
+    <value>Default External Commission (%)</value>
+  </data>
+  <data name="Default GL accounts and CPA tax mapping codes seeded when this template is activated." xml:space="preserve">
+    <value>Default GL accounts and CPA tax mapping codes seeded when this template is activated.</value>
+  </data>
+  <data name="Default Internal Commission (%)" xml:space="preserve">
+    <value>Default Internal Commission (%)</value>
+  </data>
+  <data name="Default Vacation Rate (%)" xml:space="preserve">
+    <value>Default Vacation Rate (%)</value>
+  </data>
+  <data name="Draft" xml:space="preserve">
+    <value>Draft</value>
+  </data>
+  <data name="Emp %" xml:space="preserve">
+    <value>Emp %</value>
+  </data>
+  <data name="Employee %" xml:space="preserve">
+    <value>Employee %</value>
+  </data>
+  <data name="Employee Expense Reimbursements" xml:space="preserve">
+    <value>Employee Expense Reimbursements</value>
+  </data>
+  <data name="Employee payroll and tax profile saved." xml:space="preserve">
+    <value>Employee payroll and tax profile saved.</value>
+  </data>
+  <data name="Employer %" xml:space="preserve">
+    <value>Employer %</value>
+  </data>
+  <data name="Employer Paid" xml:space="preserve">
+    <value>Employer Paid</value>
+  </data>
+  <data name="Enter currency codes separated by commas (e.g. CAD, USD, EUR)" xml:space="preserve">
+    <value>Enter currency codes separated by commas (e.g. CAD, USD, EUR)</value>
+  </data>
+  <data name="Exempt for Employee" xml:space="preserve">
+    <value>Exempt for Employee</value>
+  </data>
+  <data name="Exemption ($)" xml:space="preserve">
+    <value>Exemption ($)</value>
+  </data>
+  <data name="Export JSON" xml:space="preserve">
+    <value>Export JSON</value>
+  </data>
+  <data name="finalized pay run(s) awaiting disbursement" xml:space="preserve">
+    <value>finalized pay run(s) awaiting disbursement</value>
+  </data>
+  <data name="Financial Dashboard" xml:space="preserve">
+    <value>Financial Dashboard</value>
+  </data>
+  <data name="Financial Dashboard &amp; Bookkeeping Pulse" xml:space="preserve">
+    <value>Financial Dashboard &amp; Bookkeeping Pulse</value>
+  </data>
+  <data name="Financial Defaults &amp; Fiscal Period" xml:space="preserve">
+    <value>Financial Defaults &amp; Fiscal Period</value>
+  </data>
+  <data name="Fiscal Year Start Month" xml:space="preserve">
+    <value>Fiscal Year Start Month</value>
+  </data>
+  <data name="General, Mileage &amp; Vacation" xml:space="preserve">
+    <value>General, Mileage &amp; Vacation</value>
+  </data>
+  <data name="GL Code" xml:space="preserve">
+    <value>GL Code</value>
+  </data>
+  <data name="Government &amp; Payroll Obligations" xml:space="preserve">
+    <value>Government &amp; Payroll Obligations</value>
+  </data>
+  <data name="Government &amp; Payroll Obligations Due" xml:space="preserve">
+    <value>Government &amp; Payroll Obligations Due</value>
+  </data>
+  <data name="Group insurance, pension/retirement matching, union dues, or recurring allowances." xml:space="preserve">
+    <value>Group insurance, pension/retirement matching, union dues, or recurring allowances.</value>
+  </data>
+  <data name="Hourly" xml:space="preserve">
+    <value>Hourly</value>
+  </data>
+  <data name="Hourly Rate" xml:space="preserve">
+    <value>Hourly Rate</value>
+  </data>
+  <data name="HR Approvals" xml:space="preserve">
+    <value>HR Approvals</value>
+  </data>
+  <data name="imported bank line(s) waiting to be matched or categorized" xml:space="preserve">
+    <value>imported bank line(s) waiting to be matched or categorized</value>
+  </data>
+  <data name="Income Tax Tables" xml:space="preserve">
+    <value>Income Tax Tables</value>
+  </data>
+  <data name="Internal Projects &amp; Salaries" xml:space="preserve">
+    <value>Internal Projects &amp; Salaries</value>
+  </data>
+  <data name="Invoice Prefix" xml:space="preserve">
+    <value>Invoice Prefix</value>
+  </data>
+  <data name="Invoiced Revenue (MTD)" xml:space="preserve">
+    <value>Invoiced Revenue (MTD)</value>
+  </data>
+  <data name="ITC / Asset GL" xml:space="preserve">
+    <value>ITC / Asset GL</value>
+  </data>
+  <data name="item(s) need review" xml:space="preserve">
+    <value>item(s) need review</value>
+  </data>
+  <data name="Jurisdiction Code (e.g. CA-QC)" xml:space="preserve">
+    <value>Jurisdiction Code (e.g. CA-QC)</value>
+  </data>
+  <data name="Jurisdiction Display Name" xml:space="preserve">
+    <value>Jurisdiction Display Name</value>
+  </data>
+  <data name="Jurisdiction Template &amp; Rules Builder" xml:space="preserve">
+    <value>Jurisdiction Template &amp; Rules Builder</value>
+  </data>
+  <data name="Jurisdiction template imported and activated." xml:space="preserve">
+    <value>Jurisdiction template imported and activated.</value>
+  </data>
+  <data name="Jurisdiction template saved, activated, and synchronized with Chart of Accounts &amp; Payroll." xml:space="preserve">
+    <value>Jurisdiction template saved, activated, and synchronized with Chart of Accounts &amp; Payroll.</value>
+  </data>
+  <data name="Less: Due in 14 Days" xml:space="preserve">
+    <value>Less: Due in 14 Days</value>
+  </data>
+  <data name="Less: Gov. &amp; Tax Reserve" xml:space="preserve">
+    <value>Less: Gov. &amp; Tax Reserve</value>
+  </data>
+  <data name="Loaded Jurisdiction Template" xml:space="preserve">
+    <value>Loaded Jurisdiction Template</value>
+  </data>
+  <data name="Manage recurring fixed costs, one-time company bills, internal projects, and hourly overhead burden rates." xml:space="preserve">
+    <value>Manage recurring fixed costs, one-time company bills, internal projects, and hourly overhead burden rates.</value>
+  </data>
+  <data name="Marginal Tax Rate (%)" xml:space="preserve">
+    <value>Marginal Tax Rate (%)</value>
+  </data>
+  <data name="Mark Paid / Remitted" xml:space="preserve">
+    <value>Mark Paid / Remitted</value>
+  </data>
+  <data name="Matched Record / Category" xml:space="preserve">
+    <value>Matched Record / Category</value>
+  </data>
+  <data name="Mileage / Kilometrage Allowance Rules" xml:space="preserve">
+    <value>Mileage / Kilometrage Allowance Rules</value>
+  </data>
+  <data name="Monthly (12/yr)" xml:space="preserve">
+    <value>Monthly (12/yr)</value>
+  </data>
+  <data name="Net" xml:space="preserve">
+    <value>Net</value>
+  </data>
+  <data name="Net Sales Tax Reserve (Collected minus ITC/ITR)" xml:space="preserve">
+    <value>Net Sales Tax Reserve (Collected minus ITC/ITR)</value>
+  </data>
+  <data name="New Blank Template" xml:space="preserve">
+    <value>New Blank Template</value>
+  </data>
+  <data name="Next remittance deadline:" xml:space="preserve">
+    <value>Next remittance deadline:</value>
+  </data>
+  <data name="No custom deductions or benefits configured." xml:space="preserve">
+    <value>No custom deductions or benefits configured.</value>
+  </data>
+  <data name="No overdue client invoices." xml:space="preserve">
+    <value>No overdue client invoices.</value>
+  </data>
+  <data name="No supplier bills waiting for approval." xml:space="preserve">
+    <value>No supplier bills waiting for approval.</value>
+  </data>
+  <data name="No upper limit (Top Bracket)" xml:space="preserve">
+    <value>No upper limit (Top Bracket)</value>
+  </data>
+  <data name="One-Time Company Bills" xml:space="preserve">
+    <value>One-Time Company Bills</value>
+  </data>
+  <data name="Opening Balance" xml:space="preserve">
+    <value>Opening Balance</value>
+  </data>
+  <data name="Out-of-Balance Diff:" xml:space="preserve">
+    <value>Out-of-Balance Diff:</value>
+  </data>
+  <data name="Overdue" xml:space="preserve">
+    <value>Overdue</value>
+  </data>
+  <data name="Overdue Client Invoices" xml:space="preserve">
+    <value>Overdue Client Invoices</value>
+  </data>
+  <data name="overdue invoice(s) totaling" xml:space="preserve">
+    <value>overdue invoice(s) totaling</value>
+  </data>
+  <data name="Overhead Rate &amp; Allocation" xml:space="preserve">
+    <value>Overhead Rate &amp; Allocation</value>
+  </data>
+  <data name="Pay &amp; Remit" xml:space="preserve">
+    <value>Pay &amp; Remit</value>
+  </data>
+  <data name="Pay Frequency" xml:space="preserve">
+    <value>Pay Frequency</value>
+  </data>
+  <data name="Pay Out Every Period" xml:space="preserve">
+    <value>Pay Out Every Period</value>
+  </data>
+  <data name="Pay Run Prefix" xml:space="preserve">
+    <value>Pay Run Prefix</value>
+  </data>
+  <data name="Pay Stubs &amp; Breakdown" xml:space="preserve">
+    <value>Pay Stubs &amp; Breakdown</value>
+  </data>
+  <data name="Pay stubs recalculated and draft saved." xml:space="preserve">
+    <value>Pay stubs recalculated and draft saved.</value>
+  </data>
+  <data name="Payables" xml:space="preserve">
+    <value>Payables</value>
+  </data>
+  <data name="payables &amp; net payroll due" xml:space="preserve">
+    <value>payables &amp; net payroll due</value>
+  </data>
+  <data name="Payroll &amp; Tax Profile" xml:space="preserve">
+    <value>Payroll &amp; Tax Profile</value>
+  </data>
+  <data name="Payroll Contributions" xml:space="preserve">
+    <value>Payroll Contributions</value>
+  </data>
+  <data name="Payroll Cost (Gross + Employer Burden MTD)" xml:space="preserve">
+    <value>Payroll Cost (Gross + Employer Burden MTD)</value>
+  </data>
+  <data name="Payroll Profile" xml:space="preserve">
+    <value>Payroll Profile</value>
+  </data>
+  <data name="Plus Open AR:" xml:space="preserve">
+    <value>Plus Open AR:</value>
+  </data>
+  <data name="Primary Rate ($/km)" xml:space="preserve">
+    <value>Primary Rate ($/km)</value>
+  </data>
+  <data name="Progressive Annual Tax Brackets" xml:space="preserve">
+    <value>Progressive Annual Tax Brackets</value>
+  </data>
+  <data name="Project PO Bills &amp; Expenses (MTD)" xml:space="preserve">
+    <value>Project PO Bills &amp; Expenses (MTD)</value>
+  </data>
+  <data name="Project Report Prefix" xml:space="preserve">
+    <value>Project Report Prefix</value>
+  </data>
+  <data name="Projects Needing Attention" xml:space="preserve">
+    <value>Projects Needing Attention</value>
+  </data>
+  <data name="Prompts for an audit reason when editing documents on or before this date" xml:space="preserve">
+    <value>Prompts for an audit reason when editing documents on or before this date</value>
+  </data>
+  <data name="Purchase Order Prefix" xml:space="preserve">
+    <value>Purchase Order Prefix</value>
+  </data>
+  <data name="Quarterly" xml:space="preserve">
+    <value>Quarterly</value>
+  </data>
+  <data name="Quote Prefix" xml:space="preserve">
+    <value>Quote Prefix</value>
+  </data>
+  <data name="Rate (%)" xml:space="preserve">
+    <value>Rate (%)</value>
+  </data>
+  <data name="Real-time cash position, government tax reserves, and daily bookkeeping checklist." xml:space="preserve">
+    <value>Real-time cash position, government tax reserves, and daily bookkeeping checklist.</value>
+  </data>
+  <data name="Recalculate Taxes &amp; Save Draft" xml:space="preserve">
+    <value>Recalculate Taxes &amp; Save Draft</value>
+  </data>
+  <data name="Receivables" xml:space="preserve">
+    <value>Receivables</value>
+  </data>
+  <data name="Receivables, payables, payroll, bank reconciliation, tax filings, and general ledger." xml:space="preserve">
+    <value>Receivables, payables, payroll, bank reconciliation, tax filings, and general ledger.</value>
+  </data>
+  <data name="Reconcile" xml:space="preserve">
+    <value>Reconcile</value>
+  </data>
+  <data name="Recoverable (ITC)" xml:space="preserve">
+    <value>Recoverable (ITC)</value>
+  </data>
+  <data name="Recurring &amp; Overhead Bills (MTD)" xml:space="preserve">
+    <value>Recurring &amp; Overhead Bills (MTD)</value>
+  </data>
+  <data name="Recurring Company Bills" xml:space="preserve">
+    <value>Recurring Company Bills</value>
+  </data>
+  <data name="Region / State / Province" xml:space="preserve">
+    <value>Region / State / Province</value>
+  </data>
+  <data name="Registration # Label" xml:space="preserve">
+    <value>Registration # Label</value>
+  </data>
+  <data name="Remittance Recorded" xml:space="preserve">
+    <value>Remittance Recorded</value>
+  </data>
+  <data name="run(s) unremitted" xml:space="preserve">
+    <value>run(s) unremitted</value>
+  </data>
+  <data name="Salaried (Annual)" xml:space="preserve">
+    <value>Salaried (Annual)</value>
+  </data>
+  <data name="Sales Tax Filing Frequency" xml:space="preserve">
+    <value>Sales Tax Filing Frequency</value>
+  </data>
+  <data name="Sales Tax:" xml:space="preserve">
+    <value>Sales Tax:</value>
+  </data>
+  <data name="Sales Taxes" xml:space="preserve">
+    <value>Sales Taxes</value>
+  </data>
+  <data name="Save &amp; Activate Template" xml:space="preserve">
+    <value>Save &amp; Activate Template</value>
+  </data>
+  <data name="Secondary Rate Above Threshold ($/km)" xml:space="preserve">
+    <value>Secondary Rate Above Threshold ($/km)</value>
+  </data>
+  <data name="Select a jurisdiction preset or build your own tax, mileage, payroll, and Chart of Accounts template from the ground up." xml:space="preserve">
+    <value>Select a jurisdiction preset or build your own tax, mileage, payroll, and Chart of Accounts template from the ground up.</value>
+  </data>
+  <data name="Semi-Monthly (24/yr)" xml:space="preserve">
+    <value>Semi-Monthly (24/yr)</value>
+  </data>
+  <data name="Seniority Vacation Rate (%)" xml:space="preserve">
+    <value>Seniority Vacation Rate (%)</value>
+  </data>
+  <data name="Slip Box" xml:space="preserve">
+    <value>Slip Box</value>
+  </data>
+  <data name="Slip Box Code" xml:space="preserve">
+    <value>Slip Box Code</value>
+  </data>
+  <data name="Standard Weekly Hours" xml:space="preserve">
+    <value>Standard Weekly Hours</value>
+  </data>
+  <data name="Statutory Social Contributions &amp; Exemptions" xml:space="preserve">
+    <value>Statutory Social Contributions &amp; Exemptions</value>
+  </data>
+  <data name="Statutory Vacation Accrual Defaults" xml:space="preserve">
+    <value>Statutory Vacation Accrual Defaults</value>
+  </data>
+  <data name="submitted expense report(s) awaiting reimbursement" xml:space="preserve">
+    <value>submitted expense report(s) awaiting reimbursement</value>
+  </data>
+  <data name="submitted timesheet(s) ready for approval before payroll" xml:space="preserve">
+    <value>submitted timesheet(s) ready for approval before payroll</value>
+  </data>
+  <data name="Supplier Bills Awaiting Approval" xml:space="preserve">
+    <value>Supplier Bills Awaiting Approval</value>
+  </data>
+  <data name="Supported Currencies" xml:space="preserve">
+    <value>Supported Currencies</value>
+  </data>
+  <data name="Tax &amp; Payroll Profile" xml:space="preserve">
+    <value>Tax &amp; Payroll Profile</value>
+  </data>
+  <data name="Tax / GIFI Code" xml:space="preserve">
+    <value>Tax / GIFI Code</value>
+  </data>
+  <data name="Tax Tables" xml:space="preserve">
+    <value>Tax Tables</value>
+  </data>
+  <data name="Tax Year" xml:space="preserve">
+    <value>Tax Year</value>
+  </data>
+  <data name="Timesheets Awaiting Approval" xml:space="preserve">
+    <value>Timesheets Awaiting Approval</value>
+  </data>
+  <data name="Toggle exemptions for specific contributions defined in the active jurisdiction template (e.g. owner/shareholder exemptions)." xml:space="preserve">
+    <value>Toggle exemptions for specific contributions defined in the active jurisdiction template (e.g. owner/shareholder exemptions).</value>
+  </data>
+  <data name="Transaction matched to journal entry." xml:space="preserve">
+    <value>Transaction matched to journal entry.</value>
+  </data>
+  <data name="True Available Cash Equation" xml:space="preserve">
+    <value>True Available Cash Equation</value>
+  </data>
+  <data name="Unmatched Bank Statement Lines" xml:space="preserve">
+    <value>Unmatched Bank Statement Lines</value>
+  </data>
+  <data name="Up To Annual Taxable Income ($ — leave blank for top bracket)" xml:space="preserve">
+    <value>Up To Annual Taxable Income ($ — leave blank for top bracket)</value>
+  </data>
+  <data name="Vac. Hours" xml:space="preserve">
+    <value>Vac. Hours</value>
+  </data>
+  <data name="Vacation Bank Balance ($)" xml:space="preserve">
+    <value>Vacation Bank Balance ($)</value>
+  </data>
+  <data name="Vacation Handling" xml:space="preserve">
+    <value>Vacation Handling</value>
+  </data>
+  <data name="Vacation Rate (%)" xml:space="preserve">
+    <value>Vacation Rate (%)</value>
+  </data>
+  <data name="Weekly (52/yr)" xml:space="preserve">
+    <value>Weekly (52/yr)</value>
+  </data>
+  <data name="Years of Service for Senior Rate" xml:space="preserve">
+    <value>Years of Service for Senior Rate</value>
+  </data>
+  <data name="Company Tax Registration Numbers (printed on invoices) are configured per jurisdiction in Business Settings → Accounting, Tax &amp; Jurisdiction." xml:space="preserve">
+    <value>Company Tax Registration Numbers (printed on invoices) are configured per jurisdiction in Business Settings → Accounting, Tax &amp; Jurisdiction.</value>
+  </data>
+  <data name="3900 Residual" xml:space="preserve">
+    <value>3900 Residual</value>
+  </data>
+  <data name="Accounting Cutover &amp; Migration (Sage 50 / CSV)" xml:space="preserve">
+    <value>Accounting Cutover &amp; Migration (Sage 50 / CSV)</value>
+  </data>
+  <data name="Action" xml:space="preserve">
+    <value>Action</value>
+  </data>
+  <data name="Batch #" xml:space="preserve">
+    <value>Batch #</value>
+  </data>
+  <data name="Bill #" xml:space="preserve">
+    <value>Bill #</value>
+  </data>
+  <data name="Clear Files" xml:space="preserve">
+    <value>Clear Files</value>
+  </data>
+  <data name="Create Account" xml:space="preserve">
+    <value>Create Account</value>
+  </data>
+  <data name="Customers / Clients" xml:space="preserve">
+    <value>Customers / Clients</value>
+  </data>
+  <data name="Cutover &amp; Migration" xml:space="preserve">
+    <value>Cutover &amp; Migration</value>
+  </data>
+  <data name="Cutover Date" xml:space="preserve">
+    <value>Cutover Date</value>
+  </data>
+  <data name="Executed At (UTC)" xml:space="preserve">
+    <value>Executed At (UTC)</value>
+  </data>
+  <data name="File Name" xml:space="preserve">
+    <value>File Name</value>
+  </data>
+  <data name="Fresh Cutover (New Spokes Workspace)" xml:space="preserve">
+    <value>Fresh Cutover (New Spokes Workspace)</value>
+  </data>
+  <data name="Importing from Sage 50, Sage Business Cloud, or CSV? Run the guided cutover wizard to match accounts, clients, suppliers, open AR/AP, and payroll YTD balances." xml:space="preserve">
+    <value>Importing from Sage 50, Sage Business Cloud, or CSV? Run the guided cutover wizard to match accounts, clients, suppliers, open AR/AP, and payroll YTD balances.</value>
+  </data>
+  <data name="Link Existing" xml:space="preserve">
+    <value>Link Existing</value>
+  </data>
+  <data name="Map to Existing" xml:space="preserve">
+    <value>Map to Existing</value>
+  </data>
+  <data name="Migration Cutover History &amp; Rollback" xml:space="preserve">
+    <value>Migration Cutover History &amp; Rollback</value>
+  </data>
+  <data name="Mode / Format" xml:space="preserve">
+    <value>Mode / Format</value>
+  </data>
+  <data name="No migration cutovers executed yet." xml:space="preserve">
+    <value>No migration cutovers executed yet.</value>
+  </data>
+  <data name="Open Accounting Migration Wizard" xml:space="preserve">
+    <value>Open Accounting Migration Wizard</value>
+  </data>
+  <data name="Open AP Bills" xml:space="preserve">
+    <value>Open AP Bills</value>
+  </data>
+  <data name="Open AR Invoices" xml:space="preserve">
+    <value>Open AR Invoices</value>
+  </data>
+  <data name="Payroll YTD" xml:space="preserve">
+    <value>Payroll YTD</value>
+  </data>
+  <data name="Payroll YTD Seed" xml:space="preserve">
+    <value>Payroll YTD Seed</value>
+  </data>
+  <data name="Rollback" xml:space="preserve">
+    <value>Rollback</value>
+  </data>
+  <data name="Rolled back migration batch {0}." xml:space="preserve">
+    <value>Rolled back migration batch {0}.</value>
+  </data>
+  <data name="Source Format" xml:space="preserve">
+    <value>Source Format</value>
+  </data>
+  <data name="Summary" xml:space="preserve">
+    <value>Summary</value>
+  </data>
+  <data name="Suppliers / Vendors" xml:space="preserve">
+    <value>Suppliers / Vendors</value>
+  </data>
+  <data name="Target Spokes Account" xml:space="preserve">
+    <value>Target Spokes Account</value>
+  </data>
+  <data name="+ Contribs" xml:space="preserve">
+    <value>+ Contribs</value>
+  </data>
+  <data name="Account name is required." xml:space="preserve">
+    <value>Account name is required.</value>
+  </data>
+  <data name="Add Bracket Set" xml:space="preserve">
+    <value>Add Bracket Set</value>
+  </data>
+  <data name="Add Option" xml:space="preserve">
+    <value>Add Option</value>
+  </data>
+  <data name="Add Parameter" xml:space="preserve">
+    <value>Add Parameter</value>
+  </data>
+  <data name="Add Step" xml:space="preserve">
+    <value>Add Step</value>
+  </data>
+  <data name="Base %" xml:space="preserve">
+    <value>Base %</value>
+  </data>
+  <data name="Base Multiplier (%)" xml:space="preserve">
+    <value>Base Multiplier (%)</value>
+  </data>
+  <data name="Bracket" xml:space="preserve">
+    <value>Bracket</value>
+  </data>
+  <data name="Cash in Bank" xml:space="preserve">
+    <value>Cash in Bank</value>
+  </data>
+  <data name="Choice Options" xml:space="preserve">
+    <value>Choice Options</value>
+  </data>
+  <data name="Computation Method" xml:space="preserve">
+    <value>Computation Method</value>
+  </data>
+  <data name="Conditional Bracket Sets (e.g. by Filing Status)" xml:space="preserve">
+    <value>Conditional Bracket Sets (e.g. by Filing Status)</value>
+  </data>
+  <data name="Configure statutory employee deductions and employer payroll levies (with base multipliers, exemptions, floors, and ceilings)." xml:space="preserve">
+    <value>Configure statutory employee deductions and employer payroll levies (with base multipliers, exemptions, floors, and ceilings).</value>
+  </data>
+  <data name="Credit" xml:space="preserve">
+    <value>Credit</value>
+  </data>
+  <data name="Declare per-employee payroll parameters rendered in Employee Payroll Profiles (credits, filing status choices, personalized rates, or extra withholding)." xml:space="preserve">
+    <value>Declare per-employee payroll parameters rendered in Employee Payroll Profiles (credits, filing status choices, personalized rates, or extra withholding).</value>
+  </data>
+  <data name="Deductible" xml:space="preserve">
+    <value>Deductible</value>
+  </data>
+  <data name="Default ($)" xml:space="preserve">
+    <value>Default ($)</value>
+  </data>
+  <data name="Default Value" xml:space="preserve">
+    <value>Default Value</value>
+  </data>
+  <data name="Define income tax calculation pipelines for each tax authority (progressive brackets, filing-status bracket sets, employee rate overrides, pre-bracket deductions, and post-tax steps)." xml:space="preserve">
+    <value>Define income tax calculation pipelines for each tax authority (progressive brackets, filing-status bracket sets, employee rate overrides, pre-bracket deductions, and post-tax steps).</value>
+  </data>
+  <data name="Employee Parameters" xml:space="preserve">
+    <value>Employee Parameters</value>
+  </data>
+  <data name="Flat Rate (%)" xml:space="preserve">
+    <value>Flat Rate (%)</value>
+  </data>
+  <data name="GL Account updated." xml:space="preserve">
+    <value>GL Account updated.</value>
+  </data>
+  <data name="Help Text" xml:space="preserve">
+    <value>Help Text</value>
+  </data>
+  <data name="Include itemized overhead breakdown table" xml:space="preserve">
+    <value>Include itemized overhead breakdown table</value>
+  </data>
+  <data name="Jurisdiction Tax &amp; Withholding Parameters" xml:space="preserve">
+    <value>Jurisdiction Tax &amp; Withholding Parameters</value>
+  </data>
+  <data name="Key" xml:space="preserve">
+    <value>Key</value>
+  </data>
+  <data name="No per-employee parameters declared yet." xml:space="preserve">
+    <value>No per-employee parameters declared yet.</value>
+  </data>
+  <data name="No post-calculation steps (tax comes directly from brackets/rate)." xml:space="preserve">
+    <value>No post-calculation steps (tax comes directly from brackets/rate).</value>
+  </data>
+  <data name="Option Key" xml:space="preserve">
+    <value>Option Key</value>
+  </data>
+  <data name="Param Key" xml:space="preserve">
+    <value>Param Key</value>
+  </data>
+  <data name="Post-Calculation Pipeline Steps (Credits, Abatements, Surtaxes, Extra Withholding)" xml:space="preserve">
+    <value>Post-Calculation Pipeline Steps (Credits, Abatements, Surtaxes, Extra Withholding)</value>
+  </data>
+  <data name="Pre-Bracket Deduction Param Key" xml:space="preserve">
+    <value>Pre-Bracket Deduction Param Key</value>
+  </data>
+  <data name="Pre-Bracket Std. Deduction ($)" xml:space="preserve">
+    <value>Pre-Bracket Std. Deduction ($)</value>
+  </data>
+  <data name="Rate / Factor (%)" xml:space="preserve">
+    <value>Rate / Factor (%)</value>
+  </data>
+  <data name="Rate Override Param Key (e.g. FR_PAS_RATE)" xml:space="preserve">
+    <value>Rate Override Param Key (e.g. FR_PAS_RATE)</value>
+  </data>
+  <data name="Rendered dynamically from the active jurisdiction template." xml:space="preserve">
+    <value>Rendered dynamically from the active jurisdiction template.</value>
+  </data>
+  <data name="Reset All Defaults" xml:space="preserve">
+    <value>Reset All Defaults</value>
+  </data>
+  <data name="Selector Choice Param Key (e.g. W4_FILING_STATUS)" xml:space="preserve">
+    <value>Selector Choice Param Key (e.g. W4_FILING_STATUS)</value>
+  </data>
+  <data name="Std. Deduction ($)" xml:space="preserve">
+    <value>Std. Deduction ($)</value>
+  </data>
+  <data name="Step Type" xml:space="preserve">
+    <value>Step Type</value>
+  </data>
+  <data name="Top Bracket" xml:space="preserve">
+    <value>Top Bracket</value>
+  </data>
+  <data name="Up To Annual Taxable Income ($)" xml:space="preserve">
+    <value>Up To Annual Taxable Income ($)</value>
+  </data>
+  <data name="Accounting" xml:space="preserve">
+    <value>Accounting</value>
+  </data>
+  <data name="Bills / History" xml:space="preserve">
+    <value>Bills / History</value>
+  </data>
+  <data name="Confirm Merge" xml:space="preserve">
+    <value>Confirm Merge</value>
+  </data>
+  <data name="Default Amount" xml:space="preserve">
+    <value>Default Amount</value>
+  </data>
+  <data name="Delete draft pay run {0}?" xml:space="preserve">
+    <value>Delete draft pay run {0}?</value>
+  </data>
+  <data name="Delete pay run {0}? Any unlocked General Ledger entries for this pay run will be removed." xml:space="preserve">
+    <value>Delete pay run {0}? Any unlocked General Ledger entries for this pay run will be removed.</value>
+  </data>
+  <data name="Discard" xml:space="preserve">
+    <value>Discard</value>
+  </data>
+  <data name="Draft Preview" xml:space="preserve">
+    <value>Draft Preview</value>
+  </data>
+  <data name="Employee payment status updated." xml:space="preserve">
+    <value>Employee payment status updated.</value>
+  </data>
+  <data name="employees paid" xml:space="preserve">
+    <value>employees paid</value>
+  </data>
+  <data name="Mark {0} Selected Paid" xml:space="preserve">
+    <value>Mark {0} Selected Paid</value>
+  </data>
+  <data name="Mark {0} Unpaid" xml:space="preserve">
+    <value>Mark {0} Unpaid</value>
+  </data>
+  <data name="Mark All Paid" xml:space="preserve">
+    <value>Mark All Paid</value>
+  </data>
+  <data name="Mark Paid" xml:space="preserve">
+    <value>Mark Paid</value>
+  </data>
+  <data name="Mark Unpaid" xml:space="preserve">
+    <value>Mark Unpaid</value>
+  </data>
+  <data name="Marked selected employee payment(s) as unpaid." xml:space="preserve">
+    <value>Marked selected employee payment(s) as unpaid.</value>
+  </data>
+  <data name="Merge" xml:space="preserve">
+    <value>Merge</value>
+  </data>
+  <data name="Merge {0} ({1} profile(s)) into '{2}'? All linked bills, history records, and Bill Inbox links will be moved to '{2}', and the selected duplicate profiles will be permanently deleted." xml:space="preserve">
+    <value>Merge {0} ({1} profile(s)) into '{2}'? All linked bills, history records, and Bill Inbox links will be moved to '{2}', and the selected duplicate profiles will be permanently deleted.</value>
+  </data>
+  <data name="Merge {0} Selected Into This Profile" xml:space="preserve">
+    <value>Merge {0} Selected Into This Profile</value>
+  </data>
+  <data name="Merge Duplicates" xml:space="preserve">
+    <value>Merge Duplicates</value>
+  </data>
+  <data name="Merged {0} duplicate recurring profile(s)." xml:space="preserve">
+    <value>Merged {0} duplicate recurring profile(s).</value>
+  </data>
+  <data name="No other recurring profiles found to merge." xml:space="preserve">
+    <value>No other recurring profiles found to merge.</value>
+  </data>
+  <data name="Operating Costs" xml:space="preserve">
+    <value>Operating Costs</value>
+  </data>
+  <data name="Pay run deleted." xml:space="preserve">
+    <value>Pay run deleted.</value>
+  </data>
+  <data name="Pay Run Preview" xml:space="preserve">
+    <value>Pay Run Preview</value>
+  </data>
+  <data name="Payment Confirmation" xml:space="preserve">
+    <value>Payment Confirmation</value>
+  </data>
+  <data name="Possible Duplicate" xml:space="preserve">
+    <value>Possible Duplicate</value>
+  </data>
+  <data name="Preview only — this pay run has not been saved yet. Review or adjust hours below, then click Save Draft or Approve &amp; Post, or click Discard to close without saving." xml:space="preserve">
+    <value>Preview only — this pay run has not been saved yet. Review or adjust hours below, then click Save Draft or Approve &amp; Post, or click Discard to close without saving.</value>
+  </data>
+  <data name="Ref (e.g. EFT / Cheque)" xml:space="preserve">
+    <value>Ref (e.g. EFT / Cheque)</value>
+  </data>
+  <data name="Save Draft" xml:space="preserve">
+    <value>Save Draft</value>
+  </data>
+  <data name="Search recurring profiles by name or supplier..." xml:space="preserve">
+    <value>Search recurring profiles by name or supplier...</value>
+  </data>
+  <data name="Select duplicate recurring profiles below to merge their bill history, standalone bills, and Bill Inbox links into '{0}'. Merged profiles will be deleted." xml:space="preserve">
+    <value>Select duplicate recurring profiles below to merge their bill history, standalone bills, and Bill Inbox links into '{0}'. Merged profiles will be deleted.</value>
+  </data>
+  <data name="Unsaved Preview" xml:space="preserve">
+    <value>Unsaved Preview</value>
+  </data>
+  <data name="Acct 3900 Residual" xml:space="preserve">
+    <value>Acct 3900 Residual</value>
+  </data>
+  <data name="Active Since Year (&gt;=)" xml:space="preserve">
+    <value>Active Since Year (&gt;=)</value>
+  </data>
+  <data name="Add to Address Book" xml:space="preserve">
+    <value>Add to Address Book</value>
+  </data>
+  <data name="Address Book" xml:space="preserve">
+    <value>Address Book</value>
+  </data>
+  <data name="Address Book (Clients &amp; Suppliers)" xml:space="preserve">
+    <value>Address Book (Clients &amp; Suppliers)</value>
+  </data>
+  <data name="All data imports — Sage 50 exports (.txt / .imp), Chart of Accounts, Clients, Suppliers, Employees, Payroll YTD CSV, Projects, Open AR/AP Invoices &amp; Bills, and Clockify Timesheets — are now unified in one place with an interactive review and filtering dialog." xml:space="preserve">
+    <value>All data imports — Sage 50 exports (.txt / .imp), Chart of Accounts, Clients, Suppliers, Employees, Payroll YTD CSV, Projects, Open AR/AP Invoices &amp; Bills, and Clockify Timesheets — are now unified in one place with an interactive review and filtering dialog.</value>
+  </data>
+  <data name="Analyze &amp; Review Import" xml:space="preserve">
+    <value>Analyze &amp; Review Import</value>
+  </data>
+  <data name="Analyzing Files..." xml:space="preserve">
+    <value>Analyzing Files...</value>
+  </data>
+  <data name="Apply Year Rule" xml:space="preserve">
+    <value>Apply Year Rule</value>
+  </data>
+  <data name="Auto-Detect (Recommended)" xml:space="preserve">
+    <value>Auto-Detect (Recommended)</value>
+  </data>
+  <data name="Auto-Skip Obsolete Accounts" xml:space="preserve">
+    <value>Auto-Skip Obsolete Accounts</value>
+  </data>
+  <data name="Back to Accounting" xml:space="preserve">
+    <value>Back to Accounting</value>
+  </data>
+  <data name="Cash Flow Statement" xml:space="preserve">
+    <value>Cash Flow Statement</value>
+  </data>
+  <data name="Check Shown" xml:space="preserve">
+    <value>Check Shown</value>
+  </data>
+  <data name="Client &amp; Supplier" xml:space="preserve">
+    <value>Client &amp; Supplier</value>
+  </data>
+  <data name="Clients" xml:space="preserve">
+    <value>Clients</value>
+  </data>
+  <data name="Clockify Time Entries" xml:space="preserve">
+    <value>Clockify Time Entries</value>
+  </data>
+  <data name="Clockify Timesheets" xml:space="preserve">
+    <value>Clockify Timesheets</value>
+  </data>
+  <data name="Clockify Timesheets CSV" xml:space="preserve">
+    <value>Clockify Timesheets CSV</value>
+  </data>
+  <data name="Company Name" xml:space="preserve">
+    <value>Company Name</value>
+  </data>
+  <data name="Compilation / Notice to Reader packages containing Executive KPIs, Income Statement, Balance Sheet, Cash Flow Statement, and Financial Ratios for shareholders &amp; investors." xml:space="preserve">
+    <value>Compilation / Notice to Reader packages containing Executive KPIs, Income Statement, Balance Sheet, Cash Flow Statement, and Financial Ratios for shareholders &amp; investors.</value>
+  </data>
+  <data name="Confirm &amp; Execute Import" xml:space="preserve">
+    <value>Confirm &amp; Execute Import</value>
+  </data>
+  <data name="Confirm Migration Rollback" xml:space="preserve">
+    <value>Confirm Migration Rollback</value>
+  </data>
+  <data name="Contact" xml:space="preserve">
+    <value>Contact</value>
+  </data>
+  <data name="Create Active" xml:space="preserve">
+    <value>Create Active</value>
+  </data>
+  <data name="Create as Completed (Archived)" xml:space="preserve">
+    <value>Create as Completed (Archived)</value>
+  </data>
+  <data name="Create Completed (Archived)" xml:space="preserve">
+    <value>Create Completed (Archived)</value>
+  </data>
+  <data name="Create Former (Inactive)" xml:space="preserve">
+    <value>Create Former (Inactive)</value>
+  </data>
+  <data name="Cutover As-Of Date" xml:space="preserve">
+    <value>Cutover As-Of Date</value>
+  </data>
+  <data name="Cutover Mode" xml:space="preserve">
+    <value>Cutover Mode</value>
+  </data>
+  <data name="Date (UTC)" xml:space="preserve">
+    <value>Date (UTC)</value>
+  </data>
+  <data name="Debit" xml:space="preserve">
+    <value>Debit</value>
+  </data>
+  <data name="Deduplicated" xml:space="preserve">
+    <value>Deduplicated</value>
+  </data>
+  <data name="Delete financial statement {0}?" xml:space="preserve">
+    <value>Delete financial statement {0}?</value>
+  </data>
+  <data name="Deselect All" xml:space="preserve">
+    <value>Deselect All</value>
+  </data>
+  <data name="Detected Content" xml:space="preserve">
+    <value>Detected Content</value>
+  </data>
+  <data name="Document Audit History" xml:space="preserve">
+    <value>Document Audit History</value>
+  </data>
+  <data name="Download PDF" xml:space="preserve">
+    <value>Download PDF</value>
+  </data>
+  <data name="Drop all company export files here in one batch: Sage 50 (.txt / .imp), Chart of Accounts, Vendors, Customers, Employees, Projects, Payroll YTD CSV, Open AR/AP Invoices &amp; Bills, or Clockify Timesheets CSV. You will review, filter, and pick what to keep before anything is saved." xml:space="preserve">
+    <value>Drop all company export files here in one batch: Sage 50 (.txt / .imp), Chart of Accounts, Vendors, Customers, Employees, Projects, Payroll YTD CSV, Open AR/AP Invoices &amp; Bills, or Clockify Timesheets CSV. You will review, filter, and pick what to keep before anything is saved.</value>
+  </data>
+  <data name="Edit Report" xml:space="preserve">
+    <value>Edit Report</value>
+  </data>
+  <data name="Employees &amp; Payroll" xml:space="preserve">
+    <value>Employees &amp; Payroll</value>
+  </data>
+  <data name="Employees Directory" xml:space="preserve">
+    <value>Employees Directory</value>
+  </data>
+  <data name="Executive Summary &amp; KPIs" xml:space="preserve">
+    <value>Executive Summary &amp; KPIs</value>
+  </data>
+  <data name="Executive Summary / Highlights for Shareholders &amp; Investors" xml:space="preserve">
+    <value>Executive Summary / Highlights for Shareholders &amp; Investors</value>
+  </data>
+  <data name="Existing Workspace Delta (Sync with Existing GL)" xml:space="preserve">
+    <value>Existing Workspace Delta (Sync with Existing GL)</value>
+  </data>
+  <data name="Failed to save report" xml:space="preserve">
+    <value>Failed to save report</value>
+  </data>
+  <data name="Final" xml:space="preserve">
+    <value>Final</value>
+  </data>
+  <data name="Financial Ratios" xml:space="preserve">
+    <value>Financial Ratios</value>
+  </data>
+  <data name="Financial report deleted." xml:space="preserve">
+    <value>Financial report deleted.</value>
+  </data>
+  <data name="Financial report not found." xml:space="preserve">
+    <value>Financial report not found.</value>
+  </data>
+  <data name="Financial report saved." xml:space="preserve">
+    <value>Financial report saved.</value>
+  </data>
+  <data name="Financial statements recalculated from current General Ledger." xml:space="preserve">
+    <value>Financial statements recalculated from current General Ledger.</value>
+  </data>
+  <data name="Generate &amp; Open Report" xml:space="preserve">
+    <value>Generate &amp; Open Report</value>
+  </data>
+  <data name="Generate Shareholder / Investor Report" xml:space="preserve">
+    <value>Generate Shareholder / Investor Report</value>
+  </data>
+  <data name="Generating PDF..." xml:space="preserve">
+    <value>Generating PDF...</value>
+  </data>
+  <data name="Generic / Clockify CSV" xml:space="preserve">
+    <value>Generic / Clockify CSV</value>
+  </data>
+  <data name="GIFI" xml:space="preserve">
+    <value>GIFI</value>
+  </data>
+  <data name="GL Accounts" xml:space="preserve">
+    <value>GL Accounts</value>
+  </data>
+  <data name="GL Trial Balance" xml:space="preserve">
+    <value>GL Trial Balance</value>
+  </data>
+  <data name="Import analysis failed" xml:space="preserve">
+    <value>Import analysis failed</value>
+  </data>
+  <data name="Import Batch {0} completed." xml:space="preserve">
+    <value>Import Batch {0} completed.</value>
+  </data>
+  <data name="Imported {0} Clockify time entries." xml:space="preserve">
+    <value>Imported {0} Clockify time entries.</value>
+  </data>
+  <data name="Imported Entities" xml:space="preserve">
+    <value>Imported Entities</value>
+  </data>
+  <data name="Included Sections" xml:space="preserve">
+    <value>Included Sections</value>
+  </data>
+  <data name="Interactive Review &amp; 1-Click Rollback" xml:space="preserve">
+    <value>Interactive Review &amp; 1-Click Rollback</value>
+  </data>
+  <data name="Internal Bucket" xml:space="preserve">
+    <value>Internal Bucket</value>
+  </data>
+  <data name="Inventory (Info)" xml:space="preserve">
+    <value>Inventory (Info)</value>
+  </data>
+  <data name="Inventory Items (Info)" xml:space="preserve">
+    <value>Inventory Items (Info)</value>
+  </data>
+  <data name="Issue Date" xml:space="preserve">
+    <value>Issue Date</value>
+  </data>
+  <data name="Keep Active" xml:space="preserve">
+    <value>Keep Active</value>
+  </data>
+  <data name="Matched Client" xml:space="preserve">
+    <value>Matched Client</value>
+  </data>
+  <data name="Migration batch {0} executed successfully." xml:space="preserve">
+    <value>Migration batch {0} executed successfully.</value>
+  </data>
+  <data name="Migration Cutover History &amp; 1-Click Rollback" xml:space="preserve">
+    <value>Migration Cutover History &amp; 1-Click Rollback</value>
+  </data>
+  <data name="Notes to Financial Statements &amp; Management Discussion" xml:space="preserve">
+    <value>Notes to Financial Statements &amp; Management Discussion</value>
+  </data>
+  <data name="Notice to Reader / Basis of Presentation Disclaimer" xml:space="preserve">
+    <value>Notice to Reader / Basis of Presentation Disclaimer</value>
+  </data>
+  <data name="Obsolete" xml:space="preserve">
+    <value>Obsolete</value>
+  </data>
+  <data name="Older Projects Action" xml:space="preserve">
+    <value>Older Projects Action</value>
+  </data>
+  <data name="Open Amount" xml:space="preserve">
+    <value>Open Amount</value>
+  </data>
+  <data name="Open AP" xml:space="preserve">
+    <value>Open AP</value>
+  </data>
+  <data name="Open AR" xml:space="preserve">
+    <value>Open AR</value>
+  </data>
+  <data name="Open AR/AP &amp; Timesheets" xml:space="preserve">
+    <value>Open AR/AP &amp; Timesheets</value>
+  </data>
+  <data name="Open Payable Bills" xml:space="preserve">
+    <value>Open Payable Bills</value>
+  </data>
+  <data name="Open Receivable Invoices" xml:space="preserve">
+    <value>Open Receivable Invoices</value>
+  </data>
+  <data name="Open Unified Data Import Hub" xml:space="preserve">
+    <value>Open Unified Data Import Hub</value>
+  </data>
+  <data name="Pay Periods" xml:space="preserve">
+    <value>Pay Periods</value>
+  </data>
+  <data name="Period End (As Of)" xml:space="preserve">
+    <value>Period End (As Of)</value>
+  </data>
+  <data name="Period Type" xml:space="preserve">
+    <value>Period Type</value>
+  </data>
+  <data name="Prepared / Approved By" xml:space="preserve">
+    <value>Prepared / Approved By</value>
+  </data>
+  <data name="Prior Period Comparison" xml:space="preserve">
+    <value>Prior Period Comparison</value>
+  </data>
+  <data name="Project Name" xml:space="preserve">
+    <value>Project Name</value>
+  </data>
+  <data name="Projects" xml:space="preserve">
+    <value>Projects</value>
+  </data>
+  <data name="Recalculate" xml:space="preserve">
+    <value>Recalculate</value>
+  </data>
+  <data name="Recalculate Financial Statements &amp; Cash Flows from current General Ledger" xml:space="preserve">
+    <value>Recalculate Financial Statements &amp; Cash Flows from current General Ledger</value>
+  </data>
+  <data name="Refresh GL Data" xml:space="preserve">
+    <value>Refresh GL Data</value>
+  </data>
+  <data name="Report status updated to {0}." xml:space="preserve">
+    <value>Report status updated to {0}.</value>
+  </data>
+  <data name="Review &amp; Curate Import Data" xml:space="preserve">
+    <value>Review &amp; Curate Import Data</value>
+  </data>
+  <data name="Role" xml:space="preserve">
+    <value>Role</value>
+  </data>
+  <data name="Roll back migration batch {0}? This deletes imported opening journal entries, un-paid invoices/bills, created employees, created suppliers, created projects, GL accounts, and payroll YTD seed runs created by this batch." xml:space="preserve">
+    <value>Roll back migration batch {0}? This deletes imported opening journal entries, un-paid invoices/bills, created employees, created suppliers, created projects, GL accounts, and payroll YTD seed runs created by this batch.</value>
+  </data>
+  <data name="Roll back migration batch {0}? This deletes the opening journal entries, un-paid invoices/bills, created employees, suppliers, projects, GL accounts, and payroll YTD seed runs created by this batch." xml:space="preserve">
+    <value>Roll back migration batch {0}? This deletes the opening journal entries, un-paid invoices/bills, created employees, suppliers, projects, GL accounts, and payroll YTD seed runs created by this batch.</value>
+  </data>
+  <data name="Rollback failed" xml:space="preserve">
+    <value>Rollback failed</value>
+  </data>
+  <data name="Sage 50 .imp" xml:space="preserve">
+    <value>Sage 50 .imp</value>
+  </data>
+  <data name="Sage 50 .imp Package" xml:space="preserve">
+    <value>Sage 50 .imp Package</value>
+  </data>
+  <data name="Saved Financial Statement Packages" xml:space="preserve">
+    <value>Saved Financial Statement Packages</value>
+  </data>
+  <data name="Select All" xml:space="preserve">
+    <value>Select All</value>
+  </data>
+  <data name="Select Export Files (.txt, .imp, .csv)" xml:space="preserve">
+    <value>Select Export Files (.txt, .imp, .csv)</value>
+  </data>
+  <data name="Shareholder &amp; Investor Reports" xml:space="preserve">
+    <value>Shareholder &amp; Investor Reports</value>
+  </data>
+  <data name="Show Flagged (Employees / Tax Agencies)" xml:space="preserve">
+    <value>Show Flagged (Employees / Tax Agencies)</value>
+  </data>
+  <data name="Show GL Codes" xml:space="preserve">
+    <value>Show GL Codes</value>
+  </data>
+  <data name="SIN" xml:space="preserve">
+    <value>SIN</value>
+  </data>
+  <data name="Skip / Ignore" xml:space="preserve">
+    <value>Skip / Ignore</value>
+  </data>
+  <data name="Skip Internal Buckets (Admin / Vacance / Atelier)" xml:space="preserve">
+    <value>Skip Internal Buckets (Admin / Vacance / Atelier)</value>
+  </data>
+  <data name="Skip Older Projects" xml:space="preserve">
+    <value>Skip Older Projects</value>
+  </data>
+  <data name="Status / Flag" xml:space="preserve">
+    <value>Status / Flag</value>
+  </data>
+  <data name="Subtitle / Audience (e.g. Q3 Board Update)" xml:space="preserve">
+    <value>Subtitle / Audience (e.g. Q3 Board Update)</value>
+  </data>
+  <data name="Suppliers" xml:space="preserve">
+    <value>Suppliers</value>
+  </data>
+  <data name="Target Spokes Employee" xml:space="preserve">
+    <value>Target Spokes Employee</value>
+  </data>
+  <data name="Trial Balance Summary" xml:space="preserve">
+    <value>Trial Balance Summary</value>
+  </data>
+  <data name="Type / SubType" xml:space="preserve">
+    <value>Type / SubType</value>
+  </data>
+  <data name="Uncheck Shown" xml:space="preserve">
+    <value>Uncheck Shown</value>
+  </data>
+  <data name="Unified Data Import &amp; Accounting Cutover" xml:space="preserve">
+    <value>Unified Data Import &amp; Accounting Cutover</value>
+  </data>
+  <data name="Unified Data Import &amp; Cutover" xml:space="preserve">
+    <value>Unified Data Import &amp; Cutover</value>
+  </data>
+  <data name="Unified Data Import &amp; Cutover Hub" xml:space="preserve">
+    <value>Unified Data Import &amp; Cutover Hub</value>
+  </data>
+  <data name="Unmatched -&gt; Create Active" xml:space="preserve">
+    <value>Unmatched -&gt; Create Active</value>
+  </data>
+  <data name="Unmatched -&gt; Former (Inactive)" xml:space="preserve">
+    <value>Unmatched -&gt; Former (Inactive)</value>
+  </data>
+  <data name="View / PDF" xml:space="preserve">
+    <value>View / PDF</value>
+  </data>
+  <data name="Sage 50 Desktop (.imp)" xml:space="preserve">
+    <value>Sage 50 Desktop (.imp)</value>
+  </data>
+  <data name="Sage 50 Export (.txt / CSV)" xml:space="preserve">
+    <value>Sage 50 Export (.txt / CSV)</value>
+  </data>
+  <data name="Sage Business Cloud CSV" xml:space="preserve">
+    <value>Sage Business Cloud CSV</value>
+  </data>
+  <data name="Failed to read selected file" xml:space="preserve">
+    <value>Failed to read selected file</value>
+  </data>
+  <data name="Adjusting entries recorded from CPA imports within the selected date range." xml:space="preserve">
+    <value>Adjusting entries recorded from CPA imports within the selected date range.</value>
+  </data>
+  <data name="Aged AR &amp; AP (.CSV)" xml:space="preserve">
+    <value>Aged AR &amp; AP (.CSV)</value>
+  </data>
+  <data name="All schedules below are also bundled inside the .ZIP package, or can be downloaded individually for the selected period." xml:space="preserve">
+    <value>All schedules below are also bundled inside the .ZIP package, or can be downloaded individually for the selected period.</value>
+  </data>
+  <data name="Balance Sheet (.CSV)" xml:space="preserve">
+    <value>Balance Sheet (.CSV)</value>
+  </data>
+  <data name="Bank Reconciliation (.CSV)" xml:space="preserve">
+    <value>Bank Reconciliation (.CSV)</value>
+  </data>
+  <data name="Core Financial Statements &amp; Ledger" xml:space="preserve">
+    <value>Core Financial Statements &amp; Ledger</value>
+  </data>
+  <data name="CPA &amp; Accountant" xml:space="preserve">
+    <value>CPA &amp; Accountant</value>
+  </data>
+  <data name="CPA &amp; Accountant Hand-Off" xml:space="preserve">
+    <value>CPA &amp; Accountant Hand-Off</value>
+  </data>
+  <data name="CPA adjusting entry deleted." xml:space="preserve">
+    <value>CPA adjusting entry deleted.</value>
+  </data>
+  <data name="CPA Cover Sheet (README.txt)" xml:space="preserve">
+    <value>CPA Cover Sheet (README.txt)</value>
+  </data>
+  <data name="Delete CPA adjusting entry {0}?" xml:space="preserve">
+    <value>Delete CPA adjusting entry {0}?</value>
+  </data>
+  <data name="Double-entry General Ledger, GIFI/FEC-ready Trial Balance, and financial statements." xml:space="preserve">
+    <value>Double-entry General Ledger, GIFI/FEC-ready Trial Balance, and financial statements.</value>
+  </data>
+  <data name="Download Sample CSV" xml:space="preserve">
+    <value>Download Sample CSV</value>
+  </data>
+  <data name="Downloaded {0}." xml:space="preserve">
+    <value>Downloaded {0}.</value>
+  </data>
+  <data name="Expected CSV Columns:" xml:space="preserve">
+    <value>Expected CSV Columns:</value>
+  </data>
+  <data name="Export audit-ready schedules, GIFI/Sage files, and vouchers for your CPA, and import year-end adjusting journal entries back into the General Ledger." xml:space="preserve">
+    <value>Export audit-ready schedules, GIFI/Sage files, and vouchers for your CPA, and import year-end adjusting journal entries back into the General Ledger.</value>
+  </data>
+  <data name="Export failed: {0}" xml:space="preserve">
+    <value>Export failed: {0}</value>
+  </data>
+  <data name="Fixed Assets &amp; CapEx (.CSV)" xml:space="preserve">
+    <value>Fixed Assets &amp; CapEx (.CSV)</value>
+  </data>
+  <data name="General Ledger" xml:space="preserve">
+    <value>General Ledger</value>
+  </data>
+  <data name="General Ledger &amp; Financial Statements" xml:space="preserve">
+    <value>General Ledger &amp; Financial Statements</value>
+  </data>
+  <data name="General Ledger (.CSV)" xml:space="preserve">
+    <value>General Ledger (.CSV)</value>
+  </data>
+  <data name="GIFI Schedule (.CSV)" xml:space="preserve">
+    <value>GIFI Schedule (.CSV)</value>
+  </data>
+  <data name="GIFI Tax Import (.GFF)" xml:space="preserve">
+    <value>GIFI Tax Import (.GFF)</value>
+  </data>
+  <data name="Import year-end CPA adjusting journal entries (depreciation, accruals, tax provisions, reclassifications) from CSV directly into your General Ledger." xml:space="preserve">
+    <value>Import year-end CPA adjusting journal entries (depreciation, accruals, tax provisions, reclassifications) from CSV directly into your General Ledger.</value>
+  </data>
+  <data name="Imported {0} journal entries ({1} lines)." xml:space="preserve">
+    <value>Imported {0} journal entries ({1} lines).</value>
+  </data>
+  <data name="Imported By" xml:space="preserve">
+    <value>Imported By</value>
+  </data>
+  <data name="Imported CPA Adjusting Journal Entries" xml:space="preserve">
+    <value>Imported CPA Adjusting Journal Entries</value>
+  </data>
+  <data name="Include Vouchers" xml:space="preserve">
+    <value>Include Vouchers</value>
+  </data>
+  <data name="Income Statement (.CSV)" xml:space="preserve">
+    <value>Income Statement (.CSV)</value>
+  </data>
+  <data name="Lines" xml:space="preserve">
+    <value>Lines</value>
+  </data>
+  <data name="Lines sharing the same EntryNumber are grouped into a balanced journal entry. Imbalanced groups or entries in a locked period are skipped with a warning." xml:space="preserve">
+    <value>Lines sharing the same EntryNumber are grouped into a balanced journal entry. Imbalanced groups or entries in a locked period are skipped with a warning.</value>
+  </data>
+  <data name="New Report" xml:space="preserve">
+    <value>New Report</value>
+  </data>
+  <data name="No CPA adjusting journal entries found for this period." xml:space="preserve">
+    <value>No CPA adjusting journal entries found for this period.</value>
+  </data>
+  <data name="No saved shareholder reports yet. Click 'New Report' to create one." xml:space="preserve">
+    <value>No saved shareholder reports yet. Click 'New Report' to create one.</value>
+  </data>
+  <data name="Overhead Allocation (.CSV)" xml:space="preserve">
+    <value>Overhead Allocation (.CSV)</value>
+  </data>
+  <data name="Payroll &amp; DAS (.CSV)" xml:space="preserve">
+    <value>Payroll &amp; DAS (.CSV)</value>
+  </data>
+  <data name="Period Locked Through {0:yyyy-MM-dd}" xml:space="preserve">
+    <value>Period Locked Through {0:yyyy-MM-dd}</value>
+  </data>
+  <data name="Projects &amp; SR&amp;ED Labor (.CSV)" xml:space="preserve">
+    <value>Projects &amp; SR&amp;ED Labor (.CSV)</value>
+  </data>
+  <data name="Receive from Accountant — Adjusting Entries" xml:space="preserve">
+    <value>Receive from Accountant — Adjusting Entries</value>
+  </data>
+  <data name="Sage 50 Import (.IMP)" xml:space="preserve">
+    <value>Sage 50 Import (.IMP)</value>
+  </data>
+  <data name="Sales Tax Summary (.CSV)" xml:space="preserve">
+    <value>Sales Tax Summary (.CSV)</value>
+  </data>
+  <data name="Send to Accountant — Individual Schedules &amp; Formats" xml:space="preserve">
+    <value>Send to Accountant — Individual Schedules &amp; Formats</value>
+  </data>
+  <data name="Show All Dates" xml:space="preserve">
+    <value>Show All Dates</value>
+  </data>
+  <data name="Synchronizes double-entry journal entries from Invoices, Bills, Expenses, Commissions, and Pay Runs." xml:space="preserve">
+    <value>Synchronizes double-entry journal entries from Invoices, Bills, Expenses, Commissions, and Pay Runs.</value>
+  </data>
+  <data name="Tax, GIFI &amp; Accounting Software Imports" xml:space="preserve">
+    <value>Tax, GIFI &amp; Accounting Software Imports</value>
+  </data>
+  <data name="Trial Balance (.CSV)" xml:space="preserve">
+    <value>Trial Balance (.CSV)</value>
+  </data>
+  <data name="Working Papers &amp; Sub-Ledgers" xml:space="preserve">
+    <value>Working Papers &amp; Sub-Ledgers</value>
+  </data>
+  <data name="Active Business.ManageSettings, Finance.AccessAccounting, and Hr.ManageSalaries permissions are required to modify jurisdiction templates." xml:space="preserve">
+    <value>Active Business.ManageSettings, Finance.AccessAccounting, and Hr.ManageSalaries permissions are required to modify jurisdiction templates.</value>
+  </data>
+  <data name="Active Business.ManageSettings, Finance.AccessAccounting, and Hr.ManageSalaries permissions are required." xml:space="preserve">
+    <value>Active Business.ManageSettings, Finance.AccessAccounting, and Hr.ManageSalaries permissions are required.</value>
+  </data>
+  <data name="Active Finance.AccessAccounting permission is required to edit financial reports." xml:space="preserve">
+    <value>Active Finance.AccessAccounting permission is required to edit financial reports.</value>
+  </data>
+  <data name="Active Finance.AccessAccounting permission is required." xml:space="preserve">
+    <value>Active Finance.AccessAccounting permission is required.</value>
+  </data>
+  <data name="Active Purchases.ManageBills permission is required." xml:space="preserve">
+    <value>Active Purchases.ManageBills permission is required.</value>
+  </data>
+  <data name="Failed to save report: active Finance.AccessAccounting permission is required." xml:space="preserve">
+    <value>Failed to save report: active Finance.AccessAccounting permission is required.</value>
+  </data>
+  <data name="Finance.AccessAccounting permission is required to download financial report PDFs." xml:space="preserve">
+    <value>Finance.AccessAccounting permission is required to download financial report PDFs.</value>
+  </data>
+  <data name="Missing required permission to approve payroll." xml:space="preserve">
+    <value>Missing required permission to approve payroll.</value>
+  </data>
+  <data name="Missing required permission to disburse payroll." xml:space="preserve">
+    <value>Missing required permission to disburse payroll.</value>
+  </data>
+  <data name="Missing required permission to manage payroll." xml:space="preserve">
+    <value>Missing required permission to manage payroll.</value>
+  </data>
+  <data name="Only an active Global Administrator may analyze or execute migrations." xml:space="preserve">
+    <value>Only an active Global Administrator may analyze or execute migrations.</value>
+  </data>
+  <data name="Only an active Global Administrator may execute migrations." xml:space="preserve">
+    <value>Only an active Global Administrator may execute migrations.</value>
+  </data>
+  <data name="Only an active Global Administrator may roll back migration batches." xml:space="preserve">
+    <value>Only an active Global Administrator may roll back migration batches.</value>
+  </data>
+  <data name="Only an active Global Administrator may roll back migrations." xml:space="preserve">
+    <value>Only an active Global Administrator may roll back migrations.</value>
+  </data>
+  <data name="Payroll &amp; Benefits (Summary)" xml:space="preserve">
+    <value>Payroll &amp; Benefits (Summary)</value>
+  </data>
+  <data name="Read-only mode: cannot modify salaries or contributions." xml:space="preserve">
+    <value>Read-only mode: cannot modify salaries or contributions.</value>
+  </data>
+  <data name="View Draft" xml:space="preserve">
+    <value>View Draft</value>
+  </data>
+  <data name="You do not have access to all draft bills on this email." xml:space="preserve">
+    <value>You do not have access to all draft bills on this email.</value>
+  </data>
+  <data name="You do not have access to link this purchase order." xml:space="preserve">
+    <value>You do not have access to link this purchase order.</value>
+  </data>
+  <data name="You do not have access to save a bill for this project." xml:space="preserve">
+    <value>You do not have access to save a bill for this project.</value>
+  </data>
+  <data name="You do not have access to this bill." xml:space="preserve">
+    <value>You do not have access to this bill.</value>
+  </data>
+  <data name="You do not have access to this invoice." xml:space="preserve">
+    <value>You do not have access to this invoice.</value>
+  </data>
+  <data name="You do not have permission to access Data Migration. Global Administrator access is required." xml:space="preserve">
+    <value>You do not have permission to access Data Migration. Global Administrator access is required.</value>
+  </data>
+  <data name="You do not have permission to approve bills." xml:space="preserve">
+    <value>You do not have permission to approve bills.</value>
+  </data>
+  <data name="You do not have permission to approve draft bills." xml:space="preserve">
+    <value>You do not have permission to approve draft bills.</value>
+  </data>
+  <data name="You do not have permission to view payroll data." xml:space="preserve">
+    <value>You do not have permission to view payroll data.</value>
+  </data>
+  <data name="You need bill approval permission to re-evaluate approved bills." xml:space="preserve">
+    <value>You need bill approval permission to re-evaluate approved bills.</value>
+  </data>
+  <data name="User" xml:space="preserve">
+    <value>User</value>
+  </data>
+  <data name="{0} Planning" xml:space="preserve">
+    <value>{0} Planning</value>
+  </data>
+  <data name="{0} Schedule ({1})" xml:space="preserve">
+    <value>{0} Schedule ({1})</value>
+  </data>
+  <data name="Add Activity" xml:space="preserve">
+    <value>Add Activity</value>
+  </data>
+  <data name="Allocate" xml:space="preserve">
+    <value>Allocate</value>
+  </data>
+  <data name="Allocate Work" xml:space="preserve">
+    <value>Allocate Work</value>
+  </data>
+  <data name="Allocated {0}h to {1}" xml:space="preserve">
+    <value>Allocated {0}h to {1}</value>
+  </data>
+  <data name="Assigned:" xml:space="preserve">
+    <value>Assigned:</value>
+  </data>
+  <data name="Backlog (Unassigned)" xml:space="preserve">
+    <value>Backlog (Unassigned)</value>
+  </data>
+  <data name="Capacity (Weekly)" xml:space="preserve">
+    <value>Capacity (Weekly)</value>
+  </data>
+  <data name="Due {0}" xml:space="preserve">
+    <value>Due {0}</value>
+  </data>
+  <data name="From Quote #{0}" xml:space="preserve">
+    <value>From Quote #{0}</value>
+  </data>
+  <data name="My Weekly Plan" xml:space="preserve">
+    <value>My Weekly Plan</value>
+  </data>
+  <data name="No active allocations for this {0}." xml:space="preserve">
+    <value>No active allocations for this {0}.</value>
+  </data>
+  <data name="No activities planned for this week." xml:space="preserve">
+    <value>No activities planned for this week.</value>
+  </data>
+  <data name="No activities planned for this week. Click 'Add Activity' to start." xml:space="preserve">
+    <value>No activities planned for this week. Click 'Add Activity' to start.</value>
+  </data>
+  <data name="Planned (This Week)" xml:space="preserve">
+    <value>Planned (This Week)</value>
+  </data>
+  <data name="Planned Activities" xml:space="preserve">
+    <value>Planned Activities</value>
+  </data>
+  <data name="Please select an accessible project from the list." xml:space="preserve">
+    <value>Please select an accessible project from the list.</value>
+  </data>
+  <data name="Quoted:" xml:space="preserve">
+    <value>Quoted:</value>
+  </data>
+  <data name="Restricted Project" xml:space="preserve">
+    <value>Restricted Project</value>
+  </data>
+  <data name="Saved" xml:space="preserve">
+    <value>Saved</value>
+  </data>
+  <data name="Specific focus..." xml:space="preserve">
+    <value>Specific focus...</value>
+  </data>
+  <data name="Total Planned" xml:space="preserve">
+    <value>Total Planned</value>
+  </data>
+  <data name="Utilization" xml:space="preserve">
+    <value>Utilization</value>
+  </data>
+  <data name="W{0} - {1}" xml:space="preserve">
+    <value>W{0} - {1}</value>
+  </data>
+  <data name="Weekly Plan is disabled for your organization" xml:space="preserve">
+    <value>Weekly Plan is disabled for your organization</value>
+  </data>
+  <data name="Work Queue / Demand" xml:space="preserve">
+    <value>Work Queue / Demand</value>
+  </data>
+  <data name="You are not assigned as a Leader of any {0}, and have no direct reports." xml:space="preserve">
+    <value>You are not assigned as a Leader of any {0}, and have no direct reports.</value>
+  </data>
+  <data name="You can only modify plans for {0} you lead." xml:space="preserve">
+    <value>You can only modify plans for {0} you lead.</value>
+  </data>
+  <data name="You do not have access to assign that project." xml:space="preserve">
+    <value>You do not have access to assign that project.</value>
+  </data>
+  <data name="You do not have permission to allocate work for this {0}." xml:space="preserve">
+    <value>You do not have permission to allocate work for this {0}.</value>
+  </data>
+  <data name="You do not have permission to edit weekly plans." xml:space="preserve">
+    <value>You do not have permission to edit weekly plans.</value>
+  </data>
+  <data name="You do not have permission to edit your weekly plan." xml:space="preserve">
+    <value>You do not have permission to edit your weekly plan.</value>
+  </data>
+  <data name="You do not have permission to modify entries for a restricted project." xml:space="preserve">
+    <value>You do not have permission to modify entries for a restricted project.</value>
+  </data>
+  <data name="+ Money In" xml:space="preserve">
+    <value>+ Money In</value>
+  </data>
+  <data name="+ Money Out" xml:space="preserve">
+    <value>+ Money Out</value>
+  </data>
+  <data name="+ Transfer" xml:space="preserve">
+    <value>+ Transfer</value>
+  </data>
+  <data name="Account Transfer" xml:space="preserve">
+    <value>Account Transfer</value>
+  </data>
+  <data name="Account Transfers" xml:space="preserve">
+    <value>Account Transfers</value>
+  </data>
+  <data name="Accounting Preview (Auto-Ledger)" xml:space="preserve">
+    <value>Accounting Preview (Auto-Ledger)</value>
+  </data>
+  <data name="Add Split Line" xml:space="preserve">
+    <value>Add Split Line</value>
+  </data>
+  <data name="Adjust tax amounts manually" xml:space="preserve">
+    <value>Adjust tax amounts manually</value>
+  </data>
+  <data name="Amount (Tax Included)" xml:space="preserve">
+    <value>Amount (Tax Included)</value>
+  </data>
+  <data name="Attach Proof / Receipt" xml:space="preserve">
+    <value>Attach Proof / Receipt</value>
+  </data>
+  <data name="Bank Fees &amp; Interest" xml:space="preserve">
+    <value>Bank Fees &amp; Interest</value>
+  </data>
+  <data name="Category &amp; Amount" xml:space="preserve">
+    <value>Category &amp; Amount</value>
+  </data>
+  <data name="Category / Destination" xml:space="preserve">
+    <value>Category / Destination</value>
+  </data>
+  <data name="Check #, Receipt #, Slip #" xml:space="preserve">
+    <value>Check #, Receipt #, Slip #</value>
+  </data>
+  <data name="Company, person, or institution" xml:space="preserve">
+    <value>Company, person, or institution</value>
+  </data>
+  <data name="Debit Card" xml:space="preserve">
+    <value>Debit Card</value>
+  </data>
+  <data name="Deposited Into" xml:space="preserve">
+    <value>Deposited Into</value>
+  </data>
+  <data name="Direct Expense" xml:space="preserve">
+    <value>Direct Expense</value>
+  </data>
+  <data name="Direct Transaction" xml:space="preserve">
+    <value>Direct Transaction</value>
+  </data>
+  <data name="e.g. Monthly corporate credit card payment" xml:space="preserve">
+    <value>e.g. Monthly corporate credit card payment</value>
+  </data>
+  <data name="e.g., Duplicate entry or entered with wrong account" xml:space="preserve">
+    <value>e.g., Duplicate entry or entered with wrong account</value>
+  </data>
+  <data name="EFT / Wire" xml:space="preserve">
+    <value>EFT / Wire</value>
+  </data>
+  <data name="Enter an amount and category to preview the automatic journal entry." xml:space="preserve">
+    <value>Enter an amount and category to preview the automatic journal entry.</value>
+  </data>
+  <data name="Extract Sales Tax on Direct Categorization" xml:space="preserve">
+    <value>Extract Sales Tax on Direct Categorization</value>
+  </data>
+  <data name="From Account" xml:space="preserve">
+    <value>From Account</value>
+  </data>
+  <data name="FX Rate (to {0})" xml:space="preserve">
+    <value>FX Rate (to {0})</value>
+  </data>
+  <data name="Grant / Subsidy" xml:space="preserve">
+    <value>Grant / Subsidy</value>
+  </data>
+  <data name="Interest / Rebate" xml:space="preserve">
+    <value>Interest / Rebate</value>
+  </data>
+  <data name="Internal Notes" xml:space="preserve">
+    <value>Internal Notes</value>
+  </data>
+  <data name="Internal Transfer" xml:space="preserve">
+    <value>Internal Transfer</value>
+  </data>
+  <data name="Line Memo (Optional)" xml:space="preserve">
+    <value>Line Memo (Optional)</value>
+  </data>
+  <data name="Manage in Accounting" xml:space="preserve">
+    <value>Manage in Accounting</value>
+  </data>
+  <data name="Miscellaneous Income" xml:space="preserve">
+    <value>Miscellaneous Income</value>
+  </data>
+  <data name="Money In" xml:space="preserve">
+    <value>Money In</value>
+  </data>
+  <data name="Money Out" xml:space="preserve">
+    <value>Money Out</value>
+  </data>
+  <data name="Money Received" xml:space="preserve">
+    <value>Money Received</value>
+  </data>
+  <data name="Net Amount (Pre-Tax)" xml:space="preserve">
+    <value>Net Amount (Pre-Tax)</value>
+  </data>
+  <data name="Net Other Cash Flow" xml:space="preserve">
+    <value>Net Other Cash Flow</value>
+  </data>
+  <data name="No direct transactions in this period yet. Use '+ Money In', '+ Money Out', or '+ Transfer' to record cash movements outside invoices and bills." xml:space="preserve">
+    <value>No direct transactions in this period yet. Use '+ Money In', '+ Money Out', or '+ Transfer' to record cash movements outside invoices and bills.</value>
+  </data>
+  <data name="No Tax / Exempt" xml:space="preserve">
+    <value>No Tax / Exempt</value>
+  </data>
+  <data name="Optional Details (Project, Currency, Proof / Receipt)" xml:space="preserve">
+    <value>Optional Details (Project, Currency, Proof / Receipt)</value>
+  </data>
+  <data name="Other Cash Received" xml:space="preserve">
+    <value>Other Cash Received</value>
+  </data>
+  <data name="Other Direct Expenses" xml:space="preserve">
+    <value>Other Direct Expenses</value>
+  </data>
+  <data name="Other Direct Income (MTD)" xml:space="preserve">
+    <value>Other Direct Income (MTD)</value>
+  </data>
+  <data name="Other Direct Payments" xml:space="preserve">
+    <value>Other Direct Payments</value>
+  </data>
+  <data name="Other Direct Payments (MTD)" xml:space="preserve">
+    <value>Other Direct Payments (MTD)</value>
+  </data>
+  <data name="Other Project Income" xml:space="preserve">
+    <value>Other Project Income</value>
+  </data>
+  <data name="Other Project Transactions" xml:space="preserve">
+    <value>Other Project Transactions</value>
+  </data>
+  <data name="Other Project Transactions (Direct Income &amp; Payments)" xml:space="preserve">
+    <value>Other Project Transactions (Direct Income &amp; Payments)</value>
+  </data>
+  <data name="Other Transactions" xml:space="preserve">
+    <value>Other Transactions</value>
+  </data>
+  <data name="Other Transactions (Money In, Money Out &amp; Transfers)" xml:space="preserve">
+    <value>Other Transactions (Money In, Money Out &amp; Transfers)</value>
+  </data>
+  <data name="Owner Contribution" xml:space="preserve">
+    <value>Owner Contribution</value>
+  </data>
+  <data name="Owner Draw" xml:space="preserve">
+    <value>Owner Draw</value>
+  </data>
+  <data name="Paid From" xml:space="preserve">
+    <value>Paid From</value>
+  </data>
+  <data name="Paid To" xml:space="preserve">
+    <value>Paid To</value>
+  </data>
+  <data name="Party &amp; Description" xml:space="preserve">
+    <value>Party &amp; Description</value>
+  </data>
+  <data name="Party / Description" xml:space="preserve">
+    <value>Party / Description</value>
+  </data>
+  <data name="Payment Made" xml:space="preserve">
+    <value>Payment Made</value>
+  </data>
+  <data name="Payments Made" xml:space="preserve">
+    <value>Payments Made</value>
+  </data>
+  <data name="Plus Sales Tax" xml:space="preserve">
+    <value>Plus Sales Tax</value>
+  </data>
+  <data name="Posted" xml:space="preserve">
+    <value>Posted</value>
+  </data>
+  <data name="Professional Fees" xml:space="preserve">
+    <value>Professional Fees</value>
+  </data>
+  <data name="Proof" xml:space="preserve">
+    <value>Proof</value>
+  </data>
+  <data name="Quick Category:" xml:space="preserve">
+    <value>Quick Category:</value>
+  </data>
+  <data name="Reason for Voiding" xml:space="preserve">
+    <value>Reason for Voiding</value>
+  </data>
+  <data name="Received From" xml:space="preserve">
+    <value>Received From</value>
+  </data>
+  <data name="Record Account Transfer" xml:space="preserve">
+    <value>Record Account Transfer</value>
+  </data>
+  <data name="Record Money Received" xml:space="preserve">
+    <value>Record Money Received</value>
+  </data>
+  <data name="Record Payment Made" xml:space="preserve">
+    <value>Record Payment Made</value>
+  </data>
+  <data name="Record payments received outside client invoices, payments made outside supplier bills, and transfers between your accounts. Double-entry ledger lines are posted automatically." xml:space="preserve">
+    <value>Record payments received outside client invoices, payments made outside supplier bills, and transfers between your accounts. Double-entry ledger lines are posted automatically.</value>
+  </data>
+  <data name="Record Transaction" xml:space="preserve">
+    <value>Record Transaction</value>
+  </data>
+  <data name="Ref #" xml:space="preserve">
+    <value>Ref #</value>
+  </data>
+  <data name="Reference # (Optional)" xml:space="preserve">
+    <value>Reference # (Optional)</value>
+  </data>
+  <data name="Sales Tax Treatment" xml:space="preserve">
+    <value>Sales Tax Treatment</value>
+  </data>
+  <data name="Search payee, ref, category..." xml:space="preserve">
+    <value>Search payee, ref, category...</value>
+  </data>
+  <data name="Selected period (excl. transfers)" xml:space="preserve">
+    <value>Selected period (excl. transfers)</value>
+  </data>
+  <data name="Spokes automatically posts these balanced General Ledger lines when you save." xml:space="preserve">
+    <value>Spokes automatically posts these balanced General Ledger lines when you save.</value>
+  </data>
+  <data name="Subtotal" xml:space="preserve">
+    <value>Subtotal</value>
+  </data>
+  <data name="Supporting Document (Receipt, Weight Slip, Wire Confirmation)" xml:space="preserve">
+    <value>Supporting Document (Receipt, Weight Slip, Wire Confirmation)</value>
+  </data>
+  <data name="Tax" xml:space="preserve">
+    <value>Tax</value>
+  </data>
+  <data name="Tax Included in Amount" xml:space="preserve">
+    <value>Tax Included in Amount</value>
+  </data>
+  <data name="To Account" xml:space="preserve">
+    <value>To Account</value>
+  </data>
+  <data name="Total Paid" xml:space="preserve">
+    <value>Total Paid</value>
+  </data>
+  <data name="Total Received" xml:space="preserve">
+    <value>Total Received</value>
+  </data>
+  <data name="Transaction recorded and posted to the General Ledger." xml:space="preserve">
+    <value>Transaction recorded and posted to the General Ledger.</value>
+  </data>
+  <data name="Transaction updated." xml:space="preserve">
+    <value>Transaction updated.</value>
+  </data>
+  <data name="Transaction voided." xml:space="preserve">
+    <value>Transaction voided.</value>
+  </data>
+  <data name="transaction(s)" xml:space="preserve">
+    <value>transaction(s)</value>
+  </data>
+  <data name="Transfer" xml:space="preserve">
+    <value>Transfer</value>
+  </data>
+  <data name="Transfer Amount" xml:space="preserve">
+    <value>Transfer Amount</value>
+  </data>
+  <data name="transfer(s)" xml:space="preserve">
+    <value>transfer(s)</value>
+  </data>
+  <data name="Transfers" xml:space="preserve">
+    <value>Transfers</value>
+  </data>
+  <data name="Void" xml:space="preserve">
+    <value>Void</value>
+  </data>
+  <data name="Void {0} ({1})? Its General Ledger journal entry will be removed while preserving audit history." xml:space="preserve">
+    <value>Void {0} ({1})? Its General Ledger journal entry will be removed while preserving audit history.</value>
+  </data>
+  <data name="Void Transaction" xml:space="preserve">
+    <value>Void Transaction</value>
+  </data>
+  <data name="Voided" xml:space="preserve">
+    <value>Voided</value>
+  </data>
+  <data name="What was this payment for?" xml:space="preserve">
+    <value>What was this payment for?</value>
+  </data>
+  <data name="Adjustment Date" xml:space="preserve">
+    <value>Adjustment Date</value>
+  </data>
+  <data name="Amount cannot exceed the remaining balance ({0})." xml:space="preserve">
+    <value>Amount cannot exceed the remaining balance ({0}).</value>
+  </data>
+  <data name="Are you sure you want to reverse the balance write-off of {0} recorded on {1}? This will reopen the balance and remove its write-off journal entry." xml:space="preserve">
+    <value>Are you sure you want to reverse the balance write-off of {0} recorded on {1}? This will reopen the balance and remove its write-off journal entry.</value>
+  </data>
+  <data name="Balance Adjustment" xml:space="preserve">
+    <value>Balance Adjustment</value>
+  </data>
+  <data name="Balance write-off reversed successfully." xml:space="preserve">
+    <value>Balance write-off reversed successfully.</value>
+  </data>
+  <data name="Balance Write-Offs / Adjustments" xml:space="preserve">
+    <value>Balance Write-Offs / Adjustments</value>
+  </data>
+  <data name="Bill" xml:space="preserve">
+    <value>Bill</value>
+  </data>
+  <data name="Cannot revert an invoice with recorded payments or write-offs to Draft. Remove them first." xml:space="preserve">
+    <value>Cannot revert an invoice with recorded payments or write-offs to Draft. Remove them first.</value>
+  </data>
+  <data name="Close / Write Off Balance" xml:space="preserve">
+    <value>Close / Write Off Balance</value>
+  </data>
+  <data name="Close Balance" xml:space="preserve">
+    <value>Close Balance</value>
+  </data>
+  <data name="Closed balance of {0} without creating a bank transaction." xml:space="preserve">
+    <value>Closed balance of {0} without creating a bank transaction.</value>
+  </data>
+  <data name="e.g., Rounding discrepancy ($0.01), waived small balance, courtesy discount, uncollectible balance" xml:space="preserve">
+    <value>e.g., Rounding discrepancy ($0.01), waived small balance, courtesy discount, uncollectible balance</value>
+  </data>
+  <data name="Explain why this balance write-off is being reversed..." xml:space="preserve">
+    <value>Explain why this balance write-off is being reversed...</value>
+  </data>
+  <data name="Invoice" xml:space="preserve">
+    <value>Invoice</value>
+  </data>
+  <data name="Missing active accounting permission to close invoice balances." xml:space="preserve">
+    <value>Missing active accounting permission to close invoice balances.</value>
+  </data>
+  <data name="Missing Purchases.ManageBills permission to close payable balances." xml:space="preserve">
+    <value>Missing Purchases.ManageBills permission to close payable balances.</value>
+  </data>
+  <data name="One-Time" xml:space="preserve">
+    <value>One-Time</value>
+  </data>
+  <data name="Paid / Closed" xml:space="preserve">
+    <value>Paid / Closed</value>
+  </data>
+  <data name="Reason for Closing / Write-Off" xml:space="preserve">
+    <value>Reason for Closing / Write-Off</value>
+  </data>
+  <data name="Reason for reversing write-off" xml:space="preserve">
+    <value>Reason for reversing write-off</value>
+  </data>
+  <data name="Remaining balance after write-off: {0} — Resulting status: {1}" xml:space="preserve">
+    <value>Remaining balance after write-off: {0} — Resulting status: {1}</value>
+  </data>
+  <data name="Reverse Write-Off" xml:space="preserve">
+    <value>Reverse Write-Off</value>
+  </data>
+  <data name="This records a non-cash balance adjustment to clear the open receivable or payable without creating a bank or credit card transaction." xml:space="preserve">
+    <value>This records a non-cash balance adjustment to clear the open receivable or payable without creating a bank or credit card transaction.</value>
+  </data>
+  <data name="Unpaid" xml:space="preserve">
+    <value>Unpaid</value>
+  </data>
+  <data name="Write-Off Amount" xml:space="preserve">
+    <value>Write-Off Amount</value>
+  </data>
+  <data name="Written Off" xml:space="preserve">
+    <value>Written Off</value>
+  </data>
+  <data name="+ Credit Line" xml:space="preserve">
+    <value>+ Credit Line</value>
+  </data>
+  <data name="Account archived." xml:space="preserve">
+    <value>Account archived.</value>
+  </data>
+  <data name="Account restored." xml:space="preserve">
+    <value>Account restored.</value>
+  </data>
+  <data name="Account Type" xml:space="preserve">
+    <value>Account Type</value>
+  </data>
+  <data name="Active bank &amp; cash accounts" xml:space="preserve">
+    <value>Active bank &amp; cash accounts</value>
+  </data>
+  <data name="Add Financial Account" xml:space="preserve">
+    <value>Add Financial Account</value>
+  </data>
+  <data name="Adjustment Category" xml:space="preserve">
+    <value>Adjustment Category</value>
+  </data>
+  <data name="Advanced (Accountant)" xml:space="preserve">
+    <value>Advanced (Accountant)</value>
+  </data>
+  <data name="Allows this chequing account balance to go negative up to this limit on the same statement." xml:space="preserve">
+    <value>Allows this chequing account balance to go negative up to this limit on the same statement.</value>
+  </data>
+  <data name="Attached directly to a Chequing account (allows negative balance up to credit limit on the same statement)" xml:space="preserve">
+    <value>Attached directly to a Chequing account (allows negative balance up to credit limit on the same statement)</value>
+  </data>
+  <data name="Attached Operating Line of Credit / Overdraft" xml:space="preserve">
+    <value>Attached Operating Line of Credit / Overdraft</value>
+  </data>
+  <data name="Auto-create dedicated GL account" xml:space="preserve">
+    <value>Auto-create dedicated GL account</value>
+  </data>
+  <data name="Auto-inherited from Supplier" xml:space="preserve">
+    <value>Auto-inherited from Supplier</value>
+  </data>
+  <data name="available" xml:space="preserve">
+    <value>available</value>
+  </data>
+  <data name="Available w/ credit line:" xml:space="preserve">
+    <value>Available w/ credit line:</value>
+  </data>
+  <data name="Balance owing" xml:space="preserve">
+    <value>Balance owing</value>
+  </data>
+  <data name="Bank Fees" xml:space="preserve">
+    <value>Bank Fees</value>
+  </data>
+  <data name="Banking &amp; Financial Accounts" xml:space="preserve">
+    <value>Banking &amp; Financial Accounts</value>
+  </data>
+  <data name="Book Balance" xml:space="preserve">
+    <value>Book Balance</value>
+  </data>
+  <data name="Cash on Hand" xml:space="preserve">
+    <value>Cash on Hand</value>
+  </data>
+  <data name="Cash on Hand / Petty Cash" xml:space="preserve">
+    <value>Cash on Hand / Petty Cash</value>
+  </data>
+  <data name="Chequing" xml:space="preserve">
+    <value>Chequing</value>
+  </data>
+  <data name="Chequing Account" xml:space="preserve">
+    <value>Chequing Account</value>
+  </data>
+  <data name="Configure your real-world bank accounts, credit cards, lines of credit, payment processors, and loans. Spokes automatically manages the double-entry General Ledger in the background." xml:space="preserve">
+    <value>Configure your real-world bank accounts, credit cards, lines of credit, payment processors, and loans. Spokes automatically manages the double-entry General Ledger in the background.</value>
+  </data>
+  <data name="Could not archive account." xml:space="preserve">
+    <value>Could not archive account.</value>
+  </data>
+  <data name="Could not restore account." xml:space="preserve">
+    <value>Could not restore account.</value>
+  </data>
+  <data name="Credit Limit" xml:space="preserve">
+    <value>Credit Limit</value>
+  </data>
+  <data name="Credit Limit (Optional)" xml:space="preserve">
+    <value>Credit Limit (Optional)</value>
+  </data>
+  <data name="Credit Limit / Available" xml:space="preserve">
+    <value>Credit Limit / Available</value>
+  </data>
+  <data name="Credit line drawn" xml:space="preserve">
+    <value>Credit line drawn</value>
+  </data>
+  <data name="Credit Line Limit" xml:space="preserve">
+    <value>Credit Line Limit</value>
+  </data>
+  <data name="Default Card" xml:space="preserve">
+    <value>Default Card</value>
+  </data>
+  <data name="Default Credit Card (pre-selected when payment method is Credit Card)" xml:space="preserve">
+    <value>Default Credit Card (pre-selected when payment method is Credit Card)</value>
+  </data>
+  <data name="Default Expense Category" xml:space="preserve">
+    <value>Default Expense Category</value>
+  </data>
+  <data name="Default Operating" xml:space="preserve">
+    <value>Default Operating</value>
+  </data>
+  <data name="Default Operating Account (pre-selected for deposits, bill payments, payroll, and taxes)" xml:space="preserve">
+    <value>Default Operating Account (pre-selected for deposits, bill payments, payroll, and taxes)</value>
+  </data>
+  <data name="Defaults" xml:space="preserve">
+    <value>Defaults</value>
+  </data>
+  <data name="e.g., BNC Operating Line of Credit" xml:space="preserve">
+    <value>e.g., BNC Operating Line of Credit</value>
+  </data>
+  <data name="e.g., Desjardins Operating CAD" xml:space="preserve">
+    <value>e.g., Desjardins Operating CAD</value>
+  </data>
+  <data name="e.g., Desjardins, RBC, Stripe" xml:space="preserve">
+    <value>e.g., Desjardins, RBC, Stripe</value>
+  </data>
+  <data name="e.g., Equipment Term Loan" xml:space="preserve">
+    <value>e.g., Equipment Term Loan</value>
+  </data>
+  <data name="e.g., Office Petty Cash" xml:space="preserve">
+    <value>e.g., Office Petty Cash</value>
+  </data>
+  <data name="e.g., RBC Visa Corporate" xml:space="preserve">
+    <value>e.g., RBC Visa Corporate</value>
+  </data>
+  <data name="e.g., Stripe CAD Clearing" xml:space="preserve">
+    <value>e.g., Stripe CAD Clearing</value>
+  </data>
+  <data name="e.g., Tax Reserve Savings" xml:space="preserve">
+    <value>e.g., Tax Reserve Savings</value>
+  </data>
+  <data name="Edit Financial Account" xml:space="preserve">
+    <value>Edit Financial Account</value>
+  </data>
+  <data name="Employee Net Payroll Payable" xml:space="preserve">
+    <value>Employee Net Payroll Payable</value>
+  </data>
+  <data name="Failed to attach line of credit." xml:space="preserve">
+    <value>Failed to attach line of credit.</value>
+  </data>
+  <data name="Failed to save financial account." xml:space="preserve">
+    <value>Failed to save financial account.</value>
+  </data>
+  <data name="Financial Account" xml:space="preserve">
+    <value>Financial Account</value>
+  </data>
+  <data name="Financial account added." xml:space="preserve">
+    <value>Financial account added.</value>
+  </data>
+  <data name="Financial account updated." xml:space="preserve">
+    <value>Financial account updated.</value>
+  </data>
+  <data name="Financial Institution (Optional)" xml:space="preserve">
+    <value>Financial Institution (Optional)</value>
+  </data>
+  <data name="How does this Line of Credit operate?" xml:space="preserve">
+    <value>How does this Line of Credit operate?</value>
+  </data>
+  <data name="Last 4 Digits / Ref (Optional)" xml:space="preserve">
+    <value>Last 4 Digits / Ref (Optional)</value>
+  </data>
+  <data name="Leave blank to automatically create and synchronize a dedicated General Ledger account in the background, or select an existing GL account to link manually." xml:space="preserve">
+    <value>Leave blank to automatically create and synchronize a dedicated General Ledger account in the background, or select an existing GL account to link manually.</value>
+  </data>
+  <data name="limit" xml:space="preserve">
+    <value>limit</value>
+  </data>
+  <data name="Line of Credit" xml:space="preserve">
+    <value>Line of Credit</value>
+  </data>
+  <data name="Linked General Ledger Account (Optional)" xml:space="preserve">
+    <value>Linked General Ledger Account (Optional)</value>
+  </data>
+  <data name="Loan / Financing" xml:space="preserve">
+    <value>Loan / Financing</value>
+  </data>
+  <data name="Misc. Income" xml:space="preserve">
+    <value>Misc. Income</value>
+  </data>
+  <data name="No financial accounts configured yet." xml:space="preserve">
+    <value>No financial accounts configured yet.</value>
+  </data>
+  <data name="Notes (Optional)" xml:space="preserve">
+    <value>Notes (Optional)</value>
+  </data>
+  <data name="Operating Chequing Account" xml:space="preserve">
+    <value>Operating Chequing Account</value>
+  </data>
+  <data name="Operating line of credit linked to chequing account." xml:space="preserve">
+    <value>Operating line of credit linked to chequing account.</value>
+  </data>
+  <data name="Payment Processor" xml:space="preserve">
+    <value>Payment Processor</value>
+  </data>
+  <data name="Payment Processor (Stripe / PayPal)" xml:space="preserve">
+    <value>Payment Processor (Stripe / PayPal)</value>
+  </data>
+  <data name="Payroll Source Deductions / DAS" xml:space="preserve">
+    <value>Payroll Source Deductions / DAS</value>
+  </data>
+  <data name="Please select a chequing account and enter a credit limit greater than zero." xml:space="preserve">
+    <value>Please select a chequing account and enter a credit limit greater than zero.</value>
+  </data>
+  <data name="Reconcile Statements" xml:space="preserve">
+    <value>Reconcile Statements</value>
+  </data>
+  <data name="Remittance Payment Account" xml:space="preserve">
+    <value>Remittance Payment Account</value>
+  </data>
+  <data name="Savings" xml:space="preserve">
+    <value>Savings</value>
+  </data>
+  <data name="Savings Account" xml:space="preserve">
+    <value>Savings Account</value>
+  </data>
+  <data name="Search name, supplier, category..." xml:space="preserve">
+    <value>Search name, supplier, category...</value>
+  </data>
+  <data name="Show Archived" xml:space="preserve">
+    <value>Show Archived</value>
+  </data>
+  <data name="Standalone Line of Credit (separate account &amp; statement with transfers to/from Chequing)" xml:space="preserve">
+    <value>Standalone Line of Credit (separate account &amp; statement with transfers to/from Chequing)</value>
   </data>
 </root>

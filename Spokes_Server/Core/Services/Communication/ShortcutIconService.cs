@@ -1,11 +1,10 @@
 using SkiaSharp;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.HR;
-using Spokes_Server.Core.Models.Core;
+using Spokes_Server.Core.Services.Storage;
 
 namespace Spokes_Server.Core.Services.Communication;
 
@@ -14,28 +13,21 @@ public class ShortcutIconService
     private readonly IConfiguration _config;
     private readonly AvatarGeneratorService _avatarGenerator;
     private readonly IMemoryCache _cache;
+    private readonly IFileService? _fileService;
     private readonly ILogger<ShortcutIconService>? _logger;
 
     public ShortcutIconService(
-        IWebHostEnvironment env,
-        IConfiguration config,
-        AvatarGeneratorService avatarGenerator,
-        IMemoryCache cache)
-        : this(env, config, avatarGenerator, cache, null)
-    {
-    }
-
-    public ShortcutIconService(
-        IWebHostEnvironment _,
         IConfiguration config,
         AvatarGeneratorService avatarGenerator,
         IMemoryCache cache,
-        ILogger<ShortcutIconService>? logger)
+        ILogger<ShortcutIconService>? logger = null,
+        IFileService? fileService = null)
     {
         _config = config;
         _avatarGenerator = avatarGenerator;
         _cache = cache;
         _logger = logger;
+        _fileService = fileService;
     }
 
     public string GetShortcutIconBase64(Employee? employee)
@@ -55,11 +47,16 @@ public class ShortcutIconService
             {
                 try
                 {
-                    var dataPath = _config["DataPath"] ?? "Data";
-                    var path = Path.Combine(dataPath, "Employees", employee.Id, employee.AvatarFile);
-                    if (File.Exists(path))
+                    var safeFileName = Path.GetFileName(employee.AvatarFile);
+                    if (FileHelper.IsValidPathSegment(employee.Id) && FileHelper.IsValidPathSegment(safeFileName))
                     {
-                        originalBytes = File.ReadAllBytes(path);
+                        var path = _fileService != null
+                            ? _fileService.GetAvatarPhysicalPath(employee.Id, safeFileName)
+                            : Path.Combine(_config["DataPath"] ?? "Data", "Employees", employee.Id, safeFileName);
+                        if (File.Exists(path))
+                        {
+                            originalBytes = File.ReadAllBytes(path);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -99,7 +96,7 @@ public class ShortcutIconService
         }) ?? string.Empty;
     }
 
-    private string ResizeAndEncodeBase64(byte[] imageBytes, int size)
+    private static string ResizeAndEncodeBase64(byte[] imageBytes, int size)
     {
         try
         {

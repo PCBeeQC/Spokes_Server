@@ -13,6 +13,7 @@ using Spokes_Server.Components.Dialogs.Accounting;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Accounting;
 using Spokes_Server.Core.Services.Accounting.InvoiceExtraction;
 using Spokes_Server.Core.Services.Communication.Email;
@@ -28,12 +29,14 @@ public class CompanyBillRecurringAndLinkTests : TestDataTestBase
     private readonly Mock<IFileService> _mockFileService;
     private readonly Mock<IEmailCacheMaintenanceService> _mockCacheMaintenance;
     private readonly CompanyBillInboxService _inboxService;
+    private static readonly Employee AdminActor = new() { Id = "admin-test", FirstName = "Admin", LastName = "Test", IsAdmin = true, IsActive = true };
 
     public CompanyBillRecurringAndLinkTests()
     {
         var services = new ServiceCollection();
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
         services.AddLogging(b => b.AddConsole());
         services.AddSingleton<EncryptionService>();
@@ -95,7 +98,7 @@ public class CompanyBillRecurringAndLinkTests : TestDataTestBase
         _db.EmailMessages.Save(email);
 
         // 3. Act: Link email to bill without explicitly passing attachmentPath
-        _inboxService.AttachAttachmentToExistingBill(email.Id, bill.Id, "user1");
+        _inboxService.AttachAttachmentToExistingBill(email.Id, bill.Id, "user1", actor: AdminActor);
 
         // 4. Assert: Bill should have attachment from email, and email is approved
         var updatedBill = _db.Bills.GetById(bill.Id);
@@ -155,7 +158,8 @@ public class CompanyBillRecurringAndLinkTests : TestDataTestBase
             email.Id,
             expense.Id,
             record.Id,
-            "user1");
+            "user1",
+            actor: AdminActor);
 
         // 4. Assert
         var updatedExpense = _db.RecurringExpenses.GetById(expense.Id);
@@ -200,7 +204,7 @@ public class CompanyBillRecurringAndLinkTests : TestDataTestBase
         };
         _db.EmailMessages.Save(email);
 
-        _inboxService.LinkEmailToRecurringExpense(email.Id, expense.Id, record.Id, "user1");
+        _inboxService.LinkEmailToRecurringExpense(email.Id, expense.Id, record.Id, "user1", actor: AdminActor);
 
         var updatedEmail = _db.EmailMessages.GetById(email.Id);
         Assert.NotNull(updatedEmail);
@@ -209,126 +213,4 @@ public class CompanyBillRecurringAndLinkTests : TestDataTestBase
         Assert.Equal(record.Id, updatedEmail.LinkedRecurringRecordId);
     }
 
-    [Fact]
-    public void ExistingBillItem_ListingIncludesPaidBillsAndAwaitingApproval_SortedMostRecentFirst()
-    {
-        // 1. Arrange a mix of bills with various dates and statuses
-        var olderPaidBill = new Bill
-        {
-            Id = "b1",
-            SupplierName = "Acme Corp",
-            Amount = 100m,
-            Date = DateTime.Today.AddDays(-30),
-            Status = BillStatus.Paid,
-            DatePaid = DateTime.Today.AddDays(-20)
-        };
-        var newerAwaitingApprovalBill = new Bill
-        {
-            Id = "b2",
-            SupplierName = "Beta LLC",
-            Amount = 250m,
-            Date = DateTime.Today.AddDays(-2),
-            Status = BillStatus.AwaitingApproval
-        };
-        var recurringExpense = new RecurringExpense
-        {
-            Id = "re1",
-            Name = "Internet Service",
-            Supplier = "Telco Inc",
-            Amount = 90m,
-            IsEstimate = false,
-            History =
-            [
-                new RecurringBillRecord
-                {
-                    Id = "rec1",
-                    Date = DateTime.Today.AddDays(-10),
-                    Amount = 95m,
-                    IsPaid = true
-                }
-            ]
-        };
-
-        _db.Bills.Save(olderPaidBill);
-        _db.Bills.Save(newerAwaitingApprovalBill);
-        _db.RecurringExpenses.Save(recurringExpense);
-
-        // 2. Build the unified existing bills list as done in LinkBillToEmailDialog
-        var items = _db.Bills.GetAll().Where(b => b.Status != BillStatus.Void)
-            .Select(b => new LinkBillToEmailDialog.ExistingBillItem
-            {
-                Id = b.Id,
-                SupplierName = b.SupplierName,
-                Date = b.Date,
-                Amount = b.Amount,
-                Status = b.BalanceDue <= 0 || b.Status == BillStatus.Paid ? BillStatus.Paid : b.Status,
-                IsRecurring = false
-            })
-            .Concat(
-                _db.RecurringExpenses.GetAll().Where(e => !e.IsEstimate)
-                    .SelectMany(re => re.History.Select(rec => new LinkBillToEmailDialog.ExistingBillItem
-                    {
-                        Id = rec.Id,
-                        SupplierName = !string.IsNullOrWhiteSpace(re.Supplier) ? re.Supplier : re.Name,
-                        Date = rec.Date,
-                        Amount = rec.Amount,
-                        Status = rec.IsPaid ? BillStatus.Paid : BillStatus.Unpaid,
-                        IsRecurring = true
-                    }))
-            )
-            .OrderByDescending(b => b.Date)
-            .ToList();
-
-        // 3. Assert all 3 bills are present
-        Assert.Equal(3, items.Count);
-
-        // Confirm ordered from newest to oldest
-        Assert.Equal("b2", items[0].Id); // -2 days
-        Assert.Equal("rec1", items[1].Id); // -10 days
-        Assert.Equal("b1", items[2].Id); // -30 days
-
-        // Confirm Paid bills are included
-        Assert.Contains(items, i => i.Status == BillStatus.Paid && i.Id == "b1");
-        Assert.Contains(items, i => i.Status == BillStatus.Paid && i.Id == "rec1");
-
-        // Confirm AwaitingApproval is included
-        Assert.Contains(items, i => i.Status == BillStatus.AwaitingApproval && i.Id == "b2");
-    }
-
-    [Fact]
-    public void ExistingBillItem_MultiTermSearch_MatchesSupplierName()
-    {
-        var items = new[]
-        {
-            new LinkBillToEmailDialog.ExistingBillItem { SupplierName = "Hydro-Québec", Description = "Monthly Electricity", Amount = 145m },
-            new LinkBillToEmailDialog.ExistingBillItem { SupplierName = "Bell Canada", Description = "Fiber 500", Amount = 85m },
-            new LinkBillToEmailDialog.ExistingBillItem { SupplierName = "Amazon Web Services", Description = "Cloud Hosting", Amount = 500m }
-        };
-
-        // Multi-term search function
-        Func<string, LinkBillToEmailDialog.ExistingBillItem[]> search = q =>
-        {
-            var terms = q.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            return items.Where(b =>
-                terms.All(term =>
-                    (!string.IsNullOrEmpty(b.SupplierName) && b.SupplierName.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
-                    (!string.IsNullOrEmpty(b.Description) && b.Description.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
-                    b.Amount.ToString("F2").Contains(term, StringComparison.OrdinalIgnoreCase))).ToArray();
-        };
-
-        // Supplier name search
-        var bellResults = search("bell");
-        Assert.Single(bellResults);
-        Assert.Equal("Bell Canada", bellResults[0].SupplierName);
-
-        // Partial match with accent / hyphen
-        var hydroResults = search("Hydro");
-        Assert.Single(hydroResults);
-        Assert.Equal("Hydro-Québec", hydroResults[0].SupplierName);
-
-        // Multi-term match (supplier + amount)
-        var awsResults = search("amazon 500");
-        Assert.Single(awsResults);
-        Assert.Equal("Amazon Web Services", awsResults[0].SupplierName);
-    }
 }

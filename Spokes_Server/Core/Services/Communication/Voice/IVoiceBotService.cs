@@ -23,6 +23,17 @@ public interface IVoiceBotService : IAsyncDisposable
     Task PlaySoundAsync(string channelId, string soundId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Starts looping a ringback sound into the specified voice channel's WebRTC audio track until
+    /// <see cref="StopRingingAsync"/> is called or <paramref name="maxDuration"/> elapses.
+    /// </summary>
+    Task StartRingingAsync(string channelId, string soundId, TimeSpan? maxDuration = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    /// <summary>
+    /// Immediately stops any active ringback playback in the specified voice channel.
+    /// </summary>
+    Task StopRingingAsync(string channelId) => Task.CompletedTask;
+
+    /// <summary>
     /// Disconnects the bot from the specified voice channel and releases associated WebRTC resources.
     /// </summary>
     Task LeaveRoomAsync(string channelId, CancellationToken cancellationToken = default);

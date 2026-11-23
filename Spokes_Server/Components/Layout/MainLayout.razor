@@ -20,14 +20,12 @@
 @inject IBrowserViewportService ViewportService
 @inject AppLabelService AppLabels
 @inject LicenseValidationService LicenseValidationService
-@inject IFileService FileService
 @inject ChatNotificationService ChatNotifications
 @inject Spokes_Server.Core.Services.Communication.Email.EmailNotificationService EmailNotifications
 @inject Spokes_Server.Core.Services.HR.Calendar.CalendarNotificationService CalendarNotifications
 @inject ShareTargetStateService ShareTargetStateService
 @inject ServerUpdateService ServerUpdateService
 @inject ScopedKeystoreService ScopedKeystore
-@inject ICryptoService Crypto
 @inject Microsoft.AspNetCore.DataProtection.IDataProtectionProvider DataProtection
 @inject ImageRecoveryService ImageRecovery
 @inject IHttpContextAccessor HttpContextAccessor
@@ -36,22 +34,24 @@
 @inject SessionService SessionService
 @inject IStorageHealthService StorageHealth
 @inject ILogger<MainLayout> Logger
+@inject Spokes_Server.Core.Services.Communication.Voice.GlobalVoiceService VoiceService
 @implements IAsyncDisposable
 @implements IBrowserViewportObserver
 
 <MudThemeProvider Theme="@_theme" @bind-IsDarkMode="_isDarkMode" ObserveSystemDarkModeChange="false" />
 <MudPopoverProvider />
-<MudDialogProvider />
+<SpokesDialogProvider />
 <MudSnackbarProvider />
 
 <MudLayout>
-    @{
-        StartupTimings.AddChatTransition($"Server: RenderTree MainLayout[{_diagTag}] #{++_diagRenderCount} (_isChatChannelOpen={_isChatChannelOpen})"); // DIAG-TEMP
+    @if (StartupTimings.IsChatProfilerEnabled)
+    {
+        StartupTimings.AddChatTransition($"Server: RenderTree MainLayout[{_diagTag}] #{++_diagRenderCount} (_isChatChannelOpen={_isChatChannelOpen})");
     }
     <MudAppBar Class="@($"py-n2{(_isChatChannelOpen ? " hide-appbar-mobile" : "")}")" Elevation="1" Dense="true">
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start"
             OnClick="@((e) => DrawerToggle())" />
-        <div class="d-flex align-center ml-1 flex-shrink-1" style="min-width: 0; overflow: hidden;">
+        <div class="d-flex align-center ml-1 flex-shrink-1" style="min-width: 0; overflow: hidden; cursor: pointer;" @onclick="@(() => Nav.NavigateTo("/"))">
             @if (Profile?.HasCustomLogo == true)
             {
                 <MudImage Src="@($"/spokesapi/Media/Logo?v={Profile.LogoVersion}")" Height="32" Class="mr-2 flex-shrink-0" />
@@ -66,61 +66,65 @@
             </MudText>
         </div>
 
-        @* Desktop Toolbar *@
-        <MudHidden Breakpoint="Breakpoint.SmAndDown">
-                @if (!IsFriendEdition)
-                {
-                    <MudMenu Icon="@Icons.Material.Filled.Add" Color="Color.Inherit" Class="ml-4">
-                        <MudMenuItem OnClick="@(() => Nav.NavigateTo("/projects/new"))">@BizLoc["New Project"]</MudMenuItem>
-                        <MudMenuItem OnClick="@(() => Nav.NavigateTo("/my-timesheet"))">@BizLoc["Log Time"]</MudMenuItem>
-                        <MudMenuItem OnClick="@(() => Nav.NavigateTo("/me/expenses"))">@BizLoc["New Expense"]</MudMenuItem>
-                    </MudMenu>
+        @if (!CircuitContext.IsMobileLayout)
+        {
+            @* Desktop Toolbar *@
+            @if (!IsFriendEdition)
+            {
+                <LazyMudMenu Icon="@Icons.Material.Filled.Add" Color="Color.Inherit" Class="ml-4" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft" Context="closeMenu">
+                    <MudListItem T="string" Class="mud-menu-item" OnClick="@(() => { closeMenu(); Nav.NavigateTo("/projects/new"); })">@BizLoc["New Project"]</MudListItem>
+                    <MudListItem T="string" Class="mud-menu-item" OnClick="@(() => { closeMenu(); Nav.NavigateTo("/my-timesheet"); })">@BizLoc["Log Time"]</MudListItem>
+                    <MudListItem T="string" Class="mud-menu-item" OnClick="@(() => { closeMenu(); Nav.NavigateTo("/me/expenses"); })">@BizLoc["New Expense"]</MudListItem>
+                </LazyMudMenu>
 
+                @if (!IsReadOnlyOrRestricted && _currentUser?.HasPermission(AppPermissions.Timesheets.AccessTimesheet) == true)
+                {
                     <Spokes_Server.Components.Shared.TimerButton />
                 }
-                
-                <MudSpacer />
-                @if (!IsFriendEdition)
-                {
-                    <Spokes_Server.Components.Shared.GlobalSearchBar @ref="_searchBar" />
-                }
-                
+            }
+            
+            <MudSpacer />
+            @if (!IsFriendEdition)
+            {
+                <Spokes_Server.Components.Shared.GlobalSearchBar @ref="_searchBar" />
+            }
+            
 
-                <MudSpacer />
+            <MudSpacer />
 
-                <MudIconButton Icon="@Icons.Material.Filled.Settings" Color="Color.Inherit"
-                    OnClick="OpenUserSettingsDialog" />
-                <MudIconButton Icon="@DarkLightModeButtonIcon" Color="Color.Inherit" OnClick="@DarkModeToggle"
-                    Class="mr-4" />
+            <MudIconButton Icon="@Icons.Material.Filled.Settings" Color="Color.Inherit"
+                OnClick="OpenUserSettingsDialog" />
+            <MudIconButton Icon="@DarkLightModeButtonIcon" Color="Color.Inherit" OnClick="@DarkModeToggle"
+                Class="mr-4" />
 
-                <AuthorizeView>
-                    <Authorized Context="auth">
-                        <div class="d-flex align-center cursor-pointer mr-4" @onclick="OpenProfileDialog">
-                            <EmployeeAvatar Employee="@_currentUser" Size="Size.Small" Class="mr-2" />
-                            <MudText>
-                                @(_currentUser?.FullName
-                                    ?? _currentUser?.Email
-                                    ?? auth.User.FindFirst("email")?.Value
-                                    ?? auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
-                                    ?? auth.User.Identity?.Name)
-                            </MudText>
-                        </div>
+            <AuthorizeView>
+                <Authorized Context="auth">
+                    <div class="d-flex align-center cursor-pointer mr-4" @onclick="OpenProfileDialog">
+                        <EmployeeAvatar Employee="@_currentUser" Size="Size.Small" Class="mr-2" />
+                        <MudText>
+                            @(_currentUser?.FullName
+                                ?? _currentUser?.Email
+                                ?? auth.User.FindFirst("email")?.Value
+                                ?? auth.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+                                ?? auth.User.Identity?.Name)
+                        </MudText>
+                    </div>
 
-                        <form action="logout" method="post" data-enhance="false">
-                            <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Error">@Loc["Logout"]
-                            </MudButton>
-                            <AntiforgeryToken />
-                        </form>
-                    </Authorized>
-                </AuthorizeView>
-            </MudHidden>
-
-        @* Mobile Toolbar *@
-        <MudHidden Breakpoint="Breakpoint.MdAndUp">
+                    <form action="logout" method="post" data-enhance="false">
+                        <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Error">@Loc["Logout"]
+                        </MudButton>
+                        <AntiforgeryToken />
+                    </form>
+                </Authorized>
+            </AuthorizeView>
+        }
+        else
+        {
+            @* Mobile Toolbar *@
             <MudSpacer />
 
             @* Running timer indicator on mobile *@
-            @if (_timerState.IsRunning)
+            @if (_timerState.IsRunning && !IsReadOnlyOrRestricted && _currentUser?.HasPermission(AppPermissions.Timesheets.AccessTimesheet) == true)
             {
                 <div class="d-flex align-center gap-1 mr-2" @onclick="StopTimerFromMenu">
                     <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord" Color="Color.Error" Size="Size.Small"
@@ -139,66 +143,71 @@
                 </Authorized>
             </AuthorizeView>
 
-            <MudMenu Icon="@Icons.Material.Filled.MoreVert" Color="Color.Inherit"
-                AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="mr-n5">
+            <LazyMudMenu Icon="@Icons.Material.Filled.MoreVert" Color="Color.Inherit"
+                AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="mr-n5"
+                ContentVersion="@HashCode.Combine(IsFriendEdition, IsReadOnlyOrRestricted, _timerState.IsRunning, _isDarkMode, _currentUser?.Id, _currentUser?.AvatarVersion)"
+                Context="closeMenu">
 
                 @if (!IsFriendEdition)
                 {
                     @* New Project *@
-                    <MudMenuItem Icon="@Icons.Material.Filled.Add" OnClick="@(() => Nav.NavigateTo("/projects/new"))">
+                    <MudListItem T="string" Class="mud-menu-item" Icon="@Icons.Material.Filled.Add" OnClick="@(() => { closeMenu(); Nav.NavigateTo("/projects/new"); })">
                         @BizLoc["New Project"]
-                    </MudMenuItem>
+                    </MudListItem>
 
                     @* Start/Stop Timer *@
-                    @if (_timerState.IsRunning)
+                    @if (!IsReadOnlyOrRestricted && _currentUser?.HasPermission(AppPermissions.Timesheets.AccessTimesheet) == true)
                     {
-                        <MudMenuItem Icon="@Icons.Material.Filled.Stop" IconColor="Color.Error" OnClick="StopTimerFromMenu">
-                            @BizLoc["Stop Timer"]
-                        </MudMenuItem>
-                    }
-                    else
-                    {
-                        <MudMenuItem Icon="@Icons.Material.Filled.PlayArrow" IconColor="Color.Success"
-                                     OnClick="StartTimerFromMenu">
-                            @BizLoc["Start Timer"]
-                        </MudMenuItem>
+                        @if (_timerState.IsRunning)
+                        {
+                            <MudListItem T="string" Class="mud-menu-item" Icon="@Icons.Material.Filled.Stop" IconColor="Color.Error" OnClick="@(async () => { closeMenu(); await StopTimerFromMenu(); })">
+                                @BizLoc["Stop Timer"]
+                            </MudListItem>
+                        }
+                        else
+                        {
+                            <MudListItem T="string" Class="mud-menu-item" Icon="@Icons.Material.Filled.PlayArrow" IconColor="Color.Success"
+                                         OnClick="@(async () => { closeMenu(); await StartTimerFromMenu(); })">
+                                @BizLoc["Start Timer"]
+                            </MudListItem>
+                        }
                     }
                 }
                 
                 @if (!IsFriendEdition)
                 {
                     @* Search *@
-                    <MudMenuItem Icon="@Icons.Material.Filled.Search" OnClick="FocusMobileSearch">
+                    <MudListItem T="string" Class="mud-menu-item" Icon="@Icons.Material.Filled.Search" OnClick="@(async () => { closeMenu(); await FocusMobileSearch(); })">
                         @Loc["Search"]
-                    </MudMenuItem>
-				}
-				
+                    </MudListItem>
+                }
+                
 
                 @* Settings *@
-                <MudMenuItem Icon="@Icons.Material.Filled.Settings"
-                    OnClick="OpenUserSettingsDialog">
+                <MudListItem T="string" Class="mud-menu-item" Icon="@Icons.Material.Filled.Settings"
+                    OnClick="@(async () => { closeMenu(); await OpenUserSettingsDialog(); })">
                     @Loc["Settings"]
-                </MudMenuItem>
+                </MudListItem>
 
                 @* Theme *@
-                <MudMenuItem Icon="@DarkLightModeButtonIcon" OnClick="DarkModeToggle">
+                <MudListItem T="string" Class="mud-menu-item" Icon="@DarkLightModeButtonIcon" OnClick="@(() => { closeMenu(); DarkModeToggle(); })">
                     @Loc["SwitchTheme"]
-                </MudMenuItem>
+                </MudListItem>
 
                 <MudDivider />
 
                 @* Profile *@
                 <AuthorizeView>
                     <Authorized Context="auth">
-                        <MudMenuItem Icon="@Icons.Material.Filled.Person" IconColor="Color.Transparent" OnClick="OpenProfileDialog">
+                        <MudListItem T="string" Class="mud-menu-item" Style="position: relative;" Icon="@Icons.Material.Filled.Person" IconColor="Color.Transparent" OnClick="@(async () => { closeMenu(); await OpenProfileDialog(); })">
                             <span style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); z-index: 10; pointer-events: none;">
                                 <EmployeeAvatar Employee="@_currentUser" Size="Size.Small" />
                             </span>
                             @(_currentUser?.FirstName ?? Loc["Profile"].Value)
-                        </MudMenuItem>
+                        </MudListItem>
 
                         @* Logout *@
-                        <MudMenuItem Icon="@Icons.Material.Filled.Logout" IconColor="Color.Error">
+                        <MudListItem T="string" Class="mud-menu-item" Icon="@Icons.Material.Filled.Logout" IconColor="Color.Error">
                             <form action="logout" method="post" data-enhance="false" id="logout-form-mobile" style="width: 100%; display: flex; flex-grow: 1;">
                                 <button type="submit"
                                     style="background: none; border: none; padding: 0; margin: 0; color: inherit; width: 100%; text-align: left; cursor: pointer; display: flex; align-items: center; justify-content: flex-start;">
@@ -206,18 +215,18 @@
                                 </button>
                                 <AntiforgeryToken />
                             </form>
-                        </MudMenuItem>
+                        </MudListItem>
 
                     </Authorized>
                 </AuthorizeView>
-            </MudMenu>
-        </MudHidden>
+            </LazyMudMenu>
+        }
     </MudAppBar>
 
-    <MudDrawer id="nav-drawer" @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Variant="@_drawerVariant" Elevation="1" Class="@((_isLoaded ? "" : "mobile-preload-hide") + (_drawerOpen ? " is-nav-drawer-open" : " is-nav-drawer-closed"))">
+    <MudDrawer id="nav-drawer" Open="@_drawerOpen" OpenChanged="OnDrawerOpenChanged" ClipMode="DrawerClipMode.Always" Variant="@_drawerVariant" Elevation="1" Class="@((_isLoaded ? "" : "mobile-preload-hide") + (_drawerOpen ? " is-nav-drawer-open" : " is-nav-drawer-closed"))">
         @if (Db.CompanyProfile.Get()?.Edition == "Family")
         {
-            <NavMenu_Friend drawerOpen="_drawerOpen" _isEditingFavorites="_isEditingFavorites" />
+            <NavMenu_Friend />
         }
         else
         {
@@ -280,8 +289,7 @@
             }
         }
         @if ((_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || 
-              _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired || 
-              _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated) && 
+              _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired) && 
               _currentUser != null && (_currentUser.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)) && !_hideLicenseBanner)
         {
             <MudAlert Severity="@(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ? Severity.Error : Severity.Warning)" 
@@ -296,8 +304,8 @@
                              Size="Size.Small" 
                              Class="mr-2" />
                     <MudText Typo="Typo.body2" Class="mr-2">
-                        <b>@(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ? Loc["Spokes Pass Invalid"] : _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired ? Loc["Spokes Pass Expired"] : Loc["Spokes Pass Update Required"])</b>
-                        <span> - @(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock || _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired ? Loc["Native push notifications (desktop & mobile) are currently disabled."] : _licenseError)</span>
+                        <b>@(_licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ? Loc["Spokes Pass Invalid"] : Loc["Spokes Pass Expired"])</b>
+                        <span> - @Loc["Native push notifications (desktop & mobile) are currently disabled."]</span>
                     </MudText>
                     <MudButton Variant="Variant.Text" Color="Color.Inherit" Size="Size.Small" OnClick="@(() => Nav.NavigateTo("/admin/settings?tab=setup"))">@Loc["Resolve"]</MudButton>
                     <MudSpacer />
@@ -320,110 +328,7 @@
     <span class="dismiss">🗙</span>
 </div>
 
-<style>
-    .license-banner.mud-alert {
-        align-items: center;
-    }
-
-    .license-banner .mud-alert-message {
-        width: 100%;
-        padding: 4px 0;
-    }
-
-    :root {
-        --safe-area-top: env(safe-area-inset-top, 0px);
-        --safe-area-bottom: env(safe-area-inset-bottom, 0px);
-    }
-
-    html.keyboard-open-ios {
-        --safe-area-bottom: 0px !important;
-    }
-
-    .mud-layout > .mud-appbar {
-        padding-top: var(--safe-area-top) !important;
-        height: calc(48px + var(--safe-area-top)) !important;
-    }
-
-    .mud-layout > .mud-main-content:not(.chat-channel-open) {
-        padding-top: calc(48px + var(--safe-area-top)) !important;
-        padding-bottom: var(--safe-area-bottom) !important;
-    }
-
-    #nav-drawer {
-        top: calc(48px + var(--safe-area-top)) !important;
-        height: calc(100vh - 48px - var(--safe-area-top) - var(--safe-area-bottom)) !important;
-    }
-
-    .timer-pulse {
-        animation: pulse 1.5s infinite;
-    }
-
-    @@keyframes pulse {
-        0% {
-            opacity: 1;
-        }
-
-        50% {
-            opacity: 0.3;
-        }
-
-        100% {
-            opacity: 1;
-        }
-    }
-
-    /* Default: chat page still needs top padding for the app bar */
-    .mud-layout > .mud-main-content.chat-channel-open {
-        padding-top: calc(48px + var(--safe-area-top)) !important;
-        padding-bottom: var(--safe-area-bottom) !important;
-    }
-
-    /* On mobile (sm and down), hide the app bar when a chat channel is open */
-    @@media (max-width: 959.98px) {
-        .mobile-preload-hide {
-            display: none !important;
-        }
-
-        .hide-appbar-mobile {
-            display: none !important;
-        }
-
-        .mud-layout > .mud-main-content.chat-channel-open {
-            padding-top: var(--safe-area-top) !important;
-            padding-bottom: var(--safe-area-bottom) !important;
-            height: var(--viewport-height, 100dvh) !important;
-            position: absolute !important;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            width: 100%;
-        }
-    }
-
-    /* On desktop (md and up), keep normal top padding */
-    @@media (min-width: 960px) {
-        .mud-layout > .mud-main-content.chat-channel-open {
-            padding-top: calc(48px + var(--safe-area-top)) !important;
-        }
-    }
-
-    /* Print styling to reset restricted viewports so browsers capture full pages */
-    @@media print {
-        .print-layout {
-            height: auto !important;
-            overflow: visible !important;
-            display: block !important;
-            position: static !important;
-        }
-
-        .print-scroll {
-            overflow: visible !important;
-            display: block !important;
-            position: static !important;
-        }
-    }
-</style>
+@* MainLayout shell styles live in wwwroot/css/app.css so they are HTTP-cached instead of streamed in the startup SignalR RenderBatch. *@
 
 @code {
     private bool _isLoaded = false;
@@ -477,115 +382,24 @@
         }
     }
 
-    private bool _isThisTabFocused = true; // Assume focused on initial load
     private string _appVersion = Spokes_Server.Core.Services.Licensing.LicenseValidationService.AppVersion;
-    private string? _licenseError;
-    private string? _allowedVersion;
-    private string? _firstInstalledVersion;
-    private string? _lockupVersion;
-    private string? _allowedVersionStripped;
     private Spokes_Server.Core.Services.Licensing.LicenseStatus _licenseStatus = Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid;
 
-    private void HandleLicenseUploaded(List<Spokes_Server.Components.Shared.ApiFileUpload.UploadResult> results)
-    {
-        if (results == null || results.Count == 0) return;
-        if (IsReadOnlyOrRestricted || !(_currentUser!.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings))) return;
-        
-        var result = results.First();
-        var parts = result.FilePath.Substring("/spokesapi/files/".Length).Split('/');
-        if (parts.Length != 3) return;
-        var fullPath = FileService.GetPhysicalPath(parts[0], parts[1], parts[2]);
-        
-        if (File.Exists(fullPath))
-        {
-            try
-            {
-                var json = File.ReadAllText(fullPath);
-                var config = Db.ServerConfigs.GetOrCreateGlobalConfig();
-                var validationResult = LicenseValidationService.ValidateLicense(json, config);
-
-                if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid || 
-                    validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Tolerated ||
-                    validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
-                {
-                    if (validationResult.ParsedLicense != null)
-                    {
-                        if(Profile != null)
-                        {
-                            Profile.LicensePayload = json;
-                            
-                            var newEditions = Spokes_Server.Core.Services.Licensing.LicenseValidationService.GetAvailableEditions(validationResult);
-                            if (!newEditions.Contains(Profile.Edition))
-                            {
-                                Profile.Edition = newEditions.FirstOrDefault() ?? "Family";
-                            }
-                            
-                            Db.CompanyProfile.Save(Profile);
-                        }
-
-                        // Reset license banner dismissals so admins are alerted if/when this license expires in the future
-                        var admins = Db.Employees.GetAll().Where(e => e.IsAdmin || e.Permissions.Contains(Spokes_Server.Core.Constants.AppPermissions.Admin.ManageSettings)).ToList();
-                        foreach (var admin in admins)
-                        {
-                            if (admin.DismissedLicenseBannerPermanently || admin.LicenseBannerRemindLaterDate != null)
-                            {
-                                admin.DismissedLicenseBannerPermanently = false;
-                                admin.LicenseBannerRemindLaterDate = null;
-                                Db.Employees.Save(admin);
-                            }
-                        }
-
-                        if (validationResult.Status == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired)
-                        {
-                            Snackbar.Add($"Expired License Saved: {validationResult.Message}", Severity.Warning);
-                            _licenseStatus = validationResult.Status;
-                            _licenseError = validationResult.Message;
-                        }
-                        else
-                        {
-                            Snackbar.Add("License Validated & Saved Successfully!", Severity.Success);
-                            _licenseStatus = validationResult.Status;
-                            _licenseError = null;
-                        }
-                        
-                        _allowedVersion = null;
-                        _firstInstalledVersion = null;
-                        _lockupVersion = null;
-                    }
-                    else
-                    {
-                        Snackbar.Add("License is valid but could not be parsed.", Severity.Warning);
-                    }
-                }
-                else
-                {
-                    Snackbar.Add($"Invalid License: {validationResult.Message}", Severity.Error);
-                }
-                
-                FileService.CleanTempContext(parts[1]);
-                StateHasChanged();
-            }
-            catch (Exception ex)
-            {
-                Snackbar.Add($"Upload Failed: {ex.Message}", Severity.Error);
-                FileService.CleanTempContext(parts[1]);
-            }
-        }
-    }
-
-    // DIAG-TEMP: chat transition diagnostics
+    // On-demand chat transition profiler (off by default; enabled in-memory via browser console)
     private readonly string _diagTag = Guid.NewGuid().ToString("N")[..4];
     private int _diagRenderCount;
     private int _diagAfterRenderCount;
 
-    [JSInvokable] public double DiagPing() => StartupTimingService.NowMs();
+    [JSInvokable] public bool PingCircuit() => true;
+    [JSInvokable] public void SetChatProfilerEnabled(bool enabled) => StartupTimings.SetChatProfilerEnabled(enabled);
+    [JSInvokable] public double DiagClockPing() => StartupTimingService.NowMs();
     [JSInvokable] public int DiagBeginTransition(string name) => StartupTimings.BeginTransition(name, isNamed: false);
     [JSInvokable] public ChatTransitionDrainResult DiagDrain(int transitionId, int cursor) => StartupTimings.Drain(transitionId, cursor);
 
     protected override void OnInitialized()
     {
         StartupTimings.Add("Server: Layout OnInitialized");
-        StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}] OnInitialized"); // DIAG-TEMP
+        if (StartupTimings.IsChatProfilerEnabled) StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}] OnInitialized");
         _isChatPage = IsChatPageUrl(Nav.Uri);
         _isChatChannelOpen = IsChatChannelUrl(Nav.Uri);
         Nav.LocationChanged += HandleLocationChanged;
@@ -593,6 +407,11 @@
         
         SessionService.OnSessionRevoked += HandleSessionRevoked;
         SessionService.OnSessionBanned += HandleSessionBanned;
+        SessionService.OnSessionVaultRevoked += HandleSessionVaultRevoked;
+        SessionService.OnUserSuspensionChanged += HandleUserSuspensionChanged;
+        ScopedKeystore.OnLocked += HandleScopedKeystoreLocked;
+        Db.Employees.OnSaved += HandleEmployeeSaved;
+        Db.CompanyProfile.OnSaved += HandleCompanyProfileSaved;
 
         if (Db.CompanyProfile.Get()?.Edition == "Family")
         {
@@ -610,14 +429,176 @@
         }
     }
 
+    private void LockAndClearLocalSessionState()
+    {
+        if (!string.IsNullOrEmpty(_currentUser?.Id))
+        {
+            ScopedKeystore.Lock(_currentUser.Id);
+        }
+        UserService.ClearCache();
+    }
+
+    private void HandleScopedKeystoreLocked()
+    {
+        if (_isDisposed || CircuitContext.IsTerminated) return;
+        _ = InvokeAsync(async () =>
+        {
+            if (_isDisposed || CircuitContext.IsTerminated) return;
+            try
+            {
+                await JS.InvokeVoidAsync("spokesMediaLoader.clearEncryptedCache");
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+            {
+                // Ignore disconnected JS interop during circuit teardown
+            }
+        });
+    }
+
+    private async void HandleSessionVaultRevoked(string sessionId)
+    {
+        if (_isDisposed || string.IsNullOrEmpty(_currentSessionId) || sessionId != _currentSessionId)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(_currentUser?.Id))
+        {
+            ScopedKeystore.Lock(_currentUser.Id);
+        }
+        else
+        {
+            ScopedKeystore.Lock();
+        }
+
+        await InvokeAsync(async () =>
+        {
+            if (_isDisposed || CircuitContext.IsTerminated) return;
+            try
+            {
+                await JS.InvokeVoidAsync("spokesVault.clearStoredVaultKey");
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+            {
+                // Ignore disconnected JS interop
+            }
+            try
+            {
+                await JS.InvokeVoidAsync("spokesMediaLoader.clearEncryptedCache");
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+            {
+                // Ignore disconnected JS interop
+            }
+        });
+    }
+
     private async void HandleSessionRevoked(string sessionId)
     {
         if (!string.IsNullOrEmpty(_currentSessionId) && sessionId == _currentSessionId)
         {
-            await InvokeAsync(() =>
+            LockAndClearLocalSessionState();
+            await InvokeAsync(async () =>
             {
+                try
+                {
+                    await JS.InvokeVoidAsync("spokesMediaLoader.clearAllCache");
+                }
+                catch { }
                 Nav.NavigateTo("/spokesapi/auth/force-logout", forceLoad: true);
             });
+        }
+    }
+
+    private bool IsChatNotificationEligible =>
+        _currentUser is { IsActive: true, IsBanned: false } &&
+        _currentUser.HasEffectivePermission(AppPermissions.Chat.Use, allowSuspended: true);
+
+    private bool IsEmailNotificationEligible =>
+        !IsFriendEdition &&
+        _currentUser is { IsActive: true, IsBanned: false } &&
+        _currentUser.HasPermission(AppPermissions.Email.Use);
+
+    private bool IsCalendarNotificationEligible =>
+        _currentUser is { IsActive: true, IsBanned: false } &&
+        (Spokes_Server.Core.Services.HR.CalendarService.HasCalendarViewAccess(_currentUser)
+            || Spokes_Server.Core.Services.HR.CalendarService.HasCalendarAdminOverride(_currentUser));
+
+    private async Task SyncChatAndCalendarNotificationsAsync()
+    {
+        try
+        {
+            if (_currentUser != null && IsChatNotificationEligible)
+            {
+                await ChatNotifications.InitializeAsync(_currentUser.Id);
+            }
+            else
+            {
+                await ChatNotifications.DisposeAsync();
+            }
+
+            if (_currentUser != null && IsCalendarNotificationEligible)
+            {
+                await CalendarNotifications.InitializeAsync(_currentUser.Id);
+            }
+            else
+            {
+                await CalendarNotifications.DisposeAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[MainLayout] Error syncing chat/calendar notifications");
+        }
+    }
+
+    private async Task SyncEmailNotificationsAsync()
+    {
+        try
+        {
+            var userId = _currentUser?.Id;
+            if (!string.IsNullOrEmpty(userId) && IsEmailNotificationEligible)
+            {
+                await Task.Run(() => EmailNotifications.InitializeAsync(userId));
+            }
+            else
+            {
+                await EmailNotifications.DisposeAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[MainLayout] Error syncing email notifications");
+        }
+    }
+
+    private async Task DisposeAllCircuitNotificationSubscriptionsAsync()
+    {
+        try { await ChatNotifications.DisposeAsync(); } catch { }
+        try { await EmailNotifications.DisposeAsync(); } catch { }
+        try { await CalendarNotifications.DisposeAsync(); } catch { }
+    }
+
+    private void HandleEmployeeSaved(Employee savedEmployee)
+    {
+        if (_isDisposed || _currentUser == null || !string.Equals(savedEmployee.Id, _currentUser.Id, StringComparison.Ordinal))
+            return;
+
+        _currentUser = Db.Employees.GetById(_currentUser.Id) ?? savedEmployee;
+        _ = SyncChatAndCalendarNotificationsAsync();
+        _ = SyncEmailNotificationsAsync();
+    }
+
+    private void HandleCompanyProfileSaved(CompanyProfile profile)
+    {
+        if (_isDisposed) return;
+
+        Profile = profile;
+        if (_currentUser != null)
+        {
+            _currentUser = Db.Employees.GetById(_currentUser.Id) ?? _currentUser;
+            _ = SyncChatAndCalendarNotificationsAsync();
+            _ = SyncEmailNotificationsAsync();
         }
     }
 
@@ -625,11 +606,59 @@
     {
         if (!string.IsNullOrEmpty(_currentSessionId) && sessionId == _currentSessionId)
         {
-            await InvokeAsync(() =>
+            LockAndClearLocalSessionState();
+            await DisposeAllCircuitNotificationSubscriptionsAsync();
+            await InvokeAsync(async () =>
             {
+                try
+                {
+                    await JS.InvokeVoidAsync("spokesMediaLoader.clearAllCache");
+                }
+                catch { }
                 Nav.NavigateTo(PreserveMobileQuery("/banned"), forceLoad: true);
             });
         }
+    }
+
+    private async void HandleUserSuspensionChanged(string employeeId, bool isSuspended)
+    {
+        if (_isDisposed || _currentUser == null || !string.Equals(_currentUser.Id, employeeId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (isSuspended)
+        {
+            LockAndClearLocalSessionState();
+        }
+        else
+        {
+            UserService.ClearCache();
+        }
+
+        await InvokeAsync(async () =>
+        {
+            if (isSuspended)
+            {
+                try
+                {
+                    await JS.InvokeVoidAsync("spokesMediaLoader.clearEncryptedCache");
+                }
+                catch { }
+            }
+            if (isSuspended && (VoiceService.IsInVoiceCall || VoiceService.IsConnecting))
+            {
+                try
+                {
+                    await VoiceService.DisconnectAsync();
+                }
+                catch
+                {
+                    // Ignore disconnected JS interop during force reload
+                }
+            }
+            Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        });
     }
 
     private void HandleLocationChanged(object? sender, LocationChangedEventArgs e)
@@ -639,11 +668,15 @@
         bool layoutStateChanged = _isChatPage != newIsChatPage || _isChatChannelOpen != newIsChatChannelOpen;
         _isChatPage = newIsChatPage;
         _isChatChannelOpen = newIsChatChannelOpen;
-        StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}].HandleLocationChanged (_isChatChannelOpen={_isChatChannelOpen}, changed={layoutStateChanged}, intercepted={e.IsNavigationIntercepted}, location={new Uri(e.Location).PathAndQuery})"); // DIAG-TEMP
+        if (StartupTimings.IsChatProfilerEnabled)
+        {
+            StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}].HandleLocationChanged (_isChatChannelOpen={_isChatChannelOpen}, changed={layoutStateChanged}, intercepted={e.IsNavigationIntercepted}, location={new Uri(e.Location).PathAndQuery})");
+        }
         
         if (_currentUser != null)
         {
-            using (StartupTimings.Span("Server: MainLayout PresenceState.PingUserActive")) // DIAG-TEMP
+            CircuitContext.IsIdle = false;
+            using (StartupTimings.Span("Server: MainLayout PresenceState.PingUserActive"))
             {
                 PresenceState.PingUserActive(_currentUser.Id);
             }
@@ -652,7 +685,10 @@
         if (!newIsChatPage || layoutStateChanged)
         {
             StateHasChanged();
-            StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}].HandleLocationChanged StateHasChanged returned"); // DIAG-TEMP
+            if (StartupTimings.IsChatProfilerEnabled)
+            {
+                StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}].HandleLocationChanged StateHasChanged returned");
+            }
         }
     }
 
@@ -665,24 +701,25 @@
         _theme = SpokesTheme.CreateTheme();
 
         // 2. Load User Preference & Session Platform Context
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var user = authState.User;
+        var user = HttpContextAccessor.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true)
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            user = authState.User;
+        }
         _currentSessionId = user.FindFirst("SessionId")?.Value;
 
         var initialSession = !string.IsNullOrEmpty(_currentSessionId) ? Db.DeviceSessions.GetById(_currentSessionId) : null;
         var ua = HttpContextAccessor.HttpContext?.Request.Headers.UserAgent.ToString() ?? string.Empty;
         bool isDesktopUa = Spokes_Server.Core.Helpers.DeviceDetectionHelper.IsDesktopClient(ua);
-        bool isMobileQuery = string.Equals(HttpContextAccessor.HttpContext?.Request.Query["client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase);
+        bool isMobileQuery = string.Equals(HttpContextAccessor.HttpContext?.Request.Query["client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase)
+            || (Nav.Uri?.Contains("client=mobile", StringComparison.OrdinalIgnoreCase) ?? false);
         bool isCapacitorFromUa = ua.Contains("Capacitor", StringComparison.OrdinalIgnoreCase);
-        bool isMobileUa = !isDesktopUa && (isCapacitorFromUa
-            || ua.Contains("Mobile", StringComparison.OrdinalIgnoreCase)
-            || ua.Contains("Android", StringComparison.OrdinalIgnoreCase)
-            || ua.Contains("iPhone", StringComparison.OrdinalIgnoreCase)
-            || ua.Contains("iPod", StringComparison.OrdinalIgnoreCase));
+        bool isMobileUa = Spokes_Server.Core.Helpers.DeviceDetectionHelper.IsMobileDevice(ua);
         _isDesktopSession = isDesktopUa
             || (initialSession?.DeviceInfo?.Contains("Desktop App", StringComparison.OrdinalIgnoreCase) ?? false);
         _isCapacitorApp = !_isDesktopSession && ((initialSession?.IsCapacitorApp ?? false) || isCapacitorFromUa || isMobileQuery);
-        bool isInitialMobile = !_isDesktopSession && (isMobileUa || isMobileQuery || string.Equals(initialSession?.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase));
+        bool isInitialMobile = !_isDesktopSession && (_isCapacitorApp || isMobileUa || isMobileQuery || string.Equals(initialSession?.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase));
 
         _drawerVariant = DrawerVariant.Mini;
         Snackbar.Configuration.PositionClass = Defaults.Classes.Position.BottomLeft;
@@ -692,17 +729,19 @@
             _drawerOpen = false;
             _drawerVariant = DrawerVariant.Responsive;
             Snackbar.Configuration.PositionClass = Defaults.Classes.Position.TopCenter;
-            _isLoaded = true;
         }
+        CircuitContext.IsMobileViewport = isInitialMobile;
 
-        // Use UserService to get the employee
-        _currentUser = await UserService.GetEmployeeAsync();
+        // Use UserService to get the employee (synchronous fast-path when HttpContext user is already resolved)
+        _currentUser = user.Identity?.IsAuthenticated == true
+            ? (UserService.GetEmployee(user) ?? await UserService.GetEmployeeAsync())
+            : await UserService.GetEmployeeAsync();
         StartupTimings.Add("Server: Layout GetEmployeeAsync Done");
 
         // Redirect to access-pending if authenticated but no employee linked
         if (user.Identity?.IsAuthenticated == true && _currentUser == null)
         {
-            var currentUri = Nav.Uri;
+            var currentUri = Nav.Uri ?? string.Empty;
             if (!currentUri.Contains("/access-pending"))
             {
                 Nav.NavigateTo("/access-pending", replace: true);
@@ -718,19 +757,23 @@
             CircuitContext.IsCapacitorApp = _isCapacitorApp;
             CircuitContext.DeviceType = _isDesktopSession ? DeviceType.Desktop : (isInitialMobile ? DeviceType.Mobile : (initialSession?.DeviceType ?? DeviceType.Desktop));
             CircuitContext.IsMobileViewport = isInitialMobile;
-            CircuitContext.HasPushEnabled = initialSession?.PushEnabled ?? false;
-            CircuitContext.IsFocused = _isThisTabFocused;
-
-            await CalendarNotifications.InitializeAsync(_currentUser.Id);
+            CircuitContext.HasPushEnabled = initialSession is { HasPush: true, PushEnabled: true };
+            CircuitContext.IsFocused = true;
 
             if (_currentUser.IsBanned)
             {
-                var currentUri = Nav.Uri;
+                await DisposeAllCircuitNotificationSubscriptionsAsync();
+                var currentUri = Nav.Uri ?? string.Empty;
                 if (!currentUri.Contains("/banned", StringComparison.OrdinalIgnoreCase))
                 {
                     Nav.NavigateTo("/banned", replace: true);
                     return;
                 }
+            }
+            else
+            {
+                await SyncChatAndCalendarNotificationsAsync();
+                _ = SyncEmailNotificationsAsync();
             }
 
             if (_currentUser.IsSuspended)
@@ -751,30 +794,13 @@
             // Verify License
             var result = LicenseValidationService.ValidateLicense(Profile?.LicensePayload, Db.ServerConfigs.GetOrCreateGlobalConfig());
             _licenseStatus = result.Status;
-            if (result.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid)
+            if (result.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.Valid && _currentUser != null)
             {
-                _licenseError = result.Message;
-                _allowedVersion = result.MaxAllowedVersion;
-                
-                if (result.ParsedLicense != null)
+                bool isPermanentlyDismissed = _currentUser.DismissedLicenseBannerPermanently;
+                bool isRemindLaterActive = _currentUser.LicenseBannerRemindLaterDate != null && DateTimeOffset.UtcNow < _currentUser.LicenseBannerRemindLaterDate;
+                if (isPermanentlyDismissed || isRemindLaterActive)
                 {
-                    _allowedVersionStripped = GetVersionNumbersOnly(_allowedVersion);
-                }
-                else if (string.IsNullOrEmpty(Profile?.LicensePayload))
-                {
-                    _firstInstalledVersion = result.FirstInstalledVersion ?? Db.ServerConfigs.GetOrCreateGlobalConfig().DatabaseCreationVersion;
-                    _lockupVersion = result.LockupVersion ?? _firstInstalledVersion;
-                    _allowedVersionStripped = GetVersionNumbersOnly(_allowedVersion);
-                }
-
-                if (_currentUser != null)
-                {
-                    bool isPermanentlyDismissed = _currentUser.DismissedLicenseBannerPermanently;
-                    bool isRemindLaterActive = _currentUser.LicenseBannerRemindLaterDate != null && DateTimeOffset.UtcNow < _currentUser.LicenseBannerRemindLaterDate;
-                    if (isPermanentlyDismissed || isRemindLaterActive)
-                    {
-                        _hideLicenseBanner = true;
-                    }
+                    _hideLicenseBanner = true;
                 }
             }
 
@@ -797,25 +823,6 @@
         StartupTimings.Add("Server: Layout OnInitializedAsync Done");
     }
 
-    private string GetVersionNumbersOnly(string? version)
-    {
-        if (string.IsNullOrEmpty(version)) return "latest";
-        int firstDigitIndex = -1;
-        for (int i = 0; i < version.Length; i++)
-        {
-            if (char.IsDigit(version[i]))
-            {
-                firstDigitIndex = i;
-                break;
-            }
-        }
-        if (firstDigitIndex >= 0)
-        {
-            return version.Substring(firstDigitIndex);
-        }
-        return version.TrimStart('v', 'V');
-    }
-
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -836,20 +843,45 @@
 
             if (_currentUser is { IsActive: true, IsBanned: false })
             {
+                if (!string.IsNullOrEmpty(_currentSessionId))
+                {
+                    var currentSession = Db.DeviceSessions.GetById(_currentSessionId);
+                    if (currentSession != null)
+                    {
+                        bool isSessionMobile = !_isDesktopSession && (currentSession.IsCapacitorApp || string.Equals(currentSession.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase));
+                        if (!_isDesktopSession && currentSession.IsCapacitorApp)
+                        {
+                            _isCapacitorApp = true;
+                            CircuitContext.IsCapacitorApp = true;
+                        }
+                        if (isSessionMobile)
+                        {
+                            CircuitContext.DeviceType = DeviceType.Mobile;
+                            CircuitContext.IsMobileViewport = true;
+                        }
+                        CircuitContext.HasPushEnabled = currentSession is { HasPush: true, PushEnabled: true };
+                    }
+                }
+
                 _currentPresenceToken = Spokes_Server.Controllers.PresenceController.CreatePresenceToken(
                     DataProtection, _currentSubscriptionId, _currentUser.Id);
+                CircuitContext.UserId = _currentUser.Id;
                 CircuitContext.SubscriptionId = _currentSubscriptionId;
                 CircuitContext.SessionId = _currentSessionId;
-                PresenceState.RegisterConnection(new ConnectionRegistrationOptions
+                if (!_isDisposed && CircuitContext.CanRegisterPresence)
                 {
-                    UserId = _currentUser.Id,
-                    SubscriptionId = _currentSubscriptionId,
-                    DeviceType = CircuitContext.DeviceType,
-                    HasPushEnabled = CircuitContext.HasPushEnabled,
-                    IsCapacitorApp = CircuitContext.IsCapacitorApp,
-                    SessionId = _currentSessionId,
-                    IsFocused = _isThisTabFocused
-                });
+                    PresenceState.RegisterConnection(new ConnectionRegistrationOptions
+                    {
+                        UserId = _currentUser.Id,
+                        SubscriptionId = _currentSubscriptionId,
+                        DeviceType = CircuitContext.DeviceType,
+                        HasPushEnabled = CircuitContext.HasPushEnabled,
+                        IsCapacitorApp = CircuitContext.IsCapacitorApp,
+                        SessionId = _currentSessionId,
+                        IsFocused = CircuitContext.IsFocused,
+                        IsTransportAlive = () => !_isDisposed && CircuitContext.CanRegisterPresence
+                    });
+                }
             }
 
             var vapidPublicKey = (Profile ?? Db.CompanyProfile.Get())?.VapidPublicKey ?? string.Empty;
@@ -873,8 +905,7 @@
                     presenceToken = _currentPresenceToken,
                     isDarkMode = _isDarkMode,
                     vapidPublicKey = vapidPublicKey,
-                    needsVaultKey = shouldBatchDeviceVaultCheck,
-                    chatDiagnostics = ChatDiagnostics.Enabled // DIAG-TEMP
+                    needsVaultKey = shouldBatchDeviceVaultCheck
                 });
             }
             catch (Exception ex)
@@ -882,9 +913,19 @@
                 Logger.LogWarning(ex, "[MainLayout] SpokesBridge.initLayout failed");
             }
 
-            if (shouldBatchDeviceVaultCheck && clientInit != null)
+            if (_isDisposed || CircuitContext.IsTerminated)
+            {
+                return;
+            }
+
+            if (shouldBatchDeviceVaultCheck && clientInit != null && CircuitContext.CanRegisterPresence)
             {
                 await externalVaultScope.CompleteAsync(JS, clientInit.StoredVaultKey, _currentUser!.Id, _currentUser.EncryptedPrivateKey);
+            }
+
+            if (ScopedKeystore.HasPendingHttpCookieRenewal && CircuitContext.CanRegisterPresence)
+            {
+                _ = ScopedKeystore.RenewPendingHttpCookieAsync(JS);
             }
 
             if (!string.IsNullOrEmpty(clientInit?.TimeZone) && _currentUser is { IsAdmin: true, IsActive: true, IsBanned: false, IsSuspended: false })
@@ -914,6 +955,11 @@
             _deferredPushClientInit = clientInit;
             _deferredVapidPublicKey = vapidPublicKey;
 
+            if (_isDisposed || !CircuitContext.CanRegisterPresence)
+            {
+                return;
+            }
+
             // Auto-unlock vault on Native Mobile fallback (only if initLayout failed to return batched payload)
             if (shouldBatchDeviceVaultCheck && clientInit == null && !ScopedKeystore.IsUnlocked)
             {
@@ -929,7 +975,7 @@
             }
 
             // Server Update Notification for Admins
-            if (!IsReadOnlyOrRestricted && (_currentUser!.IsAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
+            if (!IsReadOnlyOrRestricted && (_currentUser!.IsEffectiveAdmin || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings)))
             {
                 if (ServerUpdateService.IsUpdateAvailable && !string.IsNullOrEmpty(ServerUpdateService.LatestVersion))
                 {
@@ -954,7 +1000,7 @@
                 }
             }
 
-            if (!IsReadOnlyOrRestricted && !_currentUser!.HasVaultPassword && !_currentUser.DismissedChatWizardPermanently)
+            if (!IsReadOnlyOrRestricted && _currentUser is { IsActiveUnsuspended: true } && _currentUser.HasPermission(AppPermissions.Chat.Use) && !_currentUser.HasVaultPassword && !_currentUser.DismissedChatWizardPermanently)
             {
                 if ((_currentUser.ChatWizardRemindLaterDate == null || DateTimeOffset.UtcNow > _currentUser.ChatWizardRemindLaterDate) && !Config.GetValue<bool>("Spokes_DemoMode"))
                 {
@@ -997,6 +1043,10 @@
             if (isMobile)
             {
                 _drawerOpen = false;
+                if (_isCapacitorApp)
+                {
+                    try { _ = JS.InvokeVoidAsync("spokesNotifyNavDrawerOpen", false); } catch { }
+                }
             }
             _isLoaded = true;
 
@@ -1017,7 +1067,10 @@
                 _pendingLayoutSettleReport = false;
                 await ReportLayoutAndFallbackRouteSettledAsync();
             }
-            StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}] OnAfterRender #{++_diagAfterRenderCount} (_isChatChannelOpen={_isChatChannelOpen})"); // DIAG-TEMP
+            if (StartupTimings.IsChatProfilerEnabled)
+            {
+                StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}] OnAfterRender #{++_diagAfterRenderCount} (_isChatChannelOpen={_isChatChannelOpen})");
+            }
         }
     }
 
@@ -1058,6 +1111,7 @@
     public async Task NotifyBrowserViewportChangeAsync(BrowserViewportEventArgs args)
     {
         var isMobile = args.Breakpoint <= Breakpoint.Sm;
+        var layoutChanged = CircuitContext.IsMobileViewport != isMobile;
         CircuitContext.IsMobileViewport = isMobile;
 
         var newVariant = isMobile ? DrawerVariant.Responsive : DrawerVariant.Mini;
@@ -1068,7 +1122,7 @@
             Snackbar.Configuration.PositionClass = newPosition;
         }
 
-        if (_drawerVariant != newVariant)
+        if (_drawerVariant != newVariant || layoutChanged)
         {
             _drawerVariant = newVariant;
             await InvokeAsync(StateHasChanged);
@@ -1078,6 +1132,17 @@
     public async ValueTask DisposeAsync()
     {
         _isDisposed = true;
+        CircuitContext.IsConnected = false;
+        CircuitContext.IsTerminated = true;
+        CircuitContext.IsFocused = false;
+
+        // Deterministically remove this connection from presence tracking BEFORE any JS interop
+        // that throws JSDisconnectedException when disposing a disconnected circuit.
+        if (!string.IsNullOrEmpty(_currentSubscriptionId) && PresenceState != null)
+        {
+            PresenceState.RemoveConnection(_currentSubscriptionId, markTerminated: true);
+        }
+
         try
         {
             if (_dotNetRef != null)
@@ -1085,18 +1150,11 @@
                 await JS.InvokeVoidAsync("SpokesBridge.disposeLayout");
             }
 
-            // Remove this connection from presence tracking
-            if (_currentUser != null && PresenceState != null)
-            {
-                if (!string.IsNullOrEmpty(_currentSubscriptionId))
-                {
-                    PresenceState.RemoveConnection(_currentSubscriptionId);
-                }
-            }
-
             await ViewportService.UnsubscribeAsync(this);
         }
         catch (JSDisconnectedException) { }
+        catch (TaskCanceledException) { }
+        catch (ObjectDisposedException) { }
         catch (InvalidOperationException) { }
 
         TimerService.OnTimerChanged -= OnTimerChanged;
@@ -1105,6 +1163,11 @@
         CircuitContext.OnChatChannelOpenChanged -= HandleChatChannelOpenChanged;
         SessionService.OnSessionRevoked -= HandleSessionRevoked;
         SessionService.OnSessionBanned -= HandleSessionBanned;
+        SessionService.OnSessionVaultRevoked -= HandleSessionVaultRevoked;
+        SessionService.OnUserSuspensionChanged -= HandleUserSuspensionChanged;
+        ScopedKeystore.OnLocked -= HandleScopedKeystoreLocked;
+        Db.Employees.OnSaved -= HandleEmployeeSaved;
+        Db.CompanyProfile.OnSaved -= HandleCompanyProfileSaved;
         _dotNetRef?.Dispose();
     }
 
@@ -1131,73 +1194,118 @@
         Nav.NavigateTo(PreserveMobileQuery(url));
     }
 
-    [JSInvokable]
-    public void OnWindowFocusChanged(bool isFocused)
+    private void EnsurePresenceConnectionRegistered(bool? isFocusedOverride = null, bool isReconnect = false, long? presenceSequence = null)
     {
-        bool serverMatches = CircuitContext.IsFocused == isFocused &&
-                             !CircuitContext.IsIdle &&
-                             (string.IsNullOrEmpty(_currentSubscriptionId) || PresenceState.IsConnectionActivelyViewed(_currentSubscriptionId) == isFocused);
-        if (_isThisTabFocused == isFocused && serverMatches) return; // Prevent spurious updates
+        if (_isDisposed || !CircuitContext.CanRegisterPresence)
+            return;
 
-        _isThisTabFocused = isFocused;
+        if (_currentUser is not { IsActive: true, IsBanned: false } || string.IsNullOrEmpty(_currentSubscriptionId))
+            return;
+
+        if (isReconnect || !PresenceState.HasConnection(_currentSubscriptionId))
+        {
+            PresenceState.RegisterConnection(new ConnectionRegistrationOptions
+            {
+                UserId = _currentUser.Id,
+                SubscriptionId = _currentSubscriptionId,
+                DeviceType = CircuitContext.DeviceType,
+                HasPushEnabled = CircuitContext.HasPushEnabled,
+                IsCapacitorApp = CircuitContext.IsCapacitorApp,
+                SessionId = _currentSessionId,
+                IsFocused = isFocusedOverride ?? CircuitContext.IsFocused,
+                IsReconnect = isReconnect,
+                PresenceSequence = presenceSequence,
+                IsTransportAlive = () => !_isDisposed && CircuitContext.CanRegisterPresence
+            });
+        }
+    }
+
+    private void ApplyFocusState(bool isFocused, bool healUnreadCounts, bool notifyUi, long? sequence = null)
+    {
         CircuitContext.IsFocused = isFocused;
         if (isFocused)
         {
             CircuitContext.IsIdle = false;
         }
-        CircuitContext.NotifyFocusChanged();
 
         if (_currentUser != null)
         {
-            PresenceState.SetConnectionFocus(_currentUser.Id, _currentSubscriptionId, isFocused);
+            PresenceState.SetConnectionFocus(_currentUser.Id, _currentSubscriptionId, isFocused, sequence);
             if (!isFocused)
             {
-                UserClientStateService.FlushToDiskIfUnsent(_currentUser.Id);
+                UserClientStateService.StopActiveTyping(_currentUser.Id);
             }
         }
 
-        // Force a UI re-render when returning to the app 
-        // to un-stick the iOS WKWebView 100vh viewport bug.
-        if (isFocused)
+        if (isFocused && healUnreadCounts)
         {
+            // Heal any desynced unread counters BEFORE NotifyFocusChanged so an actively
+            // viewed open chat channel clears its own unread badge immediately afterward.
+            ChatNotifications.ReloadUnreadCounts();
+            if (IsEmailNotificationEligible)
+            {
+                EmailNotifications.LoadUnreadCount();
+            }
+        }
+
+        // Notify subscribers AFTER PresenceState and unread counts are updated so
+        // Chat.HandleFocusChanged sees IsConnectionActivelyViewed() == true and marks
+        // the open channel as read without being overwritten by ReloadUnreadCounts().
+        CircuitContext.NotifyFocusChanged();
+
+        if (isFocused && notifyUi && _isCapacitorApp)
+        {
+            // Force a UI re-render when returning to the native app
+            // to un-stick the iOS WKWebView 100vh viewport bug.
             try { _ = JS.InvokeVoidAsync("setCapacitorStatusBarStyle", _isDarkMode); } catch { }
 
             // Clear any stale pre-sleep snackbars so warm start presents a clean UI
             Snackbar.Clear();
 
-            // Heal any desynced unread counters that were missed while the app was asleep/backgrounded
-            ChatNotifications.ReloadUnreadCounts();
-            if (!IsFriendEdition)
-            {
-                EmailNotifications.LoadUnreadCount();
-            }
-            
             InvokeAsync(StateHasChanged);
         }
     }
 
     [JSInvokable]
+    public void OnPageRestoredFromCache(bool isFocused, long sequence)
+    {
+        if (_isDisposed || !CircuitContext.CanRegisterPresence) return;
+
+        long? seq = sequence > 0 ? sequence : null;
+        EnsurePresenceConnectionRegistered(isFocused, isReconnect: true, presenceSequence: seq);
+        ApplyFocusState(isFocused, healUnreadCounts: isFocused, notifyUi: false, sequence: seq);
+    }
+
+    [JSInvokable]
+    public void OnWindowFocusChanged(bool isFocused, long sequence)
+    {
+        if (_isDisposed || !CircuitContext.CanRegisterPresence) return;
+
+        long? seq = sequence > 0 ? sequence : null;
+        bool serverMatchesBeforeRegister = CircuitContext.IsFocused == isFocused &&
+                                           !CircuitContext.IsIdle &&
+                                           (string.IsNullOrEmpty(_currentSubscriptionId) ||
+                                            (PresenceState.HasConnection(_currentSubscriptionId) &&
+                                             PresenceState.IsConnectionActivelyViewed(_currentSubscriptionId) == isFocused));
+
+        if (isFocused) EnsurePresenceConnectionRegistered(true, presenceSequence: seq);
+
+        if (serverMatchesBeforeRegister)
+        {
+            if (_currentUser != null && seq.HasValue)
+            {
+                PresenceState.SetConnectionFocus(_currentUser.Id, _currentSubscriptionId, isFocused, seq);
+            }
+            return; // Prevent spurious UI notifications while still advancing monotonic sequence
+        }
+
+        ApplyFocusState(isFocused, healUnreadCounts: true, notifyUi: true, sequence: seq);
+    }
+
+    [JSInvokable]
     public Task OnShareReceived(SharePayload payload)
     {
-        if (IsReadOnlyOrRestricted) return Task.CompletedTask;
-        // Normalize plugin's "texts" array into Text/Url if those are empty
-        if (payload.Texts is { Count: > 0 })
-        {
-            foreach (var t in payload.Texts)
-            {
-                if (Uri.TryCreate(t, UriKind.Absolute, out var uri)
-                    && (uri.Scheme == "http" || uri.Scheme == "https"))
-                {
-                    payload.Url ??= t;
-                }
-                else
-                {
-                    payload.Text = string.IsNullOrEmpty(payload.Text) ? t : payload.Text + "\n" + t;
-                }
-            }
-            // If only URLs were in texts and Text is still null, put the URL there too
-            payload.Text ??= payload.Url;
-        }
+        if (IsReadOnlyOrRestricted || !_currentUser!.HasPermission(AppPermissions.Chat.Use)) return Task.CompletedTask;
 
         if (!string.IsNullOrEmpty(payload.TargetChannelId))
         {
@@ -1212,16 +1320,8 @@
 
     private async Task ShowShareModalAsync(SharePayload payload)
     {
-        var parameters = new DialogParameters
-        {
-            { "SharedTitle", payload.Title },
-            { "SharedText", payload.Text },
-            { "SharedUrl", payload.Url },
-            { "SharedFiles", payload.Files ?? [] }
-        };
-
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large, FullWidth = true };
-        var dialog = await DialogService.ShowAsync<ShareModal>("Share to Spokes", parameters,options);
+        var dialog = await DialogService.ShowAsync<ShareModal>("Share to Spokes", options);
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled && result.Data is ShareModal.ShareResult shareResult)
@@ -1250,19 +1350,31 @@
     // --- Drawer & Theme ---
     private void DrawerToggle()
     {
-        _drawerOpen = !_drawerOpen;
+        SetDrawerOpen(!_drawerOpen);
     }
 
-    private async Task ChangeServerMobileApp()
+    private void OnDrawerOpenChanged(bool open)
     {
-        try { await JS.InvokeVoidAsync("changeCapacitorServer"); } catch { }
+        SetDrawerOpen(open);
+    }
+
+    private void SetDrawerOpen(bool open)
+    {
+        _drawerOpen = open;
+        if (_isCapacitorApp && !_isDisposed)
+        {
+            try { _ = JS.InvokeVoidAsync("spokesNotifyNavDrawerOpen", open); } catch { }
+        }
     }
 
     private void DarkModeToggle()
     {
         _isDarkMode = !_isDarkMode;
 
-        try { _ = JS.InvokeVoidAsync("setCapacitorStatusBarStyle", _isDarkMode); } catch { }
+        if (_isCapacitorApp)
+        {
+            try { _ = JS.InvokeVoidAsync("setCapacitorStatusBarStyle", _isDarkMode); } catch { }
+        }
 
         if (!IsReadOnlyOrRestricted && _currentUser != null)
         {
@@ -1289,6 +1401,7 @@
 
         if (result is { Canceled: false, Data: Employee updatedEmployee })
         {
+            _currentUser = updatedEmployee;
             StateHasChanged();
         }
     }
@@ -1297,15 +1410,21 @@
     private async Task StartTimerFromMenu()
     {
         if (IsReadOnlyOrRestricted) return;
+        var liveUser = await UserService.GetEmployeeAsync();
+        _currentUser = liveUser;
+        if (liveUser == null || !liveUser.HasPermission(AppPermissions.Timesheets.AccessTimesheet)) return;
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
         var dialog = await DialogService.ShowAsync<StartTimerDialog>("Start Timer", options);
         // The dialog handles the actual starting through TimerService
     }
 
-    private void StopTimerFromMenu()
+    private async Task StopTimerFromMenu()
     {
-        if (IsReadOnlyOrRestricted || _currentUser == null) return;
-        var result = TimerService.Stop(_currentUser.Id);
+        if (IsReadOnlyOrRestricted) return;
+        var liveUser = await UserService.GetEmployeeAsync();
+        _currentUser = liveUser;
+        if (liveUser == null || !liveUser.HasPermission(AppPermissions.Timesheets.AccessTimesheet)) return;
+        var result = TimerService.Stop(liveUser.Id);
         if (result.IsSuccess)
         {
             var elapsed = result.Value;
@@ -1396,11 +1515,15 @@
 
         var currentSession = !string.IsNullOrEmpty(_currentSessionId) ? Db.DeviceSessions.GetById(_currentSessionId) : null;
         bool isDesktopClient = (clientInit?.IsDesktopApp == true) || _isDesktopSession;
-        bool isNativeApp = !isDesktopClient && (clientInit?.IsCapacitorApp ?? _isCapacitorApp);
+        bool isNativeApp = !isDesktopClient && ((clientInit?.IsCapacitorApp == true) || _isCapacitorApp);
         bool isCapacitorApp = !isDesktopClient && (isNativeApp || (currentSession?.IsCapacitorApp ?? false));
+        bool isMobileSession = !isDesktopClient && (isCapacitorApp
+            || string.Equals(clientInit?.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(currentSession?.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(CircuitContext.DeviceType, DeviceType.Mobile, StringComparison.OrdinalIgnoreCase));
         var deviceType = isDesktopClient
             ? DeviceType.Desktop
-            : (isCapacitorApp
+            : (isMobileSession
                 ? DeviceType.Mobile
                 : (!string.IsNullOrEmpty(clientInit?.DeviceType) ? clientInit.DeviceType : (currentSession?.DeviceType ?? DeviceType.Desktop)));
 
@@ -1426,9 +1549,16 @@
 
         _isCapacitorApp = isCapacitorApp;
 
-        if (clientInit?.IsFocused == false || !PresenceState.IsConnectionActivelyViewed(_currentSubscriptionId))
+        bool hadConnection = PresenceState.HasConnection(_currentSubscriptionId);
+        bool wasActivelyViewed = hadConnection && PresenceState.IsConnectionActivelyViewed(_currentSubscriptionId);
+        if (hadConnection && !wasActivelyViewed)
         {
-            _isThisTabFocused = false;
+            // Sync CircuitContext if an out-of-band /spokesapi/presence/unfocus arrived during initLayout.
+            CircuitContext.IsFocused = false;
+        }
+        else if (!hadConnection && clientInit?.IsFocused == false)
+        {
+            CircuitContext.IsFocused = false;
         }
 
         CircuitContext.UserId = _currentUser.Id;
@@ -1437,8 +1567,12 @@
         CircuitContext.DeviceType = deviceType;
         CircuitContext.HasPushEnabled = initialHasPushEnabled;
         CircuitContext.IsCapacitorApp = isCapacitorApp;
-        CircuitContext.IsFocused = _isThisTabFocused;
         CircuitContext.IsIdle = false;
+
+        if (_isDisposed || !CircuitContext.CanRegisterPresence)
+        {
+            return;
+        }
 
         PresenceState.RegisterConnection(new ConnectionRegistrationOptions
         {
@@ -1448,8 +1582,15 @@
             HasPushEnabled = initialHasPushEnabled,
             IsCapacitorApp = isCapacitorApp,
             SessionId = _currentSessionId,
-            IsFocused = _isThisTabFocused
+            IsFocused = CircuitContext.IsFocused,
+            PreserveExistingActivity = true,
+            IsTransportAlive = () => !_isDisposed && CircuitContext.CanRegisterPresence
         });
+
+        if (!wasActivelyViewed && PresenceState.IsConnectionActivelyViewed(_currentSubscriptionId))
+        {
+            CircuitContext.NotifyFocusChanged();
+        }
     }
 
     private async Task ReconcilePushAfterInteractiveAsync(LayoutClientInitResult? clientInit, string vapidPublicKey)
@@ -1462,12 +1603,16 @@
             await Task.Delay(60);
             if (_isDisposed || _currentUser == null) return;
 
+            var sessionBeforeProbe = !string.IsNullOrEmpty(_currentSessionId) ? Db.DeviceSessions.GetById(_currentSessionId) : null;
+
             PushProbeResult? pushProbe = null;
             try
             {
                 pushProbe = await JS.InvokeAsync<PushProbeResult?>("SpokesBridge.probePushState", new
                 {
-                    isCapacitorApp = _isCapacitorApp
+                    isCapacitorApp = _isCapacitorApp,
+                    hasServerPush = sessionBeforeProbe is { HasPush: true, PushExplicitlyDisabled: false },
+                    pushExplicitlyDisabled = sessionBeforeProbe?.PushExplicitlyDisabled == true
                 });
             }
             catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
@@ -1483,16 +1628,17 @@
 
             var currentSession = !string.IsNullOrEmpty(_currentSessionId) ? Db.DeviceSessions.GetById(_currentSessionId) : null;
             bool isDesktopClient = (clientInit?.IsDesktopApp == true) || _isDesktopSession;
-            bool isNativeApp = !isDesktopClient && (clientInit?.IsCapacitorApp ?? _isCapacitorApp);
+            bool isNativeApp = !isDesktopClient && ((clientInit?.IsCapacitorApp == true) || _isCapacitorApp);
             bool isCapacitorApp = _isCapacitorApp;
             var deviceType = CircuitContext.DeviceType;
+            bool isExplicitlyDisabled = currentSession?.PushExplicitlyDisabled == true;
 
             bool hasPushEnabled = false;
             bool shouldSyncPushSubscription = false;
-            var existingSub = pushProbe?.ExistingSubscription ?? clientInit?.ExistingSubscription;
+            var existingSub = isExplicitlyDisabled ? null : (pushProbe?.ExistingSubscription ?? clientInit?.ExistingSubscription);
             var endpoint = ExtractDictString(existingSub, "endpoint");
 
-            if (existingSub != null && !string.IsNullOrEmpty(endpoint))
+            if (!isExplicitlyDisabled && existingSub != null && !string.IsNullOrEmpty(endpoint))
             {
                 _currentSubscriptionEndpoint = endpoint;
                 var sub = Db.DeviceSessions.GetByPushEndpoint(_currentSubscriptionEndpoint);
@@ -1511,8 +1657,6 @@
                 }
                 else
                 {
-
-
                     bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ||
                                                _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
 
@@ -1545,7 +1689,7 @@
                 });
             }
 
-            if (!IsReadOnlyOrRestricted && shouldSyncPushSubscription && existingSub != null && !_isDisposed)
+            if (!IsReadOnlyOrRestricted && !isExplicitlyDisabled && shouldSyncPushSubscription && existingSub != null && !_isDisposed)
             {
                 try
                 {
@@ -1556,23 +1700,26 @@
 
             if (_isDisposed) return;
 
-            // Auto-prompt or auto-register push notifications on new devices that don't have an active endpoint yet
-            if (!_pushPromptEvaluated && !IsReadOnlyOrRestricted && string.IsNullOrEmpty(_currentSubscriptionEndpoint) && !Config.GetValue<bool>("Spokes_DemoMode"))
+            // Auto-prompt or auto-register push notifications on new devices that don't have an active endpoint yet,
+            // unless the user explicitly disabled push notifications on this server session.
+            if (!_pushPromptEvaluated && !IsReadOnlyOrRestricted && !isExplicitlyDisabled && string.IsNullOrEmpty(_currentSubscriptionEndpoint) && !Config.GetValue<bool>("Spokes_DemoMode"))
             {
                 _pushPromptEvaluated = true;
                 if (!string.IsNullOrEmpty(vapidPublicKey))
                 {
-                    var permStatus = clientInit?.PermissionStatus ?? "default";
-                    if (permStatus == "granted")
+                    var permStatus = pushProbe?.PermissionStatus ?? clientInit?.PermissionStatus ?? "default";
+                    bool requiresRelay = isNativeApp || isDesktopClient || (clientInit?.RequiresPushRelay ?? false);
+
+                    if (permStatus == "granted" && !requiresRelay)
                     {
                         await TriggerAutoPushRegistration(vapidPublicKey, isSilent: true, clientInit);
                     }
-                    else if (permStatus == "default" && clientInit is { HasBeenPromptedForPush: false, IsPushSupported: true })
+                    else if ((permStatus is "default" or "prompt" or "prompt-with-rationale" || (permStatus == "granted" && requiresRelay)) && clientInit is { HasBeenPromptedForPush: false, IsPushSupported: true })
                     {
                         bool isNativePushBlocked = _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock ||
                                                    _licenseStatus == Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
 
-                        if (clientInit.RequiresPushRelay && isNativePushBlocked)
+                        if (requiresRelay && isNativePushBlocked)
                         {
                             await JS.InvokeVoidAsync("pushNotifications.setPushPrompted", vapidPublicKey);
                         }
@@ -1608,21 +1755,32 @@
     }
 
     [JSInvokable]
-    public void OnDeviceActivePing()
+    public void OnDeviceActivePing(bool isFocused)
     {
+        if (_isDisposed || !CircuitContext.CanRegisterPresence) return;
+
         bool wasIdle = CircuitContext.IsIdle;
         CircuitContext.IsIdle = false;
+        EnsurePresenceConnectionRegistered(isFocusedOverride: isFocused ? true : null);
         PresenceState.PingDeviceActive(_currentSubscriptionId);
-        if (wasIdle && _isThisTabFocused)
+
+        // Defense-in-depth self-healing: if the user is actively interacting inside a focused foreground view
+        // while server focus state drifted to unfocused (e.g. legacy client race), immediately reconcile focus.
+        if (isFocused && (!CircuitContext.IsFocused ||
+            (!string.IsNullOrEmpty(_currentSubscriptionId) && !PresenceState.IsConnectionActivelyViewed(_currentSubscriptionId))))
+        {
+            ApplyFocusState(true, healUnreadCounts: true, notifyUi: false);
+        }
+        else if (wasIdle && CircuitContext.IsFocused)
         {
             CircuitContext.NotifyFocusChanged();
         }
     }
 
     [JSInvokable]
-    public void OnClientPresenceStateChanged(string state)
+    public void OnClientPresenceStateChanged(string state, long sequence)
     {
-        if (string.IsNullOrEmpty(state)) return;
+        if (string.IsNullOrEmpty(state) || _isDisposed || CircuitContext.IsTerminated) return;
 
         var normalized = state.Trim().ToLowerInvariant();
         var parsedState = normalized switch
@@ -1633,18 +1791,25 @@
             _ => ConnectionPresenceState.Active
         };
 
+        if (parsedState != ConnectionPresenceState.Offline && !CircuitContext.CanRegisterPresence) return;
+
+        long? seq = sequence > 0 ? sequence : null;
         bool wasIdle = CircuitContext.IsIdle;
         bool isInVoiceCall = _currentUser != null && PresenceState.IsUserInVoiceCall(_currentUser.Id);
         CircuitContext.IsIdle = parsedState == ConnectionPresenceState.Offline ||
             (parsedState == ConnectionPresenceState.Idle && !isInVoiceCall);
 
-        PresenceState.SetConnectionPresenceState(_currentSubscriptionId, parsedState);
+        if (parsedState != ConnectionPresenceState.Offline)
+        {
+            EnsurePresenceConnectionRegistered(presenceSequence: seq);
+        }
+        PresenceState.SetConnectionPresenceState(_currentSubscriptionId, parsedState, seq);
 
         if (CircuitContext.IsIdle && _currentUser != null)
         {
-            UserClientStateService.FlushToDiskIfUnsent(_currentUser.Id);
+            UserClientStateService.StopActiveTyping(_currentUser.Id);
         }
-        else if (wasIdle && !CircuitContext.IsIdle && _isThisTabFocused)
+        else if (wasIdle && !CircuitContext.IsIdle && CircuitContext.IsFocused)
         {
             CircuitContext.NotifyFocusChanged();
         }
@@ -1700,22 +1865,37 @@
     }
 
     /// <summary>
+    /// Extracts the {channelId} segment from an absolute or relative /chat/{channelId} URL,
+    /// or null if the URL is not a chat channel route.
+    /// </summary>
+    internal static string? ExtractChatChannelId(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return null;
+
+        string path;
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            path = uri.AbsolutePath.TrimEnd('/');
+        }
+        else
+        {
+            path = url.Split('?')[0].Split('#')[0].TrimEnd('/');
+        }
+
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length >= 2 && segments[0].Equals("chat", StringComparison.OrdinalIgnoreCase))
+        {
+            return Uri.UnescapeDataString(segments[1]);
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Checks if the URL is a chat channel URL (i.e. /chat/{channelId}).
     /// This is used to hide the app bar on mobile to maximize chat space.
     /// </summary>
-    internal static bool IsChatChannelUrl(string url)
-    {
-        // Extract the path from the full URL
-        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
-        {
-            var path = uri.AbsolutePath.TrimEnd('/');
-            // Match /chat/{something} but not just /chat
-            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            return segments.Length >= 2 
-                && segments[0].Equals("chat", StringComparison.OrdinalIgnoreCase);
-        }
-        return false;
-    }
+    internal static bool IsChatChannelUrl(string url) => ExtractChatChannelId(url) != null;
 
 
     private async Task TriggerAutoPushRegistration(string vapidPublicKey, bool isSilent = false, LayoutClientInitResult? clientInit = null)
@@ -1802,6 +1982,11 @@
     [JSInvokable]
     public void OnAppShortcutReceived(string channelId)
     {
+        if (_currentUser == null || !_currentUser.IsActive || _currentUser.IsBanned || !_currentUser.HasEffectivePermission(AppPermissions.Chat.Use, allowSuspended: true))
+        {
+            return;
+        }
+
         if (!string.IsNullOrEmpty(channelId))
         {
             Nav.NavigateTo(PreserveMobileQuery($"/chat/{channelId}"));
@@ -1822,11 +2007,11 @@
         public string DeviceType { get; set; } = global::Spokes_Server.Core.Models.Core.DeviceType.Desktop;
         public bool? IsFocused { get; set; }
         public Dictionary<string, object>? ExistingSubscription { get; set; }
-        public string PermissionStatus { get; set; } = "default";
+
         public bool HasBeenPromptedForPush { get; set; }
         public bool IsPushSupported { get; set; }
         public bool RequiresPushRelay { get; set; }
-        public bool IosSoundDisabled { get; set; }
+        public bool IosSoundDisabled { get; set; } public string? PermissionStatus { get; set; }
         public string? TimeZone { get; set; }
         public int ViewportWidth { get; set; }
         public string? StoredVaultKey { get; set; }
@@ -1835,7 +2020,7 @@
     private sealed class PushProbeResult
     {
         public Dictionary<string, object>? ExistingSubscription { get; set; }
-        public bool IosSoundDisabled { get; set; }
+        public bool IosSoundDisabled { get; set; } public string? PermissionStatus { get; set; }
     }
 
     private async Task SubscribeViewportResizeAsync()

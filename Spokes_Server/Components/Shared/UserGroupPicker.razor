@@ -1,13 +1,8 @@
-@using Spokes_Server.Core.Data.Repositories.HR
-@using Spokes_Server.Core.Models.HR
-@using Spokes_Server.Core.Services.Identity
-@using Spokes_Server.Core.Services.Security
 @inject EmployeeRepository EmployeeRepo
 @inject TeamRepository TeamRepo
 @inject UserService UserService
 @inject IUserPrivacyService PrivacyService
 @inject AppLabelService AppLabels
-@using Spokes_Server.Components.Shared
 
 @if (Style == UserGroupPickerStyle.Chips)
 {
@@ -72,7 +67,7 @@
                                       Color="Color.Secondary"
                                       Variant="Variant.Filled" />
                         }
-                        else
+                        else if (!IsExistingUndiscoverableGroup(groupId))
                         {
                             <MudChip T="string"
                                      Color="Color.Default"
@@ -99,7 +94,7 @@
                                           Color="Color.Primary"
                                           Variant="Variant.Outlined" />
                         }
-                        else
+                        else if (!IsExistingUndiscoverableUser(userId))
                         {
                             <MudChip T="string"
                                      Color="Color.Default"
@@ -274,7 +269,7 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        _currentUser = await UserService.GetEmployeeAsync();
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
         SyncFromListParameters();
         LoadDiscoverableData();
     }
@@ -309,38 +304,9 @@ else
             _allDiscoverableUsers = _allDiscoverableUsers.Where(u => u.Id != _currentUser.Id).ToList();
         }
 
-        // Retain any already-selected users even if not normally discoverable so their names/avatars render
-        var discoverableIds = new HashSet<string>(_allDiscoverableUsers.Select(u => u.Id));
-        foreach (var id in SelectedUserIds)
-        {
-            if (!discoverableIds.Contains(id))
-            {
-                var emp = EmployeeRepo.GetById(id);
-                if (emp != null)
-                {
-                    _allDiscoverableUsers.Add(emp);
-                    discoverableIds.Add(id);
-                }
-            }
-        }
-
         // Privacy-enforcing team discovery
         var allTeams = TeamRepo.GetAll();
         _allDiscoverableTeams = PrivacyService.FilterDiscoverableTeams(_currentUser, allTeams);
-
-        var discoverableTeamIds = new HashSet<string>(_allDiscoverableTeams.Select(t => t.Id));
-        foreach (var tid in SelectedGroupIds)
-        {
-            if (!discoverableTeamIds.Contains(tid))
-            {
-                var team = TeamRepo.GetById(tid);
-                if (team != null)
-                {
-                    _allDiscoverableTeams.Add(team);
-                    discoverableTeamIds.Add(tid);
-                }
-            }
-        }
     }
 
     private IEnumerable<Employee> FilteredChecklistUsers
@@ -360,7 +326,7 @@ else
                 var q = _searchQuery.Trim();
                 list = list.Where(u =>
                     u.FullName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    (u.Email != null && u.Email.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (PrivacyService.CanViewUserEmail(_currentUser, u) && u.Email != null && u.Email.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
                     (!string.IsNullOrEmpty(u.Position) && u.Position.Contains(q, StringComparison.OrdinalIgnoreCase)));
             }
 
@@ -415,13 +381,15 @@ else
     private async Task AddUserAsync(Employee? user)
     {
         if (user == null || Disabled) return;
+        if (!PrivacyService.CanDiscoverUser(_currentUser, user)) return;
+        if (!AllowSelf && _currentUser != null && user.Id == _currentUser.Id) return;
         SelectedUserIds.Add(user.Id);
         await NotifyUserIdsChangedAsync();
     }
 
     private async Task RemoveUser(string userId)
     {
-        if (Disabled) return;
+        if (Disabled || IsExistingUndiscoverableUser(userId)) return;
         if (SelectedUserIds.Remove(userId))
         {
             await NotifyUserIdsChangedAsync();
@@ -430,9 +398,11 @@ else
 
     private async Task SetUserSelection(string userId, bool selected)
     {
-        if (Disabled) return;
+        if (Disabled || IsExistingUndiscoverableUser(userId)) return;
         if (selected)
         {
+            var emp = EmployeeRepo.GetById(userId);
+            if (emp == null || !PrivacyService.CanDiscoverUser(_currentUser, emp)) return;
             SelectedUserIds.Add(userId);
         }
         else
@@ -444,7 +414,7 @@ else
 
     private async Task ToggleUser(string userId)
     {
-        if (Disabled) return;
+        if (Disabled || IsExistingUndiscoverableUser(userId)) return;
         var selected = SelectedUserIds.Contains(userId);
         await SetUserSelection(userId, !selected);
     }
@@ -452,13 +422,14 @@ else
     private async Task AddGroupAsync(Team? team)
     {
         if (team == null || Disabled) return;
+        if (_allDiscoverableTeams.All(t => t.Id != team.Id)) return;
         SelectedGroupIds.Add(team.Id);
         await NotifyGroupIdsChangedAsync();
     }
 
     private async Task RemoveGroup(string groupId)
     {
-        if (Disabled) return;
+        if (Disabled || IsExistingUndiscoverableGroup(groupId)) return;
         if (SelectedGroupIds.Remove(groupId))
         {
             await NotifyGroupIdsChangedAsync();
@@ -467,9 +438,10 @@ else
 
     private async Task SetGroupSelection(string groupId, bool selected)
     {
-        if (Disabled) return;
+        if (Disabled || IsExistingUndiscoverableGroup(groupId)) return;
         if (selected)
         {
+            if (_allDiscoverableTeams.All(t => t.Id != groupId)) return;
             SelectedGroupIds.Add(groupId);
         }
         else
@@ -481,16 +453,29 @@ else
 
     private async Task ToggleGroup(string groupId)
     {
-        if (Disabled) return;
+        if (Disabled || IsExistingUndiscoverableGroup(groupId)) return;
         var selected = SelectedGroupIds.Contains(groupId);
         await SetGroupSelection(groupId, !selected);
     }
 
     private Employee? GetEmployee(string id) =>
-        _allDiscoverableUsers.FirstOrDefault(e => e.Id == id) ?? EmployeeRepo.GetById(id);
+        _allDiscoverableUsers.FirstOrDefault(e => e.Id == id)
+        ?? (_currentUser != null && id == _currentUser.Id && PrivacyService.CanDiscoverUser(_currentUser, _currentUser) ? _currentUser : null);
 
     private Team? GetTeam(string id) =>
-        _allDiscoverableTeams.FirstOrDefault(t => t.Id == id) ?? TeamRepo.GetById(id);
+        _allDiscoverableTeams.FirstOrDefault(t => t.Id == id);
+
+    private bool IsExistingUndiscoverableUser(string userId)
+    {
+        var raw = EmployeeRepo.GetById(userId);
+        return raw != null && !PrivacyService.CanDiscoverUser(_currentUser, raw);
+    }
+
+    private bool IsExistingUndiscoverableGroup(string groupId)
+    {
+        var raw = TeamRepo.GetById(groupId);
+        return raw != null && _allDiscoverableTeams.All(t => t.Id != groupId);
+    }
 
     private EventCallback GetRemoveGroupCallback(string groupId) =>
         Disabled ? default : EventCallback.Factory.Create(this, () => RemoveGroup(groupId));

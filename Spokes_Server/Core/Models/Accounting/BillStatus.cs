@@ -9,5 +9,10 @@ public static class BillStatus
     public const string Approved = "Approved";
     public const string Unpaid = "Unpaid";
     public const string Paid = "Paid";
+    public const string WrittenOff = "Written Off";
     public const string Void = "Void";
+
+    public static bool IsSettled(string? status) =>
+        string.Equals(status, Paid, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, WrittenOff, StringComparison.OrdinalIgnoreCase);
 }

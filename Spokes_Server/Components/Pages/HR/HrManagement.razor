@@ -1,0 +1,173 @@
+@page "/business/hr"
+@attribute [Authorize]
+@implements IDisposable
+@using Spokes_Server.Components.Pages.Admin.Features
+@using Spokes_Server.Components.Pages.Accounting.BusinessExpenses.Tabs
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Data
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.HR
+@inject NavigationManager Nav
+@inject UserService UserService
+@inject AppLabelService AppLabels
+@inject Database Db
+
+<PageTitle>@BizLoc["HR & People"]</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4 pb-4">
+    <div class="d-flex justify-space-between align-start mb-4">
+        <div>
+            <MudText Typo="Typo.h5" GutterBottom="true">@BizLoc["HR & People"]</MudText>
+            <MudText Typo="Typo.body1">@string.Format(BizLoc["Manage {0} profiles, {1}, organizational structure, and compensation."].Value, AppLabels.Employee.ToLower(), AppLabels.Teams.ToLower())</MudText>
+        </div>
+        @if (_canManagePeople && Db.SystemConfigs.Get().ProviderType == IdpType.BuiltInCasdoor)
+        {
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AdminPanelSettings" Href="@($"{Db.SystemConfigs.Get().ServerPublicUrl.TrimEnd('/')}/login/spokes-org")" Target="_blank">@Loc["Open Casdoor"]</MudButton>
+        }
+    </div>
+
+    @if (!_canReadPeople && !_canReadSalaries)
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mt-2">
+            @Loc["Access Denied"]
+        </MudAlert>
+    }
+    else
+    {
+        <SpokesTabs ActivePanelIndex="@ActiveTabIndex"
+                    ActivePanelIndexChanged="OnTabIndexChanged">
+            @if (_canReadPeople)
+            {
+                <MudTabPanel Text="@AppLabels.Employees" Icon="@Icons.Material.Filled.People">
+                    <EmployeesList ReadOnly="@(!_canManagePeople)" />
+                </MudTabPanel>
+                <MudTabPanel Text="@AppLabels.Teams" Icon="@Icons.Material.Filled.Diversity3">
+                    <TeamsList ReadOnly="@(!_canManagePeople)" />
+                </MudTabPanel>
+                <MudTabPanel Text="@BizLoc["Org Chart"]" Icon="@Icons.Material.Filled.AccountTree">
+                    <OrgTree ReadOnly="@(!_canManagePeople)" />
+                </MudTabPanel>
+            }
+            @if (_canReadSalaries)
+            {
+                <MudTabPanel Text="@BizLoc["Salaries & Contributions"]" Icon="@Icons.Material.Filled.Payments">
+                    <SalaryTab />
+                </MudTabPanel>
+                <MudTabPanel Text="@BizLoc["Payroll & Pay Runs"]" Icon="@Icons.Material.Filled.ReceiptLong">
+                    <PayrollTab />
+                </MudTabPanel>
+            }
+        </SpokesTabs>
+    }
+</MudContainer>
+
+@code {
+    [SupplyParameterFromQuery] public string? Tab { get; set; }
+    private string currentTab = "employees";
+    private bool _canReadPeople;
+    private bool _canManagePeople;
+    private bool _canReadSalaries;
+    private bool _canManageSalaries;
+    private Employee? _currentUser;
+    private bool _isDisposed;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        _canManagePeople = _currentUser is { IsActiveUnsuspended: true } && (
+            _currentUser.IsEffectiveAdmin ||
+            _currentUser.HasPermission(AppPermissions.Hr.ManageEmployees) ||
+            _currentUser.HasPermission(AppPermissions.Admin.ManageUsers));
+        _canReadPeople = _canManagePeople;
+        _canManageSalaries = _currentUser is { IsActiveUnsuspended: true } && (
+            _currentUser.IsEffectiveAdmin ||
+            _currentUser.HasPermission(AppPermissions.Hr.ManageSalaries));
+        _canReadSalaries = _canManageSalaries;
+
+        ResolveActiveTab();
+    }
+
+    protected override void OnParametersSet()
+    {
+        ResolveActiveTab();
+    }
+
+    private void ResolveActiveTab()
+    {
+        var defaultTab = _canReadPeople ? "employees" : (_canReadSalaries ? "salaries" : "employees");
+        if (!string.IsNullOrEmpty(Tab))
+        {
+            currentTab = Tab.ToLowerInvariant() switch
+            {
+                "employees" or "members" when _canReadPeople => "employees",
+                "teams" when _canReadPeople => "teams",
+                "chart" when _canReadPeople => "chart",
+                "salaries" when _canReadSalaries => "salaries",
+                "payroll" when _canReadSalaries => "payroll",
+                _ => defaultTab
+            };
+        }
+        else if ((currentTab is "employees" or "teams" or "chart") && !_canReadPeople)
+        {
+            currentTab = defaultTab;
+        }
+        else if ((currentTab is "salaries" or "payroll") && !_canReadSalaries)
+        {
+            currentTab = defaultTab;
+        }
+    }
+
+    private List<string> AvailableTabs
+    {
+        get
+        {
+            var list = new List<string>();
+            if (_canReadPeople)
+            {
+                list.Add("employees");
+                list.Add("teams");
+                list.Add("chart");
+            }
+            if (_canReadSalaries)
+            {
+                list.Add("salaries");
+                list.Add("payroll");
+            }
+            return list;
+        }
+    }
+
+    private int ActiveTabIndex => Math.Max(0, AvailableTabs.IndexOf(currentTab));
+
+    private void OnTabIndexChanged(int index)
+    {
+        var tabs = AvailableTabs;
+        if (index >= 0 && index < tabs.Count)
+        {
+            UpdateActiveTab(tabs[index]);
+        }
+    }
+
+    private void UpdateActiveTab(string tabName)
+    {
+        if (_isDisposed || string.IsNullOrWhiteSpace(tabName)) return;
+
+        currentTab = tabName;
+
+        if (!Nav.Uri.Contains("/business/hr", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+        }
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+}

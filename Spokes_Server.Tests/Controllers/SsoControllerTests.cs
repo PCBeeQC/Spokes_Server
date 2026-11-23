@@ -35,7 +35,6 @@ public class SsoControllerTests : TestDataTestBase
     private readonly HrContext _hrContext;
     private readonly SessionService _sessionService;
     private readonly IMemoryCache _cache;
-    private readonly Mock<IOptionsMonitor<OpenIdConnectOptions>> _mockOidcMonitor;
     private readonly Mock<ILogger<SsoController>> _mockLogger;
 
     public SsoControllerTests()
@@ -44,6 +43,7 @@ public class SsoControllerTests : TestDataTestBase
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         mockConfig.Setup(c => c.GetSection(It.IsAny<string>())).Returns(new Mock<IConfigurationSection>().Object);
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
@@ -62,14 +62,6 @@ public class SsoControllerTests : TestDataTestBase
         _sessionService = _serviceProvider.GetRequiredService<SessionService>();
         _cache = _serviceProvider.GetRequiredService<IMemoryCache>();
 
-        _mockOidcMonitor = new Mock<IOptionsMonitor<OpenIdConnectOptions>>();
-        _mockOidcMonitor.Setup(m => m.Get(OpenIdConnectDefaults.AuthenticationScheme))
-            .Returns(new OpenIdConnectOptions
-            {
-                Authority = "https://auth.example.com",
-                ClientId = "spokes-test"
-            });
-
         _mockLogger = new Mock<ILogger<SsoController>>();
     }
 
@@ -86,7 +78,7 @@ public class SsoControllerTests : TestDataTestBase
         var config = configuration ?? new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["DataPath"] = _testDataPath,
+                ["DataPath"] = _testDataPath, ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!",
                 ["Spokes_DemoMode"] = "false"
             })
             .Build();
@@ -97,7 +89,6 @@ public class SsoControllerTests : TestDataTestBase
             _sessionService,
             config,
             _cache,
-            _mockOidcMonitor.Object,
             _mockLogger.Object);
 
         var context = httpContext ?? new DefaultHttpContext();
@@ -284,7 +275,7 @@ public class SsoControllerTests : TestDataTestBase
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["DataPath"] = _testDataPath,
+                ["DataPath"] = _testDataPath, ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!",
                 ["Spokes_DemoMode"] = "true"
             })
             .Build();
@@ -342,7 +333,7 @@ public class SsoControllerTests : TestDataTestBase
         var result = await controller.LoginAuto("/accounting", null, null);
 
         var redirect = Assert.IsType<RedirectResult>(result);
-        Assert.Equal("/session-expired", redirect.Url);
+        Assert.Equal("/session-expired?returnUrl=%2Faccounting", redirect.Url);
     }
 
     [Fact]
@@ -373,6 +364,20 @@ public class SsoControllerTests : TestDataTestBase
     }
 
     [Fact]
+    public async Task LoginAuto_WithClientMobileQueryAndNoReturnUrl_RedirectsToMobileLogin()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.QueryString = new QueryString("?client=mobile");
+        context.Request.Headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15";
+        var controller = CreateController(httpContext: context);
+
+        var result = await controller.LoginAuto(null, null, null);
+
+        var redirect = Assert.IsType<RedirectResult>(result);
+        Assert.Equal("/mobile-login?returnUrl=%2F", redirect.Url);
+    }
+
+    [Fact]
     public async Task LoginAuto_OnDesktopWithSsoError_RedirectsToSessionExpired()
     {
         var context = new DefaultHttpContext();
@@ -382,7 +387,7 @@ public class SsoControllerTests : TestDataTestBase
         var result = await controller.LoginAuto("/projects", null, "1");
 
         var redirect = Assert.IsType<RedirectResult>(result);
-        Assert.Equal("/session-expired", redirect.Url);
+        Assert.Equal("/session-expired?returnUrl=%2Fprojects", redirect.Url);
     }
 
     [Fact]
@@ -443,7 +448,7 @@ public class SsoControllerTests : TestDataTestBase
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["DataPath"] = _testDataPath,
+                ["DataPath"] = _testDataPath, ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!",
                 ["Spokes_DemoMode"] = "true"
             })
             .Build();
@@ -543,6 +548,80 @@ public class SsoControllerTests : TestDataTestBase
         var result = await controller.Logout();
 
         Assert.NotNull(result);
+    }
+
+    #endregion
+
+    #region Demo Auto-Login Admin Isolation Tests
+
+    [Fact]
+    public async Task DemoAutoLogin_WithAdminAndSystemIdsOnly_NeverIssuesSessionAndChallengesOidc()
+    {
+        var admin = new Employee { Id = "emp-demo-admin", FirstName = "Demo", LastName = "Admin", IsActive = true, IsAdmin = true };
+        var sys = new Employee { Id = "emp-demo-sys", FirstName = "Demo", LastName = "System", IsActive = true, IsSystem = true };
+        _db.Employees.Save(admin);
+        _db.Employees.Save(sys);
+
+        var demoConfig = _coreContext.DemoConfigs.GetOrCreate();
+        demoConfig.AutoLoginEmployeeIds = [admin.Id, sys.Id];
+        _coreContext.DemoConfigs.Save(demoConfig);
+
+        Assert.Null(SsoController.SelectDemoAutoLoginEmployee(demoConfig.AutoLoginEmployeeIds, _hrContext.Employees));
+
+        var demoAppConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = _testDataPath,
+                ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!",
+                ["Spokes_DemoMode"] = "true"
+            })
+            .Build();
+
+        var loginAutoResult = await CreateController(configuration: demoAppConfig).LoginAuto(null, null, null);
+        Assert.IsType<ChallengeResult>(loginAutoResult);
+
+        var loginResult = await CreateController(configuration: demoAppConfig).Login(null, null);
+        Assert.IsType<ChallengeResult>(loginResult);
+
+        Assert.Empty(_db.DeviceSessions.GetAll());
+    }
+
+    [Fact]
+    public async Task DemoAutoLogin_WithMixedAdminAndStandardEmployees_SelectsOnlyEligibleNonAdmin()
+    {
+        var admin = new Employee { Id = "emp-demo-admin2", FirstName = "Admin", LastName = "User", IsActive = true, IsAdmin = true };
+        var std = new Employee { Id = "emp-demo-std", FirstName = "Regular", LastName = "Visitor", IsActive = true, IsAdmin = false };
+        _db.Employees.Save(admin);
+        _db.Employees.Save(std);
+
+        var demoConfig = _coreContext.DemoConfigs.GetOrCreate();
+        demoConfig.AutoLoginEmployeeIds = [admin.Id, std.Id];
+        _coreContext.DemoConfigs.Save(demoConfig);
+
+        for (int i = 0; i < 20; i++)
+        {
+            var picked = SsoController.SelectDemoAutoLoginEmployee(demoConfig.AutoLoginEmployeeIds, _hrContext.Employees);
+            Assert.NotNull(picked);
+            Assert.Equal(std.Id, picked!.Id);
+            Assert.False(picked.IsAdmin);
+        }
+
+        var demoAppConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = _testDataPath,
+                ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!",
+                ["Spokes_DemoMode"] = "true"
+            })
+            .Build();
+
+        var loginResult = await CreateController(configuration: demoAppConfig).Login(null, null);
+        var contentResult = Assert.IsType<ContentResult>(loginResult);
+        Assert.Equal("text/html", contentResult.ContentType);
+
+        var sessions = _db.DeviceSessions.GetAll();
+        Assert.Single(sessions);
+        Assert.Equal(std.Id, sessions.First().EmployeeId);
     }
 
     #endregion

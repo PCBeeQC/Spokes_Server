@@ -1,5 +1,9 @@
 @using Spokes_Server.Aggregate.Contexts
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Security
 @inject HrContext Hr
+@inject UserService UserService
+@inject IUserPrivacyService PrivacyService
 @inject NavigationManager Nav
 
 <MudPaper Class="pa-4" Elevation="0" Outlined="true">
@@ -42,10 +46,13 @@
                                      </div>
                                  </div>
                                  <MudSpacer />
-                                 <MudTooltip Text="Edit Timesheet">
-                                    <MudIconButton Icon="@Icons.Material.Filled.EditCalendar" Size="Size.Small" Color="Color.Default" 
-                                                   OnClick="@(() => OpenTimesheet(emp.Id))" />
-                                 </MudTooltip>
+                                 @if (!ReadOnly && _currentUser?.IsActiveUnsuspended == true)
+                                 {
+                                     <MudTooltip Text="Edit Timesheet">
+                                        <MudIconButton Icon="@Icons.Material.Filled.EditCalendar" Size="Size.Small" Color="Color.Default" 
+                                                       OnClick="@(() => OpenTimesheet(emp.Id))" />
+                                     </MudTooltip>
+                                 }
                             </MudPaper>
                         }
                     </Content>
@@ -61,52 +68,91 @@
 </MudPaper>
 
 @code {
+    [Parameter] public bool ReadOnly { get; set; } = false;
+
     private List<TreeItemData<Employee>> TreeItems = [];
     private List<Employee> AllEmployees = [];
     private List<Team> AllTeams = [];
+    private Employee? _currentUser;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        AllEmployees = Hr.Employees.GetAll().Where(e => e.IsActive).ToList();
-        AllTeams = Hr.Teams.GetAll();
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        if (_currentUser == null || !PrivacyService.CanViewDirectory(_currentUser))
+        {
+            AllEmployees = [];
+            AllTeams = [];
+            TreeItems = [];
+            return;
+        }
+
+        var candidates = Hr.Employees.GetAll()
+            .Where(e => e.IsActive && !e.IsBanned && !e.IsSystem && e.Id != AccountDeletionService.SystemDeletedUserId);
+        AllEmployees = PrivacyService.FilterDiscoverableEmployees(_currentUser, candidates);
+        AllTeams = PrivacyService.FilterDiscoverableTeams(_currentUser, Hr.Teams.GetAll());
         BuildTree();
     }
 
     private void BuildTree()
     {
         TreeItems.Clear();
-        
-        // 1. Find Roots (Employees who effectively have no manager in the Team structure)
+
+        var visibleIds = AllEmployees.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+
+        // 1. Find Roots (Employees who effectively have no manager in the visible Team structure)
         // Manager Definition: If in a Team, and NOT the leader, your Manager is the Team Leader.
-        // If not in a team, or ARE the leader, you are a root (for now).
-        
-        var roots = AllEmployees.Where(e => GetderivedManagerId(e) == null).ToList();
-        
+        // If not in a team, ARE the leader, or the leader is outside your privacy scope, you become a root.
+        var roots = AllEmployees.Where(e => GetderivedManagerId(e, visibleIds) == null).ToList();
+
         foreach (var root in roots)
         {
-            TreeItems.Add(CreateNode(root));
+            if (visited.Add(root.Id))
+            {
+                TreeItems.Add(CreateNode(root, visibleIds, visited));
+            }
+        }
+
+        // Guard against leader cycles among remaining visible employees.
+        foreach (var emp in AllEmployees)
+        {
+            if (visited.Add(emp.Id))
+            {
+                TreeItems.Add(CreateNode(emp, visibleIds, visited));
+            }
         }
     }
 
-    private string? GetderivedManagerId(Employee e)
+    private string? GetderivedManagerId(Employee e, HashSet<string>? visibleIds = null)
     {
         if (string.IsNullOrEmpty(e.TeamId)) return null; // No Team -> No Manager (Root)
-        
+
         var team = AllTeams.FirstOrDefault(t => t.Id == e.TeamId);
-        if (team == null) return null; // Invalid Team
-        
-        if (team.LeaderId == e.Id) return null; // I am the Leader -> No Manager (Root)
-        
+        if (team == null) return null; // Invalid or undiscoverable Team
+
+        if (string.IsNullOrEmpty(team.LeaderId) || team.LeaderId == e.Id) return null; // I am the Leader -> No Manager (Root)
+
+        if (visibleIds != null && !visibleIds.Contains(team.LeaderId)) return null; // Undiscoverable leader -> promote to Root
+
         return team.LeaderId;
     }
 
-    private TreeItemData<Employee> CreateNode(Employee emp)
+    private TreeItemData<Employee> CreateNode(Employee emp, HashSet<string> visibleIds, HashSet<string> visited)
     {
+        var children = new List<TreeItemData<Employee>>();
+        foreach (var child in AllEmployees.Where(e => GetderivedManagerId(e, visibleIds) == emp.Id))
+        {
+            if (visited.Add(child.Id))
+            {
+                children.Add(CreateNode(child, visibleIds, visited));
+            }
+        }
+
         return new TreeItemData<Employee>
         {
             Value = emp,
             Expanded = true,
-            Children = AllEmployees.Where(e => GetderivedManagerId(e) == emp.Id).Select(CreateNode).ToList()
+            Children = children
         };
     }
 

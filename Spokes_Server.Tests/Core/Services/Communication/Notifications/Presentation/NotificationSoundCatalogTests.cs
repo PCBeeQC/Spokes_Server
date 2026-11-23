@@ -152,4 +152,19 @@ public class NotificationSoundCatalogTests
         Assert.Equal("mixkit_vintage_telephone_ringtone_1356.wav", pushSound);
         Assert.Equal("mixkit_happy_bell_alert_601.wav", emailPushSound);
     }
+
+    [Theory]
+    [InlineData(null, "mixkit_marimba_ringtone_1359.wav")]
+    [InlineData("", "mixkit_marimba_ringtone_1359.wav")]
+    [InlineData(NotificationSoundIds.SpokesDefault, "mixkit_marimba_ringtone_1359.wav")]
+    [InlineData(NotificationSoundIds.SystemDefault, "mixkit_marimba_ringtone_1359.wav")]
+    [InlineData("mixkit_vintage_telephone_ringtone_1356", "mixkit_vintage_telephone_ringtone_1356.wav")]
+    [InlineData("mixkit_vintage_telephone_ringtone_1356.wav", "mixkit_vintage_telephone_ringtone_1356.wav")]
+    [InlineData("mixkit_on_hold_ringtone_1361", "mixkit_on_hold_ringtone_1361.wav")]
+    public void ResolveCallRingbackFileName_ReturnsCustomRingtoneOrFallsBackToCallDefault(string? soundId, string expectedFileName)
+    {
+        var resolved = NotificationSoundCatalog.ResolveCallRingbackFileName(soundId);
+
+        Assert.Equal(expectedFileName, resolved);
+    }
 }

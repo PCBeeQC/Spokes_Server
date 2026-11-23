@@ -1,0 +1,883 @@
+@using Spokes_Server.Components.Dialogs.Accounting
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Components.Shared
+@inject Database Db
+@inject ILedgerService LedgerService
+@inject IJurisdictionTemplateService JurisdictionService
+@inject IFinancialReportService FinancialReportService
+@inject UserService UserService
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+
+<MudGrid Spacing="3">
+    @* Top Action Bar: Jurisdiction & Period Controls *@
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+            <MudGrid Spacing="2" Class="align-center">
+                <MudItem xs="12" md="5">
+                    <MudText Typo="Typo.h6">@BizLoc["General Ledger & Financial Statements"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["Double-entry General Ledger, GIFI/FEC-ready Trial Balance, and financial statements."]
+                    </MudText>
+                </MudItem>
+
+                <MudItem xs="12" md="7">
+                    <div class="d-flex justify-end align-center flex-wrap gap-2">
+                        <MudSelect T="string"
+                                   Value="@_selectedJurisdictionId"
+                                   ValueChanged="OnJurisdictionChanged"
+                                   Disabled="@(!_canSwitchJurisdiction)"
+                                   Label="@BizLoc["Jurisdiction Template"]"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   Dense="true"
+                                   Style="min-width: 240px;">
+                            @foreach (var tmpl in _availableTemplates)
+                            {
+                                <MudSelectItem Value="@tmpl.JurisdictionId">@tmpl.Name (@tmpl.TaxYear)</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <div style="width: 150px; flex-shrink: 0;">
+                            <MudDatePicker @bind-Date="_startDate"
+                                           @bind-Date:after="RefreshReports"
+                                           Label="@BizLoc["From"]"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense" />
+                        </div>
+
+                        <div style="width: 150px; flex-shrink: 0;">
+                            <MudDatePicker @bind-Date="_endDate"
+                                           @bind-Date:after="RefreshReports"
+                                           Label="@BizLoc["To"]"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense" />
+                        </div>
+
+                        @if (_canWriteAccounting)
+                        {
+                            <MudTooltip Text="@BizLoc["Synchronizes double-entry journal entries from Invoices, Bills, Expenses, Commissions, and Pay Runs."]">
+                                <MudButton Variant="Variant.Outlined"
+                                           Color="Color.Info"
+                                           Size="Size.Small"
+                                           StartIcon="@Icons.Material.Filled.Sync"
+                                           OnClick="SyncOperationalDocumentsToLedger">
+                                    @BizLoc["Sync Ledger"]
+                                </MudButton>
+                            </MudTooltip>
+                        }
+                    </div>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    </MudItem>
+
+    @* Sub-Tabs *@
+    <MudItem xs="12">
+        <SpokesTabs ActivePanelIndex="@ActiveSubTabIndex"
+                    ActivePanelIndexChanged="OnSubTabIndexChanged">
+            <MudTabPanel Text="@BizLoc["Trial Balance"]" Icon="@Icons.Material.Filled.Balance">
+                @if (_trialBalance != null)
+                {
+                    <div class="d-flex justify-space-between align-center mb-3">
+                        <MudText Typo="Typo.h6">@BizLoc["Trial Balance"] (@_trialBalance.StartDate.ToString("yyyy-MM-dd") → @_trialBalance.EndDate.ToString("yyyy-MM-dd"))</MudText>
+                        <MudChip T="string" Color="@(_trialBalance.IsBalanced ? Color.Success : Color.Error)">
+                            @BizLoc["Debits:"] @_trialBalance.TotalEndingDebitColumn.ToString("C2") · @BizLoc["Credits:"] @_trialBalance.TotalEndingCreditColumn.ToString("C2")
+                        </MudChip>
+                    </div>
+
+                    <MudTable Items="@_trialBalance.Rows" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>@BizLoc["Code"]</MudTh>
+                            <MudTh>@BizLoc["Account Name"]</MudTh>
+                            <MudTh>@BizLoc["Type"]</MudTh>
+                            <MudTh>@BizLoc["GIFI / Tax Code"]</MudTh>
+                            <MudTh Style="text-align: right;">@BizLoc["Period Debits"]</MudTh>
+                            <MudTh Style="text-align: right;">@BizLoc["Period Credits"]</MudTh>
+                            <MudTh Style="text-align: right;">@BizLoc["Ending Balance"]</MudTh>
+                        </HeaderContent>
+                        <RowTemplate Context="row">
+                            <MudTd><b>@row.AccountCode</b></MudTd>
+                            <MudTd>@row.AccountName</MudTd>
+                            <MudTd>@row.AccountType</MudTd>
+                            <MudTd>@(string.IsNullOrWhiteSpace(row.StandardTaxCode) ? "—" : row.StandardTaxCode)</MudTd>
+                            <MudTd Style="text-align: right;">@row.PeriodDebits.ToString("C2")</MudTd>
+                            <MudTd Style="text-align: right;">@row.PeriodCredits.ToString("C2")</MudTd>
+                            <MudTd Style="text-align: right; font-weight: 700;">@row.EndingBalance.ToString("C2")</MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText Align="Align.Center" Class="py-4 mud-text-secondary">
+                                @BizLoc["No posted journal activity up to this date. Click 'Sync Ledger' to post existing operational documents."]
+                            </MudText>
+                        </NoRecordsContent>
+                    </MudTable>
+                }
+            </MudTabPanel>
+
+            <MudTabPanel Text="@BizLoc["Income Statement (P&L)"]" Icon="@Icons.Material.Filled.Assessment">
+                @if (_plReport != null)
+                {
+                <div class="d-flex justify-space-between align-center mb-3">
+                    <MudText Typo="Typo.h6">
+                        @BizLoc["Income Statement (Profit & Loss)"] (@_plReport.StartDate.ToString("yyyy-MM-dd") → @_plReport.EndDate.ToString("yyyy-MM-dd"))
+                    </MudText>
+                    <MudChip T="string" Color="@(_plReport.NetIncome >= 0 ? Color.Success : Color.Error)">
+                        @BizLoc["Net Income:"] @_plReport.NetIncome.ToString("C2")
+                    </MudChip>
+                </div>
+
+                <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Hover="true" Bordered="true" Striped="true">
+                    <thead>
+                        <tr>
+                            <th>@BizLoc["Code"]</th>
+                            <th>@BizLoc["Account"]</th>
+                            <th>@BizLoc["GIFI / Tax Code"]</th>
+                            <th style="text-align: right;">@BizLoc["Amount"]</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="background-color: var(--mud-palette-background-grey); font-weight: 700;">
+                            <td colspan="4">@BizLoc["Revenue"]</td>
+                        </tr>
+                        @foreach (var line in _plReport.RevenueLines)
+                        {
+                            <tr>
+                                <td>@line.AccountCode</td>
+                                <td>@line.AccountName</td>
+                                <td>@line.StandardTaxCode</td>
+                                <td style="text-align: right;">@line.Amount.ToString("C2")</td>
+                            </tr>
+                        }
+                        <tr style="font-weight: 700;">
+                            <td colspan="3">@BizLoc["Total Revenue"]</td>
+                            <td style="text-align: right;">@_plReport.TotalRevenue.ToString("C2")</td>
+                        </tr>
+
+                        @if (_plReport.DirectCostLines.Count > 0)
+                        {
+                            <tr style="background-color: var(--mud-palette-background-grey); font-weight: 700;">
+                                <td colspan="4">@BizLoc["Cost of Services / Direct Costs"]</td>
+                            </tr>
+                            @foreach (var line in _plReport.DirectCostLines)
+                            {
+                                <tr>
+                                    <td>@line.AccountCode</td>
+                                    <td>@line.AccountName</td>
+                                    <td>@line.StandardTaxCode</td>
+                                    <td style="text-align: right;">@line.Amount.ToString("C2")</td>
+                                </tr>
+                            }
+                        }
+
+                        <tr style="font-weight: 700;">
+                            <td colspan="3">@BizLoc["Gross Profit"]</td>
+                            <td style="text-align: right;">@_plReport.GrossProfit.ToString("C2")</td>
+                        </tr>
+
+                        <tr style="background-color: var(--mud-palette-background-grey); font-weight: 700;">
+                            <td colspan="4">@BizLoc["Operating Expenses"]</td>
+                        </tr>
+                        @if (_canManageSalaries)
+                        {
+                            @foreach (var line in _plReport.PayrollExpenseLines)
+                            {
+                                <tr>
+                                    <td>@line.AccountCode</td>
+                                    <td>@line.AccountName</td>
+                                    <td>@line.StandardTaxCode</td>
+                                    <td style="text-align: right;">@line.Amount.ToString("C2")</td>
+                                </tr>
+                            }
+                        }
+                        else if (_plReport.PayrollExpenseLines.Count > 0)
+                        {
+                            <tr>
+                                <td>5000</td>
+                                <td>@BizLoc["Payroll & Benefits (Summary)"]</td>
+                                <td>8710</td>
+                                <td style="text-align: right;">@_plReport.TotalPayrollExpenses.ToString("C2")</td>
+                            </tr>
+                        }
+                        @foreach (var line in _plReport.OverheadExpenseLines)
+                        {
+                            <tr>
+                                <td>@line.AccountCode</td>
+                                <td>@line.AccountName</td>
+                                <td>@line.StandardTaxCode</td>
+                                <td style="text-align: right;">@line.Amount.ToString("C2")</td>
+                            </tr>
+                        }
+                        <tr style="font-weight: 700;">
+                            <td colspan="3">@BizLoc["Total Operating Expenses"]</td>
+                            <td style="text-align: right;">@_plReport.TotalOperatingExpenses.ToString("C2")</td>
+                        </tr>
+                        <tr style="background-color: var(--mud-palette-background-grey); font-weight: 800;">
+                            <td colspan="3">@BizLoc["Net Income"]</td>
+                            <td style="text-align: right;">@_plReport.NetIncome.ToString("C2")</td>
+                        </tr>
+                    </tbody>
+                </MudSimpleTable>
+                }
+            </MudTabPanel>
+
+            <MudTabPanel Text="@BizLoc["Balance Sheet"]" Icon="@Icons.Material.Filled.AccountBalance">
+                @if (_balanceSheet != null)
+                {
+                    <div class="d-flex justify-space-between align-center mb-3">
+                    <MudText Typo="Typo.h6">@BizLoc["Balance Sheet"] (@BizLoc["As of"] @_balanceSheet.AsOfDate.ToString("yyyy-MM-dd"))</MudText>
+                    <MudChip T="string" Color="@(_balanceSheet.IsBalanced ? Color.Success : Color.Warning)">
+                        @(_balanceSheet.IsBalanced ? BizLoc["Balanced (Assets = Liabilities + Equity)"] : BizLoc["Out of Balance"])
+                    </MudChip>
+                </div>
+
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" md="6">
+                        <MudText Typo="Typo.subtitle1" Class="mb-2"><b>@BizLoc["Assets"]</b></MudText>
+                        <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Bordered="true" Striped="true">
+                            <tbody>
+                                @foreach (var line in _balanceSheet.AssetLines)
+                                {
+                                    <tr>
+                                        <td><b>@line.AccountCode</b> — @line.AccountName</td>
+                                        <td style="text-align: right;">@line.Amount.ToString("C2")</td>
+                                    </tr>
+                                }
+                                <tr style="font-weight: 800;">
+                                    <td>@BizLoc["Total Assets"]</td>
+                                    <td style="text-align: right;">@_balanceSheet.TotalAssets.ToString("C2")</td>
+                                </tr>
+                            </tbody>
+                        </MudSimpleTable>
+                    </MudItem>
+
+                    <MudItem xs="12" md="6">
+                        <MudText Typo="Typo.subtitle1" Class="mb-2"><b>@BizLoc["Liabilities & Equity"]</b></MudText>
+                        <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Bordered="true" Striped="true">
+                            <tbody>
+                                @foreach (var line in _balanceSheet.LiabilityLines)
+                                {
+                                    <tr>
+                                        <td><b>@line.AccountCode</b> — @line.AccountName</td>
+                                        <td style="text-align: right;">@line.Amount.ToString("C2")</td>
+                                    </tr>
+                                }
+                                <tr style="font-weight: 700;">
+                                    <td>@BizLoc["Total Liabilities"]</td>
+                                    <td style="text-align: right;">@_balanceSheet.TotalLiabilities.ToString("C2")</td>
+                                </tr>
+                                @foreach (var line in _balanceSheet.EquityLines)
+                                {
+                                    <tr>
+                                        <td><b>@line.AccountCode</b> — @line.AccountName</td>
+                                        <td style="text-align: right;">@line.Amount.ToString("C2")</td>
+                                    </tr>
+                                }
+                                <tr>
+                                    <td><b>3200-CUR</b> — @BizLoc["Current Period Net Income"]</td>
+                                    <td style="text-align: right;">@_balanceSheet.CurrentYearNetIncome.ToString("C2")</td>
+                                </tr>
+                                <tr style="font-weight: 800;">
+                                    <td>@BizLoc["Total Liabilities & Equity"]</td>
+                                    <td style="text-align: right;">@_balanceSheet.TotalLiabilitiesAndEquity.ToString("C2")</td>
+                                </tr>
+                            </tbody>
+                        </MudSimpleTable>
+                    </MudItem>
+                </MudGrid>
+                }
+            </MudTabPanel>
+
+            <MudTabPanel Text="@BizLoc["Journal Entries"]" Icon="@Icons.Material.Filled.MenuBook">
+            @if (_canWriteAccounting)
+            {
+                <MudPaper Class="pa-4 mb-3" Elevation="0" Outlined="true">
+                    <MudText Typo="Typo.subtitle1" Class="mb-2"><b>@BizLoc["Post Manual / Adjusting Journal Entry"]</b></MudText>
+                    <MudGrid Spacing="2" Class="align-center">
+                        <MudItem xs="12" sm="2">
+                            <MudDatePicker @bind-Date="_manualDate" Label="@BizLoc["Date"]" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="12" sm="3">
+                            <MudTextField @bind-Value="_manualDescription" Label="@BizLoc["Description / Memo"]" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="12" sm="2">
+                            <GlAccountSelect @bind-Value="_manualDebitAccount" ShowAccountCode="true" Label="@BizLoc["Debit GL"]" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="false" />
+                        </MudItem>
+                        <MudItem xs="12" sm="2">
+                            <GlAccountSelect @bind-Value="_manualCreditAccount" ShowAccountCode="true" Label="@BizLoc["Credit GL"]" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="false" />
+                        </MudItem>
+                        <MudItem xs="12" sm="2">
+                            <MudNumericField T="decimal" @bind-Value="_manualAmount" Label="@BizLoc["Amount"]" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" Format="N2" />
+                        </MudItem>
+                        <MudItem xs="12" sm="1">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" OnClick="PostSimpleManualEntry">
+                                @BizLoc["Post"]
+                            </MudButton>
+                        </MudItem>
+                    </MudGrid>
+                </MudPaper>
+            }
+
+            <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                <MudText Typo="Typo.h6" Class="mb-2">@BizLoc["General Ledger Journal Entries"] (@_journalEntries.Count)</MudText>
+                <MudTable Items="@_journalEntries" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0" RowsPerPage="50">
+                    <HeaderContent>
+                        <MudTh>@BizLoc["Entry #"]</MudTh>
+                        <MudTh>@BizLoc["Date"]</MudTh>
+                        <MudTh>@BizLoc["Source"]</MudTh>
+                        <MudTh>@BizLoc["Reference"]</MudTh>
+                        <MudTh>@BizLoc["Description"]</MudTh>
+                        <MudTh Style="text-align: right;">@BizLoc["Debits"]</MudTh>
+                        <MudTh Style="text-align: right;">@BizLoc["Credits"]</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="entry">
+                        <MudTd><b>@entry.EntryNumber</b></MudTd>
+                        <MudTd>@entry.Date.ToString("yyyy-MM-dd")</MudTd>
+                        <MudTd><MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@entry.SourceType</MudChip></MudTd>
+                        <MudTd>@(string.IsNullOrWhiteSpace(entry.Reference) ? "—" : entry.Reference)</MudTd>
+                        <MudTd>@entry.Description</MudTd>
+                        <MudTd Style="text-align: right;">@entry.TotalDebits.ToString("C2")</MudTd>
+                        <MudTd Style="text-align: right;">@entry.TotalCredits.ToString("C2")</MudTd>
+                    </RowTemplate>
+                    <PagerContent>
+                        <MudTablePager PageSizeOptions="new[] { 25, 50, 100, 250 }" />
+                    </PagerContent>
+                </MudTable>
+            </MudPaper>
+            </MudTabPanel>
+
+            <MudTabPanel Text="@BizLoc["Chart of Accounts"]" Icon="@Icons.Material.Filled.FormatListNumbered">
+            @if (_canWriteAccounting)
+            {
+                <MudPaper Class="pa-4 mb-3" Elevation="0" Outlined="true">
+                    <MudText Typo="Typo.subtitle1" Class="mb-2"><b>@BizLoc["Add Custom GL Account"]</b></MudText>
+                    <MudGrid Spacing="2" Class="align-center">
+                        <MudItem xs="12" sm="2">
+                            <MudTextField @bind-Value="_newGlCode" Label="@BizLoc["Code (e.g. 5350)"]" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="12" sm="3">
+                            <MudTextField @bind-Value="_newGlName" Label="@BizLoc["Account Name"]" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="6" sm="2">
+                            <MudSelect T="string"
+                                       Value="_newGlType"
+                                       ValueChanged="OnNewGlTypeChanged"
+                                       Label="@BizLoc["Type"]"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       Dense="true">
+                                @foreach (var t in GlAccountType.All)
+                                {
+                                    <MudSelectItem Value="@t">@t</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="6" sm="2">
+                            <MudSelect T="string"
+                                       @bind-Value="_newGlSubType"
+                                       Label="@BizLoc["Sub-Type"]"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       Dense="true">
+                                @foreach (var st in GlAccountSubType.GetForAccountType(_newGlType))
+                                {
+                                    <MudSelectItem Value="@st">@st</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="6" sm="1">
+                            <MudTextField @bind-Value="_newGlTaxCode" Label="@BizLoc["Tax Code"]" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="6" sm="2">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" StartIcon="@Icons.Material.Filled.Add" OnClick="AddCustomGlAccount">
+                                @BizLoc["Add Account"]
+                            </MudButton>
+                        </MudItem>
+                    </MudGrid>
+                </MudPaper>
+            }
+
+            <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                <MudTable Items="@_glAccounts" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh>@BizLoc["Code"]</MudTh>
+                        <MudTh>@BizLoc["Account Name"]</MudTh>
+                        <MudTh>@BizLoc["Type"]</MudTh>
+                        <MudTh>@BizLoc["Sub-Type"]</MudTh>
+                        <MudTh>@BizLoc["System Role"]</MudTh>
+                        <MudTh>@BizLoc["GIFI / Tax Code"]</MudTh>
+                        <MudTh Style="width: 90px;"></MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="acct">
+                        <MudTd><b>@acct.Code</b></MudTd>
+                        <MudTd>
+                            @if (_canWriteAccounting && _editingGlAccountId == acct.Id)
+                            {
+                                <MudTextField T="string" @bind-Value="acct.Name" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            }
+                            else
+                            {
+                                @acct.GetLocalizedName()
+                            }
+                        </MudTd>
+                        <MudTd>@acct.Type</MudTd>
+                        <MudTd>
+                            @if (_canWriteAccounting && _editingGlAccountId == acct.Id)
+                            {
+                                <MudSelect T="string" @bind-Value="acct.SubType" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true">
+                                    @foreach (var st in GlAccountSubType.GetForAccountType(acct.Type))
+                                    {
+                                        <MudSelectItem Value="@st">@st</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            }
+                            else
+                            {
+                                @acct.SubType
+                            }
+                        </MudTd>
+                        <MudTd>
+                            @if (_canWriteAccounting && _editingGlAccountId == acct.Id)
+                            {
+                                <MudSelect T="string" @bind-Value="acct.SystemRole" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true">
+                                    @foreach (var role in GlSystemRole.All)
+                                    {
+                                        <MudSelectItem Value="@role">@(string.IsNullOrEmpty(role) ? "—" : role)</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            }
+                            else
+                            {
+                                @(acct.SystemRole == GlSystemRole.None ? "—" : acct.SystemRole)
+                            }
+                        </MudTd>
+                        <MudTd>
+                            @if (_canWriteAccounting && _editingGlAccountId == acct.Id)
+                            {
+                                <MudTextField T="string" @bind-Value="acct.StandardTaxCode" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 110px;" />
+                            }
+                            else
+                            {
+                                @(string.IsNullOrWhiteSpace(acct.StandardTaxCode) ? "—" : acct.StandardTaxCode)
+                            }
+                        </MudTd>
+                        <MudTd>
+                            @if (_canWriteAccounting)
+                            {
+                                @if (_editingGlAccountId == acct.Id)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" OnClick="@(() => SaveGlAccountEdit(acct))" />
+                                }
+                                else
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="@(() => _editingGlAccountId = acct.Id)" />
+                                }
+                            }
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudPaper>
+            </MudTabPanel>
+
+            @* SUB-TAB 6: SHAREHOLDER & INVESTOR REPORTS *@
+            <MudTabPanel Text="@BizLoc["Shareholder & Investor Reports"]" Icon="@Icons.Material.Filled.Insights">
+                <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                    <div class="d-flex flex-wrap justify-space-between align-center gap-2 mb-3">
+                        <div>
+                            <MudText Typo="Typo.h6">@BizLoc["Saved Financial Statement Packages"]</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @BizLoc["Compilation / Notice to Reader packages containing Executive KPIs, Income Statement, Balance Sheet, Cash Flow Statement, and Financial Ratios for shareholders & investors."]
+                            </MudText>
+                        </div>
+                        @if (_canWriteAccounting)
+                        {
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.AddChart"
+                                       OnClick="OpenNewFinancialReportDialogAsync">
+                                @BizLoc["New Report"]
+                            </MudButton>
+                        }
+                    </div>
+
+                    <MudTable Items="@_savedFinancialReports" Dense="true" Hover="true" Outlined="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>@BizLoc["Report #"]</MudTh>
+                            <MudTh>@BizLoc["Title"]</MudTh>
+                            <MudTh>@BizLoc["Period"]</MudTh>
+                            <MudTh>@BizLoc["Type"]</MudTh>
+                            <MudTh Style="text-align: right;">@BizLoc["Revenue"]</MudTh>
+                            <MudTh Style="text-align: right;">@BizLoc["Net Income"]</MudTh>
+                            <MudTh>@BizLoc["Status"]</MudTh>
+                            <MudTh></MudTh>
+                        </HeaderContent>
+                        <RowTemplate Context="rep">
+                            <MudTd><b>@rep.ReportNumber</b> <span class="mud-text-secondary">@($"v{rep.Version}")</span></MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.body2"><b>@rep.Title</b></MudText>
+                                @if (!string.IsNullOrWhiteSpace(rep.Subtitle))
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@rep.Subtitle</MudText>
+                                }
+                            </MudTd>
+                            <MudTd>@($"{rep.PeriodStart:yyyy-MM-dd} → {rep.PeriodEnd:yyyy-MM-dd}")</MudTd>
+                            <MudTd>@rep.PeriodType</MudTd>
+                            <MudTd Style="text-align: right;">@rep.Snapshot.IncomeStatement.TotalRevenue.ToString("C2")</MudTd>
+                            <MudTd Style="text-align: right;">@rep.Snapshot.IncomeStatement.NetIncome.ToString("C2")</MudTd>
+                            <MudTd>
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Color="@(rep.Status == FinancialReportStatus.Final ? Color.Success : Color.Warning)"
+                                         Variant="Variant.Outlined">
+                                    @rep.Status
+                                </MudChip>
+                            </MudTd>
+                            <MudTd Style="text-align: right;">
+                                <MudButton Variant="Variant.Outlined"
+                                           Size="Size.Small"
+                                           Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.Visibility"
+                                           OnClick="@(() => Nav.NavigateTo($"/business/accounting/financial-reports/{rep.Id}"))">
+                                    @BizLoc["View / PDF"]
+                                </MudButton>
+                                @if (_canWriteAccounting)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                                   Size="Size.Small"
+                                                   Color="Color.Error"
+                                                   OnClick="@(() => DeleteFinancialReportAsync(rep))" />
+                                }
+                            </MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4 text-center">
+                                @BizLoc["No saved shareholder reports yet. Click 'New Report' to create one."]
+                            </MudText>
+                        </NoRecordsContent>
+                    </MudTable>
+                </MudPaper>
+            </MudTabPanel>
+
+            @* SUB-TAB 7: CUTOVER & MIGRATION *@
+            <MudTabPanel Text="@BizLoc["Cutover & Migration"]" Icon="@Icons.Material.Filled.SwapHoriz">
+                <AccountingMigrationSubTab OnMigrationCommitted="RefreshReports" />
+            </MudTabPanel>
+        </SpokesTabs>
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter] public string? InitialSubTab { get; set; }
+
+    private string? _lastAppliedInitialSubTab;
+    private string _subTab = "trial-balance";
+    private string _selectedJurisdictionId = "CA-QC";
+    private List<JurisdictionTemplate> _availableTemplates = [];
+
+    private DateTime? _startDate = new DateTime(DateTime.Today.Year, 1, 1);
+    private DateTime? _endDate = DateTime.Today;
+
+    private Employee? _currentUser;
+    private bool _canManageSalaries;
+    private bool _canWriteAccounting;
+    private bool _canSwitchJurisdiction;
+
+    private TrialBalanceReport? _trialBalance;
+    private IncomeStatementReport? _plReport;
+    private BalanceSheetReport? _balanceSheet;
+    private List<JournalEntry> _journalEntries = [];
+    private List<GlAccount> _glAccounts = [];
+    private List<FinancialReport> _savedFinancialReports = [];
+
+    // Manual journal entry fields
+    private DateTime? _manualDate = DateTime.Today;
+    private string _manualDescription = string.Empty;
+    private string? _manualDebitAccount = "5300";
+    private string? _manualCreditAccount = "1020";
+    private decimal _manualAmount;
+
+    // Add GL Account fields
+    private string _newGlCode = string.Empty;
+    private string _newGlName = string.Empty;
+    private string _newGlType = GlAccountType.Expense;
+    private string _newGlSubType = GlAccountSubType.Overhead;
+    private string _newGlTaxCode = string.Empty;
+    private string? _editingGlAccountId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshCurrentUserAsync();
+        JurisdictionService.EnsureChartOfAccountsSeeded();
+        _availableTemplates = JurisdictionService.GetAvailableTemplates().ToList();
+        _selectedJurisdictionId = JurisdictionService.GetActiveTemplate().JurisdictionId;
+        RefreshReports();
+    }
+
+    private async Task RefreshCurrentUserAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        _canManageSalaries = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: true);
+        _canWriteAccounting = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false);
+        _canSwitchJurisdiction = _canWriteAccounting
+            && _currentUser?.HasEffectivePermission(AppPermissions.Business.ManageSettings, allowSuspended: false) == true
+            && _currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false);
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrWhiteSpace(InitialSubTab)
+            && !string.Equals(_lastAppliedInitialSubTab, InitialSubTab, StringComparison.OrdinalIgnoreCase))
+        {
+            _lastAppliedInitialSubTab = InitialSubTab;
+            _subTab = InitialSubTab.ToLowerInvariant() switch
+            {
+                "trial-balance" or "tb" => "trial-balance",
+                "pl" or "income" => "pl",
+                "balance-sheet" or "bs" => "balance-sheet",
+                "journal" or "je" => "journal",
+                "coa" or "accounts" => "coa",
+                "shareholder-reports" or "reports" or "financial-reports" => "shareholder-reports",
+                "migration" or "cutover" or "sage" => "migration",
+                _ => _subTab
+            };
+        }
+    }
+
+    private int ActiveSubTabIndex => _subTab switch
+    {
+        "trial-balance" => 0,
+        "pl" => 1,
+        "balance-sheet" => 2,
+        "journal" => 3,
+        "coa" => 4,
+        "shareholder-reports" => 5,
+        "migration" => 6,
+        _ => 0
+    };
+
+    private void OnSubTabIndexChanged(int index)
+    {
+        var tab = index switch
+        {
+            0 => "trial-balance",
+            1 => "pl",
+            2 => "balance-sheet",
+            3 => "journal",
+            4 => "coa",
+            5 => "shareholder-reports",
+            6 => "migration",
+            _ => "trial-balance"
+        };
+        OnSubTabChanged(tab);
+    }
+
+    private void OnSubTabChanged(string tab)
+    {
+        if (!string.IsNullOrWhiteSpace(tab))
+        {
+            _subTab = tab;
+        }
+    }
+
+    private async Task OnJurisdictionChanged(string jurisdictionId)
+    {
+        if (string.IsNullOrWhiteSpace(jurisdictionId)) return;
+        await RefreshCurrentUserAsync();
+        if (!_canSwitchJurisdiction)
+        {
+            Snackbar.Add(BizLoc["Active Business.ManageSettings, Finance.AccessAccounting, and Hr.ManageSalaries permissions are required."].Value, Severity.Error);
+            return;
+        }
+        _selectedJurisdictionId = jurisdictionId;
+        JurisdictionService.ActivateTemplate(jurisdictionId, syncChartOfAccounts: true, actor: _currentUser);
+        RefreshReports();
+        Snackbar.Add(string.Format(BizLoc["Applied jurisdiction template: {0}"].Value, JurisdictionService.GetActiveTemplate().Name), Severity.Success);
+    }
+
+    private async Task SyncOperationalDocumentsToLedger()
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canWriteAccounting)
+        {
+            Snackbar.Add(BizLoc["Active Finance.AccessAccounting permission is required."].Value, Severity.Error);
+            return;
+        }
+        var postedCount = LedgerService.RebuildOperationalLedger();
+        RefreshReports();
+        Snackbar.Add(string.Format(BizLoc["Ledger synchronized ({0} journal entries verified)."].Value, postedCount), Severity.Success);
+    }
+
+    private void RefreshReports()
+    {
+        var start = _startDate ?? new DateTime(DateTime.Today.Year, 1, 1);
+        var end = _endDate ?? DateTime.Today;
+
+        _trialBalance = LedgerService.CalculateTrialBalance(start, end);
+        _plReport = LedgerService.CalculateIncomeStatement(start, end);
+        _balanceSheet = LedgerService.CalculateBalanceSheet(end);
+        _journalEntries = Db.JournalEntries?.GetByDateRange(start, end).ToList() ?? [];
+        _glAccounts = Db.GlAccounts?.GetAll().ToList() ?? [];
+        _savedFinancialReports = _currentUser != null ? FinancialReportService.GetReports(_currentUser) : [];
+    }
+
+    private async Task OpenNewFinancialReportDialogAsync()
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canWriteAccounting)
+        {
+            Snackbar.Add(BizLoc["Active Finance.AccessAccounting permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        var parameters = new DialogParameters<FinancialReportEditorDialog>
+        {
+            { x => x.DefaultStartDate, _startDate },
+            { x => x.DefaultEndDate, _endDate }
+        };
+
+        var dialog = await DialogService.ShowAsync<FinancialReportEditorDialog>(
+            BizLoc["Generate Shareholder / Investor Report"].Value,
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: FinancialReport created })
+        {
+            RefreshReports();
+            Nav.NavigateTo($"/business/accounting/financial-reports/{created.Id}");
+        }
+    }
+
+    private async Task DeleteFinancialReportAsync(FinancialReport report)
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canWriteAccounting)
+        {
+            Snackbar.Add(BizLoc["Active Finance.AccessAccounting permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            Loc["Delete"],
+            string.Format(BizLoc["Delete financial statement {0}?"].Value, report.ReportNumber),
+            yesText: Loc["Delete"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirmed == true)
+        {
+            await RefreshCurrentUserAsync();
+            if (!_canWriteAccounting || _currentUser == null)
+            {
+                Snackbar.Add(BizLoc["Active Finance.AccessAccounting permission is required."].Value, Severity.Error);
+                return;
+            }
+            FinancialReportService.DeleteReport(report.Id, _currentUser);
+            RefreshReports();
+            Snackbar.Add(BizLoc["Financial report deleted."].Value, Severity.Info);
+        }
+    }
+
+    private async Task PostSimpleManualEntry()
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canWriteAccounting)
+        {
+            Snackbar.Add(BizLoc["Active Finance.AccessAccounting permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        if (_manualAmount <= 0m || string.IsNullOrWhiteSpace(_manualDebitAccount) || string.IsNullOrWhiteSpace(_manualCreditAccount))
+        {
+            Snackbar.Add(BizLoc["Please enter a valid amount and select both Debit and Credit GL accounts."].Value, Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var entry = new JournalEntry
+            {
+                Date = _manualDate ?? DateTime.Today,
+                SourceType = JournalSourceType.Manual,
+                Description = string.IsNullOrWhiteSpace(_manualDescription) ? "Manual Journal Adjustment" : _manualDescription.Trim(),
+                Lines =
+                [
+                    new JournalLine { GlAccountCode = _manualDebitAccount, Debit = _manualAmount, Memo = _manualDescription },
+                    new JournalLine { GlAccountCode = _manualCreditAccount, Credit = _manualAmount, Memo = _manualDescription }
+                ]
+            };
+            LedgerService.SaveManualJournalEntry(entry);
+            _manualAmount = 0m;
+            _manualDescription = string.Empty;
+            RefreshReports();
+            Snackbar.Add(BizLoc["Manual journal entry posted."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private void OnNewGlTypeChanged(string newType)
+    {
+        _newGlType = newType;
+        _newGlSubType = GlAccountSubType.GetDefaultForAccountType(newType);
+    }
+
+    private async Task SaveGlAccountEdit(GlAccount acct)
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canWriteAccounting)
+        {
+            _editingGlAccountId = null;
+            Snackbar.Add(BizLoc["Active Finance.AccessAccounting permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(acct.Name))
+        {
+            Snackbar.Add(BizLoc["Account name is required."].Value, Severity.Warning);
+            return;
+        }
+        Db.GlAccounts?.Save(acct);
+        _editingGlAccountId = null;
+        RefreshReports();
+        Snackbar.Add(BizLoc["GL Account updated."].Value, Severity.Success);
+    }
+
+    private async Task AddCustomGlAccount()
+    {
+        await RefreshCurrentUserAsync();
+        if (!_canWriteAccounting)
+        {
+            Snackbar.Add(BizLoc["Active Finance.AccessAccounting permission is required."].Value, Severity.Error);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_newGlCode) || string.IsNullOrWhiteSpace(_newGlName))
+        {
+            Snackbar.Add(BizLoc["Account code and name are required."].Value, Severity.Warning);
+            return;
+        }
+
+        var acct = new GlAccount
+        {
+            Code = _newGlCode.Trim(),
+            Name = _newGlName.Trim(),
+            Type = _newGlType,
+            SubType = _newGlSubType,
+            StandardTaxCode = _newGlTaxCode.Trim(),
+            IsActive = true
+        };
+        Db.GlAccounts?.Save(acct);
+        _newGlCode = string.Empty;
+        _newGlName = string.Empty;
+        _newGlTaxCode = string.Empty;
+        _newGlSubType = GlAccountSubType.GetDefaultForAccountType(_newGlType);
+        RefreshReports();
+        Snackbar.Add(BizLoc["GL Account added."].Value, Severity.Success);
+    }
+}

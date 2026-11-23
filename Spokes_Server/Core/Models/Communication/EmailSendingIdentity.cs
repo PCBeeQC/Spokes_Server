@@ -98,9 +98,6 @@ public class EmailSendingIdentity : IDataEntity
             : $"{DisplayName} <{EmailAddress}>";
 
     [JsonIgnore]
-    public string DisplayLabel => FormattedFrom;
-
-    [JsonIgnore]
     public string EffectiveDomain
     {
         get
@@ -128,20 +125,6 @@ public class EmailSendingIdentity : IDataEntity
     public string SmtpUsername { get; set; } = string.Empty;
     public string EncryptedSmtpPassword { get; set; } = string.Empty;
 
-    [JsonIgnore]
-    public string CustomSmtpUsername
-    {
-        get => SmtpUsername;
-        set => SmtpUsername = value;
-    }
-
-    [JsonIgnore]
-    public string EncryptedCustomSmtpPassword
-    {
-        get => EncryptedSmtpPassword;
-        set => EncryptedSmtpPassword = value;
-    }
-
     /// <summary>
     /// Individual Employee IDs granted permission to send from this identity.
     /// </summary>
@@ -154,12 +137,6 @@ public class EmailSendingIdentity : IDataEntity
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-    public bool CanUserAccess(string employeeId, IEnumerable<string>? userTeamIds = null)
-    {
-        if (string.IsNullOrWhiteSpace(employeeId)) return false;
-        if (!IsServerManaged && string.Equals(OwnerEmployeeId, employeeId, StringComparison.OrdinalIgnoreCase)) return true;
-        if (AllowedUserIds != null && AllowedUserIds.Any(u => string.Equals(u, employeeId, StringComparison.OrdinalIgnoreCase))) return true;
-        if (userTeamIds != null && AllowedTeamIds != null && AllowedTeamIds.Intersect(userTeamIds, StringComparer.OrdinalIgnoreCase).Any()) return true;
-        return false;
-    }
+    public bool CanUserAccess(string employeeId, IEnumerable<string>? userTeamIds = null) =>
+        EmailAccessHelper.CanUserAccess(IsServerManaged, OwnerEmployeeId, AllowedUserIds, AllowedTeamIds, employeeId, userTeamIds);
 }

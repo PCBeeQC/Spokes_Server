@@ -37,14 +37,28 @@ window.pushNotifications = {
                 return localCache;
             }
 
+            const originKeySuffix = (() => {
+                if (window.spokesAuth && typeof window.spokesAuth.getCanonicalOrigin === 'function') {
+                    return window.spokesAuth.getCanonicalOrigin() || '__local__';
+                }
+                try {
+                    const u = new URL(window.location.href);
+                    if (u.protocol === 'http:' || u.protocol === 'https:') {
+                        return u.origin.toLowerCase();
+                    }
+                } catch (e) {}
+                return '__local__';
+            })();
+            const deviceIdPrefKey = 'spokes_device_id::' + originKeySuffix;
+
             // 1. Try platform-native stable ID (survives reinstalls)
             try {
                 const crypto = window.Capacitor.Plugins.NotificationCrypto;
                 if (crypto && crypto.getStableDeviceId) {
                     const res = await crypto.getStableDeviceId();
                     if (res && res.deviceId) {
-                        // Cache in Preferences for quick access by other code paths
-                        try { await window.Capacitor.Plugins.Preferences.set({ key: 'spokes_device_id', value: res.deviceId }); } catch (e) {}
+                        // Cache in origin-scoped Preferences for quick access by other code paths
+                        try { await window.Capacitor.Plugins.Preferences.set({ key: deviceIdPrefKey, value: res.deviceId }); } catch (e) {}
                         localStorage.setItem('spokes_native_device_id', res.deviceId);
                         window._spokesCachedDeviceId = res.deviceId;
                         return res.deviceId;
@@ -54,9 +68,9 @@ window.pushNotifications = {
                 console.warn('[DeviceId] Native stable ID failed, falling back to Preferences', e);
             }
 
-            // 2. Fall back to Preferences (modern namespaced ID)
+            // 2. Fall back to Preferences (origin-scoped ID)
             try {
-                const res = await window.Capacitor.Plugins.Preferences.get({ key: 'spokes_device_id' });
+                const res = await window.Capacitor.Plugins.Preferences.get({ key: deviceIdPrefKey });
                 if (res && res.value && !res.value.startsWith('dev_')) {
                     localStorage.setItem('spokes_native_device_id', res.value);
                     window._spokesCachedDeviceId = res.value;
@@ -67,11 +81,8 @@ window.pushNotifications = {
             }
 
             // 3. Last resort: generate random UUID (should rarely happen)
-            var deviceId = (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-                return v.toString(16);
-            }));
-            try { await window.Capacitor.Plugins.Preferences.set({ key: 'spokes_device_id', value: deviceId }); } catch (e) {}
+            var deviceId = this._generateUuid();
+            try { await window.Capacitor.Plugins.Preferences.set({ key: deviceIdPrefKey, value: deviceId }); } catch (e) {}
             localStorage.setItem('spokes_native_device_id', deviceId);
             window._spokesCachedDeviceId = deviceId;
             return deviceId;
@@ -81,13 +92,28 @@ window.pushNotifications = {
         var deviceId = localStorage.getItem('spokes_device_id');
         if (!deviceId || deviceId.startsWith('dev_')) {
             // Generate standard UUID
-            deviceId = (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-                return v.toString(16);
-            }));
+            deviceId = this._generateUuid();
             localStorage.setItem('spokes_device_id', deviceId);
         }
         return deviceId;
+    },
+
+    _generateUuid: function () {
+        return crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    },
+
+    _buildNativeRelaySubscription: function (endpoint, publicKey) {
+        return {
+            success: true,
+            endpoint: endpoint,
+            p256dh: '',
+            auth: '',
+            publicKey: publicKey,
+            subscriptionType: 'NativeRelay'
+        };
     },
 
     // Authoritative hardware keystore public key query for native mobile (Capacitor).
@@ -122,117 +148,21 @@ window.pushNotifications = {
         };
     },
 
-    // Safely copy text to clipboard with fallback for iOS WebViews
-    copyText: function(text) {
-        if (navigator.clipboard && window.isSecureContext && !navigator.userAgent.match(/ipad|iphone|macintosh/i)) {
-            return navigator.clipboard.writeText(text);
-        } else {
-            return new Promise((resolve, reject) => {
-                try {
-                    var textArea = document.createElement('textarea');
-                    textArea.value = text;
-                    textArea.style.position = 'fixed';
-                    textArea.style.left = '-999999px';
-                    textArea.style.top = '-999999px';
-                    document.body.appendChild(textArea);
-                    textArea.focus();
-                    textArea.select();
-                    var res = document.execCommand('copy');
-                    textArea.remove();
-                    if (res) resolve();
-                    else reject(new Error('copy failed'));
-                } catch (e) {
-                    reject(e);
-                }
-            });
-        }
-    },
-
-    // Update app icon badge natively via Capacitor Badge plugin
+    // Report this server's unread count to the pure-native badge coordinator, which sums
+    // across all saved servers and updates the OS app icon badge natively.
     updateBadge: async function (count) {
         if (this.isNativePlatform()) {
             const currentOrigin = window.location.origin.replace(/\/$/, '');
-            
-            if (typeof window.updateServerSwitcherBadge === 'function') {
+            const safeCount = Math.max(0, Number(count) || 0);
+            if (window.Capacitor?.Plugins?.NotificationCrypto?.setServerBadgeCount) {
                 try {
-                    window.updateServerSwitcherBadge(currentOrigin, count);
-                } catch(e) {}
-            }
-
-            if (window.Capacitor.Plugins.NotificationCrypto) {
-                try {
-                    await window.Capacitor.Plugins.NotificationCrypto.setServerBadgeCount({ originUrl: currentOrigin, count: count });
-                } catch(e) {}
-            }
-            
-            let totalCount = count;
-            if (window.Capacitor?.Plugins?.Preferences) {
-                try {
-                    const res = await window.Capacitor.Plugins.Preferences.get({ key: 'savedServers' });
-                    let servers = res.value ? JSON.parse(res.value) : [];
-                    
-                    for (let s of servers) {
-                        let serverUrl = s.url.replace(/\/$/, '');
-                        if (serverUrl !== currentOrigin) {
-                            try {
-                                let fetchUrl = serverUrl + '/spokesapi/push/unread-count';
-                                let data = null;
-                                let targetHost = new URL(serverUrl).hostname;
-                                let hdrs = window.spokesAuth ? await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' }, targetHost) : { 'Content-Type': 'application/json' };
-                                
-                                // Cross-origin: use explicit CapacitorHttp to bypass CORS on native
-                                if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
-                                    let resp = await window.Capacitor.Plugins.CapacitorHttp.get({ url: fetchUrl, headers: hdrs });
-                                    if (resp.status >= 200 && resp.status < 300 && resp.data) {
-                                        data = typeof resp.data === 'string' ? JSON.parse(resp.data) : resp.data;
-                                    }
-                                } else {
-                                    let req = await fetch(fetchUrl, { headers: hdrs, credentials: 'include' });
-                                    if (req.ok) data = await req.json();
-                                }
-                                if (data) {
-                                    const otherCount = data.count || 0;
-                                    totalCount += otherCount;
-                                    if (typeof window.updateServerSwitcherBadge === 'function') {
-                                        try {
-                                            window.updateServerSwitcherBadge(serverUrl, otherCount);
-                                        } catch(e) {}
-                                    }
-                                }
-                            } catch (e) {}
-                        }
-                    }
-                } catch (e) {}
-            }
-            
-            let badgeHandled = false;
-            // On iOS, route badge count updates directly through NotificationCrypto to avoid
-            // the rogue .badge permission request from @capawesome/capacitor-badge
-            if (window.Capacitor?.getPlatform() === 'ios' && window.Capacitor?.Plugins?.NotificationCrypto?.setBadgeCount) {
-                try {
-                    if (totalCount > 0) {
-                        await window.Capacitor.Plugins.NotificationCrypto.setBadgeCount({ count: totalCount });
-                    } else {
-                        await window.Capacitor.Plugins.NotificationCrypto.clearBadge();
-                    }
-                    badgeHandled = true;
+                    await window.Capacitor.Plugins.NotificationCrypto.setServerBadgeCount({
+                        originUrl: currentOrigin,
+                        count: safeCount
+                    });
                 } catch (e) {
-                    console.error('Error updating native iOS badge via NotificationCrypto:', e);
+                    console.warn('[Push] setServerBadgeCount failed:', e);
                 }
-            }
-            
-            if (!badgeHandled && window.Capacitor?.Plugins?.Badge) {
-                try {
-                    if (totalCount > 0) {
-                        await window.Capacitor.Plugins.Badge.set({ count: totalCount });
-                    } else {
-                        await window.Capacitor.Plugins.Badge.clear();
-                    }
-                } catch (e) {
-                    console.error('Error updating native app badge:', e);
-                }
-            } else if (!badgeHandled) {
-                console.warn('Badge plugin not found. Did you run cap sync?');
             }
         } else if ('setAppBadge' in navigator) {
             // Experimental Web API for PWAs
@@ -271,13 +201,6 @@ window.pushNotifications = {
         return this.isNativePlatform() || this.isDesktopApp();
     },
 
-    // Get current client push platform identifier ('mobile', 'desktop', or 'web')
-    getPushPlatform: function () {
-        if (this.isNativePlatform()) return 'mobile';
-        if (this.isDesktopApp()) return 'desktop';
-        return 'web';
-    },
-
     _lastSubscriptionError: null,
     getLastSubscriptionError: function () {
         return this._lastSubscriptionError || null;
@@ -309,7 +232,7 @@ window.pushNotifications = {
         if (this.isNativePlatform()) {
             try {
                 const status = await Capacitor.Plugins.FirebaseMessaging.checkPermissions();
-                return status.receive;
+                return (status && (status.receive === 'prompt' || status.receive === 'prompt-with-rationale')) ? 'default' : (status?.receive || 'default');
             } catch (e) {
                 return 'default';
             }
@@ -485,14 +408,16 @@ window.pushNotifications = {
                 try {
                     const fcmSub = await window.SpokesBridge.getFcmSubscription();
                     if (fcmSub && fcmSub.endpoint) {
-                        return {
-                            success: true,
-                            endpoint: fcmSub.endpoint,
-                            p256dh: '',
-                            auth: '',
-                            publicKey: fcmSub.publicKey || '',
-                            subscriptionType: 'NativeRelay'
-                        };
+                        const desktopPublicKey = (fcmSub.publicKey || '').trim();
+                        if (!desktopPublicKey) {
+                            log('Desktop: SpokesBridge returned subscription without a push encryption public key.');
+                            return { success: false, error: 'Push encryption public key missing from desktop bridge.' };
+                        }
+                        try {
+                            localStorage.removeItem('spokes_push_disabled');
+                            localStorage.setItem('spokes_desktop_push_subscribed', 'true');
+                        } catch (e) {}
+                        return this._buildNativeRelaySubscription(fcmSub.endpoint, desktopPublicKey);
                     }
                 } catch (err) {
                     log('Desktop subscription error: ' + (err && err.message ? err.message : err));
@@ -534,17 +459,19 @@ window.pushNotifications = {
                          clearTimeout(timeoutId);
                          cleanupListeners();
                          log('Native: tokenReceived event fired. Token present: ' + (event.token ? 'yes' : 'no'));
-                         localStorage.setItem('spokes_native_push_token', event.token);
+                         try {
+                             localStorage.removeItem('spokes_push_disabled');
+                             localStorage.setItem('spokes_native_push_token', event.token);
+                         } catch (e) {}
 
                          const keyInfo = await self._getNativePublicKeyInfo(log);
-                         resolve({
-                             success: true,
-                             endpoint: event.token,
-                             p256dh: '',
-                             auth: '',
-                             publicKey: keyInfo.publicKey,
-                             subscriptionType: 'NativeRelay'
-                         });
+                         const nativePublicKey = (keyInfo && keyInfo.publicKey ? keyInfo.publicKey : '').trim();
+                         if (!nativePublicKey) {
+                             log('Native: refusing NativeRelay registration without a device RSA public key.');
+                             resolve({ success: false, error: 'Failed to obtain native push encryption public key.' });
+                             return;
+                         }
+                         resolve(self._buildNativeRelaySubscription(event.token, nativePublicKey));
                      });
                      
                      // Not strictly required by FirebaseMessaging but good practice if available
@@ -573,17 +500,19 @@ window.pushNotifications = {
                              isResolved = true;
                              clearTimeout(timeoutId);
                              cleanupListeners();
-                             localStorage.setItem('spokes_native_push_token', result.token);
+                             try {
+                                 localStorage.removeItem('spokes_push_disabled');
+                                 localStorage.setItem('spokes_native_push_token', result.token);
+                             } catch (e) {}
 
                              const keyInfo = await self._getNativePublicKeyInfo(log);
-                             resolve({
-                                 success: true,
-                                 endpoint: result.token,
-                                 p256dh: '',
-                                 auth: '',
-                                 publicKey: keyInfo.publicKey,
-                                 subscriptionType: 'NativeRelay'
-                             });
+                             const nativePublicKey = (keyInfo && keyInfo.publicKey ? keyInfo.publicKey : '').trim();
+                             if (!nativePublicKey) {
+                                 log('Native: refusing NativeRelay registration without a device RSA public key.');
+                                 resolve({ success: false, error: 'Failed to obtain native push encryption public key.' });
+                                 return;
+                             }
+                             resolve(self._buildNativeRelaySubscription(result.token, nativePublicKey));
                          }
                      } catch (e) {
                          log('Native: getToken() threw exception: ' + e.message + '. Waiting for events...');
@@ -625,6 +554,7 @@ window.pushNotifications = {
                 }
 
                 if (isKeyMatching) {
+                    try { localStorage.removeItem('spokes_push_disabled'); } catch (e) {}
                     // Already subscribed with matching key, return existing subscription
                     return this._formatSubscription(subscription);
                 }
@@ -644,6 +574,7 @@ window.pushNotifications = {
                 applicationServerKey: applicationServerKey
             });
 
+            try { localStorage.removeItem('spokes_push_disabled'); } catch (e) {}
             return this._formatSubscription(subscription);
         } catch (error) {
             console.error('Failed to subscribe:', error);
@@ -651,20 +582,39 @@ window.pushNotifications = {
         }
     },
 
-    // Unsubscribe from push notifications
+    // Synchronize server-side explicit push opt-out state with per-origin localStorage
+    setServerPushDisabled: function (disabled) {
+        try {
+            if (disabled) {
+                localStorage.setItem('spokes_push_disabled', 'true');
+                localStorage.removeItem('spokes_native_push_token');
+                localStorage.removeItem('spokes_desktop_push_subscribed');
+            } else {
+                localStorage.removeItem('spokes_push_disabled');
+            }
+        } catch (e) {}
+    },
+
+    // Unsubscribe from push notifications on the current server origin
     unsubscribe: async function () {
         try {
+            try {
+                localStorage.setItem('spokes_push_disabled', 'true');
+            } catch (e) {}
+
+            if (this.isDesktopApp()) {
+                try {
+                    localStorage.removeItem('spokes_desktop_push_subscribed');
+                } catch (e) {}
+                return { success: true };
+            }
+
             if (this.isNativePlatform()) {
                 localStorage.removeItem('spokes_native_push_token');
                 localStorage.removeItem('spokes_native_push_pubkey');
-                try {
-                    const pushPlugin = Capacitor.Plugins.FirebaseMessaging;
-                    if (pushPlugin && pushPlugin.deleteToken) {
-                        await pushPlugin.deleteToken();
-                    }
-                } catch (e) {
-                    console.log('Native [unsubscribe]: failed to delete FCM token natively', e);
-                }
+                // Do NOT call FirebaseMessaging.deleteToken() here:
+                // the OS/app-level FCM token is shared by all Spokes servers connected to this mobile app.
+                // Per-server unsubscription is scoped to this server's DeviceSession and origin localStorage.
                 return { success: true };
             }
 
@@ -679,22 +629,6 @@ window.pushNotifications = {
             return { success: true, message: 'No subscription to remove' };
         } catch (error) {
             console.error('Failed to unsubscribe:', error);
-            return { success: false, error: error.message };
-        }
-    },
-
-    // Get existing subscription if any
-    getSubscription: async function () {
-        try {
-            const registration = await navigator.serviceWorker.ready;
-            const subscription = await registration.pushManager.getSubscription();
-
-            if (subscription) {
-                return this._formatSubscription(subscription);
-            }
-
-            return { success: false, message: 'No active subscription' };
-        } catch (error) {
             return { success: false, error: error.message };
         }
     },
@@ -729,40 +663,32 @@ window.pushNotifications = {
         return outputArray;
     },
 
-    // Test notification (for debugging)
-    showTestNotification: async function () {
-        if (Notification.permission !== 'granted') {
-            return { success: false, error: 'Permission not granted' };
-        }
-
+    // Get existing subscription for this server origin (returns null if none or explicitly disabled)
+    getExistingSubscription: async function (options) {
+        options = options || {};
         try {
-            const registration = await navigator.serviceWorker.ready;
-            await registration.showNotification('Test Notification', {
-                body: 'Push notifications are working!',
-                icon: '/favicon.ico'
-            });
-            return { success: true };
-        } catch (error) {
-            return { success: false, error: error.message };
-        }
-    },
+            if (!options.ignoreDisabledFlag) {
+                try {
+                    if (localStorage.getItem('spokes_push_disabled') === 'true') {
+                        return null;
+                    }
+                } catch (e) {}
+            }
 
-    // Get existing subscription (returns null if none)
-    getExistingSubscription: async function () {
-        try {
             if (this.isDesktopApp()) {
-                if (window.SpokesBridge && window.SpokesBridge.getFcmSubscription) {
+                let allowDesktopToken = Boolean(options.allowNativeTokenFetch);
+                if (!allowDesktopToken) {
+                    try {
+                        allowDesktopToken = localStorage.getItem('spokes_desktop_push_subscribed') === 'true';
+                    } catch (e) {}
+                }
+                if (allowDesktopToken && window.SpokesBridge && window.SpokesBridge.getFcmSubscription) {
                     try {
                         const fcmSub = await window.SpokesBridge.getFcmSubscription();
-                        if (fcmSub && fcmSub.endpoint) {
-                            return {
-                                success: true,
-                                endpoint: fcmSub.endpoint,
-                                p256dh: '',
-                                auth: '',
-                                publicKey: fcmSub.publicKey || '',
-                                subscriptionType: 'NativeRelay'
-                            };
+                        const desktopPublicKey = (fcmSub && fcmSub.publicKey ? fcmSub.publicKey : '').trim();
+                        if (fcmSub && fcmSub.endpoint && desktopPublicKey) {
+                            try { localStorage.setItem('spokes_desktop_push_subscribed', 'true'); } catch (e) {}
+                            return this._buildNativeRelaySubscription(fcmSub.endpoint, desktopPublicKey);
                         }
                     } catch (e) {}
                 }
@@ -783,14 +709,7 @@ window.pushNotifications = {
 
                 if (cachedToken && authoritativePubKey) {
                     if (keyInfo.keyDirty || pubKeyChanged) {
-                        self.sendSubscriptionToServer({
-                            success: true,
-                            endpoint: cachedToken,
-                            p256dh: '',
-                            auth: '',
-                            publicKey: authoritativePubKey,
-                            subscriptionType: 'NativeRelay'
-                        }).catch(function () {});
+                        self.sendSubscriptionToServer(self._buildNativeRelaySubscription(cachedToken, authoritativePubKey)).catch(function () {});
                     }
 
                     // Check for FCM/APNs token rotation asynchronously off the critical path.
@@ -800,32 +719,19 @@ window.pushNotifications = {
                             .then(function (result) {
                                 if (result && result.token && result.token !== cachedToken) {
                                     localStorage.setItem('spokes_native_push_token', result.token);
-                                    self.sendSubscriptionToServer({
-                                        success: true,
-                                        endpoint: result.token,
-                                        p256dh: '',
-                                        auth: '',
-                                        publicKey: authoritativePubKey,
-                                        subscriptionType: 'NativeRelay'
-                                    }).catch(function () {});
+                                    self.sendSubscriptionToServer(self._buildNativeRelaySubscription(result.token, authoritativePubKey)).catch(function () {});
                                 }
                             })
                             .catch(function () {});
                     }
-                    return {
-                        success: true,
-                        endpoint: cachedToken,
-                        p256dh: '',
-                        auth: '',
-                        publicKey: authoritativePubKey,
-                        subscriptionType: 'NativeRelay'
-                    };
+                    return self._buildNativeRelaySubscription(cachedToken, authoritativePubKey);
                 }
 
                 if (cachedToken) {
                     nativeToken = cachedToken;
-                } else {
-                    // Cache empty: attempt direct retrieval from FirebaseMessaging plugin
+                } else if (options.allowNativeTokenFetch) {
+                    // Server already has push enabled for this session, but per-origin localStorage cache is empty:
+                    // recover the FCM token from FirebaseMessaging plugin.
                     try {
                         const pushPlugin = window.Capacitor?.Plugins?.FirebaseMessaging;
                         if (pushPlugin) {
@@ -842,24 +748,14 @@ window.pushNotifications = {
                 }
 
                 if (nativeToken) {
-                    if (keyInfo.keyDirty && authoritativePubKey) {
-                        self.sendSubscriptionToServer({
-                            success: true,
-                            endpoint: nativeToken,
-                            p256dh: '',
-                            auth: '',
-                            publicKey: authoritativePubKey,
-                            subscriptionType: 'NativeRelay'
-                        }).catch(function () {});
+                    if (!authoritativePubKey) {
+                        console.warn('Native [getExistingSubscription]: authoritative RSA public key unavailable; skipping NativeRelay subscription.');
+                        return null;
                     }
-                    return {
-                        success: true,
-                        endpoint: nativeToken,
-                        p256dh: '',
-                        auth: '',
-                        publicKey: authoritativePubKey,
-                        subscriptionType: 'NativeRelay'
-                    };
+                    if (keyInfo.keyDirty) {
+                        self.sendSubscriptionToServer(self._buildNativeRelaySubscription(nativeToken, authoritativePubKey)).catch(function () {});
+                    }
+                    return self._buildNativeRelaySubscription(nativeToken, authoritativePubKey);
                 }
                 return null;
             }
@@ -885,7 +781,16 @@ window.pushNotifications = {
             const resolvedDeviceType = isDesktop ? 'Desktop' : (isCapacitor ? 'Mobile' : (deviceType || this.detectDeviceType()));
             const deviceId = await this.getDeviceId();
             
-            var hdrs = await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' });
+            var hdrs = (window.spokesAuth && typeof window.spokesAuth.getHeaders === 'function')
+                ? await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' })
+                : { 'Content-Type': 'application/json' };
+
+            const subscriptionType = subscription.subscriptionType || subscription.SubscriptionType || (isCapacitor ? 'NativeRelay' : 'WebPush');
+            const publicKey = (subscription.publicKey || subscription.PublicKey || '').trim();
+            if (subscriptionType === 'NativeRelay' && !publicKey) {
+                console.warn('[Push] Refusing to register NativeRelay subscription without a public encryption key.');
+                return false;
+            }
 
             const response = await fetch('/spokesapi/push/subscribe', {
                 method: 'POST',
@@ -895,8 +800,8 @@ window.pushNotifications = {
                     endpoint: subscription.endpoint,
                     p256dh: subscription.p256dh,
                     auth: subscription.auth,
-                    publicKey: subscription.publicKey || subscription.PublicKey || '',
-                    subscriptionType: subscription.subscriptionType || subscription.SubscriptionType || (isCapacitor ? 'NativeRelay' : 'WebPush'),
+                    publicKey: publicKey,
+                    subscriptionType: subscriptionType,
                     deviceType: resolvedDeviceType,
                     deviceName: deviceName || '',
                     isCapacitor: isCapacitor,
@@ -926,6 +831,14 @@ window.pushNotifications = {
             if (contentType && contentType.includes("application/json")) {
                 const result = await response.json();
                 console.log('Subscription saved:', result);
+                try {
+                    localStorage.removeItem('spokes_push_disabled');
+                    if (isCapacitor && subscription.endpoint) {
+                        localStorage.setItem('spokes_native_push_token', subscription.endpoint);
+                    } else if (isDesktop) {
+                        localStorage.setItem('spokes_desktop_push_subscribed', 'true');
+                    }
+                } catch (e) {}
                 if (isCapacitor && window.Capacitor?.Plugins?.NotificationCrypto?.clearKeyDirty) {
                     try {
                         await window.Capacitor.Plugins.NotificationCrypto.clearKeyDirty();
@@ -944,25 +857,26 @@ window.pushNotifications = {
     },
 
     // Unsubscribe and notify server
-    unsubscribeAndNotifyServer: async function () {
+    unsubscribeAndNotifyServer: async function (fallbackEndpoint) {
         try {
-            const subscription = await this.getExistingSubscription();
+            const subscription = await this.getExistingSubscription({ ignoreDisabledFlag: true, allowNativeTokenFetch: false });
+            const endpointToUnsubscribe = (subscription && subscription.endpoint) ? subscription.endpoint : (fallbackEndpoint || '');
 
-            if (subscription) {
-                var hdrs = await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' });
+            var hdrs = (window.spokesAuth && typeof window.spokesAuth.getHeaders === 'function')
+                ? await window.spokesAuth.getHeaders({ 'Content-Type': 'application/json' })
+                : { 'Content-Type': 'application/json' };
 
-                // Notify server first
-                await fetch('/spokesapi/push/unsubscribe', {
-                    method: 'POST',
-                    headers: hdrs,
-                    credentials: 'include',
-                    body: JSON.stringify({
-                        endpoint: subscription.endpoint
-                    })
-                });
-            }
+            // Always notify the server so the active DeviceSession marks PushExplicitlyDisabled = true
+            await fetch('/spokesapi/push/unsubscribe', {
+                method: 'POST',
+                headers: hdrs,
+                credentials: 'include',
+                body: JSON.stringify({
+                    endpoint: endpointToUnsubscribe
+                })
+            });
 
-            // Then unsubscribe locally
+            // Then unsubscribe locally for this server origin
             return await this.unsubscribe();
         } catch (error) {
             console.error('Error unsubscribing:', error);
@@ -1003,21 +917,20 @@ window.pushNotifications = {
         });
     },
 
-    // Get native notification permission status
-    getPermissionStatus: function () {
-        if (this.isDesktopApp() || this.isNativePlatform()) return 'granted';
-        if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
-        return Notification.permission; // 'default', 'granted', 'denied'
-    },
-
-    // Check if the user has already been prompted for push notifications on this device
+    // Check if the user has already been prompted for push notifications on this device/server
     hasBeenPromptedForPush: function (serverId) {
+        try {
+            if (localStorage.getItem('spokes_push_disabled') === 'true') {
+                return true;
+            }
+        } catch (e) {}
+
         // If notifications are explicitly blocked by the browser or user, never prompt
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'denied') {
+        if (!this.isNativePlatform() && !this.isDesktopApp() && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'denied') {
             return true;
         }
-        // If already granted, no need to show the opt-in prompt
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        // On standard Web, if browser permission is already granted for this origin, no need to show the opt-in prompt
+        if (!this.isNativePlatform() && !this.isDesktopApp() && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
             return true;
         }
 
@@ -1032,15 +945,6 @@ window.pushNotifications = {
 
     // Record that the user has been prompted for push notifications on this device
     setPushPrompted: function (serverId) {
-        var key = serverId ? 'spokes_push_prompted_' + serverId : 'spokes_push_prompted';
-        try {
-            localStorage.setItem(key, 'true');
-            sessionStorage.setItem(key, 'true');
-        } catch (e) {}
-    },
-
-    // Explicitly dismiss the push prompt for this session and device
-    dismissPushPrompt: function (serverId) {
         var key = serverId ? 'spokes_push_prompted_' + serverId : 'spokes_push_prompted';
         try {
             localStorage.setItem(key, 'true');

@@ -23,10 +23,11 @@ public class ShortcutIconServiceTests : TestDataTestBase
 
         _mockConfig = new Mock<IConfiguration>();
         _mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        _mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         _cache = new MemoryCache(new MemoryCacheOptions());
         _avatarGenerator = new AvatarGeneratorService(_mockEnv.Object);
-        _service = new ShortcutIconService(_mockEnv.Object, _mockConfig.Object, _avatarGenerator, _cache);
+        _service = new ShortcutIconService(_mockConfig.Object, _avatarGenerator, _cache);
     }
 
     public override void Dispose()

@@ -23,7 +23,6 @@ public class SupplierRepository : JsonRepository<Supplier>
     /// </summary>
     public virtual List<Supplier> Search(string? query, int maxResults = 20)
     {
-        EnsureLoaded();
         var all = GetAll();
         if (string.IsNullOrWhiteSpace(query))
             return all.Take(maxResults).ToList();

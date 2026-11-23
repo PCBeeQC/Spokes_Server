@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
@@ -27,6 +28,7 @@ public class AlbumServiceTests : IDisposable
     private readonly AlbumRepository _albums;
     private readonly ChatChannelRepository _channels;
     private readonly EmployeeRepository _employees;
+    private readonly ChatAuthorizationService _chatAuth;
     private readonly Mock<ICryptoService> _mockCrypto;
     private readonly AlbumService _service;
 
@@ -35,7 +37,11 @@ public class AlbumServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Album_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = _testDataDir,
+            ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"
+        };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -43,6 +49,11 @@ public class AlbumServiceTests : IDisposable
         _albums = new AlbumRepository(_persistence, _config);
         _channels = new ChatChannelRepository(_persistence, _config);
         _employees = new EmployeeRepository(_persistence, _config);
+        _chatAuth = new ChatAuthorizationService(
+            _channels,
+            new Spokes_Server.Core.Data.Repositories.Projects.ProjectRepository(_persistence, _config),
+            new TeamRepository(_persistence, _config),
+            _employees);
 
         _mockCrypto = new Mock<ICryptoService>();
         _mockCrypto.Setup(c => c.GenerateAesKeyBase64()).Returns("plain-aes-key");
@@ -55,7 +66,12 @@ public class AlbumServiceTests : IDisposable
         var serverConfigs = new ServerConfigRepository(_persistence, _config);
         var escrow = new ServerEscrowService(companyProfiles, serverConfigs, _mockCrypto.Object);
 
-        _service = new AlbumService(_albums, _channels, _mockCrypto.Object, escrow, _employees);
+        _service = new AlbumService(_albums, _channels, _mockCrypto.Object, escrow, _employees, _chatAuth);
+
+        _employees.Save(new Employee { Id = "u1", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+        _employees.Save(new Employee { Id = "u2", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+        _employees.Save(new Employee { Id = "u3", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+        _employees.Save(new Employee { Id = "user-owner", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
     }
 
     public void Dispose()
@@ -69,31 +85,13 @@ public class AlbumServiceTests : IDisposable
 
     // 1. CreateAlbum
     [Fact]
-    public void CreateAlbum_ValidOwner_SavesAlbumAndReturnsSuccess()
-    {
-        var album = new Album { Id = "a1_sync" };
-        var emp = new Employee { Id = "u1_sync", PublicKey = "pub" };
-        _employees.Save(emp);
-
-        var result = _service.CreateAlbum(album, "u1_sync", "priv");
-
-        Assert.True(result.IsSuccess);
-        Assert.NotNull(result.Value);
-        Assert.Equal("u1_sync", result.Value.OwnerId);
-        Assert.True(result.Value.IsEncrypted);
-        Assert.True(result.Value.EncryptedAlbumKeys.ContainsKey("u1_sync"));
-        var saved = _albums.GetById("a1_sync");
-        Assert.NotNull(saved);
-    }
-
-    [Fact]
     public void CreateAlbum_NullAlbumOrEmptyOwner_ReturnsFailure()
     {
-        var r1 = _service.CreateAlbum(null!, "u1", "priv");
+        var r1 = _service.CreateAlbum(null!, "u1");
         Assert.False(r1.IsSuccess);
         Assert.Equal("INVALID_ARGUMENT", r1.Code);
 
-        var r2 = _service.CreateAlbum(new Album { Id = "a_null_owner" }, "", "priv");
+        var r2 = _service.CreateAlbum(new Album { Id = "a_null_owner" }, "");
         Assert.False(r2.IsSuccess);
         Assert.Equal("INVALID_ARGUMENT", r2.Code);
     }
@@ -102,10 +100,10 @@ public class AlbumServiceTests : IDisposable
     public void CreateAlbum_ValidOwner_SavesAlbum()
     {
         var album = new Album { Id = "a1" };
-        var emp = new Employee { Id = "u1", PublicKey = "pub" };
+        var emp = new Employee { Id = "u1", PublicKey = "pub", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
         _employees.Save(emp);
 
-        var result = _service.CreateAlbum(album, "u1", "priv");
+        var result = _service.CreateAlbum(album, "u1");
 
         Assert.True(result.IsSuccess);
         Assert.NotNull(result.Value);
@@ -120,7 +118,7 @@ public class AlbumServiceTests : IDisposable
     public void CreateAlbum_NoPrivateKey_SavesWithoutUserKey()
     {
         var album = new Album { Id = "a2" };
-        var result = _service.CreateAlbum(album, "u2", null);
+        var result = _service.CreateAlbum(album, "u2");
 
         Assert.True(result.IsSuccess);
         Assert.NotNull(result.Value);
@@ -135,7 +133,7 @@ public class AlbumServiceTests : IDisposable
         bool eventRaised = false;
         _service.OnAlbumUpdated += (id) => eventRaised = (id == "a3");
 
-        var result = _service.CreateAlbum(album, "u3", "priv");
+        var result = _service.CreateAlbum(album, "u3");
         Assert.True(result.IsSuccess);
         Assert.True(eventRaised);
     }
@@ -311,36 +309,6 @@ public class AlbumServiceTests : IDisposable
         }
 
         // 5. ReEvaluateAlbumEncryptionForChannel
-        [Fact]
-        public void ReEvaluateAlbumEncryptionForChannel_UpdatesEncryption()
-        {
-            var album = new Album { Id = "a13" };
-            album.SharedWithChannelIds.Add("c1");
-            _albums.Save(album);
-            
-            _service.ReEvaluateAlbumEncryptionForChannel("c1", "new-key");
-            
-            var saved = _albums.GetById("a13");
-            Assert.NotNull(saved);
-        }
-        
-        [Fact]
-        public void ReEvaluateAlbumEncryptionForChannel_NonExistentChannel_DoesNothing()
-        {
-            _service.ReEvaluateAlbumEncryptionForChannel("c99", "new-key");
-            Assert.True(true);
-        }
-
-        [Fact]
-        public void ReEvaluateAlbumEncryptionForChannel_MultipleAlbums_Processed()
-        {
-            var a1 = new Album { Id = "a14" }; a1.SharedWithChannelIds.Add("c2"); _albums.Save(a1);
-            var a2 = new Album { Id = "a15" }; a2.SharedWithChannelIds.Add("c2"); _albums.Save(a2);
-            
-            _service.ReEvaluateAlbumEncryptionForChannel("c2", "key");
-            Assert.True(true);
-        }
-
         // 6. UpdateContributors
         [Fact]
         public void UpdateContributors_AddContributor_SavesKey()
@@ -349,7 +317,7 @@ public class AlbumServiceTests : IDisposable
             album.EncryptedAlbumKeys["u1"] = "cipher";
             _albums.Save(album);
 
-            var emp = new Employee { Id = "u2", PublicKey = "pub" };
+            var emp = new Employee { Id = "u2", PublicKey = "pub", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
             _employees.Save(emp);
 
             var result = _service.UpdateContributors("a16", "u1", ["u2"], "priv");
@@ -409,7 +377,7 @@ public class AlbumServiceTests : IDisposable
             var album = new Album { Id = "a19", OwnerId = "u1" };
             _albums.Save(album);
 
-            _service.AddMedia("a19", "u1", [new AlbumMedia { Id = "m1" }]);
+            _service.AddMedia("a19", "u1", [new AlbumMedia { Id = "m1", FilePath = "/spokesapi/files/albums/a19/m1.jpg" }]);
 
             var saved = _albums.GetById("a19");
             Assert.Single(saved.Media);
@@ -423,7 +391,7 @@ public class AlbumServiceTests : IDisposable
             album.ContributorUserIds.Add("u2");
             _albums.Save(album);
 
-            _service.AddMedia("a20", "u2", [new AlbumMedia { Id = "m2" }]);
+            _service.AddMedia("a20", "u2", [new AlbumMedia { Id = "m2", FilePath = "/spokesapi/files/albums/a20/m2.jpg" }]);
 
             var saved = _albums.GetById("a20");
             Assert.Single(saved.Media);
@@ -435,119 +403,274 @@ public class AlbumServiceTests : IDisposable
             var album = new Album { Id = "a21", OwnerId = "u1" };
             _albums.Save(album);
 
-            _service.AddMedia("a21", "u2", [new AlbumMedia { Id = "m3" }]);
+            _service.AddMedia("a21", "u2", [new AlbumMedia { Id = "m3", FilePath = "/spokesapi/files/albums/a21/m3.jpg" }]);
 
             var saved = _albums.GetById("a21");
             Assert.Empty(saved.Media);
         }
 
-        // 8. RemoveMedia
+        // 8. RemoveMediaAsync & CanUserDeleteMedia
         [Fact]
-        public void RemoveMedia_AsOwner_RemovesMedia()
+        public async Task RemoveMediaAsync_AsOwner_RemovesMedia()
         {
             var album = new Album { Id = "a22", OwnerId = "u1" };
-            album.Media.Add(new AlbumMedia { Id = "m1", AddedByUserId = "u2" });
+            album.Media.Add(new AlbumMedia { Id = "m1", AddedByUserId = "u2", FilePath = "/spokesapi/files/albums/a22/m1.jpg" });
             _albums.Save(album);
 
-            _service.RemoveMedia("a22", "u1", new AlbumMedia { Id = "m1" });
+            var result = await _service.RemoveMediaAsync("a22", "u1", "m1");
 
+            Assert.True(result.IsSuccess);
+            Assert.NotNull(result.Value);
+            Assert.Equal("/spokesapi/files/albums/a22/m1.jpg", result.Value!.FilePath);
             var saved = _albums.GetById("a22");
-            Assert.Empty(saved.Media);
+            Assert.Empty(saved!.Media);
         }
 
         [Fact]
-        public void RemoveMedia_AsContributorOwnMedia_RemovesMedia()
+        public async Task RemoveMediaAsync_AsContributorOwnMedia_RemovesMediaAndPhysicalFile()
         {
-            var album = new Album { Id = "a23", OwnerId = "u1" };
-            album.ContributorUserIds.Add("u2");
-            album.Media.Add(new AlbumMedia { Id = "m2", AddedByUserId = "u2" });
+            var mockFileService = new Mock<Spokes_Server.Core.Services.Storage.IFileService>();
+            var deletedPaths = new List<string>();
+            mockFileService
+                .Setup(f => f.DeleteAsync(It.IsAny<string>()))
+                .Callback<string>(p => deletedPaths.Add(p))
+                .ReturnsAsync(true);
+            var escrow = new ServerEscrowService(new CompanyProfileRepository(_persistence, _config), new ServerConfigRepository(_persistence, _config), _mockCrypto.Object);
+            var service = new AlbumService(_albums, _channels, _mockCrypto.Object, escrow, _employees, _chatAuth, fileService: mockFileService.Object);
+
+            var album = new Album { Id = "a23", OwnerId = "u1", ContributorUserIds = ["u2"] };
+            album.Media.Add(new AlbumMedia { Id = "m1", AddedByUserId = "u1", FilePath = "/spokesapi/files/albums/a23/m1.jpg" });
+            album.Media.Add(new AlbumMedia { Id = "m2", AddedByUserId = "u2", FilePath = "/spokesapi/files/albums/a23/m2.jpg" });
             _albums.Save(album);
 
-            _service.RemoveMedia("a23", "u2", new AlbumMedia { Id = "m2" });
+            var deniedResult = await service.RemoveMediaAsync("a23", "u2", "m1");
+            Assert.False(deniedResult.IsSuccess);
+            Assert.Equal("FORBIDDEN", deniedResult.Code);
+            Assert.Empty(deletedPaths);
 
-            var saved = _albums.GetById("a23");
-            Assert.Empty(saved.Media);
+            var allowedResult = await service.RemoveMediaAsync("a23", "u2", "m2");
+            Assert.True(allowedResult.IsSuccess);
+            Assert.Equal("m2", allowedResult.Value?.Id);
+
+            var saved = _albums.GetById("a23")!;
+            Assert.Single(saved.Media);
+            Assert.Equal("m1", saved.Media[0].Id);
+            Assert.Single(deletedPaths);
+            Assert.Equal("/spokesapi/files/albums/a23/m2.jpg", deletedPaths[0]);
         }
 
         [Fact]
-        public void RemoveMedia_AsContributorOtherMedia_DoesNothing()
+        public async Task RemoveMediaAsync_AsContributorOtherMedia_DoesNothing()
         {
             var album = new Album { Id = "a24", OwnerId = "u1" };
             album.ContributorUserIds.Add("u2");
             album.Media.Add(new AlbumMedia { Id = "m3", AddedByUserId = "u1" });
             _albums.Save(album);
 
-            _service.RemoveMedia("a24", "u2", new AlbumMedia { Id = "m3" });
+            var result = await _service.RemoveMediaAsync("a24", "u2", "m3");
 
+            Assert.False(result.IsSuccess);
+            Assert.Equal("FORBIDDEN", result.Code);
             var saved = _albums.GetById("a24");
-            Assert.Single(saved.Media);
+            Assert.Single(saved!.Media);
         }
 
-        // 9. RemoveMediaBulk
         [Fact]
-        public void RemoveMediaBulk_MixedOwnershipAsContributor_RemovesOnlyOwn()
+        public async Task RemoveMediaAsync_AsContributorAnotherContributorsMediaOrLegacyMedia_ReturnsForbidden()
         {
-            var album = new Album { Id = "a25", OwnerId = "u1" };
-            album.ContributorUserIds.Add("u2");
-            album.Media.Add(new AlbumMedia { Id = "m1", AddedByUserId = "u1" });
-            album.Media.Add(new AlbumMedia { Id = "m2", AddedByUserId = "u2" });
+            var album = new Album { Id = "a24b", OwnerId = "u1", ContributorUserIds = ["u2", "u3"] };
+            album.Media.Add(new AlbumMedia { Id = "m_other_contrib", AddedByUserId = "u3", FilePath = "/spokesapi/files/albums/a24b/u3.jpg" });
+            album.Media.Add(new AlbumMedia { Id = "m_legacy", AddedByUserId = string.Empty, FilePath = "/spokesapi/files/albums/a24b/legacy.jpg" });
             _albums.Save(album);
 
-            var result = _service.RemoveMediaBulk("a25", "u2", ["m1", "m2"]);
+            var otherContribResult = await _service.RemoveMediaAsync("a24b", "u2", "m_other_contrib");
+            var legacyResult = await _service.RemoveMediaAsync("a24b", "u2", "m_legacy");
+
+            Assert.False(otherContribResult.IsSuccess);
+            Assert.Equal("FORBIDDEN", otherContribResult.Code);
+            Assert.False(legacyResult.IsSuccess);
+            Assert.Equal("FORBIDDEN", legacyResult.Code);
+            Assert.Equal(2, _albums.GetById("a24b")!.Media.Count);
+        }
+
+        [Fact]
+        public async Task RemoveMediaAsync_MissingMediaIdOrUnauthorizedCaller_DoesNotReturnSuccess()
+        {
+            var album = new Album { Id = "a24c", OwnerId = "u1", ContributorUserIds = ["u2"] };
+            album.Media.Add(new AlbumMedia { Id = "m1", AddedByUserId = "u1", FilePath = "/spokesapi/files/albums/a24c/owner.jpg" });
+            _albums.Save(album);
+
+            // Contributor passing a nonexistent media ID must NOT succeed
+            var missingResult = await _service.RemoveMediaAsync("a24c", "u2", "nonexistent");
+            Assert.False(missingResult.IsSuccess);
+            Assert.Equal("NOT_FOUND", missingResult.Code);
+
+            // Non-contributor viewer passing a nonexistent media ID must receive FORBIDDEN
+            var nonContribResult = await _service.RemoveMediaAsync("a24c", "u3", "nonexistent");
+            Assert.False(nonContribResult.IsSuccess);
+            Assert.Equal("FORBIDDEN", nonContribResult.Code);
+
+            // Former contributor (removed from ContributorUserIds) cannot delete even media tagged with their ID
+            album.ContributorUserIds.Clear();
+            album.Media.Add(new AlbumMedia { Id = "m_former", AddedByUserId = "u2", FilePath = "/spokesapi/files/albums/a24c/former.jpg" });
+            _albums.Save(album);
+
+            var formerContribResult = await _service.RemoveMediaAsync("a24c", "u2", "m_former");
+            Assert.False(formerContribResult.IsSuccess);
+            Assert.Equal("FORBIDDEN", formerContribResult.Code);
+            Assert.Equal(2, _albums.GetById("a24c")!.Media.Count);
+        }
+
+        [Fact]
+        public void CanUserDeleteMedia_And_CanUserDeleteAnyMedia_EnforceUploaderOwnershipForContributors()
+        {
+            var ownerMedia = new AlbumMedia { Id = "m_owner", AddedByUserId = "u1" };
+            var u2Media = new AlbumMedia { Id = "m_u2", AddedByUserId = "u2" };
+            var u3Media = new AlbumMedia { Id = "m_u3", AddedByUserId = "u3" };
+            var legacyMedia = new AlbumMedia { Id = "m_legacy", AddedByUserId = string.Empty };
+
+            var album = new Album
+            {
+                Id = "a_perm_check",
+                OwnerId = "u1",
+                ContributorUserIds = ["u2", "u3"],
+                Media = [ownerMedia, u3Media, legacyMedia]
+            };
+
+            var u1 = _employees.GetById("u1")!;
+            var u2 = _employees.GetById("u2")!;
+            var u3 = _employees.GetById("u3")!;
+
+            // Owner can delete everything
+            Assert.True(_service.CanUserDeleteMedia(album, ownerMedia, u1));
+            Assert.True(_service.CanUserDeleteMedia(album, u3Media, u1));
+            Assert.True(_service.CanUserDeleteMedia(album, legacyMedia, u1));
+            Assert.True(_service.CanUserDeleteAnyMedia(album, u1));
+
+            // Contributor u2 has uploaded nothing yet -> cannot delete any media
+            Assert.False(_service.CanUserDeleteMedia(album, ownerMedia, u2));
+            Assert.False(_service.CanUserDeleteMedia(album, u3Media, u2));
+            Assert.False(_service.CanUserDeleteMedia(album, legacyMedia, u2));
+            Assert.False(_service.CanUserDeleteAnyMedia(album, u2));
+
+            // Contributor u3 uploaded u3Media -> can ONLY delete u3Media
+            Assert.False(_service.CanUserDeleteMedia(album, ownerMedia, u3));
+            Assert.True(_service.CanUserDeleteMedia(album, u3Media, u3));
+            Assert.False(_service.CanUserDeleteMedia(album, legacyMedia, u3));
+            Assert.True(_service.CanUserDeleteAnyMedia(album, u3));
+
+            // Once u2 uploads u2Media, u2 can ONLY delete u2Media
+            album.Media.Add(u2Media);
+            Assert.True(_service.CanUserDeleteMedia(album, u2Media, u2));
+            Assert.True(_service.CanUserDeleteAnyMedia(album, u2));
+            Assert.False(_service.CanUserDeleteMedia(album, u2Media, u3));
+
+            // Suspended contributor cannot delete even their own media
+            var suspendedU2 = new Employee
+            {
+                Id = "u2",
+                IsActive = true,
+                IsSuspended = true,
+                Permissions = [AppPermissions.Albums.View]
+            };
+            Assert.False(_service.CanUserDeleteMedia(album, u2Media, suspendedU2));
+            Assert.False(_service.CanUserDeleteAnyMedia(album, suspendedU2));
+        }
+
+        // 9. RemoveMediaBulkAsync
+        [Fact]
+        public async Task RemoveMediaBulkAsync_MixedOwnershipAsContributor_RemovesOnlyOwnAndDeletesOnlyOwnFile()
+        {
+            var mockFileService = new Mock<Spokes_Server.Core.Services.Storage.IFileService>();
+            var deletedPaths = new List<string>();
+            mockFileService
+                .Setup(f => f.DeleteAsync(It.IsAny<string>()))
+                .Callback<string>(p => deletedPaths.Add(p))
+                .ReturnsAsync(true);
+            var escrow = new ServerEscrowService(new CompanyProfileRepository(_persistence, _config), new ServerConfigRepository(_persistence, _config), _mockCrypto.Object);
+            var service = new AlbumService(_albums, _channels, _mockCrypto.Object, escrow, _employees, _chatAuth, fileService: mockFileService.Object);
+
+            var album = new Album { Id = "a25", OwnerId = "u1" };
+            album.ContributorUserIds.Add("u2");
+            album.ContributorUserIds.Add("u3");
+            album.Media.Add(new AlbumMedia { Id = "m1", AddedByUserId = "u1", FilePath = "/spokesapi/files/albums/a25/m1.jpg" });
+            album.Media.Add(new AlbumMedia { Id = "m2", AddedByUserId = "u2", FilePath = "/spokesapi/files/albums/a25/m2.jpg" });
+            album.Media.Add(new AlbumMedia { Id = "m3", AddedByUserId = "u3", FilePath = "/spokesapi/files/albums/a25/m3.jpg" });
+            _albums.Save(album);
+
+            var result = await service.RemoveMediaBulkAsync("a25", "u2", ["m1", "m2", "m3"]);
             Assert.True(result.IsSuccess);
             var removed = result.Value!;
 
-            var saved = _albums.GetById("a25");
-            Assert.Single(saved.Media);
-            Assert.Equal("m1", saved.Media[0].Id);
+            var saved = _albums.GetById("a25")!;
+            Assert.Equal(2, saved.Media.Count);
+            Assert.Contains(saved.Media, m => m.Id == "m1");
+            Assert.Contains(saved.Media, m => m.Id == "m3");
             Assert.Single(removed);
             Assert.Equal("m2", removed[0].Id);
+            Assert.Single(deletedPaths);
+            Assert.Equal("/spokesapi/files/albums/a25/m2.jpg", deletedPaths[0]);
         }
 
         [Fact]
-        public void RemoveMediaBulk_AsOwner_RemovesAll()
+        public async Task RemoveMediaBulkAsync_ContributorOnlyOthersMedia_ReturnsForbiddenAndPreservesAll()
+        {
+            var album = new Album { Id = "a25b", OwnerId = "u1", ContributorUserIds = ["u2", "u3"] };
+            album.Media.Add(new AlbumMedia { Id = "m_owner", AddedByUserId = "u1" });
+            album.Media.Add(new AlbumMedia { Id = "m_u3", AddedByUserId = "u3" });
+            _albums.Save(album);
+
+            var result = await _service.RemoveMediaBulkAsync("a25b", "u2", ["m_owner", "m_u3"]);
+
+            Assert.False(result.IsSuccess);
+            Assert.Equal("FORBIDDEN", result.Code);
+            Assert.Equal(2, _albums.GetById("a25b")!.Media.Count);
+        }
+
+        [Fact]
+        public async Task RemoveMediaBulkAsync_AsOwner_RemovesAll()
         {
             var album = new Album { Id = "a26", OwnerId = "u1" };
             album.Media.Add(new AlbumMedia { Id = "m3", AddedByUserId = "u1" });
             album.Media.Add(new AlbumMedia { Id = "m4", AddedByUserId = "u2" });
             _albums.Save(album);
 
-            var result = _service.RemoveMediaBulk("a26", "u1", ["m3", "m4"]);
+            var result = await _service.RemoveMediaBulkAsync("a26", "u1", ["m3", "m4"]);
             Assert.True(result.IsSuccess);
             var removed = result.Value!;
 
             var saved = _albums.GetById("a26");
-            Assert.Empty(saved.Media);
+            Assert.Empty(saved!.Media);
             Assert.Equal(2, removed.Count);
         }
         
         [Fact]
-        public void RemoveMediaBulk_NonExistentAlbum_ReturnsNotFound()
+        public async Task RemoveMediaBulkAsync_NonExistentAlbum_ReturnsNotFound()
         {
-            var result = _service.RemoveMediaBulk("a99", "u1", ["m1"]);
+            var result = await _service.RemoveMediaBulkAsync("a99", "u1", ["m1"]);
             Assert.False(result.IsSuccess);
             Assert.Equal("NOT_FOUND", result.Code);
         }
 
         [Fact]
-        public void RemoveMediaBulk_NotAuthorized_ReturnsForbidden()
+        public async Task RemoveMediaBulkAsync_NotAuthorized_ReturnsForbidden()
         {
             var album = new Album { Id = "a28", OwnerId = "u1" };
             _albums.Save(album);
 
-            var result = _service.RemoveMediaBulk("a28", "unauthorized_user", ["m1"]);
+            var result = await _service.RemoveMediaBulkAsync("a28", "unauthorized_user", ["m1"]);
             Assert.False(result.IsSuccess);
             Assert.Equal("FORBIDDEN", result.Code);
         }
 
-        // 10. DeleteAlbum
+        // 10. DeleteAlbumAsync
         [Fact]
-        public void DeleteAlbum_AsOwner_Deletes()
+        public async Task DeleteAlbumAsync_AsOwner_Deletes()
         {
             var album = new Album { Id = "a27", OwnerId = "u1" };
             _albums.Save(album);
 
-            var result = _service.DeleteAlbum("a27", "u1");
+            var result = await _service.DeleteAlbumAsync("a27", "u1");
 
             Assert.True(result.IsSuccess);
             var saved = _albums.GetById("a27");
@@ -555,12 +678,12 @@ public class AlbumServiceTests : IDisposable
         }
 
         [Fact]
-        public void DeleteAlbum_NotOwner_DoesNothing()
+        public async Task DeleteAlbumAsync_NotOwner_DoesNothing()
         {
             var album = new Album { Id = "a28", OwnerId = "u1" };
             _albums.Save(album);
 
-            var result = _service.DeleteAlbum("a28", "u2");
+            var result = await _service.DeleteAlbumAsync("a28", "u2");
 
             Assert.False(result.IsSuccess);
             Assert.Equal("FORBIDDEN", result.Code);
@@ -569,7 +692,7 @@ public class AlbumServiceTests : IDisposable
         }
 
         [Fact]
-        public void DeleteAlbum_RaisesEvent()
+        public async Task DeleteAlbumAsync_RaisesEvent()
         {
             var album = new Album { Id = "a29", OwnerId = "u1" };
             _albums.Save(album);
@@ -577,8 +700,38 @@ public class AlbumServiceTests : IDisposable
             bool eventRaised = false;
             _service.OnAlbumUpdated += (id) => eventRaised = (id == "a29");
 
-            _service.DeleteAlbum("a29", "u1");
+            await _service.DeleteAlbumAsync("a29", "u1");
             Assert.True(eventRaised);
+        }
+
+        [Fact]
+        public async Task DeleteAlbumAsync_WithMedia_DeletesPhysicalFilesAndAlbum()
+        {
+            var realCrypto = new CryptoService();
+            var fileService = new Spokes_Server.Core.Services.Storage.FileService(
+                _config,
+                new Mock<ILogger<Spokes_Server.Core.Services.Storage.FileService>>().Object,
+                realCrypto);
+            var companyProfiles = new CompanyProfileRepository(_persistence, _config);
+            var serverConfigs = new ServerConfigRepository(_persistence, _config);
+            var escrow = new ServerEscrowService(companyProfiles, serverConfigs, realCrypto);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, _chatAuth, fileService: fileService);
+
+            using var stream1 = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("photo-1-bytes"));
+            var fileUrl1 = await fileService.UploadStreamAsync("albums", "alb-async", stream1, "photo1.jpg");
+            var album1 = new Album
+            {
+                Id = "alb-async",
+                Title = "Async Delete",
+                OwnerId = "u1",
+                Media = [new AlbumMedia { Id = "m1", FileName = "photo1.jpg", FilePath = fileUrl1, ContentType = "image/jpeg" }]
+            };
+            _albums.Save(album1);
+
+            var asyncResult = await service.DeleteAlbumAsync("alb-async", "u1");
+            Assert.True(asyncResult.IsSuccess);
+            Assert.Null(_albums.GetById("alb-async"));
+            Assert.False(File.Exists(fileService.GetPhysicalPath("albums", "alb-async", Path.GetFileName(fileUrl1))));
         }
 
         [Fact]
@@ -631,7 +784,7 @@ public class AlbumServiceTests : IDisposable
                 {
                     _service.AddMedia("album-concurrent-media", "user-owner", new[]
                     {
-                        new AlbumMedia { Id = $"media-{index}", AddedByUserId = "user-owner", FileName = $"file-{index}.jpg" }
+                        new AlbumMedia { Id = $"media-{index}", AddedByUserId = "user-owner", FileName = $"file-{index}.jpg", FilePath = $"/spokesapi/files/albums/album-concurrent-media/file-{index}.jpg" }
                     });
                 }));
             }
@@ -720,8 +873,8 @@ public class AlbumServiceTests : IDisposable
         [Fact]
         public void TrySelfHealContributorKeys_MissingKeyWithPublicKey_GeneratesKey()
         {
-            _employees.Save(new Employee { Id = "u1", PublicKey = "u1_pub" });
-            _employees.Save(new Employee { Id = "u2", PublicKey = "u2_pub" });
+            _employees.Save(new Employee { Id = "u1", PublicKey = "u1_pub", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _employees.Save(new Employee { Id = "u2", PublicKey = "u2_pub", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
 
             var album = new Album
             {
@@ -748,8 +901,8 @@ public class AlbumServiceTests : IDisposable
         [Fact]
         public void TrySelfHealContributorKeys_ContributorHasNoPublicKey_Skips()
         {
-            _employees.Save(new Employee { Id = "u1", PublicKey = "u1_pub" });
-            _employees.Save(new Employee { Id = "u2", PublicKey = "" }); // No vault yet
+            _employees.Save(new Employee { Id = "u1", PublicKey = "u1_pub", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _employees.Save(new Employee { Id = "u2", PublicKey = "", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] }); // No vault yet
 
             var album = new Album
             {
@@ -774,10 +927,10 @@ public class AlbumServiceTests : IDisposable
         [Fact]
         public void CreateAlbum_WhenOwnerHasPublicKeyButVaultIsLocked_EncryptsWithOwnerPublicKeyAndDoesNotUseEscrow()
         {
-            _employees.Save(new Employee { Id = "u_locked_owner", PublicKey = "owner_pub" });
+            _employees.Save(new Employee { Id = "u_locked_owner", PublicKey = "owner_pub", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
 
             var album = new Album { Id = "alb_locked_create", Title = "Private Album" };
-            var result = _service.CreateAlbum(album, "u_locked_owner", ownerPrivateKey: null);
+            var result = _service.CreateAlbum(album, "u_locked_owner");
 
             Assert.True(result.IsSuccess);
             var saved = _albums.GetById("alb_locked_create");
@@ -808,10 +961,10 @@ public class AlbumServiceTests : IDisposable
             var realCrypto = new CryptoService();
             var escrow = CreateInitializedEscrow(realCrypto);
 
-            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, _chatAuth);
 
             var (ownerPub, ownerPriv) = realCrypto.GenerateRsaKeyPair();
-            _employees.Save(new Employee { Id = "owner_bug_repro", PublicKey = ownerPub, EncryptedPrivateKey = "enc_priv" });
+            _employees.Save(new Employee { Id = "owner_bug_repro", PublicKey = ownerPub, EncryptedPrivateKey = "enc_priv", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
 
             var plainAlbumKey = realCrypto.GenerateAesKeyBase64();
             var legacyEscrowAlbum = new Album
@@ -826,11 +979,15 @@ public class AlbumServiceTests : IDisposable
             };
             _albums.Save(legacyEscrowAlbum);
 
-            // When the vault is locked (currentPrivateKey == null), IsAlbumLocked must self-heal Escrow -> owner PublicKey,
-            // remove Escrow, and report the album as LOCKED (cannot view pictures without private key).
+            // When the vault is locked (currentPrivateKey == null), IsAlbumLocked must enforce lock strictly
+            // without performing write side-effects during read-only key resolution.
             bool lockedWhenVaultLocked = service.IsAlbumLocked(legacyEscrowAlbum, "owner_bug_repro", currentPrivateKey: null, out var keyWhenLocked);
             Assert.True(lockedWhenVaultLocked);
             Assert.Null(keyWhenLocked);
+            Assert.True(_albums.GetById("alb_legacy_escrow")!.EncryptedAlbumKeys.ContainsKey("Escrow"));
+
+            // Startup/maintenance migration upgrades legacy private Escrow -> owner PublicKey and removes Escrow.
+            service.UpgradeLegacyEscrowedAlbums();
 
             var persisted = _albums.GetById("alb_legacy_escrow");
             Assert.NotNull(persisted);
@@ -849,13 +1006,13 @@ public class AlbumServiceTests : IDisposable
             var realCrypto = new CryptoService();
             var escrow = CreateInitializedEscrow(realCrypto);
 
-            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, _chatAuth);
 
             var (ownerPub, ownerPriv) = realCrypto.GenerateRsaKeyPair();
-            _employees.Save(new Employee { Id = "owner_lifecycle", PublicKey = ownerPub, EncryptedPrivateKey = "enc" });
-            _employees.Save(new Employee { Id = "viewer_user" });
+            _employees.Save(new Employee { Id = "owner_lifecycle", PublicKey = ownerPub, EncryptedPrivateKey = "enc", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _employees.Save(new Employee { Id = "viewer_user", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
 
-            var createRes = service.CreateAlbum(new Album { Id = "alb_lifecycle", Title = "Trip" }, "owner_lifecycle", ownerPriv);
+            var createRes = service.CreateAlbum(new Album { Id = "alb_lifecycle", Title = "Trip" }, "owner_lifecycle");
             Assert.True(createRes.IsSuccess);
 
             var created = _albums.GetById("alb_lifecycle")!;
@@ -896,13 +1053,13 @@ public class AlbumServiceTests : IDisposable
             var realCrypto = new CryptoService();
             var escrow = CreateInitializedEscrow(realCrypto);
 
-            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, _chatAuth);
 
             // User initially has no vault password when creating the album
-            var user = new Employee { Id = "u_claim", PublicKey = "", EncryptedPrivateKey = "" };
+            var user = new Employee { Id = "u_claim", PublicKey = "", EncryptedPrivateKey = "", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
             _employees.Save(user);
 
-            var createRes = service.CreateAlbum(new Album { Id = "alb_pre_vault", Title = "Before Vault" }, "u_claim", null);
+            var createRes = service.CreateAlbum(new Album { Id = "alb_pre_vault", Title = "Before Vault" }, "u_claim");
             Assert.True(createRes.IsSuccess);
             Assert.True(_albums.GetById("alb_pre_vault")!.EncryptedAlbumKeys.ContainsKey("Escrow"));
 
@@ -924,6 +1081,11 @@ public class AlbumServiceTests : IDisposable
         [Fact]
         public void CanUserViewAlbum_EnforcesOwnerContributorAndSharedChannelMembership()
         {
+            _employees.Save(new Employee { Id = "u_owner", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _employees.Save(new Employee { Id = "u_contrib", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _employees.Save(new Employee { Id = "u_chan_member", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _employees.Save(new Employee { Id = "u_outsider", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+
             var privateChannel = new ChatChannel
             {
                 Id = "chan_shared_priv",
@@ -953,7 +1115,7 @@ public class AlbumServiceTests : IDisposable
         {
             var realCrypto = new CryptoService();
             var escrow = CreateInitializedEscrow(realCrypto);
-            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, _chatAuth);
 
             var plainKey = realCrypto.GenerateAesKeyBase64();
             var (strangerPub, strangerPriv) = realCrypto.GenerateRsaKeyPair();
@@ -980,14 +1142,14 @@ public class AlbumServiceTests : IDisposable
         {
             var realCrypto = new CryptoService();
             var escrow = CreateInitializedEscrow(realCrypto);
-            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, _chatAuth);
 
             var (ownerPub, ownerPriv) = realCrypto.GenerateRsaKeyPair();
             var (contribPub, contribPriv) = realCrypto.GenerateRsaKeyPair();
-            _employees.Save(new Employee { Id = "u_owner_esc", PublicKey = ownerPub, EncryptedPrivateKey = "enc" });
-            _employees.Save(new Employee { Id = "u_contrib_esc", PublicKey = contribPub, EncryptedPrivateKey = "enc" });
+            _employees.Save(new Employee { Id = "u_owner_esc", PublicKey = ownerPub, EncryptedPrivateKey = "enc", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _employees.Save(new Employee { Id = "u_contrib_esc", PublicKey = contribPub, EncryptedPrivateKey = "enc", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
 
-            var createRes = service.CreateAlbum(new Album { Id = "alb_e2ee_strict", Title = "Strict E2EE" }, "u_owner_esc", ownerPriv);
+            var createRes = service.CreateAlbum(new Album { Id = "alb_e2ee_strict", Title = "Strict E2EE" }, "u_owner_esc");
             Assert.True(createRes.IsSuccess);
             Assert.True(service.UpdateContributors("alb_e2ee_strict", "u_owner_esc", ["u_contrib_esc"], ownerPriv).IsSuccess);
 
@@ -1008,9 +1170,9 @@ public class AlbumServiceTests : IDisposable
         public void ShareAlbumWithChannel_AlreadySharedChannel_AllowsAccessibleMemberReMentionAndRejectsInaccessibleCaller()
         {
             var mockChatAuth = new Mock<IChatAuthorizationService>();
-            var owner = new Employee { Id = "u_owner_re", IsActive = true };
-            var contrib = new Employee { Id = "u_contrib_re", IsActive = true };
-            var outsider = new Employee { Id = "u_outsider_re", IsActive = true };
+            var owner = new Employee { Id = "u_owner_re", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
+            var contrib = new Employee { Id = "u_contrib_re", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
+            var outsider = new Employee { Id = "u_outsider_re", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
             _employees.Save(owner);
             _employees.Save(contrib);
             _employees.Save(outsider);
@@ -1064,7 +1226,7 @@ public class AlbumServiceTests : IDisposable
         public void ShareAlbumWithChannel_NewChannelWhereOwnerCannotPost_ReturnsForbidden()
         {
             var mockChatAuth = new Mock<IChatAuthorizationService>();
-            var owner = new Employee { Id = "u_owner_nopost", IsActive = true };
+            var owner = new Employee { Id = "u_owner_nopost", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
             _employees.Save(owner);
 
             var announcementChannel = new ChatChannel
@@ -1117,8 +1279,8 @@ public class AlbumServiceTests : IDisposable
         {
             using var cache = new MemoryCache(new MemoryCacheOptions());
             var tokenService = new FileTokenService(new EphemeralDataProtectionProvider(), cache);
-            var mockChatAccess = new Mock<IChatChannelAccessService>();
-            mockChatAccess.Setup(a => a.GetUsersForChannel("c_rev")).Returns(["u_owner_rev", "u_viewer_rev"]);
+            var mockChatAuth = new Mock<IChatAuthorizationService>();
+            mockChatAuth.Setup(a => a.GetUsersForChannel("c_rev")).Returns(["u_owner_rev", "u_viewer_rev"]);
 
             var escrow = CreateInitializedEscrow(_mockCrypto.Object);
             var service = new AlbumService(
@@ -1127,7 +1289,7 @@ public class AlbumServiceTests : IDisposable
                 _mockCrypto.Object,
                 escrow,
                 _employees,
-                chatAccess: mockChatAccess.Object,
+                mockChatAuth.Object,
                 fileTokenService: tokenService);
 
             var album = new Album
@@ -1144,6 +1306,9 @@ public class AlbumServiceTests : IDisposable
                 }
             };
             _albums.Save(album);
+            _employees.Save(new Employee { Id = "u_owner_rev", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _employees.Save(new Employee { Id = "u_contrib_rev", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _employees.Save(new Employee { Id = "u_viewer_rev", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
             _channels.Save(new ChatChannel { Id = "c_rev", IsEncrypted = true });
 
             var contribAlbumToken = tokenService.GenerateAccessToken("albums", "alb_token_rev", "p1.jpg", "plain-aes-key", "u_contrib_rev", "sess_c");
@@ -1172,9 +1337,9 @@ public class AlbumServiceTests : IDisposable
         }
 
         [Fact]
-        public void Mutations_WhenCallerIsSuspended_ReturnForbidden()
+        public async Task Mutations_WhenCallerIsSuspended_ReturnForbidden()
         {
-            _employees.Save(new Employee { Id = "u_susp", IsActive = true, IsSuspended = true });
+            _employees.Save(new Employee { Id = "u_susp", IsActive = true, IsSuspended = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
             _channels.Save(new ChatChannel { Id = "c_susp" });
 
             var album = new Album
@@ -1187,15 +1352,15 @@ public class AlbumServiceTests : IDisposable
             };
             _albums.Save(album);
 
-            Assert.Equal("FORBIDDEN", _service.CreateAlbum(new Album { Id = "alb_new_susp" }, "u_susp", "priv").Code);
+            Assert.Equal("FORBIDDEN", _service.CreateAlbum(new Album { Id = "alb_new_susp" }, "u_susp").Code);
             Assert.Equal("FORBIDDEN", _service.RenameAlbum("alb_susp", "u_susp", "Renamed").Code);
             Assert.Equal("FORBIDDEN", _service.AddMedia("alb_susp", "u_susp", [new AlbumMedia { Id = "m2" }]).Code);
-            Assert.Equal("FORBIDDEN", _service.RemoveMedia("alb_susp", "u_susp", new AlbumMedia { Id = "m_susp" }).Code);
-            Assert.Equal("FORBIDDEN", _service.RemoveMediaBulk("alb_susp", "u_susp", ["m_susp"]).Code);
+            Assert.Equal("FORBIDDEN", (await _service.RemoveMediaAsync("alb_susp", "u_susp", "m_susp")).Code);
+            Assert.Equal("FORBIDDEN", (await _service.RemoveMediaBulkAsync("alb_susp", "u_susp", ["m_susp"])).Code);
             Assert.Equal("FORBIDDEN", _service.ShareAlbumWithChannel("alb_susp", "u_susp", "c_susp", "priv").Code);
             Assert.Equal("FORBIDDEN", _service.UnshareAlbumWithChannel("alb_susp", "u_susp", "c_susp").Code);
             Assert.Equal("FORBIDDEN", _service.UpdateContributors("alb_susp", "u_susp", ["u_other"], "priv").Code);
-            Assert.Equal("FORBIDDEN", _service.DeleteAlbum("alb_susp", "u_susp").Code);
+            Assert.Equal("FORBIDDEN", (await _service.DeleteAlbumAsync("alb_susp", "u_susp")).Code);
 
             var persisted = _albums.GetById("alb_susp");
             Assert.NotNull(persisted);
@@ -1214,11 +1379,11 @@ public class AlbumServiceTests : IDisposable
             var companyProfiles = new CompanyProfileRepository(_persistence, _config);
             var serverConfigs = new ServerConfigRepository(_persistence, _config);
             var escrow = new ServerEscrowService(companyProfiles, serverConfigs, realCrypto);
-            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, fileService: fileService);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, _chatAuth, fileService: fileService);
 
             var (pubKey, privKey) = realCrypto.GenerateRsaKeyPair();
 
-            var owner = new Employee { Id = "u_enc_owner", PublicKey = pubKey, EncryptedPrivateKey = "enc-priv", IsActive = true };
+            var owner = new Employee { Id = "u_enc_owner", PublicKey = pubKey, EncryptedPrivateKey = "enc-priv", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
             _employees.Save(owner);
 
             var plainChannelKey = realCrypto.GenerateAesKeyBase64();
@@ -1315,9 +1480,9 @@ public class AlbumServiceTests : IDisposable
             var companyProfiles = new CompanyProfileRepository(_persistence, _config);
             var serverConfigs = new ServerConfigRepository(_persistence, _config);
             var escrow = new ServerEscrowService(companyProfiles, serverConfigs, realCrypto);
-            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, fileService: fileService);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, _chatAuth, fileService: fileService);
 
-            _employees.Save(new Employee { Id = "u_locked", IsActive = true });
+            _employees.Save(new Employee { Id = "u_locked", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
             _channels.Save(new ChatChannel { Id = "c_locked", ChannelType = ChatChannelType.General, IsEncrypted = true });
 
             var result = await service.ImportChatAttachmentsToAlbumAsync(
@@ -1336,7 +1501,7 @@ public class AlbumServiceTests : IDisposable
         [Fact]
         public void GetWritableAlbumsForChannel_FiltersByOwnerAndSharedContributorAlbums()
         {
-            _employees.Save(new Employee { Id = "u_writer", PublicKey = "pub", IsActive = true });
+            _employees.Save(new Employee { Id = "u_writer", PublicKey = "pub", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
             _channels.Save(new ChatChannel { Id = "c_target", ChannelType = ChatChannelType.General });
 
             var ownedAlbum = new Album
@@ -1378,6 +1543,43 @@ public class AlbumServiceTests : IDisposable
             Assert.Contains(writable, a => a.Id == "alb_owned");
             Assert.Contains(writable, a => a.Id == "alb_contrib_shared");
             Assert.DoesNotContain(writable, a => a.Id == "alb_contrib_unshared");
+        }
+
+        [Fact]
+        public void GetPlainAlbumKey_ReadOnlyPath_DoesNotMutateOrPersistAlbum()
+        {
+            var realCrypto = new CryptoService();
+            var escrow = CreateInitializedEscrow(realCrypto);
+            var service = new AlbumService(_albums, _channels, realCrypto, escrow, _employees, _chatAuth);
+
+            var (ownerPub, ownerPriv) = realCrypto.GenerateRsaKeyPair();
+            var (contribPub, _) = realCrypto.GenerateRsaKeyPair();
+            _employees.Save(new Employee { Id = "u_ro_owner", PublicKey = ownerPub, EncryptedPrivateKey = "enc", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _employees.Save(new Employee { Id = "u_ro_contrib", PublicKey = contribPub, EncryptedPrivateKey = "enc", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] });
+            _channels.Save(new ChatChannel { Id = "pub_ro_chan", Name = "General", IsEncrypted = false });
+
+            var plainKey = realCrypto.GenerateAesKeyBase64();
+            var album = new Album
+            {
+                Id = "alb_readonly_check",
+                OwnerId = "u_ro_owner",
+                ContributorUserIds = ["u_ro_contrib"],
+                SharedWithChannelIds = ["pub_ro_chan"],
+                IsEncrypted = true,
+                EncryptedAlbumKeys = new Dictionary<string, string>
+                {
+                    ["u_ro_owner"] = realCrypto.EncryptRsa(plainKey, ownerPub),
+                    ["Escrow"] = realCrypto.EncryptRsa(plainKey, escrow.EscrowPublicKey!)
+                }
+            };
+            _albums.Save(album);
+
+            // Reading the album key must resolve cleanly WITHOUT syncing contributor keys or saving to disk
+            var resolved = service.GetPlainAlbumKey(album, "u_ro_owner", ownerPriv);
+            Assert.Equal(plainKey, resolved);
+
+            var persisted = _albums.GetById("alb_readonly_check")!;
+            Assert.False(persisted.EncryptedAlbumKeys.ContainsKey("u_ro_contrib"));
         }
     }
 

@@ -15,7 +15,8 @@
 param(
     [string]$ServerDir = $PSScriptRoot,
     [switch]$CheckOnly,
-    [switch]$Prune
+    [switch]$Prune,
+    [switch]$PruneSatellitesOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -143,35 +144,38 @@ function Process-LocalizationResource {
     }
 
     if (-not $CheckOnly) {
-        if ($newKeys.Count -gt 0) {
-            foreach ($newKey in $newKeys) {
-                $dataElem = $resxXml.CreateElement("data")
-                $dataElem.SetAttribute("name", $newKey)
-                $dataElem.SetAttribute("xml:space", "preserve")
+        if (-not $PruneSatellitesOnly) {
+            if ($newKeys.Count -gt 0) {
+                foreach ($newKey in $newKeys) {
+                    $dataElem = $resxXml.CreateElement("data")
+                    $dataElem.SetAttribute("name", $newKey)
+                    $dataElem.SetAttribute("xml:space", "preserve")
 
-                $valueElem = $resxXml.CreateElement("value")
-                $valueElem.InnerText = $newKey
-                $null = $dataElem.AppendChild($valueElem)
+                    $valueElem = $resxXml.CreateElement("value")
+                    $valueElem.InnerText = $newKey
+                    $null = $dataElem.AppendChild($valueElem)
 
-                $null = $resxXml.root.AppendChild($dataElem)
+                    $null = $resxXml.root.AppendChild($dataElem)
+                }
+            }
+
+            if ($newKeys.Count -gt 0 -or $prunedKeys.Count -gt 0) {
+                Save-ResxXml $resxXml $resxPath
+                Write-Host "Saved updated $ResourceBaseName.resx (+$($newKeys.Count), -$($prunedKeys.Count))" -ForegroundColor Green
             }
         }
 
-        if ($newKeys.Count -gt 0 -or $prunedKeys.Count -gt 0) {
-            Save-ResxXml $resxXml $resxPath
-            Write-Host "Saved updated $ResourceBaseName.resx (+$($newKeys.Count), -$($prunedKeys.Count))" -ForegroundColor Green
-        }
-
-        # Also prune and deduplicate satellite resx files if pruning
-        if ($Prune) {
+        # Also prune and deduplicate satellite resx files if pruning (case-insensitively to prevent MSB3568 key drops)
+        if ($Prune -or $PruneSatellitesOnly) {
+            $validKeys = if ($PruneSatellitesOnly) { $existingKeys } else { $foundKeys }
             $satelliteFiles = Get-ChildItem -Path $resourcesDir -Filter "$ResourceBaseName.*.resx"
             foreach ($satFile in $satelliteFiles) {
                 [xml]$satXml = [System.IO.File]::ReadAllText($satFile.FullName, [System.Text.Encoding]::UTF8)
                 $satNodesToRemove = @()
-                $seenSatKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+                $seenSatKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
                 foreach ($dataNode in $satXml.root.data) {
                     if ($dataNode.name) {
-                        if ((-not $foundKeys.Contains($dataNode.name)) -or ($seenSatKeys.Contains($dataNode.name))) {
+                        if ((-not $validKeys.Contains($dataNode.name)) -or ($seenSatKeys.Contains($dataNode.name))) {
                             $satNodesToRemove += $dataNode
                         } else {
                             $null = $seenSatKeys.Add($dataNode.name)

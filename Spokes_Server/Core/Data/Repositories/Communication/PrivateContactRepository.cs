@@ -105,11 +105,6 @@ public class PrivateContactRepository
             cache[item.Id] = item;
 
             var contactsDir = Path.Combine(_baseDataPath, "Employees", employeeId, "Contacts");
-            if (!Directory.Exists(contactsDir))
-            {
-                Directory.CreateDirectory(contactsDir);
-            }
-
             var filePath = Path.Combine(contactsDir, $"{item.Id}.json");
             _writer.QueueWrite(filePath, item);
         }

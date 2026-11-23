@@ -1,71 +1,13 @@
 @page "/admin/definitions"
-@attribute [Authorize(Policy = AppPermissions.Admin.ManageSettings)]
-@implements IDisposable
-@using Spokes_Server.Components.Pages.Admin.Features
-@using Spokes_Server.Core.Constants
+@attribute [Authorize]
 @inject NavigationManager Nav
 
-<PageTitle>Definitions</PageTitle>
-
-<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
-    <MudText Typo="Typo.h4" GutterBottom="true">System Definitions</MudText>
-    <MudText Typo="Typo.body1" Class="mb-4">Manage global definitions and settings.</MudText>
-
-    <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Elevation="0" Outlined="true" Border="true" ApplyEffectsToContainer="true" Rounded="true" TabPanelsClass="pa-4">
-        <MudTabPanel Text="Task Definitions" Icon="@Icons.Material.Filled.ListAlt">
-            <WorkTypesList />
-        </MudTabPanel>
-        <MudTabPanel Text="Rate Cards" Icon="@Icons.Material.Filled.PriceChange">
-            <RateCardsList />
-        </MudTabPanel>
-    </MudTabs>
-</MudContainer>
-
-
-
 @code {
-    [SupplyParameterFromQuery] public string? Tab { get; set; }
-    private int activeTabIndex = 0;
-
-    protected override void OnParametersSet()
+    protected override void OnInitialized()
     {
-        if (!string.IsNullOrEmpty(Tab))
-        {
-            activeTabIndex = Tab.ToLower() switch
-            {
-                "work-types" => 0,
-                "rate-cards" => 1,
-                _ => 0
-            };
-        }
-    }
-
-    private bool _isDisposed;
-
-    public void Dispose()
-    {
-        _isDisposed = true;
-    }
-
-    private void UpdateActiveTab(int index)
-    {
-        if (_isDisposed) return;
-
-        activeTabIndex = index;
-
-        if (!Nav.Uri.Contains("/admin/definitions", StringComparison.OrdinalIgnoreCase))
-            return;
-
-        var tabName = index switch
-        {
-            0 => "work-types",
-            1 => "rate-cards",
-            _ => "work-types"
-        };
-        
         try
         {
-            Nav.NavigateTo(Nav.GetUriWithQueryParameter("tab", tabName), replace: true);
+            Nav.NavigateTo("/business/settings?tab=tasks", replace: true);
         }
         catch (Microsoft.AspNetCore.Components.NavigationException)
         {

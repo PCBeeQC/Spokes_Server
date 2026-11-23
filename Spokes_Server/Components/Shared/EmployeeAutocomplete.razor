@@ -20,6 +20,7 @@
                  Disabled="@Disabled"
                  ShrinkLabel="@ShrinkLabel"
                  ShowProgressIndicator="@ShowProgressIndicator"
+                 DebounceInterval="@DebounceInterval"
                  Class="@Class"
                  Style="@Style"
                  Dense="@Dense">
@@ -46,7 +47,6 @@
     [Parameter] public IEnumerable<string>? ExcludedIds { get; set; }
     [Parameter] public Func<string, CancellationToken, Task<IEnumerable<Employee>>>? SearchFunc { get; set; }
     [Parameter] public bool IncludeInactive { get; set; } = false;
-    [Parameter] public bool IncludeSystemUsers { get; set; } = false;
     [Parameter] public bool ResetOnSelect { get; set; } = false;
     [Parameter] public bool ExcludeCurrentUser { get; set; } = false;
     [Parameter] public string? CurrentUserId { get; set; }
@@ -97,6 +97,8 @@
             Value = emp;
         }
     }
+
+    [Parameter] public int DebounceInterval { get; set; } = 350;
 
     private async Task<IEnumerable<Employee>> InternalSearchFunc(string value, CancellationToken ct)
     {

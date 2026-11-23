@@ -27,7 +27,7 @@ public class StorageMaintenanceServiceTests : TestDataTestBase
     {
         var services = new ServiceCollection();
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataPath };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataPath , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
         services.AddSingleton<IConfiguration>(config);
         services.AddLogging();
@@ -44,7 +44,6 @@ public class StorageMaintenanceServiceTests : TestDataTestBase
 
         _maintenanceService = new StorageMaintenanceService(
             _db,
-            mockFileService.Object,
             config,
             NullLogger<StorageMaintenanceService>.Instance);
     }
@@ -219,5 +218,97 @@ public class StorageMaintenanceServiceTests : TestDataTestBase
         Assert.Equal(0, result.OrphansDeleted);
         Assert.True(File.Exists(imgFile));
         Assert.True(File.Exists(canonicalThumbFile));
+    }
+
+    [Fact]
+    public async Task PurgeOrphanedPdfsAsync_PreservesActiveAndDeletesOrphans()
+    {
+        var pdfQuotesDir = Path.Combine(_testDataPath, "PDFs", "Quotes");
+        Directory.CreateDirectory(pdfQuotesDir);
+        var activePdf = Path.Combine(pdfQuotesDir, "q-active.pdf");
+        var orphanPdf = Path.Combine(pdfQuotesDir, "q-orphan.pdf");
+        File.WriteAllText(activePdf, "%PDF active");
+        File.WriteAllText(orphanPdf, "%PDF orphan");
+        File.SetLastWriteTimeUtc(activePdf, DateTime.UtcNow.AddHours(-1));
+        File.SetLastWriteTimeUtc(orphanPdf, DateTime.UtcNow.AddHours(-1));
+
+        _db.Quotes.Save(new Quote { Id = "q-active", ProjectId = "p1", PdfPath = activePdf });
+
+        var result = await _maintenanceService.PurgeOrphanedPdfsAsync(TimeSpan.FromMinutes(15));
+
+        Assert.Equal(2, result.FilesScanned);
+        Assert.Equal(1, result.OrphansDeleted);
+        Assert.True(File.Exists(activePdf));
+        Assert.False(File.Exists(orphanPdf));
+    }
+
+    [Fact]
+    public async Task PurgeOrphanedUploadsAsync_PreservesQuotePdfImagesAndDocumentEmbeddedUrls()
+    {
+        var docFolder = Path.Combine(_uploadsDir, "signatures", "emp-1");
+        Directory.CreateDirectory(docFolder);
+        var sigFile = Path.Combine(docFolder, "sig.png");
+        File.WriteAllText(sigFile, "png bytes");
+        File.SetLastWriteTimeUtc(sigFile, DateTime.UtcNow.AddHours(-1));
+
+        _db.ProjectDocuments.Save(new ProjectDocument
+        {
+            Id = "doc-1",
+            ProjectId = "",
+            ResolvedBody = "<img src=\"/spokesapi/files/signatures/emp-1/sig.png\" />"
+        });
+
+        var result = await _maintenanceService.PurgeOrphanedUploadsAsync(TimeSpan.FromMinutes(15));
+
+        Assert.Equal(1, result.FilesScanned);
+        Assert.Equal(0, result.OrphansDeleted);
+        Assert.True(File.Exists(sigFile));
+    }
+
+    [Fact]
+    public void PurgeStaleDeviceSessions_RemovesSystemRendererHeadlessExpiredAndOldExpiredSessions()
+    {
+        _db.DeviceSessions.Save(new Spokes_Server.Core.Models.Core.DeviceSession
+        {
+            Id = "sr-legacy",
+            EmployeeId = Spokes_Server.Core.Middleware.RenderTokenMiddleware.SystemRendererId,
+            ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+        });
+        _db.DeviceSessions.Save(new Spokes_Server.Core.Models.Core.DeviceSession
+        {
+            Id = "hl-expired",
+            EmployeeId = "emp-1",
+            DeviceName = Spokes_Server.Core.Middleware.RenderTokenMiddleware.HeadlessRendererName,
+            ExpiresAt = DateTime.UtcNow.AddMinutes(-1)
+        });
+        _db.DeviceSessions.Save(new Spokes_Server.Core.Models.Core.DeviceSession
+        {
+            Id = "hl-active",
+            EmployeeId = "emp-1",
+            DeviceName = Spokes_Server.Core.Middleware.RenderTokenMiddleware.HeadlessRendererName,
+            ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+        });
+        _db.DeviceSessions.Save(new Spokes_Server.Core.Models.Core.DeviceSession
+        {
+            Id = "user-old-revoked",
+            EmployeeId = "emp-1",
+            ExpiresAt = DateTime.UtcNow.AddDays(-60),
+            RevokedAt = DateTime.UtcNow.AddDays(-45)
+        });
+        _db.DeviceSessions.Save(new Spokes_Server.Core.Models.Core.DeviceSession
+        {
+            Id = "user-active",
+            EmployeeId = "emp-1",
+            ExpiresAt = DateTime.UtcNow.AddDays(30)
+        });
+
+        var removed = _maintenanceService.PurgeStaleDeviceSessions(TimeSpan.FromDays(30));
+
+        Assert.Equal(3, removed);
+        Assert.Null(_db.DeviceSessions.GetById("sr-legacy"));
+        Assert.Null(_db.DeviceSessions.GetById("hl-expired"));
+        Assert.NotNull(_db.DeviceSessions.GetById("hl-active"));
+        Assert.Null(_db.DeviceSessions.GetById("user-old-revoked"));
+        Assert.NotNull(_db.DeviceSessions.GetById("user-active"));
     }
 }

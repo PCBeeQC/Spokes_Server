@@ -36,7 +36,9 @@ public class UserPrivacyService : IUserPrivacyService
     public bool CanViewDirectory(Employee? caller)
     {
         if (caller == null) return false;
-        if (IsAdmin(caller)) return true;
+        var liveCaller = _employees.GetById(caller.Id) ?? caller;
+        if (!liveCaller.IsActive || liveCaller.IsBanned || liveCaller.IsSystem) return false;
+        if (IsAdmin(liveCaller) || IsUserManager(liveCaller)) return true;
 
         var config = GetPrivacyConfig();
         return config.AllowDirectoryBrowsing;
@@ -47,24 +49,30 @@ public class UserPrivacyService : IUserPrivacyService
         if (target == null) return false;
         if (target.IsSystem || target.Id == AccountDeletionService.SystemDeletedUserId) return false;
         if (caller == null) return false;
-        if (IsAdmin(caller)) return true;
-        if (caller.Id == target.Id) return true;
+        var liveCaller = _employees.GetById(caller.Id) ?? caller;
+        if (!liveCaller.IsActive || liveCaller.IsBanned || liveCaller.IsSystem) return false;
+        if (IsAdmin(liveCaller)) return true;
+        if (liveCaller.Id == target.Id) return true;
 
         // Admin discoverability check
         if (IsDiscoverableAdmin(target)) return true;
 
         // Mutual connected contacts check
-        if (caller.ContactUserIds.Contains(target.Id) || target.ContactUserIds.Contains(caller.Id))
+        if (liveCaller.ContactUserIds.Contains(target.Id) || target.ContactUserIds.Contains(liveCaller.Id))
+            return true;
+
+        // Delegated user managers may browse non-admin directory members without bypassing admin stealth
+        if (IsUserManager(liveCaller) && !target.IsAdmin)
             return true;
 
         var config = GetPrivacyConfig();
         switch (config.BaseScope)
         {
             case NetworkScope.All:
-                return true;
+                return !target.IsAdmin || IsDiscoverableAdmin(target);
 
             case NetworkScope.SameTeam:
-                var callerTeams = GetUserTeamIds(caller);
+                var callerTeams = GetUserTeamIds(liveCaller);
                 var targetTeams = GetUserTeamIds(target);
                 return callerTeams.Overlaps(targetTeams);
 
@@ -75,18 +83,38 @@ public class UserPrivacyService : IUserPrivacyService
         }
     }
 
+    public bool CanViewUserEmail(Employee? caller, Employee? target)
+    {
+        if (target == null || target.IsSystem || target.Id == AccountDeletionService.SystemDeletedUserId)
+            return false;
+        if (caller == null) return false;
+
+        var liveCaller = _employees.GetById(caller.Id) ?? caller;
+        if (!liveCaller.IsActive || liveCaller.IsBanned || liveCaller.IsSystem) return false;
+
+        if (liveCaller.Id == target.Id) return true;
+        if (IsAdmin(liveCaller)) return true;
+        if (IsUserManager(liveCaller) && !target.IsAdmin) return true;
+
+        return target.IsEmailPublic && CanDiscoverUser(liveCaller, target);
+    }
+
     public List<Employee> FilterDiscoverableEmployees(Employee? caller, IEnumerable<Employee> candidates)
     {
         if (caller == null) return [];
-        if (IsAdmin(caller)) return candidates.Where(e => !e.IsSystem && e.Id != AccountDeletionService.SystemDeletedUserId).ToList();
+        var liveCaller = _employees.GetById(caller.Id) ?? caller;
+        if (!liveCaller.IsActive || liveCaller.IsBanned || liveCaller.IsSystem) return [];
+        if (IsAdmin(liveCaller)) return candidates.Where(e => !e.IsSystem && e.Id != AccountDeletionService.SystemDeletedUserId).ToList();
 
-        return candidates.Where(e => CanDiscoverUser(caller, e)).ToList();
+        return candidates.Where(e => CanDiscoverUser(liveCaller, e)).ToList();
     }
 
     public List<Team> FilterDiscoverableTeams(Employee? caller, IEnumerable<Team> teams)
     {
         if (caller == null) return [];
-        if (IsAdmin(caller)) return teams.ToList();
+        var liveCaller = _employees.GetById(caller.Id) ?? caller;
+        if (!liveCaller.IsActive || liveCaller.IsBanned || liveCaller.IsSystem) return [];
+        if (IsAdmin(liveCaller) || IsUserManager(liveCaller)) return teams.ToList();
 
         var config = GetPrivacyConfig();
         switch (config.BaseScope)
@@ -95,7 +123,7 @@ public class UserPrivacyService : IUserPrivacyService
                 return teams.ToList();
 
             case NetworkScope.SameTeam:
-                var callerTeams = GetUserTeamIds(caller);
+                var callerTeams = GetUserTeamIds(liveCaller);
                 return teams.Where(t => callerTeams.Contains(t.Id)).ToList();
 
             case NetworkScope.ContactsOnly:
@@ -108,7 +136,9 @@ public class UserPrivacyService : IUserPrivacyService
     public bool CanCreateCompanyWideEvents(Employee? caller)
     {
         if (caller == null) return false;
-        if (IsAdmin(caller)) return true;
+        var liveCaller = _employees.GetById(caller.Id) ?? caller;
+        if (!liveCaller.IsActiveUnsuspended || liveCaller.IsSystem) return false;
+        if (IsAdmin(liveCaller)) return true;
 
         return GetPrivacyConfig().AllowNonAdminsCompanyWideCalendar;
     }
@@ -117,6 +147,12 @@ public class UserPrivacyService : IUserPrivacyService
     {
         if (caller == null)
             throw new ArgumentNullException(nameof(caller));
+
+        var liveCaller = _employees.GetById(caller.Id);
+        if (!caller.IsActiveUnsuspended || liveCaller is not { IsActiveUnsuspended: true })
+        {
+            return Task.FromResult(new AddContactResult(AddContactStatus.Forbidden, Message: "Suspended or inactive accounts cannot modify contacts."));
+        }
 
         var config = GetPrivacyConfig();
         if (config.DiscoveryMethod == UserDiscoveryMethod.None)
@@ -146,45 +182,31 @@ public class UserPrivacyService : IUserPrivacyService
         var pool = _employees.GetActiveEmployees()
             .Where(e => e.IsActive && !e.IsSuspended && !e.IsBanned && !e.IsSystem && e.Id != AccountDeletionService.SystemDeletedUserId);
 
-        Employee? matched = null;
-
-        if (config.DiscoveryMethod == UserDiscoveryMethod.ExactEmailOnly)
-        {
-            if (trimmed.Contains('@'))
-            {
-                matched = pool.FirstOrDefault(e => string.Equals(e.Email?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
-            }
-        }
-        else // ExactEmailOrUsername or OpenSearch
-        {
-            if (trimmed.Contains('@'))
-            {
-                matched = pool.FirstOrDefault(e => string.Equals(e.Email?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
-            }
-            else
-            {
-                matched = pool.FirstOrDefault(e =>
-                    (!string.IsNullOrEmpty(e.Email) && string.Equals(e.Email.Split('@')[0].Trim(), trimmed, StringComparison.OrdinalIgnoreCase)) ||
-                    string.Equals(e.FullName?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
-            }
-        }
+        var matched = FindExactEmployeeMatch(
+            pool,
+            trimmed,
+            allowUsernameOrName: config.DiscoveryMethod != UserDiscoveryMethod.ExactEmailOnly);
 
         if (matched == null)
         {
             return Task.FromResult(new AddContactResult(AddContactStatus.NotFound, Message: "User not found."));
         }
 
-        if (caller.ContactUserIds.Contains(matched.Id))
+        if (liveCaller.ContactUserIds.Contains(matched.Id))
         {
             return Task.FromResult(new AddContactResult(AddContactStatus.AlreadyConnected, matched, $"{matched.FullName} is already in your contacts."));
         }
 
         // Mutual connection
-        caller.ContactUserIds.Add(matched.Id);
-        matched.ContactUserIds.Add(caller.Id);
+        liveCaller.ContactUserIds.Add(matched.Id);
+        if (!ReferenceEquals(liveCaller, caller) && !caller.ContactUserIds.Contains(matched.Id))
+        {
+            caller.ContactUserIds.Add(matched.Id);
+        }
+        matched.ContactUserIds.Add(liveCaller.Id);
 
         // Atomic persistence per Spokes rules
-        _employees.Save(caller);
+        _employees.Save(liveCaller);
         _employees.Save(matched);
 
         return Task.FromResult(new AddContactResult(AddContactStatus.Success, matched, $"Added {matched.FullName} to your contacts."));
@@ -192,23 +214,49 @@ public class UserPrivacyService : IUserPrivacyService
 
     public Task<bool> RemoveContactAsync(Employee caller, string contactUserId)
     {
-        if (caller == null || string.IsNullOrEmpty(contactUserId))
+        if (caller is not { IsActiveUnsuspended: true } || string.IsNullOrEmpty(contactUserId))
             return Task.FromResult(false);
 
-        var removed = caller.ContactUserIds.Remove(contactUserId);
+        var liveCaller = _employees.GetById(caller.Id);
+        if (liveCaller is not { IsActiveUnsuspended: true })
+            return Task.FromResult(false);
+
+        var removed = liveCaller.ContactUserIds.Remove(contactUserId);
+        if (!ReferenceEquals(liveCaller, caller))
+        {
+            caller.ContactUserIds.Remove(contactUserId);
+        }
         if (removed)
         {
-            _employees.Save(caller);
+            _employees.Save(liveCaller);
         }
 
         // Reciprocal removal
         var target = _employees.GetById(contactUserId);
-        if (target != null && target.ContactUserIds.Remove(caller.Id))
+        if (target != null && target.ContactUserIds.Remove(liveCaller.Id))
         {
             _employees.Save(target);
         }
 
         return Task.FromResult(removed);
+    }
+
+    private static Employee? FindExactEmployeeMatch(IEnumerable<Employee> pool, string trimmedQuery, bool allowUsernameOrName)
+    {
+        if (trimmedQuery.Contains('@'))
+        {
+            return pool.FirstOrDefault(e =>
+                string.Equals(e.Email?.Trim(), trimmedQuery, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!allowUsernameOrName)
+        {
+            return null;
+        }
+
+        return pool.FirstOrDefault(e =>
+            (!string.IsNullOrEmpty(e.Email) && string.Equals(e.Email.Split('@')[0].Trim(), trimmedQuery, StringComparison.OrdinalIgnoreCase)) ||
+            string.Equals(e.FullName?.Trim(), trimmedQuery, StringComparison.OrdinalIgnoreCase));
     }
 
     public List<Employee> GetConnectedContacts(Employee caller)
@@ -233,13 +281,19 @@ public class UserPrivacyService : IUserPrivacyService
             return Task.FromResult(Enumerable.Empty<Employee>());
         }
 
+        var liveCaller = _employees.GetById(caller.Id) ?? caller;
+        if (!liveCaller.IsActive || liveCaller.IsBanned || liveCaller.IsSystem)
+        {
+            return Task.FromResult(Enumerable.Empty<Employee>());
+        }
+
         var source = (candidatePool ?? _employees.GetActiveEmployees())
             .Where(e => e.IsActive && !e.IsSuspended && !e.IsBanned && !e.IsSystem && e.Id != AccountDeletionService.SystemDeletedUserId);
 
         var trimmedQuery = query?.Trim() ?? string.Empty;
 
         // Admin sees all candidates matching query
-        if (IsAdmin(caller))
+        if (IsAdmin(liveCaller))
         {
             if (string.IsNullOrWhiteSpace(trimmedQuery))
             {
@@ -247,7 +301,7 @@ public class UserPrivacyService : IUserPrivacyService
             }
 
             return Task.FromResult(source
-                .Where(e => MatchesQuery(e, trimmedQuery))
+                .Where(e => MatchesQuery(liveCaller, e, trimmedQuery))
                 .OrderBy(e => e.FullName)
                 .Take(maxResults)
                 .AsEnumerable());
@@ -256,45 +310,33 @@ public class UserPrivacyService : IUserPrivacyService
         var config = GetPrivacyConfig();
 
         // 1. Gather all currently discoverable users for this caller
-        var currentlyDiscoverable = source.Where(e => CanDiscoverUser(caller, e));
+        var currentlyDiscoverable = source.Where(e => CanDiscoverUser(liveCaller, e));
 
-        // 2. If out-of-band discovery by exact identifier is enabled, check if the query yields an exact match
+        // 2. If out-of-band discovery by exact identifier is enabled, rate-limit before scanning non-discoverable users
         if (!string.IsNullOrWhiteSpace(trimmedQuery) &&
+            liveCaller.IsActiveUnsuspended &&
+            config.BaseScope != NetworkScope.All &&
             config.DiscoveryMethod is UserDiscoveryMethod.ExactEmailOnly or UserDiscoveryMethod.ExactEmailOrUsername)
         {
-            Employee? exactMatch = null;
-            if (trimmedQuery.Contains('@'))
-            {
-                exactMatch = source.FirstOrDefault(e => string.Equals(e.Email?.Trim(), trimmedQuery, StringComparison.OrdinalIgnoreCase));
-            }
-            else if (config.DiscoveryMethod == UserDiscoveryMethod.ExactEmailOrUsername)
-            {
-                exactMatch = source.FirstOrDefault(e =>
-                    (!string.IsNullOrEmpty(e.Email) && string.Equals(e.Email.Split('@')[0].Trim(), trimmedQuery, StringComparison.OrdinalIgnoreCase)) ||
-                    string.Equals(e.FullName?.Trim(), trimmedQuery, StringComparison.OrdinalIgnoreCase));
-            }
+            bool canCheckOutOfBand = trimmedQuery.Contains('@') ||
+                config.DiscoveryMethod == UserDiscoveryMethod.ExactEmailOrUsername;
 
-            if (exactMatch != null && !CanDiscoverUser(caller, exactMatch))
+            if (canCheckOutOfBand && !IsRateLimited(liveCaller.Id))
             {
-                // Return exact match along with any already discoverable matching users
-                var combined = currentlyDiscoverable.Where(e => MatchesQuery(e, trimmedQuery)).ToList();
-                combined.Insert(0, exactMatch);
-                return Task.FromResult(combined.Take(maxResults).AsEnumerable());
-            }
-        }
+                var outOfBandPool = source.Where(e => !e.IsAdmin || IsDiscoverableAdmin(e));
+                var exactMatch = FindExactEmployeeMatch(
+                    outOfBandPool,
+                    trimmedQuery,
+                    allowUsernameOrName: config.DiscoveryMethod == UserDiscoveryMethod.ExactEmailOrUsername);
 
-        // 3. If in OpenSearch method and BaseScope is All, search across all
-        if (config.DiscoveryMethod == UserDiscoveryMethod.OpenSearch && config.BaseScope == NetworkScope.All)
-        {
-            if (string.IsNullOrWhiteSpace(trimmedQuery))
-            {
-                return Task.FromResult(source.OrderBy(e => e.FullName).Take(maxResults).AsEnumerable());
+                if (exactMatch != null && !CanDiscoverUser(liveCaller, exactMatch))
+                {
+                    // Return exact match along with any already discoverable matching users
+                    var combined = currentlyDiscoverable.Where(e => MatchesQuery(liveCaller, e, trimmedQuery)).ToList();
+                    combined.Insert(0, exactMatch);
+                    return Task.FromResult(combined.Take(maxResults).AsEnumerable());
+                }
             }
-            return Task.FromResult(source
-                .Where(e => MatchesQuery(e, trimmedQuery))
-                .OrderBy(e => e.FullName)
-                .Take(maxResults)
-                .AsEnumerable());
         }
 
         // Standard scoped search
@@ -304,7 +346,7 @@ public class UserPrivacyService : IUserPrivacyService
         }
 
         return Task.FromResult(currentlyDiscoverable
-            .Where(e => MatchesQuery(e, trimmedQuery))
+            .Where(e => MatchesQuery(liveCaller, e, trimmedQuery))
             .OrderBy(e => e.FullName)
             .Take(maxResults)
             .AsEnumerable());
@@ -313,6 +355,8 @@ public class UserPrivacyService : IUserPrivacyService
     public bool CanCreatePublicChannels(Employee? employee)
     {
         if (employee == null) return false;
+        var liveEmployee = _employees.GetById(employee.Id) ?? employee;
+        if (!liveEmployee.IsActiveUnsuspended || liveEmployee.IsSystem) return false;
         var config = GetPrivacyConfig();
         switch (config.PublicChannels)
         {
@@ -322,19 +366,12 @@ public class UserPrivacyService : IUserPrivacyService
 
             case PublicChannelPolicy.AnnouncementOnly:
                 // Only admins can create public announcement broadcast channels
-                return IsAdmin(employee);
+                return IsAdmin(liveEmployee);
 
             case PublicChannelPolicy.Allowed:
             default:
                 return true;
         }
-    }
-
-    public bool CanAccessPublicChannels(Employee? employee)
-    {
-        if (employee == null) return false;
-        var config = GetPrivacyConfig();
-        return config.PublicChannels != PublicChannelPolicy.Disabled;
     }
 
     public bool CanAccessPublicChannel(ChatChannel? channel, Employee? employee)
@@ -364,7 +401,8 @@ public class UserPrivacyService : IUserPrivacyService
     public bool ShouldHideMemberList(ChatChannel? channel, Employee? viewer)
     {
         if (channel == null) return false;
-        if (IsAdmin(viewer)) return false;
+        var liveViewer = viewer == null ? null : (_employees.GetById(viewer.Id) ?? viewer);
+        if (IsAdmin(liveViewer)) return false;
 
         // In Team, Project, and Group channels, the member list is NEVER hidden (teammates need to know who reads messages)
         if (channel.ChannelType == ChatChannelType.Team ||
@@ -388,7 +426,9 @@ public class UserPrivacyService : IUserPrivacyService
     public bool CanReactInChannel(ChatChannel? channel, Employee? employee)
     {
         if (channel == null || employee == null) return false;
-        if (IsAdmin(employee)) return true;
+        var liveEmployee = _employees.GetById(employee.Id) ?? employee;
+        if (!liveEmployee.IsActiveUnsuspended || liveEmployee.IsSystem) return false;
+        if (IsAdmin(liveEmployee)) return true;
 
         var config = GetPrivacyConfig();
         bool isAnnouncement = channel.IsAnnouncementOnly || 
@@ -399,8 +439,8 @@ public class UserPrivacyService : IUserPrivacyService
             if (config.AnnouncementReactions == AnnouncementReactionMode.Disabled)
             {
                 // Only allowed posters can react if reactions are disabled on announcements
-                bool isAllowedPoster = (channel.AllowedPostUserIds != null && channel.AllowedPostUserIds.Contains(employee.Id)) ||
-                                       (channel.AllowedPostTeamIds != null && channel.AllowedPostTeamIds.Any(t => GetUserTeamIds(employee).Contains(t)));
+                bool isAllowedPoster = (channel.AllowedPostUserIds != null && channel.AllowedPostUserIds.Contains(liveEmployee.Id)) ||
+                                       (channel.AllowedPostTeamIds != null && channel.AllowedPostTeamIds.Any(t => GetUserTeamIds(liveEmployee).Contains(t)));
                 return isAllowedPoster;
             }
         }
@@ -411,7 +451,8 @@ public class UserPrivacyService : IUserPrivacyService
     public bool ShouldAnonymizeReactions(ChatChannel? channel, Employee? viewer)
     {
         if (channel == null) return false;
-        if (IsAdmin(viewer)) return false;
+        var liveViewer = viewer == null ? null : (_employees.GetById(viewer.Id) ?? viewer);
+        if (IsAdmin(liveViewer)) return false;
 
         var config = GetPrivacyConfig();
         bool isAnnouncement = channel.IsAnnouncementOnly || 
@@ -428,7 +469,8 @@ public class UserPrivacyService : IUserPrivacyService
     public bool ShouldRestrictAlbumAudience(Album? album, Employee? viewer)
     {
         if (album == null || viewer == null) return false;
-        if (IsAdmin(viewer) || album.OwnerId == viewer.Id) return false;
+        var liveViewer = _employees.GetById(viewer.Id) ?? viewer;
+        if (IsAdmin(liveViewer) || album.OwnerId == liveViewer.Id) return false;
 
         var config = GetPrivacyConfig();
         return config.RestrictAlbumAudienceVisibility || config.HidePublicChannelMemberList;
@@ -465,36 +507,26 @@ public class UserPrivacyService : IUserPrivacyService
         }
     }
 
-    private HashSet<string> GetUserTeamIds(Employee? employee)
-    {
-        if (employee == null) return [];
-
-        var teamIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!string.IsNullOrEmpty(employee.TeamId))
-        {
-            teamIds.Add(employee.TeamId);
-        }
-
-        var ledTeams = _teams.GetAll()
-            .Where(t => t.LeaderId == employee.Id)
-            .Select(t => t.Id);
-
-        foreach (var id in ledTeams)
-        {
-            teamIds.Add(id);
-        }
-
-        return teamIds;
-    }
+    private HashSet<string> GetUserTeamIds(Employee? employee) =>
+        TeamRepository.GetUserTeamIds(_teams, employee?.Id, employee);
 
     private static bool IsAdmin(Employee? caller) =>
-        caller != null && (caller.IsAdmin || caller.HasPermission(AppPermissions.Admin.ManageUsers));
+        caller != null && !caller.IsSystem && caller.IsEffectiveAdmin;
 
-    private static bool MatchesQuery(Employee e, string query)
+    private static bool IsUserManager(Employee? caller) =>
+        caller != null &&
+        !caller.IsSystem &&
+        caller.IsActiveUnsuspended &&
+        !caller.IsAdmin &&
+        (caller.HasPermission(AppPermissions.Admin.ManageUsers) ||
+         caller.HasPermission(AppPermissions.Hr.ManageEmployees));
+
+    private bool MatchesQuery(Employee? caller, Employee target, string query)
     {
         if (string.IsNullOrWhiteSpace(query)) return true;
-        return e.FullName.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               (e.Email?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-               (e.Position?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
+        if (target.FullName.Contains(query, StringComparison.OrdinalIgnoreCase)) return true;
+        if (target.Position?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) return true;
+        return CanViewUserEmail(caller, target) &&
+               (target.Email?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
     }
 }

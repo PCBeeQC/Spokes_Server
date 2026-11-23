@@ -1,0 +1,1027 @@
+@page "/business/accounting/financial-reports/{ReportId}"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.JSInterop
+@using Spokes_Server.Components.Dialogs.Accounting
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Helpers
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Documents
+@using Spokes_Server.Core.Security
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Documents
+@attribute [Authorize(Policy = AppPermissions.Finance.AccessAccounting)]
+@inject Database Db
+@inject IFinancialReportService ReportService
+@inject DocumentPdfService PdfService
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject UserService UserService
+@implements IAsyncDisposable
+
+@if (_report == null)
+{
+    <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-8">
+        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined">
+            @BizLoc["Financial report not found."]
+        </MudAlert>
+        <MudButton Class="mt-4" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">
+            @BizLoc["Back to Accounting"]
+        </MudButton>
+    </MudContainer>
+}
+else
+{
+    var s = _report.Snapshot;
+    var opt = _report.Options;
+    var template = EffectiveTemplate;
+    var isFr = IsFrenchTemplate;
+    var logoSrc = GetLogoSrc(s);
+    var brandColor = !string.IsNullOrWhiteSpace(template.ColorPrimary)
+        ? template.ColorPrimary
+        : (!string.IsNullOrWhiteSpace(_profile?.PrimaryColor) ? _profile.PrimaryColor : "#1e3a5f");
+
+    var reportTitle = string.Equals(_report.Title?.Trim(), "Financial Statements", StringComparison.Ordinal)
+        ? DocumentTemplateHelper.ResolveLabel(isFr, template.Label_FinancialStatements, "Financial Statements", "États financiers")
+        : _report.Title;
+
+    var reportSubtitle = string.Equals(_report.Subtitle?.Trim(), "Prepared for Shareholders & Investors", StringComparison.Ordinal)
+        ? DocumentTemplateHelper.ResolveLabel(isFr, template.Label_FinancialStatementsSubtitle, "Prepared for Shareholders & Investors", "Préparé pour les actionnaires et investisseurs")
+        : _report.Subtitle;
+
+    var basisHeading = DocumentTemplateHelper.ResolveLabel(
+        isFr,
+        template.Label_BasisOfPresentationTitle,
+        "Notice to Reader / Basis of Presentation",
+        "Avis au lecteur / Base de présentation");
+
+    var basisBody = string.Equals(_report.BasisOfPresentationNote?.Trim(), DocumentTemplateHelper.DefaultBasisOfPresentationEn, StringComparison.Ordinal)
+        ? DocumentTemplateHelper.ResolveLabel(
+            isFr,
+            template.Label_BasisOfPresentationDefault,
+            DocumentTemplateHelper.DefaultBasisOfPresentationEn,
+            DocumentTemplateHelper.DefaultBasisOfPresentationFr)
+        : _report.BasisOfPresentationNote;
+
+    var localizedStatus = _report.Status == FinancialReportStatus.Final
+        ? (isFr ? "Définitif" : "Final")
+        : (isFr ? "Brouillon" : "Draft");
+
+    var fiscalYearDisplay = isFr && s.FiscalYearLabel.StartsWith("FY ", StringComparison.OrdinalIgnoreCase)
+        ? $"AF {s.FiscalYearLabel[3..]}"
+        : s.FiscalYearLabel;
+
+    var periodLabel = DocumentTemplateHelper.ResolveLabel(isFr, template.Label_ReportPeriod, "Reporting Period", "Période");
+    var asOfLabel = DocumentTemplateHelper.ResolveLabel(isFr, template.Label_AsOfDate, "As of", "Au");
+    var varianceLabel = DocumentTemplateHelper.ResolveLabel(isFr, template.Label_Variance, "Variance", "Variation");
+
+    var secExecHeading = $"1. {DocumentTemplateHelper.ResolveLabel(isFr, template.Label_ExecutiveSummary, "Executive Summary & Key Financial Highlights", "Résumé exécutif et indicateurs clés").ToUpperInvariant()}";
+    var secPlHeading = $"2. {DocumentTemplateHelper.ResolveLabel(isFr, template.Label_IncomeStatementSection, "Statement of Income (Profit & Loss)", "État des résultats (Pertes et profits)").ToUpperInvariant()}";
+    var secBsHeading = $"3. {DocumentTemplateHelper.ResolveLabel(isFr, template.Label_BalanceSheetSection, "Balance Sheet (Statement of Financial Position)", "Bilan (Situation financière)").ToUpperInvariant()}";
+    var secCfHeading = $"4. {DocumentTemplateHelper.ResolveLabel(isFr, template.Label_CashFlowSection, "Statement of Cash Flows (Indirect Method)", "État des flux de trésorerie (Méthode indirecte)").ToUpperInvariant()}";
+    var secRatiosHeading = $"5. {DocumentTemplateHelper.ResolveLabel(isFr, template.Label_FinancialRatiosSection, "Financial Ratios & Key Metrics", "Ratios financiers et solvabilité").ToUpperInvariant()}";
+    var secNotesHeading = DocumentTemplateHelper.ResolveLabel(isFr, template.Label_ManagementNotesSection, "Notes to Financial Statements & Management Discussion", "Notes complémentaires et rapport de gestion").ToUpperInvariant();
+
+    var mdaParagraphs = string.IsNullOrWhiteSpace(_report.ManagementDiscussionNotes)
+        ? []
+        : _report.ManagementDiscussionNotes
+            .Replace("\r\n", "\n")
+            .Split("\n\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    <PageTitle>@($"{_report.ReportNumber} - {reportTitle}")</PageTitle>
+
+    <style>
+        .fin-section-heading {
+            border-bottom: 2px solid #1e3a5f;
+            color: #1e3a5f;
+            padding-bottom: 4px;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-size: 0.92rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+        .fin-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.84rem;
+            margin-bottom: 12px;
+        }
+        .fin-table th, .fin-table td {
+            padding: 5px 8px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .fin-table th {
+            text-align: left;
+            background: #f8fafc;
+            color: #334155;
+            font-weight: 600;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+        .fin-num {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+        .fin-subtotal {
+            font-weight: 700;
+            background: #f8fafc;
+            border-top: 1px solid #94a3b8;
+            border-bottom: 1px solid #94a3b8;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+        .fin-grandtotal {
+            font-weight: 800;
+            background: #eef2f6;
+            border-top: 2px solid #1e3a5f;
+            border-bottom: 3px double #1e3a5f;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+        .fin-kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        .fin-kpi-card {
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 10px 12px;
+            background: #f8fafc;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+        @("@")media (max-width: 640px) {
+            .fin-kpi-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+    </style>
+
+    <MudContainer MaxWidth="MaxWidth.Large" Class="py-4 pb-8">
+        <div class="d-print-none mb-1">
+            <SpokesBreadcrumbs Items="@(new (string, string?)[] { (BizLoc["Accounting"].Value, "business/accounting?tab=ledger&subtab=shareholder-reports"), (BizLoc["Shareholder & Investor Reports"].Value, "business/accounting?tab=ledger&subtab=shareholder-reports"), (_report.ReportNumber, null) })" />
+        </div>
+
+        @* Top Sticky Print-Hidden Action Bar *@
+        <div class="d-print-none d-flex flex-wrap justify-space-between align-center gap-2 py-2 mb-4"
+             Style="position: sticky; top: 0; z-index: 90; background-color: var(--mud-palette-background); border-bottom: 1px solid var(--mud-palette-divider);">
+            <div class="d-flex align-center gap-2 flex-wrap">
+                <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">
+                    @BizLoc["Back to Accounting"]
+                </MudButton>
+                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                    @($"{_report.ReportNumber} · v{_report.Version}")
+                </MudChip>
+                <MudChip T="string" Size="Size.Small" Color="@(_report.Status == FinancialReportStatus.Final ? Color.Success : Color.Warning)" Variant="Variant.Filled">
+                    @_report.Status
+                </MudChip>
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Default" Icon="@Icons.Material.Filled.Style">
+                    @template.Name
+                </MudChip>
+            </div>
+
+            <div class="d-flex align-center gap-2 flex-wrap">
+                @if (_canWriteAccounting)
+                {
+                    <MudSelect T="string"
+                               Value="@_report.Status"
+                               ValueChanged="OnStatusChangedAsync"
+                               Dense="true"
+                               Margin="Margin.Dense"
+                               Variant="Variant.Outlined"
+                               Style="width: 140px;">
+                        <MudSelectItem Value="@FinancialReportStatus.Draft">@BizLoc["Draft"]</MudSelectItem>
+                        <MudSelectItem Value="@FinancialReportStatus.Final">@BizLoc["Final"]</MudSelectItem>
+                    </MudSelect>
+
+                    @if (_report.Status == FinancialReportStatus.Draft)
+                    {
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Info"
+                                   Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Refresh"
+                                   OnClick="RefreshSnapshotAsync">
+                            @BizLoc["Refresh GL Data"]
+                        </MudButton>
+                    }
+
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Edit"
+                               OnClick="OpenEditDialogAsync">
+                        @Loc["Edit"]
+                    </MudButton>
+                }
+
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           Size="Size.Small"
+                           Disabled="@_isPdfBusy"
+                           StartIcon="@Icons.Material.Filled.PictureAsPdf"
+                           OnClick="DownloadPdfAsync">
+                    @(_isPdfBusy ? BizLoc["Generating PDF..."].Value : BizLoc["Download PDF"].Value)
+                </MudButton>
+
+                <MudIconButton Icon="@Icons.Material.Filled.Print"
+                               Color="Color.Default"
+                               OnClick="@(() => JS.InvokeVoidAsync("window.print"))" />
+            </div>
+        </div>
+
+        @* Formal Investor / Shareholder Statement Document (8.5 x 11 Paginated Sheet) *@
+        <MudPaper Class="mx-auto overflow-hidden" Style="max-width: 8.5in; width: 100%; min-height: 11in;" Elevation="3" id="printable-area">
+            <div class="print-footer-custom">
+                <span>@s.CompanyName</span>
+                <span>@($"{_report.ReportNumber} — {reportTitle} (v{_report.Version})")</span>
+                <span data-page-number style="display:none">{page} / {pages}</span>
+            </div>
+
+            <div class="print-body">
+                @* Header Banner *@
+                <div class="d-flex justify-space-between align-start gap-4 pb-4 keep-together" style="border-bottom: 3px solid #1e3a5f;">
+                    <div class="d-flex align-center gap-3" style="max-width: 56%;">
+                        @if (!string.IsNullOrWhiteSpace(logoSrc))
+                        {
+                            <img src="@logoSrc" alt="@s.CompanyName" style="max-height: 60px; max-width: 150px; object-fit: contain; flex-shrink: 0;" />
+                        }
+                        else
+                        {
+                            var initial = string.IsNullOrWhiteSpace(s.CompanyName) ? "S" : s.CompanyName[..1].ToUpperInvariant();
+                            <MudAvatar Rounded="true"
+                                       Style="@($"width: 52px; height: 52px; font-size: 1.5rem; color: white; background-color: {brandColor}; flex-shrink: 0; -webkit-print-color-adjust: exact;")">
+                                @initial
+                            </MudAvatar>
+                        }
+                        <div>
+                            <div style="font-size: 1.3rem; font-weight: 800; color: #0f172a; line-height: 1.2;">@s.CompanyName</div>
+                            @if (!string.IsNullOrWhiteSpace(s.CompanyAddress))
+                            {
+                                <div style="font-size: 0.8rem; color: #475569; margin-top: 2px;">@s.CompanyAddress</div>
+                            }
+                            <div style="font-size: 0.78rem; color: #64748b; margin-top: 2px;">
+                                @(isFr ? "Devise de présentation" : "Reporting Currency"): @s.Currency · @fiscalYearDisplay
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="text-align: right; max-width: 42%;">
+                        <div style="font-size: 1.15rem; font-weight: 700; color: #1e3a5f; line-height: 1.2;">@reportTitle</div>
+                        @if (!string.IsNullOrWhiteSpace(reportSubtitle))
+                        {
+                            <div style="font-size: 0.86rem; color: #475569; margin-top: 2px;">@reportSubtitle</div>
+                        }
+                        <div style="font-size: 0.82rem; font-weight: 600; margin-top: 6px;">
+                            @periodLabel: @($"{FormatDate(_report.PeriodStart)} → {FormatDate(_report.PeriodEnd)}")
+                        </div>
+                        <div style="font-size: 0.76rem; color: #64748b;">
+                            @($"{_report.ReportNumber} (v{_report.Version} · {localizedStatus})")
+                        </div>
+                    </div>
+                </div>
+
+                @* Compilation Notice / Disclaimer *@
+                <div class="keep-together" style="background: #f8fafc; border-left: 4px solid #1e3a5f; padding: 9px 12px; margin-top: 14px; font-size: 0.78rem; line-height: 1.45; color: #334155; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
+                    <strong>@basisHeading.ToUpperInvariant():</strong>
+                    @basisBody
+                </div>
+
+                @* 1. Executive Summary & KPI Highlights *@
+                @if (opt.IncludeExecutiveSummary)
+                {
+                    <div class="keep-together">
+                        <div class="fin-section-heading keep-with-next">
+                            @secExecHeading
+                        </div>
+
+                        <div class="fin-kpi-grid">
+                            <div class="fin-kpi-card">
+                                <div style="font-size: 0.74rem; color: #64748b;">@(isFr ? "Chiffre d'affaires" : "Revenue")</div>
+                                <div style="font-size: 1.12rem; font-weight: 800;">@FormatMoney(s.Ratios.Revenue)</div>
+                            </div>
+                            <div class="fin-kpi-card">
+                                <div style="font-size: 0.74rem; color: #64748b;">@(isFr ? "Marge brute" : "Gross Profit / Margin")</div>
+                                <div style="font-size: 1.12rem; font-weight: 800;">@FormatMoney(s.Ratios.GrossProfit)</div>
+                                <div style="font-size: 0.74rem; color: #0f766e;">@($"{s.Ratios.GrossMarginPercent:0.0}%")</div>
+                            </div>
+                            <div class="fin-kpi-card">
+                                <div style="font-size: 0.74rem; color: #64748b;">@(isFr ? "BAIIA (EBITDA)" : "EBITDA")</div>
+                                <div style="font-size: 1.12rem; font-weight: 800;">@FormatMoney(s.Ratios.Ebitda)</div>
+                                <div style="font-size: 0.74rem; color: #475569;">@($"{s.Ratios.EbitdaMarginPercent:0.0}%")</div>
+                            </div>
+                            <div class="fin-kpi-card">
+                                <div style="font-size: 0.74rem; color: #64748b;">@(isFr ? "Bénéfice net" : "Net Income")</div>
+                                <div style="font-size: 1.12rem; font-weight: 800; color: @(s.Ratios.NetIncome >= 0 ? "#15803d" : "#b91c1c");">
+                                    @FormatMoney(s.Ratios.NetIncome)
+                                </div>
+                                <div style="font-size: 0.74rem; color: #475569;">@($"{s.Ratios.NetProfitMarginPercent:0.0}%")</div>
+                            </div>
+                            <div class="fin-kpi-card">
+                                <div style="font-size: 0.74rem; color: #64748b;">@(isFr ? "Trésorerie nette" : "Cash & Equivalents")</div>
+                                <div style="font-size: 1.12rem; font-weight: 800;">@FormatMoney(s.Ratios.CashAndEquivalents)</div>
+                                @if (s.Ratios.RunwayMonths.HasValue)
+                                {
+                                    <div style="font-size: 0.74rem; color: #b45309;">
+                                        @(isFr ? $"{s.Ratios.RunwayMonths:0.0} mois d'autonomie" : $"{s.Ratios.RunwayMonths:0.0} mo runway")
+                                    </div>
+                                }
+                            </div>
+                            <div class="fin-kpi-card">
+                                <div style="font-size: 0.74rem; color: #64748b;">@(isFr ? "Fonds de roulement" : "Working Capital")</div>
+                                <div style="font-size: 1.12rem; font-weight: 800;">@FormatMoney(s.Ratios.WorkingCapital)</div>
+                                <div style="font-size: 0.74rem; color: #475569;">
+                                    @(isFr ? $"Ratio de liquidité : {s.Ratios.CurrentRatio:0.00}x" : $"Current Ratio: {s.Ratios.CurrentRatio:0.00}x")
+                                </div>
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(_report.ExecutiveSummary) && _report.ExecutiveSummary.Length <= 600)
+                        {
+                            <div style="white-space: pre-line; font-size: 0.86rem; line-height: 1.5; color: #1e293b; margin-bottom: 10px;">
+                                @_report.ExecutiveSummary
+                            </div>
+                        }
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_report.ExecutiveSummary) && _report.ExecutiveSummary.Length > 600)
+                    {
+                        <div class="allow-break" style="font-size: 0.86rem; line-height: 1.5; color: #1e293b; margin-bottom: 10px;">
+                            @foreach (var p in _report.ExecutiveSummary.Replace("\r\n", "\n").Split("\n\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                            {
+                                <p class="keep-together mb-2" style="white-space: pre-line;">@p</p>
+                            }
+                        </div>
+                    }
+                }
+
+                @* 2. Statement of Income (P&L) *@
+                @if (opt.IncludeIncomeStatement)
+                {
+                    var showComp = opt.IncludeComparativePriorPeriod && s.PriorIncomeStatement != null;
+                    var pl = s.IncomeStatement;
+                    var prevPl = s.PriorIncomeStatement;
+                    var plRowCount = pl.RevenueLines.Count + pl.DirectCostLines.Count + pl.PayrollExpenseLines.Count + pl.OverheadExpenseLines.Count + 6;
+                    var plContainerClass = plRowCount <= CompactSectionRowThreshold ? "keep-together" : "allow-break";
+
+                    <div class="@plContainerClass">
+                        <div class="fin-section-heading keep-together keep-with-next">
+                            @secPlHeading
+                        </div>
+
+                        <table class="fin-table allow-break">
+                            <thead class="repeat-on-break keep-with-next">
+                                <tr>
+                                    <th>@(isFr ? "Poste" : "Line Item")</th>
+                                    <th class="fin-num">@($"{FormatDate(s.PeriodStart)} → {FormatDate(s.PeriodEnd)}")</th>
+                                    @if (showComp)
+                                    {
+                                        <th class="fin-num">@($"{FormatDate(s.PriorPeriodStart!.Value)} → {FormatDate(s.PriorPeriodEnd!.Value)}")</th>
+                                        <th class="fin-num">@varianceLabel</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody class="allow-break">
+                                <tr class="keep-together keep-with-next"><td colspan="@(showComp ? 4 : 2)"><strong>@(isFr ? "Revenus" : "Revenue")</strong></td></tr>
+                                @foreach (var line in pl.RevenueLines)
+                                {
+                                    var prevAmt = prevPl?.RevenueLines.FirstOrDefault(x => x.AccountCode == line.AccountCode)?.Amount ?? 0m;
+                                    var acctLabel = GetLineAccountName(line, isFr);
+                                    <tr class="keep-together">
+                                        <td style="padding-left: 18px;">@(opt.ShowGlAccountCodes ? $"{line.AccountCode} — {acctLabel}" : acctLabel)</td>
+                                        <td class="fin-num">@FormatNumber(line.Amount)</td>
+                                        @if (showComp)
+                                        {
+                                            <td class="fin-num">@FormatNumber(prevAmt)</td>
+                                            <td class="fin-num">@FormatVariance(line.Amount - prevAmt)</td>
+                                        }
+                                    </tr>
+                                }
+                                <tr class="fin-subtotal keep-together">
+                                    <td>@(isFr ? "Total des revenus" : "Total Revenue")</td>
+                                    <td class="fin-num">@FormatNumber(pl.TotalRevenue)</td>
+                                    @if (showComp)
+                                    {
+                                        <td class="fin-num">@FormatNumber(prevPl!.TotalRevenue)</td>
+                                        <td class="fin-num">@FormatVariance(pl.TotalRevenue - prevPl.TotalRevenue)</td>
+                                    }
+                                </tr>
+
+                                @if (pl.DirectCostLines.Count > 0 || (prevPl?.DirectCostLines.Count ?? 0) > 0)
+                                {
+                                    <tr class="keep-together keep-with-next"><td colspan="@(showComp ? 4 : 2)"><strong>@(isFr ? "Coût des ventes et services directs" : "Cost of Goods Sold & Direct Costs")</strong></td></tr>
+                                    @foreach (var line in pl.DirectCostLines)
+                                    {
+                                        var prevAmt = prevPl?.DirectCostLines.FirstOrDefault(x => x.AccountCode == line.AccountCode)?.Amount ?? 0m;
+                                        var acctLabel = GetLineAccountName(line, isFr);
+                                        <tr class="keep-together">
+                                            <td style="padding-left: 18px;">@(opt.ShowGlAccountCodes ? $"{line.AccountCode} — {acctLabel}" : acctLabel)</td>
+                                            <td class="fin-num">@FormatNumber(line.Amount)</td>
+                                            @if (showComp)
+                                            {
+                                                <td class="fin-num">@FormatNumber(prevAmt)</td>
+                                                <td class="fin-num">@FormatVariance(line.Amount - prevAmt)</td>
+                                            }
+                                        </tr>
+                                    }
+                                    <tr class="fin-subtotal keep-together">
+                                        <td>@(isFr ? "Marge brute" : "Gross Profit")</td>
+                                        <td class="fin-num">@FormatNumber(pl.GrossProfit)</td>
+                                        @if (showComp)
+                                        {
+                                            <td class="fin-num">@FormatNumber(prevPl!.GrossProfit)</td>
+                                            <td class="fin-num">@FormatVariance(pl.GrossProfit - prevPl.GrossProfit)</td>
+                                        }
+                                    </tr>
+                                }
+
+                                <tr class="keep-together keep-with-next"><td colspan="@(showComp ? 4 : 2)"><strong>@(isFr ? "Charges d'exploitation" : "Operating Expenses")</strong></td></tr>
+                                @foreach (var line in pl.PayrollExpenseLines.Concat(pl.OverheadExpenseLines))
+                                {
+                                    var prevAmt = prevPl == null ? 0m : prevPl.PayrollExpenseLines.Concat(prevPl.OverheadExpenseLines).FirstOrDefault(x => x.AccountCode == line.AccountCode)?.Amount ?? 0m;
+                                    var acctLabel = GetLineAccountName(line, isFr);
+                                    <tr class="keep-together">
+                                        <td style="padding-left: 18px;">@(opt.ShowGlAccountCodes ? $"{line.AccountCode} — {acctLabel}" : acctLabel)</td>
+                                        <td class="fin-num">@FormatNumber(line.Amount)</td>
+                                        @if (showComp)
+                                        {
+                                            <td class="fin-num">@FormatNumber(prevAmt)</td>
+                                            <td class="fin-num">@FormatVariance(line.Amount - prevAmt)</td>
+                                        }
+                                    </tr>
+                                }
+                                <tr class="fin-subtotal keep-together">
+                                    <td>@(isFr ? "Total des charges d'exploitation" : "Total Operating Expenses")</td>
+                                    <td class="fin-num">@FormatNumber(pl.TotalOperatingExpenses)</td>
+                                    @if (showComp)
+                                    {
+                                        <td class="fin-num">@FormatNumber(prevPl!.TotalOperatingExpenses)</td>
+                                        <td class="fin-num">@FormatVariance(pl.TotalOperatingExpenses - prevPl.TotalOperatingExpenses)</td>
+                                    }
+                                </tr>
+                                <tr class="fin-grandtotal keep-together">
+                                    <td>@(isFr ? "Bénéfice net (Perte nette)" : "Net Income (Loss)")</td>
+                                    <td class="fin-num">@FormatMoney(pl.NetIncome)</td>
+                                    @if (showComp)
+                                    {
+                                        <td class="fin-num">@FormatMoney(prevPl!.NetIncome)</td>
+                                        <td class="fin-num">@FormatVariance(pl.NetIncome - prevPl.NetIncome)</td>
+                                    }
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                }
+
+                @* 3. Statement of Financial Position (Balance Sheet) *@
+                @if (opt.IncludeBalanceSheet)
+                {
+                    var bs = s.BalanceSheet;
+                    var prevBs = s.PriorBalanceSheet;
+                    var showComp = opt.IncludeComparativePriorPeriod && prevBs != null;
+                    var bsRowCount = bs.AssetLines.Count + bs.LiabilityLines.Count + bs.EquityLines.Count + 7;
+                    var bsContainerClass = bsRowCount <= CompactSectionRowThreshold ? "keep-together" : "allow-break";
+
+                    <div class="@bsContainerClass">
+                        <div class="fin-section-heading keep-together keep-with-next">
+                            @secBsHeading
+                        </div>
+
+                        <table class="fin-table allow-break">
+                            <thead class="repeat-on-break keep-with-next">
+                                <tr>
+                                    <th>@(isFr ? "Actifs, Passifs et Capitaux propres" : "Assets, Liabilities & Equity")</th>
+                                    <th class="fin-num">@FormatDate(bs.AsOfDate)</th>
+                                    @if (showComp)
+                                    {
+                                        <th class="fin-num">@FormatDate(prevBs!.AsOfDate)</th>
+                                        <th class="fin-num">@(isFr ? "Variation" : "Change")</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody class="allow-break">
+                                <tr class="keep-together keep-with-next"><td colspan="@(showComp ? 4 : 2)"><strong>@(isFr ? "ACTIFS" : "ASSETS")</strong></td></tr>
+                                @foreach (var line in bs.AssetLines)
+                                {
+                                    var prevAmt = prevBs?.AssetLines.FirstOrDefault(x => x.AccountCode == line.AccountCode)?.Amount ?? 0m;
+                                    var acctLabel = GetLineAccountName(line, isFr);
+                                    <tr class="keep-together">
+                                        <td style="padding-left: 18px;">@(opt.ShowGlAccountCodes ? $"{line.AccountCode} — {acctLabel}" : acctLabel)</td>
+                                        <td class="fin-num">@FormatNumber(line.Amount)</td>
+                                        @if (showComp)
+                                        {
+                                            <td class="fin-num">@FormatNumber(prevAmt)</td>
+                                            <td class="fin-num">@FormatVariance(line.Amount - prevAmt)</td>
+                                        }
+                                    </tr>
+                                }
+                                <tr class="fin-grandtotal keep-together">
+                                    <td>@(isFr ? "Total de l'actif" : "Total Assets")</td>
+                                    <td class="fin-num">@FormatMoney(bs.TotalAssets)</td>
+                                    @if (showComp)
+                                    {
+                                        <td class="fin-num">@FormatMoney(prevBs!.TotalAssets)</td>
+                                        <td class="fin-num">@FormatVariance(bs.TotalAssets - prevBs.TotalAssets)</td>
+                                    }
+                                </tr>
+
+                                <tr class="keep-together keep-with-next"><td colspan="@(showComp ? 4 : 2)" style="padding-top: 10px;"><strong>@(isFr ? "PASSIFS" : "LIABILITIES")</strong></td></tr>
+                                @foreach (var line in bs.LiabilityLines)
+                                {
+                                    var prevAmt = prevBs?.LiabilityLines.FirstOrDefault(x => x.AccountCode == line.AccountCode)?.Amount ?? 0m;
+                                    var acctLabel = GetLineAccountName(line, isFr);
+                                    <tr class="keep-together">
+                                        <td style="padding-left: 18px;">@(opt.ShowGlAccountCodes ? $"{line.AccountCode} — {acctLabel}" : acctLabel)</td>
+                                        <td class="fin-num">@FormatNumber(line.Amount)</td>
+                                        @if (showComp)
+                                        {
+                                            <td class="fin-num">@FormatNumber(prevAmt)</td>
+                                            <td class="fin-num">@FormatVariance(line.Amount - prevAmt)</td>
+                                        }
+                                    </tr>
+                                }
+                                <tr class="fin-subtotal keep-together">
+                                    <td>@(isFr ? "Total du passif" : "Total Liabilities")</td>
+                                    <td class="fin-num">@FormatNumber(bs.TotalLiabilities)</td>
+                                    @if (showComp)
+                                    {
+                                        <td class="fin-num">@FormatNumber(prevBs!.TotalLiabilities)</td>
+                                        <td class="fin-num">@FormatVariance(bs.TotalLiabilities - prevBs.TotalLiabilities)</td>
+                                    }
+                                </tr>
+
+                                <tr class="keep-together keep-with-next"><td colspan="@(showComp ? 4 : 2)" style="padding-top: 10px;"><strong>@(isFr ? "CAPITAUX PROPRES" : "SHAREHOLDERS' EQUITY")</strong></td></tr>
+                                @foreach (var line in bs.EquityLines)
+                                {
+                                    var prevAmt = prevBs?.EquityLines.FirstOrDefault(x => x.AccountCode == line.AccountCode)?.Amount ?? 0m;
+                                    var acctLabel = GetLineAccountName(line, isFr);
+                                    <tr class="keep-together">
+                                        <td style="padding-left: 18px;">@(opt.ShowGlAccountCodes ? $"{line.AccountCode} — {acctLabel}" : acctLabel)</td>
+                                        <td class="fin-num">@FormatNumber(line.Amount)</td>
+                                        @if (showComp)
+                                        {
+                                            <td class="fin-num">@FormatNumber(prevAmt)</td>
+                                            <td class="fin-num">@FormatVariance(line.Amount - prevAmt)</td>
+                                        }
+                                    </tr>
+                                }
+                                <tr class="keep-together">
+                                    <td style="padding-left: 18px;">@(isFr ? "Bénéfice net de l'exercice en cours" : "Current Year Net Income")</td>
+                                    <td class="fin-num">@FormatNumber(bs.CurrentYearNetIncome)</td>
+                                    @if (showComp)
+                                    {
+                                        <td class="fin-num">@FormatNumber(prevBs!.CurrentYearNetIncome)</td>
+                                        <td class="fin-num">@FormatVariance(bs.CurrentYearNetIncome - prevBs.CurrentYearNetIncome)</td>
+                                    }
+                                </tr>
+                                <tr class="fin-subtotal keep-together">
+                                    <td>@(isFr ? "Total des capitaux propres" : "Total Shareholders' Equity")</td>
+                                    <td class="fin-num">@FormatNumber(bs.TotalEquity)</td>
+                                    @if (showComp)
+                                    {
+                                        <td class="fin-num">@FormatNumber(prevBs!.TotalEquity)</td>
+                                        <td class="fin-num">@FormatVariance(bs.TotalEquity - prevBs.TotalEquity)</td>
+                                    }
+                                </tr>
+                                <tr class="fin-grandtotal keep-together">
+                                    <td>@(isFr ? "Total du passif et des capitaux propres" : "Total Liabilities & Shareholders' Equity")</td>
+                                    <td class="fin-num">@FormatMoney(bs.TotalLiabilitiesAndEquity)</td>
+                                    @if (showComp)
+                                    {
+                                        <td class="fin-num">@FormatMoney(prevBs!.TotalLiabilitiesAndEquity)</td>
+                                        <td class="fin-num">@FormatVariance(bs.TotalLiabilitiesAndEquity - prevBs.TotalLiabilitiesAndEquity)</td>
+                                    }
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                }
+
+                @* 4. Statement of Cash Flows (Indirect Method) *@
+                @if (opt.IncludeCashFlowStatement)
+                {
+                    var cf = s.CashFlow;
+                    var cfRowCount = cf.OperatingLines.Count + cf.InvestingLines.Count + cf.FinancingLines.Count + 7;
+                    var cfContainerClass = cfRowCount <= CompactSectionRowThreshold ? "keep-together" : "allow-break";
+
+                    <div class="@cfContainerClass">
+                        <div class="fin-section-heading keep-together keep-with-next">
+                            @secCfHeading
+                        </div>
+
+                        <table class="fin-table allow-break">
+                            <thead class="repeat-on-break keep-with-next">
+                                <tr>
+                                    <th>@(isFr ? "Flux de trésorerie" : "Cash Flow Component")</th>
+                                    <th class="fin-num">@($"{FormatDate(s.PeriodStart)} → {FormatDate(s.PeriodEnd)}")</th>
+                                </tr>
+                            </thead>
+                            <tbody class="allow-break">
+                                <tr class="keep-together keep-with-next"><td colspan="2"><strong>@(isFr ? "Activités d'exploitation" : "Operating Activities")</strong></td></tr>
+                                <tr class="keep-together">
+                                    <td style="padding-left: 18px;">@(isFr ? "Bénéfice net de la période" : "Net Income for the Period")</td>
+                                    <td class="fin-num">@FormatNumber(cf.NetIncome)</td>
+                                </tr>
+                                @foreach (var line in cf.OperatingLines)
+                                {
+                                    <tr class="keep-together">
+                                        <td style="padding-left: 18px;">@(isFr ? line.LabelFr : line.Label)</td>
+                                        <td class="fin-num">@FormatNumber(line.Amount)</td>
+                                    </tr>
+                                }
+                                <tr class="fin-subtotal keep-together">
+                                    <td>@(isFr ? "Flux de trésorerie liés aux activités d'exploitation" : "Net Cash Provided by (Used in) Operating Activities")</td>
+                                    <td class="fin-num">@FormatNumber(cf.NetCashFromOperating)</td>
+                                </tr>
+
+                                @if (cf.InvestingLines.Count > 0)
+                                {
+                                    <tr class="keep-together keep-with-next"><td colspan="2" style="padding-top: 10px;"><strong>@(isFr ? "Activités d'investissement" : "Investing Activities")</strong></td></tr>
+                                    @foreach (var line in cf.InvestingLines)
+                                    {
+                                        <tr class="keep-together">
+                                            <td style="padding-left: 18px;">@(isFr ? line.LabelFr : line.Label)</td>
+                                            <td class="fin-num">@FormatNumber(line.Amount)</td>
+                                        </tr>
+                                    }
+                                    <tr class="fin-subtotal keep-together">
+                                        <td>@(isFr ? "Flux de trésorerie liés aux activités d'investissement" : "Net Cash Used in Investing Activities")</td>
+                                        <td class="fin-num">@FormatNumber(cf.NetCashFromInvesting)</td>
+                                    </tr>
+                                }
+
+                                @if (cf.FinancingLines.Count > 0)
+                                {
+                                    <tr class="keep-together keep-with-next"><td colspan="2" style="padding-top: 10px;"><strong>@(isFr ? "Activités de financement" : "Financing Activities")</strong></td></tr>
+                                    @foreach (var line in cf.FinancingLines)
+                                    {
+                                        <tr class="keep-together">
+                                            <td style="padding-left: 18px;">@(isFr ? line.LabelFr : line.Label)</td>
+                                            <td class="fin-num">@FormatNumber(line.Amount)</td>
+                                        </tr>
+                                    }
+                                    <tr class="fin-subtotal keep-together">
+                                        <td>@(isFr ? "Flux de trésorerie liés aux activités de financement" : "Net Cash Provided by (Used in) Financing Activities")</td>
+                                        <td class="fin-num">@FormatNumber(cf.NetCashFromFinancing)</td>
+                                    </tr>
+                                }
+
+                                <tr class="fin-subtotal keep-together">
+                                    <td>@(isFr ? "Variation nette de la trésorerie" : "Net Increase (Decrease) in Cash")</td>
+                                    <td class="fin-num">@FormatNumber(cf.NetChangeInCash)</td>
+                                </tr>
+                                <tr class="keep-together">
+                                    <td>@(isFr ? "Trésorerie à l'ouverture" : "Cash at Beginning of Period")</td>
+                                    <td class="fin-num">@FormatNumber(cf.OpeningCashBalance)</td>
+                                </tr>
+                                <tr class="fin-grandtotal keep-together">
+                                    <td>@(isFr ? "Trésorerie à la clôture" : "Cash at End of Period")</td>
+                                    <td class="fin-num">@FormatMoney(cf.ClosingCashBalance)</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                }
+
+                @* 5. Financial Ratios & Notes *@
+                @if (opt.IncludeFinancialRatios)
+                {
+                    <div class="keep-together">
+                        <div class="fin-section-heading keep-with-next">
+                            @secRatiosHeading
+                        </div>
+                        <table class="fin-table">
+                            <tbody>
+                                <tr>
+                                    <td>@(isFr ? "Ratio de liquidité générale" : "Current Ratio (Current Assets / Current Liabilities)")</td>
+                                    <td class="fin-num">@($"{s.Ratios.CurrentRatio:0.00}x")</td>
+                                    <td>@(isFr ? "Ratio de liquidité immédiate" : "Quick Ratio ((Cash + AR) / Current Liabilities)")</td>
+                                    <td class="fin-num">@($"{s.Ratios.QuickRatio:0.00}x")</td>
+                                </tr>
+                                <tr>
+                                    <td>@(isFr ? "Ratio d'endettement (Dette / Capitaux propres)" : "Debt-to-Equity Ratio")</td>
+                                    <td class="fin-num">@($"{s.Ratios.DebtToEquityRatio:0.00}x")</td>
+                                    <td>@(isFr ? "Rendement des capitaux propres (ROE)" : "Return on Equity (ROE)")</td>
+                                    <td class="fin-num">@($"{s.Ratios.ReturnOnEquityPercent:0.0}%")</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                }
+
+                @if (mdaParagraphs.Length > 0)
+                {
+                    var notesContainerClass = mdaParagraphs.Length <= 3 ? "keep-together" : "allow-break";
+                    <div class="@notesContainerClass">
+                        <div class="fin-section-heading keep-together keep-with-next">
+                            @secNotesHeading
+                        </div>
+                        <div class="allow-break" style="font-size: 0.86rem; line-height: 1.5; color: #1e293b;">
+                            @foreach (var para in mdaParagraphs)
+                            {
+                                <p class="keep-together mb-2" style="white-space: pre-line;">@para</p>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @* Sign-Off Footer *@
+                <div class="d-flex justify-space-between align-end gap-4 mt-6 pt-3 keep-together" style="border-top: 1px solid #cbd5e1; font-size: 0.8rem; color: #475569;">
+                    <div>
+                        <div><strong>@(isFr ? "Préparé par" : "Prepared By"):</strong> @_report.PreparedByName</div>
+                        <div><strong>@(isFr ? "Approuvé par" : "Approved By"):</strong> @(string.IsNullOrWhiteSpace(_report.ApprovedByName) ? "—" : _report.ApprovedByName)</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div><strong>@(isFr ? "Écritures au Grand Livre" : "Posted GL Entries"):</strong> @s.PostedJournalEntryCount</div>
+                        <div><strong>@(isFr ? "Dernière mise à jour (UTC)" : "Last Updated (UTC)"):</strong> @($"{FormatDate(_report.UpdatedAt)} {_report.UpdatedAt:HH:mm}")</div>
+                    </div>
+                </div>
+            </div>
+        </MudPaper>
+
+        @* Audit History (Screen-Only) *@
+        <MudPaper Class="pa-4 mt-4 d-print-none mx-auto" Style="max-width: 8.5in; width: 100%;" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.subtitle2" Class="mb-2"><b>@BizLoc["Document Audit History"]</b></MudText>
+            <MudTable Items="@_report.History.OrderByDescending(h => h.Timestamp)" Dense="true" Hover="true" Outlined="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>@BizLoc["Date (UTC)"]</MudTh>
+                    <MudTh>@BizLoc["Action"]</MudTh>
+                    <MudTh>@BizLoc["User"]</MudTh>
+                    <MudTh>@BizLoc["Details"]</MudTh>
+                </HeaderContent>
+                <RowTemplate Context="h">
+                    <MudTd>@h.Timestamp.ToString("yyyy-MM-dd HH:mm")</MudTd>
+                    <MudTd>@h.Action</MudTd>
+                    <MudTd>@h.ChangedBy</MudTd>
+                    <MudTd>@h.Summary</MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
+    </MudContainer>
+}
+
+@code {
+    [Parameter] public string ReportId { get; set; } = string.Empty;
+
+    private const int PageHeight = 940;
+    private const int CompactSectionRowThreshold = 22;
+
+    private FinancialReport? _report;
+    private CompanyProfile? _profile;
+    private DocumentTemplate? _template;
+    private Employee? _currentUser;
+    private Dictionary<string, GlAccount> _glAccountsByCode = new(StringComparer.OrdinalIgnoreCase);
+    private string? _loadedReportId;
+    private bool _needsPagination;
+    private bool _isPdfBusy;
+    private bool _canWriteAccounting;
+
+    private DocumentTemplate EffectiveTemplate => _template ?? new DocumentTemplate();
+    private bool IsFrenchTemplate => DocumentTemplateHelper.IsFrench(
+        _template,
+        _report?.Options.Language,
+        hasExplicitTemplate: !string.IsNullOrWhiteSpace(_report?.TemplateId));
+
+    protected override void OnInitialized()
+    {
+        Db.CompanyProfile.OnSaved += OnProfileOrTemplateSaved;
+        Db.DocumentTemplates.OnSaved += OnProfileOrTemplateSaved;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var changed = !string.Equals(_loadedReportId, ReportId, StringComparison.Ordinal);
+        _report = null;
+        await LoadReportStateAsync();
+        _loadedReportId = ReportId;
+
+        if (changed && _report != null)
+        {
+            _needsPagination = true;
+        }
+    }
+
+    private async Task LoadReportStateAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        _canWriteAccounting = _currentUser != null
+            && !_currentUser.IsSystem
+            && _currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false);
+
+        if (_currentUser == null || !_currentUser.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: true))
+        {
+            _report = null;
+            return;
+        }
+
+        _report = ReportService.GetById(ReportId, _currentUser);
+        _profile = Db.CompanyProfile.Get();
+        _glAccountsByCode = (Db.GlAccounts?.GetAll() ?? [])
+            .GroupBy(a => a.Code, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        _template = _report != null
+            ? DocumentTemplateHelper.ResolveEffectiveTemplate(_report.TemplateId, Db.DocumentTemplates, _report.Options.Language)
+            : Db.DocumentTemplates.GetDefault();
+    }
+
+    private void OnProfileOrTemplateSaved(object? _)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await LoadReportStateAsync();
+            _needsPagination = true;
+            StateHasChanged();
+        });
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if ((firstRender || _needsPagination) && _report != null)
+        {
+            _needsPagination = false;
+            try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); } catch { }
+            try { await JS.InvokeVoidAsync("paginateSections", "printable-area", PageHeight); }
+            catch { /* pagination failed, single-page fallback */ }
+        }
+    }
+
+    private async Task RefreshViewerAsync()
+    {
+        await LoadReportStateAsync();
+        try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); } catch { }
+        _needsPagination = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Db.CompanyProfile.OnSaved -= OnProfileOrTemplateSaved;
+        Db.DocumentTemplates.OnSaved -= OnProfileOrTemplateSaved;
+        try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
+        catch { /* component already disposed or JS unavailable */ }
+    }
+
+    private string GetLineAccountName(FinancialStatementLine line, bool isFr)
+    {
+        if (isFr)
+        {
+            if (!string.IsNullOrWhiteSpace(line.AccountNameFr))
+                return line.AccountNameFr;
+
+            if (_glAccountsByCode.TryGetValue(line.AccountCode, out var acct) &&
+                !string.IsNullOrWhiteSpace(acct.NameFr))
+            {
+                return acct.NameFr;
+            }
+        }
+
+        return line.GetLocalizedName(isFr);
+    }
+
+    private string FormatMoney(decimal amount) => DocumentTemplateHelper.FormatCurrency(EffectiveTemplate, amount, includeSymbol: true);
+    private string FormatNumber(decimal amount) => DocumentTemplateHelper.FormatCurrency(EffectiveTemplate, amount, includeSymbol: false);
+    private string FormatVariance(decimal variance) => DocumentTemplateHelper.FormatSignedVariance(EffectiveTemplate, variance);
+    private string FormatDate(DateTime date) => DocumentTemplateHelper.FormatDate(EffectiveTemplate, date);
+
+    private string? GetLogoSrc(FinancialReportSnapshot s)
+    {
+        if (!string.IsNullOrWhiteSpace(s.CompanyLogoPath))
+        {
+            var raw = s.CompanyLogoPath.Trim();
+            if (raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                || raw.StartsWith("/", StringComparison.Ordinal)
+                || raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || raw.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                return raw;
+            }
+
+            return $"data:image/png;base64,{raw}";
+        }
+
+        if (_profile?.HasCustomLogo == true)
+        {
+            return $"/spokesapi/Media/Logo?v={_profile.LogoVersion}";
+        }
+
+        return null;
+    }
+
+    private async Task GoBack()
+    {
+        try { await JS.InvokeVoidAsync("scrollMainToTop"); } catch { }
+        Nav.NavigateTo("/business/accounting?tab=ledger&subtab=shareholder-reports");
+    }
+
+    private async Task OnStatusChangedAsync(string newStatus)
+    {
+        if (_report == null || newStatus == _report.Status) return;
+
+        try
+        {
+            var actor = await RequireActiveAccountingActorAsync("update report status");
+            _report = ReportService.ChangeStatus(_report.Id, newStatus, actor.Id, GetActorDisplayName(actor), actor: actor);
+            Snackbar.Add(string.Format(BizLoc["Report status updated to {0}."].Value, _report.Status), Severity.Success);
+            await RefreshViewerAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task RefreshSnapshotAsync()
+    {
+        if (_report == null) return;
+
+        try
+        {
+            var actor = await RequireActiveAccountingActorAsync("recalculate financial report");
+            _report = ReportService.UpdateReport(_report, refreshSnapshot: true, actor.Id, GetActorDisplayName(actor), actor: actor);
+            Snackbar.Add(BizLoc["Financial statements recalculated from current General Ledger."].Value, Severity.Success);
+            await RefreshViewerAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task OpenEditDialogAsync()
+    {
+        if (_report == null) return;
+
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: false))
+        {
+            Snackbar.Add(BizLoc["Active Finance.AccessAccounting permission is required to edit financial reports."].Value, Severity.Error);
+            return;
+        }
+
+        var parameters = new DialogParameters<FinancialReportEditorDialog>
+        {
+            { x => x.ExistingReport, _report }
+        };
+
+        var dialog = await DialogService.ShowAsync<FinancialReportEditorDialog>(
+            $"{BizLoc["Edit Report"].Value}: {_report.ReportNumber}",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: FinancialReport updated })
+        {
+            _report = updated;
+            Snackbar.Add(BizLoc["Financial report saved."].Value, Severity.Success);
+            await RefreshViewerAsync();
+        }
+    }
+
+    private async Task DownloadPdfAsync()
+    {
+        if (_report == null || _isPdfBusy) return;
+
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: true))
+        {
+            Snackbar.Add(BizLoc["Finance.AccessAccounting permission is required to download financial report PDFs."].Value, Severity.Error);
+            return;
+        }
+
+        _isPdfBusy = true;
+        try
+        {
+            var pdfPath = await PdfService.GenerateFinancialReportPdfAsync(_report, Nav.BaseUri, actor.Id);
+            var bytes = await File.ReadAllBytesAsync(pdfPath);
+            var fileName = $"{_report.ReportNumber}_{_report.PeriodEnd:yyyyMMdd}.pdf";
+            using var streamRef = new DotNetStreamReference(new MemoryStream(bytes));
+            await JS.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(string.Format(BizLoc["Failed to generate PDF: {0}"].Value, ex.Message), Severity.Error);
+        }
+        finally
+        {
+            _isPdfBusy = false;
+        }
+    }
+
+    private async Task<Employee> RequireActiveAccountingActorAsync(string action)
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        DomainActorGuard.RequirePermission(actor, AppPermissions.Finance.AccessAccounting, action, allowSuspended: false);
+        return actor!;
+    }
+
+    private static string GetActorDisplayName(Employee actor) =>
+        !string.IsNullOrWhiteSpace(actor.FullName) ? actor.FullName : "Administrator";
+}

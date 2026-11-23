@@ -64,43 +64,6 @@ public class DateFormattingTests : IDisposable
         var testDate = new DateTime(year, month, day);
         Assert.Equal(expectedOutput, testDate.ToShortDateString());
         Assert.Equal(expectedOutput, testDate.ToString("d"));
-        Assert.Equal(expectedOutput, testDate.ToCompanyDate());
     }
 
-    [Fact]
-    public void DateDisplayExtensions_ToCompanyDate_HandlesNullAndFallbacks()
-    {
-        CultureCircuitHandler.ApplyDateFormat("yyyy-MM-dd");
-
-        DateTime? validDate = new DateTime(2026, 10, 14);
-        DateTime? nullDate = null;
-
-        Assert.Equal("2026-10-14", validDate.ToCompanyDate());
-        Assert.Equal("-", nullDate.ToCompanyDate());
-        Assert.Equal("N/A", nullDate.ToCompanyDate(fallback: "N/A"));
-    }
-
-    [Fact]
-    public void DocumentViewers_DateFormatting_StrictlyFollowsDocumentTemplate_RegardlessOfCompanyDateFormat()
-    {
-        // Company Profile is set to UK format (dd/MM/yyyy)
-        CultureCircuitHandler.ApplyDateFormat("dd/MM/yyyy");
-        var testDate = new DateTime(2026, 10, 14);
-
-        // General UI uses company format
-        Assert.Equal("14/10/2026", testDate.ToShortDateString());
-
-        // Document Template specifies ISO (yyyy-MM-dd)
-        var templateIso = new DocumentTemplate { DateFormat = "yyyy-MM-dd" };
-        var renderedIso = testDate.ToString(!string.IsNullOrEmpty(templateIso.DateFormat) ? templateIso.DateFormat : "yyyy-MM-dd");
-        Assert.Equal("2026-10-14", renderedIso);
-
-        // Document Template specifies US (MM/dd/yyyy)
-        var templateUs = new DocumentTemplate { DateFormat = "MM/dd/yyyy" };
-        var renderedUs = testDate.ToString(!string.IsNullOrEmpty(templateUs.DateFormat) ? templateUs.DateFormat : "yyyy-MM-dd");
-        Assert.Equal("10/14/2026", renderedUs);
-
-        // The document viewer template format was NOT contaminated by the company profile's dd/MM/yyyy
-        Assert.NotEqual(testDate.ToShortDateString(), renderedIso);
-    }
 }

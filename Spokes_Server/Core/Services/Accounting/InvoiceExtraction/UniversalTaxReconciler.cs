@@ -62,59 +62,25 @@ public static class UniversalTaxReconciler
 
         if (commaIdx >= 0 && dotIdx >= 0)
         {
-            if (dotIdx > commaIdx)
-            {
-                // Standard 1,234.56
-                cleaned = cleaned.Replace(",", "").Replace(" ", "");
-                if (decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var val))
-                    return isNegative ? -val : val;
-            }
-            else
-            {
-                // European 1.234,56
-                cleaned = cleaned.Replace(".", "").Replace(" ", "").Replace(',', '.');
-                if (decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var val))
-                    return isNegative ? -val : val;
-            }
+            cleaned = dotIdx > commaIdx
+                ? cleaned.Replace(",", "").Replace(" ", "")
+                : cleaned.Replace(".", "").Replace(" ", "").Replace(',', '.');
         }
         else if (commaIdx >= 0)
         {
             int decimalsAfterComma = cleaned.Length - commaIdx - 1;
-            if (decimalsAfterComma == 2)
-            {
-                // French/European comma decimal: 6 397,10 or 123,45
-                cleaned = cleaned.Replace(" ", "").Replace(',', '.');
-                if (decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var val))
-                    return isNegative ? -val : val;
-            }
-            else if (decimalsAfterComma == 3)
-            {
-                // Thousand separator: 1,234
-                cleaned = cleaned.Replace(",", "").Replace(" ", "");
-                if (decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var val))
-                    return isNegative ? -val : val;
-            }
-            else
-            {
-                cleaned = cleaned.Replace(" ", "").Replace(',', '.');
-                if (decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var val))
-                    return isNegative ? -val : val;
-            }
-        }
-        else if (dotIdx >= 0)
-        {
-            cleaned = cleaned.Replace(" ", "");
-            if (decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var val))
-                return isNegative ? -val : val;
+            cleaned = decimalsAfterComma == 3
+                ? cleaned.Replace(",", "").Replace(" ", "")
+                : cleaned.Replace(" ", "").Replace(',', '.');
         }
         else
         {
             cleaned = cleaned.Replace(" ", "");
-            if (decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var val))
-                return isNegative ? -val : val;
         }
 
-        return 0m;
+        return decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var val)
+            ? (isNegative ? -val : val)
+            : 0m;
     }
 
     /// <summary>
@@ -307,10 +273,6 @@ public static class UniversalTaxReconciler
                         candidateTps = Math.Round(effectiveNet * 0.05m, 2);
                         candidateTvq = Math.Round(effectiveNet * 0.09975m, 2);
                     }
-                }
-                else if (totalTax > 0 && Math.Abs(diff - totalTax) <= 0.03m)
-                {
-                    // Perfectly reconciled
                 }
             }
             else if (diff < 0 && totalTax >= 0)

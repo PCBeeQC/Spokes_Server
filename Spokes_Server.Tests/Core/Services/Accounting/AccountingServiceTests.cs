@@ -8,6 +8,7 @@ using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
 using Spokes_Server.Core.Services.Accounting;
 using Spokes_Server.Tests;
@@ -19,6 +20,7 @@ public class AccountingServiceTests : TestDataTestBase
     private readonly ServiceProvider _serviceProvider;
     private readonly Database _db;
     private readonly AccountingService _service;
+    private static readonly Employee AdminActor = new() { Id = "acct-test-admin", FirstName = "Test", LastName = "Admin", IsActive = true, IsAdmin = true };
 
     public AccountingServiceTests()
     {
@@ -26,6 +28,7 @@ public class AccountingServiceTests : TestDataTestBase
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());
@@ -57,16 +60,6 @@ public class AccountingServiceTests : TestDataTestBase
         base.Dispose();
     }
 
-    #region Constructor
-
-    [Fact]
-    public void Constructor_WithValidDependencies_InitializesCorrectly()
-    {
-        Assert.NotNull(_service);
-    }
-
-    #endregion
-
     #region GetProjectGrossMargin - Revenue
 
     [Fact]
@@ -80,7 +73,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-1",
             ProjectId = projectId,
             Status = "Paid",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 2, UnitPrice = 500m } // SubTotal = 1000
             }
@@ -91,7 +84,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-2",
             ProjectId = projectId,
             Status = "Final",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 750m } // SubTotal = 750
             }
@@ -103,7 +96,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-void",
             ProjectId = projectId,
             Status = "Void",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 10000m }
             }
@@ -115,7 +108,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-other",
             ProjectId = "other-project",
             Status = "Paid",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 5000m }
             }
@@ -127,7 +120,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "quote-ignored",
             ProjectId = projectId,
             Status = "Accepted",
-            ItemRows = new List<QuoteItemRow>
+            MaterialLineItems = new List<QuoteItemRow>
             {
                 new() { Quantity = 1, UnitPrice = 3000m }
             }
@@ -150,7 +143,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-void-only",
             ProjectId = projectId,
             Status = "Void",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 9999m }
             }
@@ -162,7 +155,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "quote-accepted-1",
             ProjectId = projectId,
             Status = "Accepted",
-            ItemRows = new List<QuoteItemRow>
+            MaterialLineItems = new List<QuoteItemRow>
             {
                 new() { Quantity = 2, UnitPrice = 1500m } // 3000
             }
@@ -174,7 +167,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "quote-draft",
             ProjectId = projectId,
             Status = "Draft",
-            ItemRows = new List<QuoteItemRow>
+            MaterialLineItems = new List<QuoteItemRow>
             {
                 new() { Quantity = 1, UnitPrice = 2000m }
             }
@@ -186,7 +179,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "quote-rejected",
             ProjectId = projectId,
             Status = "Rejected",
-            ItemRows = new List<QuoteItemRow>
+            MaterialLineItems = new List<QuoteItemRow>
             {
                 new() { Quantity = 1, UnitPrice = 5000m }
             }
@@ -198,7 +191,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "quote-other-proj",
             ProjectId = "different-proj",
             Status = "Accepted",
-            ItemRows = new List<QuoteItemRow>
+            MaterialLineItems = new List<QuoteItemRow>
             {
                 new() { Quantity = 1, UnitPrice = 4000m }
             }
@@ -221,7 +214,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-void",
             ProjectId = projectId,
             Status = "Void",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 1000m }
             }
@@ -233,7 +226,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "quote-draft",
             ProjectId = projectId,
             Status = "Draft",
-            ItemRows = new List<QuoteItemRow>
+            MaterialLineItems = new List<QuoteItemRow>
             {
                 new() { Quantity = 1, UnitPrice = 2500m }
             }
@@ -244,7 +237,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "quote-rejected",
             ProjectId = projectId,
             Status = "Rejected",
-            ItemRows = new List<QuoteItemRow>
+            MaterialLineItems = new List<QuoteItemRow>
             {
                 new() { Quantity = 1, UnitPrice = 3500m }
             }
@@ -278,7 +271,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-base",
             ProjectId = projectId,
             Status = "Final",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 5000m }
             }
@@ -289,7 +282,7 @@ public class AccountingServiceTests : TestDataTestBase
         {
             Id = "po-valid",
             Status = "Approved",
-            Items = new List<PoItem>
+            LineItems = new List<PoItem>
             {
                 new() { ProjectId = projectId, Quantity = 2, UnitPrice = 200m }, // 400m
                 new() { ProjectId = "other-proj", Quantity = 1, UnitPrice = 300m } // Ignored
@@ -301,7 +294,7 @@ public class AccountingServiceTests : TestDataTestBase
         {
             Id = "po-void",
             Status = "Void",
-            Items = new List<PoItem>
+            LineItems = new List<PoItem>
             {
                 new() { ProjectId = projectId, Quantity = 1, UnitPrice = 1000m } // Ignored
             }
@@ -312,7 +305,7 @@ public class AccountingServiceTests : TestDataTestBase
         {
             Id = "po-other",
             Status = "Ordered",
-            Items = new List<PoItem>
+            LineItems = new List<PoItem>
             {
                 new() { ProjectId = "other-proj", Quantity = 1, UnitPrice = 500m }
             }
@@ -335,7 +328,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-base",
             ProjectId = projectId,
             Status = "Paid",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 4000m }
             }
@@ -345,7 +338,8 @@ public class AccountingServiceTests : TestDataTestBase
         _db.ExpenseReports.Save(new ExpenseReport
         {
             Id = "exp-1",
-            Items = new List<ExpenseItem>
+            DateSubmitted = DateTime.Today,
+            LineItems = new List<ExpenseItem>
             {
                 new() { ProjectId = projectId, Amount = 250m, IsKilometrage = false }, // 250m
                 new() { ProjectId = "other-proj", Amount = 500m, IsKilometrage = false } // Ignored
@@ -356,7 +350,8 @@ public class AccountingServiceTests : TestDataTestBase
         _db.ExpenseReports.Save(new ExpenseReport
         {
             Id = "exp-2",
-            Items = new List<ExpenseItem>
+            DateSubmitted = DateTime.Today,
+            LineItems = new List<ExpenseItem>
             {
                 new() { ProjectId = projectId, IsKilometrage = true, Kilometers = 120m, KilometrageRate = 0.50m } // 60m
             }
@@ -379,7 +374,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-10k",
             ProjectId = projectId,
             Status = "Final",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 10000m }
             }
@@ -390,7 +385,7 @@ public class AccountingServiceTests : TestDataTestBase
         {
             Id = "po-net",
             Status = "Received",
-            Items = new List<PoItem>
+            LineItems = new List<PoItem>
             {
                 new() { ProjectId = projectId, Quantity = 3, UnitPrice = 500m }, // 1500
                 new() { ProjectId = projectId, Quantity = 1, UnitPrice = 500m }  // 500
@@ -401,7 +396,8 @@ public class AccountingServiceTests : TestDataTestBase
         _db.ExpenseReports.Save(new ExpenseReport
         {
             Id = "exp-net",
-            Items = new List<ExpenseItem>
+            DateSubmitted = DateTime.Today,
+            LineItems = new List<ExpenseItem>
             {
                 new() { ProjectId = projectId, Amount = 1200m },
                 new() { ProjectId = projectId, Amount = 300m }
@@ -424,7 +420,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-low",
             ProjectId = projectId,
             Status = "Paid",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 1000m }
             }
@@ -434,7 +430,7 @@ public class AccountingServiceTests : TestDataTestBase
         {
             Id = "po-high",
             Status = "Ordered",
-            Items = new List<PoItem>
+            LineItems = new List<PoItem>
             {
                 new() { ProjectId = projectId, Quantity = 1, UnitPrice = 1500m }
             }
@@ -443,7 +439,8 @@ public class AccountingServiceTests : TestDataTestBase
         _db.ExpenseReports.Save(new ExpenseReport
         {
             Id = "exp-high",
-            Items = new List<ExpenseItem>
+            DateSubmitted = DateTime.Today,
+            LineItems = new List<ExpenseItem>
             {
                 new() { ProjectId = projectId, Amount = 700m }
             }
@@ -453,37 +450,6 @@ public class AccountingServiceTests : TestDataTestBase
 
         // 1000 - (1500 + 700) = -1200
         Assert.Equal(-1200m, grossMargin);
-    }
-
-    [Fact]
-    public void CalculateProjectGrossMargin_MatchesStaticAndObsoleteMethod()
-    {
-        const string projectId = "proj-calc-consistency";
-
-        _db.Invoices.Save(new Invoice
-        {
-            Id = "inv-calc-1",
-            ProjectId = projectId,
-            Status = "Paid",
-            Lines = new List<InvoiceLine>
-            {
-                new() { Quantity = 1, UnitPrice = 5000m }
-            }
-        });
-
-        _db.PurchaseOrders.Save(new PurchaseOrder
-        {
-            Id = "po-calc-1",
-            Status = "Completed",
-            Items = new List<PoItem>
-            {
-                new() { ProjectId = projectId, Quantity = 1, UnitPrice = 1500m }
-            }
-        });
-
-        var instanceResult = _service.CalculateProjectGrossMargin(projectId);
-
-        Assert.Equal(3500m, instanceResult);
     }
 
     #endregion
@@ -505,7 +471,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.Invoices.Save(invoice);
 
-        _service.ProcessInvoiceStatusChange(invoice, "Draft", "Final", "TestUser");
+        _service.ProcessInvoiceStatusChange(invoice, "Draft", "Final", "TestUser", AdminActor);
 
         var notes = _db.ProjectNotes.GetByProject(projectId);
         var note = notes.FirstOrDefault(n => n.SystemReferenceId == $"Invoice_Final_{invoice.Id}");
@@ -532,11 +498,11 @@ public class AccountingServiceTests : TestDataTestBase
         _db.Invoices.Save(invoice);
 
         // First transition to Final to establish the note
-        _service.ProcessInvoiceStatusChange(invoice, "Draft", "Final", "User1");
+        _service.ProcessInvoiceStatusChange(invoice, "Draft", "Final", "User1", AdminActor);
         Assert.NotNull(_db.ProjectNotes.GetByProject(projectId).FirstOrDefault(n => n.SystemReferenceId == $"Invoice_Final_{invoice.Id}"));
 
         // Revert to Draft
-        _service.ProcessInvoiceStatusChange(invoice, "Final", "Draft", "User1");
+        _service.ProcessInvoiceStatusChange(invoice, "Final", "Draft", "User1", AdminActor);
         Assert.Null(_db.ProjectNotes.GetByProject(projectId).FirstOrDefault(n => n.SystemReferenceId == $"Invoice_Final_{invoice.Id}"));
     }
 
@@ -567,14 +533,14 @@ public class AccountingServiceTests : TestDataTestBase
             ProjectId = projectId,
             InvoiceNumber = "INV-PAID",
             Status = "Paid",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 8000m }
             }
         };
         _db.Invoices.Save(invoice);
 
-        _service.ProcessInvoiceStatusChange(invoice, "Final", "Paid", "FinanceUser");
+        _service.ProcessInvoiceStatusChange(invoice, "Final", "Paid", "FinanceUser", AdminActor);
 
         // Verify paid timeline note was created
         var notes = _db.ProjectNotes.GetByProject(projectId);
@@ -607,11 +573,11 @@ public class AccountingServiceTests : TestDataTestBase
         _db.Invoices.Save(invoice);
 
         // Mark as paid first
-        _service.ProcessInvoiceStatusChange(invoice, "Final", "Paid", "User1");
+        _service.ProcessInvoiceStatusChange(invoice, "Final", "Paid", "User1", AdminActor);
         Assert.NotNull(_db.ProjectNotes.GetByProject(projectId).FirstOrDefault(n => n.SystemReferenceId == $"Invoice_Paid_{invoice.Id}"));
 
         // Change from Paid back to Final
-        _service.ProcessInvoiceStatusChange(invoice, "Paid", "Final", "User1");
+        _service.ProcessInvoiceStatusChange(invoice, "Paid", "Final", "User1", AdminActor);
         Assert.Null(_db.ProjectNotes.GetByProject(projectId).FirstOrDefault(n => n.SystemReferenceId == $"Invoice_Paid_{invoice.Id}"));
     }
 
@@ -630,7 +596,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.Invoices.Save(invoice);
 
-        _service.ProcessInvoiceStatusChange(invoice, "Draft", "Draft", "User1");
+        _service.ProcessInvoiceStatusChange(invoice, "Draft", "Draft", "User1", AdminActor);
 
         var notes = _db.ProjectNotes.GetByProject(projectId);
         Assert.Empty(notes);
@@ -645,7 +611,7 @@ public class AccountingServiceTests : TestDataTestBase
 
         // Invoice with empty ProjectId
         var invoiceEmptyProj = new Invoice { ProjectId = string.Empty, Status = "Final" };
-        var exception2 = Record.Exception(() => _service.ProcessInvoiceStatusChange(invoiceEmptyProj, "Draft", "Final", "User"));
+        var exception2 = Record.Exception(() => _service.ProcessInvoiceStatusChange(invoiceEmptyProj, "Draft", "Final", "User", AdminActor));
         Assert.Null(exception2);
     }
 
@@ -701,7 +667,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-comm-1",
             ProjectId = projectId,
             Status = "Paid",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 20000m }
             }
@@ -746,7 +712,7 @@ public class AccountingServiceTests : TestDataTestBase
             Id = "inv-margin",
             ProjectId = projectId,
             Status = "Paid",
-            Lines = new List<InvoiceLine>
+            LineItems = new List<InvoiceLine>
             {
                 new() { Quantity = 1, UnitPrice = 12000m }
             }
@@ -757,7 +723,7 @@ public class AccountingServiceTests : TestDataTestBase
         {
             Id = "po-margin",
             Status = "Received",
-            Items = new List<PoItem>
+            LineItems = new List<PoItem>
             {
                 new() { ProjectId = projectId, Quantity = 1, UnitPrice = 4000m }
             }
@@ -767,7 +733,8 @@ public class AccountingServiceTests : TestDataTestBase
         _db.ExpenseReports.Save(new ExpenseReport
         {
             Id = "exp-margin",
-            Items = new List<ExpenseItem>
+            DateSubmitted = DateTime.Today,
+            LineItems = new List<ExpenseItem>
             {
                 new() { ProjectId = projectId, Amount = 2000m }
             }
@@ -846,7 +813,7 @@ public class AccountingServiceTests : TestDataTestBase
             ProjectId = projectId,
             InvoiceNumber = "INV-LIN-1",
             Status = InvoiceStatus.Paid,
-            Lines = new List<InvoiceLine> { new() { Quantity = 1, UnitPrice = 5000m } }
+            LineItems = new List<InvoiceLine> { new() { Quantity = 1, UnitPrice = 5000m } }
         };
         _db.Invoices.Save(invoice);
 
@@ -862,7 +829,7 @@ public class AccountingServiceTests : TestDataTestBase
             });
 
         var orchestratedService = new AccountingService(_db.AccountingContext, _db.ProjectsContext, _db.CoreContext, timelineEventService: mockTimeline.Object);
-        orchestratedService.ProcessInvoiceStatusChange(invoice, InvoiceStatus.Final, InvoiceStatus.Paid, "FinanceUser");
+        orchestratedService.ProcessInvoiceStatusChange(invoice, InvoiceStatus.Final, InvoiceStatus.Paid, "FinanceUser", AdminActor);
 
         Assert.True(commissionsEvaluatedPriorToTimelineNotification, "AccountingService must evaluate commissions before notifying ITimelineEventService.");
         mockTimeline.Verify(t => t.SyncInvoiceStatusTimelineEvent(invoice, InvoiceStatus.Final, InvoiceStatus.Paid, "FinanceUser"), Times.Once);
@@ -893,7 +860,7 @@ public class AccountingServiceTests : TestDataTestBase
             Reference = "CHK-9988"
         };
 
-        _service.RecordInvoicePayment(invoice, payment, "BillingUser");
+        _service.RecordInvoicePayment(invoice, payment, "BillingUser", AdminActor);
 
         // Verify entity properties mutated and saved
         var savedInvoice = _db.Invoices.GetById(invoice.Id);
@@ -936,7 +903,7 @@ public class AccountingServiceTests : TestDataTestBase
             Reference = "CC-1234"
         };
 
-        _service.RecordInvoicePayment(invoice, payment, "BillingUser");
+        _service.RecordInvoicePayment(invoice, payment, "BillingUser", AdminActor);
 
         var savedInvoice = _db.Invoices.GetById(invoice.Id);
         Assert.NotNull(savedInvoice);
@@ -964,7 +931,7 @@ public class AccountingServiceTests : TestDataTestBase
             Reference = "WIRE-5544"
         };
 
-        _service.RecordBillPayment(bill, payment);
+        _service.RecordBillPayment(bill, payment, actor: AdminActor);
 
         var savedBill = _db.Bills.GetById(bill.Id);
         Assert.NotNull(savedBill);
@@ -997,7 +964,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.Bills.Save(bill);
 
-        _service.VoidBill(bill, "Vendor voided invoice - items returned", "Accountant1");
+        _service.VoidBill(bill, "Vendor voided invoice - items returned", "Accountant1", AdminActor);
 
         var savedBill = _db.Bills.GetById(bill.Id);
         Assert.NotNull(savedBill);
@@ -1020,7 +987,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.Bills.Save(bill);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => _service.VoidBill(bill, "Attempting to void paid bill", "User"));
+        var ex = Assert.Throws<InvalidOperationException>(() => _service.VoidBill(bill, "Attempting to void paid bill", "User", AdminActor));
         Assert.Contains("payments", ex.Message, StringComparison.OrdinalIgnoreCase);
 
         // Bill state remains unchanged
@@ -1078,7 +1045,7 @@ public class AccountingServiceTests : TestDataTestBase
         _db.Bills.Save(bill2);
 
         // Void the unpaid bill
-        _service.VoidBill(bill2, "Returned materials to supplier", "Buyer");
+        _service.VoidBill(bill2, "Returned materials to supplier", "Buyer", AdminActor);
 
         var updatedPo = _db.PurchaseOrders.GetById(poId);
         Assert.NotNull(updatedPo);
@@ -1113,7 +1080,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.Bills.Save(bill);
 
-        _service.VoidBill(bill, "Entire shipment returned and cancelled", "Buyer");
+        _service.VoidBill(bill, "Entire shipment returned and cancelled", "Buyer", AdminActor);
 
         var updatedPo = _db.PurchaseOrders.GetById(poId);
         Assert.NotNull(updatedPo);
@@ -1148,7 +1115,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.Bills.Save(bill);
 
-        _service.UnvoidBill(bill, "AdminUser");
+        _service.UnvoidBill(bill, "AdminUser", AdminActor);
 
         var restoredBill = _db.Bills.GetById(bill.Id);
         Assert.NotNull(restoredBill);
@@ -1181,7 +1148,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.Bills.Save(bill);
 
-        Assert.Throws<InvalidOperationException>(() => _service.ApproveBill(bill));
+        Assert.Throws<InvalidOperationException>(() => _service.ApproveBill(bill, actor: AdminActor));
     }
 
     [Fact]
@@ -1195,7 +1162,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.Bills.Save(bill);
 
-        _service.ApproveBill(bill, "Approver1");
+        _service.ApproveBill(bill, "Approver1", AdminActor);
 
         var approved = _db.Bills.GetById(bill.Id);
         Assert.NotNull(approved);
@@ -1216,7 +1183,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.Bills.Save(bill);
 
-        _service.ApproveBill(bill, "Approver1");
+        _service.ApproveBill(bill, "Approver1", AdminActor);
 
         var approved = _db.Bills.GetById(bill.Id);
         Assert.NotNull(approved);
@@ -1249,7 +1216,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.Bills.Save(bill);
 
-        _service.ApproveBill(bill, "Buyer");
+        _service.ApproveBill(bill, "Buyer", AdminActor);
 
         var updatedPo = _db.PurchaseOrders.GetById(poId);
         Assert.NotNull(updatedPo);
@@ -1283,7 +1250,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
         _db.EmailMessages.Save(email);
 
-        serviceWithComm.ApproveBill(bill, "ManagerBob");
+        serviceWithComm.ApproveBill(bill, "ManagerBob", AdminActor);
 
         var updatedEmail = _db.EmailMessages.GetById(email.Id);
         Assert.NotNull(updatedEmail);
@@ -1306,7 +1273,7 @@ public class AccountingServiceTests : TestDataTestBase
             ProjectId = projectId,
             InvoiceNumber = "INV-UPD-001",
             Status = InvoiceStatus.Final,
-            Lines = [new() { Description = "Services", Quantity = 1, UnitPrice = 1000m }]
+            LineItems = [new() { Description = "Services", Quantity = 1, UnitPrice = 1000m }]
         };
         _db.Invoices.Save(invoice);
 
@@ -1319,7 +1286,7 @@ public class AccountingServiceTests : TestDataTestBase
             Reference = "CHK-101",
             Notes = "First half"
         };
-        _service.RecordInvoicePayment(invoice, payment, "Admin");
+        _service.RecordInvoicePayment(invoice, payment, "Admin", AdminActor);
 
         var intermediate = _db.Invoices.GetById(invoice.Id);
         Assert.NotNull(intermediate);
@@ -1336,7 +1303,7 @@ public class AccountingServiceTests : TestDataTestBase
             Reference = "WIRE-999",
             Notes = "Updated to full"
         };
-        _service.UpdateInvoicePayment(intermediate, updatedPayment, "Admin");
+        _service.UpdateInvoicePayment(intermediate, updatedPayment, "Admin", actor: AdminActor);
 
         var finalInv = _db.Invoices.GetById(invoice.Id);
         Assert.NotNull(finalInv);
@@ -1359,7 +1326,7 @@ public class AccountingServiceTests : TestDataTestBase
             ProjectId = projectId,
             InvoiceNumber = "INV-UPD-002",
             Status = InvoiceStatus.Final,
-            Lines = [new() { Description = "Consulting", Quantity = 1, UnitPrice = 1000m }]
+            LineItems = [new() { Description = "Consulting", Quantity = 1, UnitPrice = 1000m }]
         };
         _db.Invoices.Save(invoice);
 
@@ -1371,7 +1338,7 @@ public class AccountingServiceTests : TestDataTestBase
             Date = DateTime.Today,
             Method = "ACH"
         };
-        _service.RecordInvoicePayment(invoice, payment, "BillingUser");
+        _service.RecordInvoicePayment(invoice, payment, "BillingUser", AdminActor);
 
         var paidInv = _db.Invoices.GetById(invoice.Id);
         Assert.NotNull(paidInv);
@@ -1386,7 +1353,7 @@ public class AccountingServiceTests : TestDataTestBase
             Date = DateTime.Today,
             Method = "ACH"
         };
-        _service.UpdateInvoicePayment(paidInv, reducedPayment, "BillingUser");
+        _service.UpdateInvoicePayment(paidInv, reducedPayment, "BillingUser", actor: AdminActor);
 
         var revertedInv = _db.Invoices.GetById(invoice.Id);
         Assert.NotNull(revertedInv);
@@ -1406,7 +1373,7 @@ public class AccountingServiceTests : TestDataTestBase
             ProjectId = projectId,
             InvoiceNumber = "INV-DEL-001",
             Status = InvoiceStatus.Final,
-            Lines = [new() { Description = "Design", Quantity = 1, UnitPrice = 500m }]
+            LineItems = [new() { Description = "Design", Quantity = 1, UnitPrice = 500m }]
         };
         _db.Invoices.Save(invoice);
 
@@ -1416,14 +1383,14 @@ public class AccountingServiceTests : TestDataTestBase
             Amount = invoice.GrandTotal,
             Date = DateTime.Today
         };
-        _service.RecordInvoicePayment(invoice, payment, "Admin");
+        _service.RecordInvoicePayment(invoice, payment, "Admin", AdminActor);
 
         var paidInv = _db.Invoices.GetById(invoice.Id);
         Assert.NotNull(paidInv);
         Assert.Equal(InvoiceStatus.Paid, paidInv.Status);
 
         // Delete the payment
-        _service.DeleteInvoicePayment(paidInv, "pay-del-1", "Admin");
+        _service.DeleteInvoicePayment(paidInv, "pay-del-1", "Admin", actor: AdminActor);
 
         var emptyInv = _db.Invoices.GetById(invoice.Id);
         Assert.NotNull(emptyInv);
@@ -1446,7 +1413,7 @@ public class AccountingServiceTests : TestDataTestBase
             ProjectId = projectId,
             InvoiceNumber = "INV-PREPAY-001",
             Status = InvoiceStatus.Paid,
-            Lines =
+            LineItems =
             [
                 new()
                 {
@@ -1476,7 +1443,7 @@ public class AccountingServiceTests : TestDataTestBase
             ProjectId = projectId,
             InvoiceNumber = "INV-CONSUMER-001",
             Status = InvoiceStatus.Final,
-            Lines =
+            LineItems =
             [
                 new()
                 {
@@ -1493,7 +1460,7 @@ public class AccountingServiceTests : TestDataTestBase
 
         // Attempting to delete the payment from the prepayment invoice must throw
         Assert.Throws<InvalidOperationException>(() =>
-            _service.DeleteInvoicePayment(prepayInvoice, "pay-prepay-1", "Admin"));
+            _service.DeleteInvoicePayment(prepayInvoice, "pay-prepay-1", "Admin", actor: AdminActor));
     }
 
     [Fact]
@@ -1508,7 +1475,7 @@ public class AccountingServiceTests : TestDataTestBase
             ProjectId = projectId,
             InvoiceNumber = "INV-PREPAY-002",
             Status = InvoiceStatus.Paid,
-            Lines =
+            LineItems =
             [
                 new()
                 {
@@ -1537,7 +1504,7 @@ public class AccountingServiceTests : TestDataTestBase
             ProjectId = projectId,
             InvoiceNumber = "INV-CONSUMER-002",
             Status = InvoiceStatus.Final,
-            Lines =
+            LineItems =
             [
                 new()
                 {
@@ -1560,7 +1527,7 @@ public class AccountingServiceTests : TestDataTestBase
         };
 
         Assert.Throws<InvalidOperationException>(() =>
-            _service.UpdateInvoicePayment(prepayInvoice, reducedPayment, "Admin"));
+            _service.UpdateInvoicePayment(prepayInvoice, reducedPayment, "Admin", actor: AdminActor));
     }
 
     [Fact]
@@ -1573,7 +1540,153 @@ public class AccountingServiceTests : TestDataTestBase
         Assert.Throws<ArgumentException>(() => _service.DeleteInvoicePayment(new Invoice(), "   "));
 
         var emptyInvoice = new Invoice { InvoiceNumber = "INV-EMPTY" };
-        Assert.Throws<InvalidOperationException>(() => _service.UpdateInvoicePayment(emptyInvoice, new PaymentRecord { Id = "nonexistent" }));
-        Assert.Throws<InvalidOperationException>(() => _service.DeleteInvoicePayment(emptyInvoice, "nonexistent"));
+        Assert.Throws<InvalidOperationException>(() => _service.UpdateInvoicePayment(emptyInvoice, new PaymentRecord { Id = "nonexistent" }, actor: AdminActor));
+        Assert.Throws<InvalidOperationException>(() => _service.DeleteInvoicePayment(emptyInvoice, "nonexistent", actor: AdminActor));
+    }
+
+    [Fact]
+    public void DeleteBill_WithRecordedPaymentsAndSourceEmail_CleansBillAndBillPaymentLedgerEntries()
+    {
+        var serviceWithComm = new AccountingService(
+            _db.AccountingContext,
+            _db.ProjectsContext,
+            _db.CoreContext,
+            communication: _db.CommunicationContext,
+            ledgerService: new LedgerService(_db.AccountingContext, _db.ProjectsContext));
+
+        var email = new EmailMessage
+        {
+            Id = "email-paid-bill-1",
+            Subject = "Customer Payment Filed as Bill",
+            BillingStatus = CompanyBillInboxConstants.BillingStatus.Approved
+        };
+
+        var bill = new Bill
+        {
+            Id = "bill-paid-delete-1",
+            SupplierName = "Client Who Paid Us",
+            InvoiceNumber = "INV-99",
+            Amount = 500m,
+            SubTotal = 500m,
+            Status = BillStatus.Paid,
+            Date = DateTime.Today,
+            DatePaid = DateTime.Today,
+            SourceEmailId = email.Id,
+            Payments = [new PaymentRecord { Id = "pmt-1", Amount = 500m, Date = DateTime.Today, Method = "Bank" }]
+        };
+        serviceWithComm.SaveBill(bill, "Tester", AdminActor);
+
+        email.LinkedBillId = bill.Id;
+        email.LinkedBillIds = [bill.Id];
+        _db.EmailMessages.Save(email);
+
+        Assert.NotNull(_db.JournalEntries!.GetBySource(JournalSourceType.Bill, bill.Id));
+        Assert.NotNull(_db.JournalEntries.GetBySource(JournalSourceType.BillPayment, $"{bill.Id}:pmt-1"));
+
+        serviceWithComm.DeleteBill(bill.Id, AdminActor);
+
+        Assert.Null(_db.Bills.GetById(bill.Id));
+        Assert.Null(_db.JournalEntries.GetBySource(JournalSourceType.Bill, bill.Id));
+        Assert.Null(_db.JournalEntries.GetBySource(JournalSourceType.BillPayment, $"{bill.Id}:pmt-1"));
+
+        var reloadedEmail = _db.EmailMessages.GetById(email.Id);
+        Assert.NotNull(reloadedEmail);
+        Assert.Null(reloadedEmail!.LinkedBillId);
+        Assert.Empty(reloadedEmail.LinkedBillIds);
+        Assert.Equal(CompanyBillInboxConstants.BillingStatus.Unprocessed, reloadedEmail.BillingStatus);
+    }
+
+    [Fact]
+    public void MergeRecurringExpenses_MovesHistoryBillsAndEmailLinksToTargetAndDeletesSources()
+    {
+        var serviceWithComm = new AccountingService(
+            _db.AccountingContext,
+            _db.ProjectsContext,
+            _db.CoreContext,
+            communication: _db.CommunicationContext,
+            ledgerService: new LedgerService(_db.AccountingContext, _db.ProjectsContext));
+
+        var target = new RecurringExpense
+        {
+            Id = "rec-target",
+            Name = "Internet Fiber",
+            Supplier = "Bell Canada",
+            Frequency = RecurringExpenseFrequency.Monthly,
+            Amount = 120m,
+            History = [new RecurringBillRecord { Id = "hist-1", InvoiceNumber = "B-01", Date = new DateTime(2026, 1, 1), Amount = 120m }]
+        };
+        var dup1 = new RecurringExpense
+        {
+            Id = "rec-dup-1",
+            Name = "Bell Internet (Auto)",
+            Supplier = "Bell Canada",
+            GlAccountCode = "5620",
+            Frequency = RecurringExpenseFrequency.Monthly,
+            Amount = 120m,
+            History = [new RecurringBillRecord { Id = "hist-2", InvoiceNumber = "B-02", Date = new DateTime(2026, 2, 1), Amount = 125m }]
+        };
+        _db.RecurringExpenses.Save(target);
+        _db.RecurringExpenses.Save(dup1);
+
+        var linkedBill = new Bill
+        {
+            Id = "bill-dup-rec",
+            SupplierName = "Bell Canada",
+            LinkedRecurringExpenseId = dup1.Id,
+            Amount = 125m,
+            SubTotal = 125m
+        };
+        _db.Bills.Save(linkedBill);
+
+        var linkedEmail = new EmailMessage
+        {
+            Id = "email-dup-rec",
+            Subject = "Bell Statement",
+            LinkedRecurringExpenseId = dup1.Id
+        };
+        _db.EmailMessages.Save(linkedEmail);
+
+        var mergedCount = serviceWithComm.MergeRecurringExpenses(target.Id, [dup1.Id], AdminActor);
+
+        Assert.Equal(1, mergedCount);
+        Assert.Null(_db.RecurringExpenses.GetById(dup1.Id));
+
+        var reloadedTarget = _db.RecurringExpenses.GetById(target.Id);
+        Assert.NotNull(reloadedTarget);
+        Assert.Equal(2, reloadedTarget!.History.Count);
+        Assert.Equal("5620", reloadedTarget.GlAccountCode);
+
+        Assert.Equal(target.Id, _db.Bills.GetById(linkedBill.Id)!.LinkedRecurringExpenseId);
+        Assert.Equal(target.Id, _db.EmailMessages.GetById(linkedEmail.Id)!.LinkedRecurringExpenseId);
+    }
+
+    [Fact]
+    public void CalculateProjectGrossMargin_ExcludesDraftExpenseReports()
+    {
+        const string projectId = "proj-draft-margin";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Draft Expense Filter" });
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-draft-margin",
+            ProjectId = projectId,
+            Status = InvoiceStatus.Sent,
+            LineItems = [new InvoiceLine { Description = "Consulting", Quantity = 1m, UnitPrice = 1000m }]
+        });
+        _db.ExpenseReports.Save(new ExpenseReport
+        {
+            Id = "exp-submitted-margin",
+            DateSubmitted = DateTime.Today,
+            LineItems = [new ExpenseItem { ProjectId = projectId, Amount = 250m }]
+        });
+        _db.ExpenseReports.Save(new ExpenseReport
+        {
+            Id = "exp-draft-margin",
+            DateSubmitted = null,
+            LineItems = [new ExpenseItem { ProjectId = projectId, Amount = 500m }]
+        });
+
+        var margin = _service.CalculateProjectGrossMargin(projectId);
+
+        Assert.Equal(750m, margin);
     }
 }

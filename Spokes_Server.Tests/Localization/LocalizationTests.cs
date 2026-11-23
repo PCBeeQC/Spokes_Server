@@ -31,6 +31,7 @@ public class LocalizationTests : TestDataTestBase
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());
@@ -323,5 +324,38 @@ public class LocalizationTests : TestDataTestBase
         Assert.True(_loc["HR Details"].ResourceNotFound);
         Assert.True(_loc["Document Signature"].ResourceNotFound);
         Assert.True(_loc["New Project"].ResourceNotFound);
+    }
+
+    [Fact]
+    public void ResourceFiles_HaveNoCaseInsensitiveDuplicateKeys()
+    {
+        var serverDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Spokes_Server", "Resources"));
+        Assert.True(Directory.Exists(serverDir), $"Resources directory not found at {serverDir}");
+
+        var resxFiles = Directory.GetFiles(serverDir, "*.resx");
+        Assert.NotEmpty(resxFiles);
+
+        var collisions = new List<string>();
+        foreach (var file in resxFiles)
+        {
+            var doc = System.Xml.Linq.XDocument.Load(file);
+            var duplicates = doc.Root?
+                .Elements("data")
+                .Select(e => e.Attribute("name")?.Value)
+                .Where(name => !string.IsNullOrEmpty(name))
+                .GroupBy(name => name!, StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1)
+                .Select(g => $"{Path.GetFileName(file)}: [{string.Join(", ", g)}]")
+                .ToList();
+
+            if (duplicates != null && duplicates.Count > 0)
+            {
+                collisions.AddRange(duplicates);
+            }
+        }
+
+        Assert.True(collisions.Count == 0,
+            "Found case-insensitive duplicate .resx keys (MSBuild ResGen MSB3568 silently drops duplicate keys at compile time):\n" +
+            string.Join("\n", collisions));
     }
 }

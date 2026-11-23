@@ -1,0 +1,835 @@
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Communication
+@using Spokes_Server.Core.Services.Communication.Voice
+@using Spokes_Server.Core.Services.Communication.Chat
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Aggregate
+@using Spokes_Server.Components.Shared
+@implements IDisposable
+@inject GlobalVoiceService VoiceService
+@inject PhysicalVoiceRoomService PhysicalRoomService
+@inject VoiceStateService VoiceState
+@inject IChatAuthorizationService ChatAuth
+@inject IUserPrivacyService PrivacyService
+@inject Database Db
+@inject UserService UserService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+@* ── Card 4: Physical Rooms (Same-Room Echo Isolation) ── *@
+<MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+    <div class="d-flex align-center justify-space-between px-4 py-3">
+        <div class="d-flex align-center gap-1">
+            <MudIcon Icon="@Icons.Material.Filled.MeetingRoom" Size="Size.Small" Class="mr-1 flex-shrink-0 text-secondary" />
+            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@Loc["Physical Rooms"]</MudText>
+            <span title="@Loc["Group computers located in the same physical room so the server automatically cancels microphone bleed and room echo between them."]" style="display: inline-flex;">
+                <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Color="Color.Secondary" Style="font-size: 16px; opacity: 0.7; cursor: help; transform: translateY(2px);" />
+            </span>
+        </div>
+        <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary"
+                   Disabled="@(CurrentUser?.IsSuspended == true)"
+                   StartIcon="@(_isCreatingRoom ? Icons.Material.Filled.Close : Icons.Material.Filled.Add)"
+                   OnClick="ToggleCreatePhysicalRoom">
+            @(_isCreatingRoom ? Loc["Cancel"].Value : Loc["New Room"].Value)
+        </MudButton>
+    </div>
+    <MudDivider />
+    <div class="px-4 py-4 d-flex flex-column gap-3">
+        @if (_isCreatingRoom)
+        {
+            <div class="d-flex align-center gap-2 pa-3 rounded-lg" style="background: var(--mud-palette-background-grey); border: 1px solid var(--mud-palette-lines-default);">
+                <MudTextField @bind-Value="_newPhysicalRoomName" Label="@Loc["Room Name (e.g. Family Gaming Room)"]"
+                              Margin="Margin.Dense" Variant="Variant.Outlined" Immediate="true" Class="flex-grow-1"
+                              OnKeyDown="@(async (e) => { if ((e.Key == "Enter" || e.Key == "NumpadEnter") && !string.IsNullOrWhiteSpace(_newPhysicalRoomName) && CurrentUser?.IsSuspended != true) await CreateAndJoinPhysicalRoomAsync(); else if (e.Key == "Escape") ToggleCreatePhysicalRoom(); })" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           Disabled="@(string.IsNullOrWhiteSpace(_newPhysicalRoomName) || CurrentUser?.IsSuspended == true)"
+                           OnClick="CreateAndJoinPhysicalRoomAsync">
+                    @Loc["Create"]
+                </MudButton>
+            </div>
+        }
+
+        <div class="d-flex align-center gap-2">
+            <MudSelect T="string" Label="@Loc["Physical Room (This Device)"]" Value="@_enrolledPhysicalRoomId"
+                       Disabled="@(CurrentUser?.IsSuspended == true)"
+                       ValueChanged="OnPhysicalRoomSelectedAsync" Margin="Margin.Dense" Variant="Variant.Outlined" Class="flex-grow-1">
+                <MudSelectItem Value="@string.Empty">@Loc["None (Standalone Device)"]</MudSelectItem>
+                @foreach (var room in _physicalRooms)
+                {
+                    <MudSelectItem Value="@room.Id">@room.Name</MudSelectItem>
+                }
+            </MudSelect>
+            @if (!string.IsNullOrEmpty(_currentDeviceName))
+            {
+                <span title="@string.Format(Loc["Active device: {0} (room enrollment only applies to this device)."].Value, _currentDeviceName)" style="display: inline-flex;" class="flex-shrink-0">
+                    <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Color="Color.Secondary" Style="font-size: 18px; opacity: 0.7; cursor: help; transform: translateY(5px);" />
+                </span>
+            }
+        </div>
+
+        @if (_enrolledPhysicalRoom != null)
+        {
+            var canEditEnrolledRoom = PhysicalRoomService.CanUserEditPhysicalRoom(_enrolledPhysicalRoom, CurrentUser?.Id);
+            <div class="pa-3 rounded-lg d-flex flex-column gap-2" style="background: var(--mud-palette-background-grey); border: 1px solid var(--mud-palette-lines-default);">
+                <div class="d-flex flex-column gap-2">
+                    <div class="d-flex align-center gap-2">
+                        <MudSelect T="PhysicalRoomAudioMode" Label="@Loc["Room Audio Mode"]"
+                                   Value="@_enrolledPhysicalRoom.AudioMode"
+                                   ValueChanged="OnRoomAudioModeChangedAsync"
+                                   Disabled="@(!canEditEnrolledRoom || CurrentUser?.IsSuspended == true)"
+                                   Margin="Margin.Dense" Variant="Variant.Outlined" Class="flex-grow-1">
+                            <MudSelectItem Value="PhysicalRoomAudioMode.LowLatencyCleaned">@Loc["Low-Latency Direct LAN"]</MudSelectItem>
+                            <MudSelectItem Value="PhysicalRoomAudioMode.ServerCleanup">@Loc["Server Audio Cleanup"]</MudSelectItem>
+                        </MudSelect>
+                        <span title="@GetRoomAudioModeDescription(_enrolledPhysicalRoom.AudioMode)" style="display: inline-flex;" class="flex-shrink-0">
+                            <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Color="Color.Secondary" Style="font-size: 18px; opacity: 0.7; cursor: help; transform: translateY(5px);" />
+                        </span>
+                    </div>
+                    @if (_enrolledPhysicalRoom.AudioMode != PhysicalRoomAudioMode.ServerCleanup)
+                    {
+                        var directStatus = _muteUsersInMyRoom
+                            ? DirectRoomOperatingStatus.MutedRoommatesLocal
+                            : VoiceService.GetPhysicalRoomDirectStatus(_enrolledPhysicalRoom.Id);
+                        var showLiveStatus = VoiceService.IsInVoiceCall && directStatus != DirectRoomOperatingStatus.NotApplicable;
+                        var showPreCallFallback = !VoiceService.IsInVoiceCall && !_muteUsersInMyRoom && directStatus == DirectRoomOperatingStatus.FallbackNotDesktopClient;
+                        @if (showLiveStatus || showPreCallFallback)
+                        {
+                            var (statusBadgeText, statusBadgeColor, statusBadgeVariant, statusDetailText) = showLiveStatus
+                                ? GetDirectRoomStatusDisplay(directStatus)
+                                : (Loc["Server Audio Cleanup (Fallback)"].Value,
+                                   Color.Warning,
+                                   Variant.Outlined,
+                                   Loc["Low-latency direct mode is only available between Spokes Desktop clients on the same LAN. On Web and Mobile, Server Audio Cleanup will be used automatically."].Value);
+                            <div class="d-flex align-center flex-wrap gap-2 px-1">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 500;">@($"{Loc["Active Mode"]} :")</MudText>
+                                <div class="d-flex align-center gap-1" title="@(string.IsNullOrEmpty(statusDetailText) ? null : statusDetailText)" style="@(!string.IsNullOrEmpty(statusDetailText) ? "cursor: help;" : "")">
+                                    <MudChip T="string" Size="Size.Small" Color="@statusBadgeColor" Variant="@statusBadgeVariant" Class="py-0 px-2 ma-0" Style="height: 22px; font-size: 0.72rem; font-weight: 500;">
+                                        @statusBadgeText
+                                    </MudChip>
+                                    @if (!string.IsNullOrEmpty(statusDetailText))
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Color="Color.Secondary" Style="font-size: 15px; opacity: 0.7;" />
+                                    }
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+
+                <MudDivider Class="my-1" />
+
+                <div class="d-flex align-center justify-space-between gap-2">
+                    <MudSwitch T="bool" Value="@_muteUsersInMyRoom" ValueChanged="OnMuteUsersInMyRoomChangedAsync"
+                               Disabled="@(CurrentUser?.IsSuspended == true)"
+                               Color="Color.Primary" Label="@Loc["Mute users in my room"]" Class="ma-0" />
+                    <span title="@Loc["Mutes other people in your physical room in your headphones so you only hear them naturally in the room without network delay. Everyone else in the call will still hear all of you."]" style="display: inline-flex;" class="flex-shrink-0">
+                        <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Color="Color.Secondary" Style="font-size: 18px; opacity: 0.7; cursor: help; transform: translateY(3px);" />
+                    </span>
+                </div>
+
+                <MudDivider Class="my-1" />
+
+                <MudText Typo="Typo.caption" Style="font-weight: 600;" Class="text-truncate">
+                    @string.Format(Loc["Enrolled Devices in {0} ({1})"].Value, _enrolledPhysicalRoom.Name, _enrolledPhysicalRoom.EnrolledDevices.Count)
+                </MudText>
+
+                @if (_enrolledPhysicalRoom.EnrolledDevices.Count > 0)
+                {
+                    <div class="d-flex flex-column gap-1 mt-1">
+                        @foreach (var enrollment in _enrolledPhysicalRoom.EnrolledDevices)
+                        {
+                            var enrolledEmp = ResolveVisibleEmployee?.Invoke(enrollment.EmployeeId);
+                            var empName = enrolledEmp?.FullName ?? Loc["Unknown User"].Value;
+                            var isMyDevice = enrollment.EmployeeId == CurrentUser?.Id && enrollment.DeviceId == _currentDeviceId;
+                            var isConnected = (isMyDevice && VoiceService.IsInVoiceCall) || VoiceState.IsVoiceDeviceConnected(enrollment.EmployeeId, enrollment.DeviceId);
+                            var canRemoveEnrollment = PhysicalRoomService.CanUserRemoveDeviceEnrollment(_enrolledPhysicalRoom, enrollment.EmployeeId, CurrentUser?.Id);
+                            <div class="d-flex align-center justify-space-between px-2 py-1 rounded" style="background: var(--mud-palette-surface);">
+                                <div class="d-flex align-center gap-2">
+                                    <EmployeeAvatar Employee="@enrolledEmp" Size="Size.Small" ShowPresence="false" />
+                                    <div>
+                                        <div class="d-flex align-center flex-wrap gap-1">
+                                            <MudText Typo="Typo.body2" Style="font-weight: 500;">@empName</MudText>
+                                            @if (isMyDevice)
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined" Class="py-0 px-2 ma-0" Style="height: 18px; font-size: 0.65rem;">@Loc["This Device"]</MudChip>
+                                            }
+                                            @if (isConnected)
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="py-0 px-2 ma-0" Style="height: 18px; font-size: 0.65rem;">@Loc["Connected"]</MudChip>
+                                            }
+                                        </div>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@enrollment.DeviceName</MudText>
+                                    </div>
+                                </div>
+                                @if (canRemoveEnrollment)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" Color="Color.Default"
+                                                   title="@Loc["Remove device from room"]" aria-label="@Loc["Remove device from room"]"
+                                                   OnClick="@(() => RemoveDeviceEnrollmentAsync(enrollment.EmployeeId, enrollment.DeviceId))" />
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+
+                <MudDivider Class="my-1" />
+
+                <PhysicalRoomDiagnosticsSection SelectedRoom="_enrolledPhysicalRoom"
+                                                CurrentUser="CurrentUser"
+                                                MuteUsersInMyRoom="_muteUsersInMyRoom"
+                                                ResolveVisibleEmployee="ResolveVisibleEmployee" />
+            </div>
+        }
+
+        @if (_manageableRooms.Count > 0)
+        {
+            <MudDivider Class="my-1" />
+            <div class="d-flex flex-column gap-2" data-physical-rooms-manage="true">
+                <div class="d-flex align-center justify-space-between gap-2">
+                    <MudText Typo="Typo.body2" Style="font-weight: 600;">
+                        @string.Format(Loc["Manage Rooms ({0})"].Value, _manageableRooms.Count)
+                    </MudText>
+                    @if (_canManagePhysicalRooms)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
+                                 Class="py-0 px-2 ma-0" Style="height: 20px; font-size: 0.68rem;">
+                            @Loc["Admin"]
+                        </MudChip>
+                    }
+                </div>
+                <div class="d-flex flex-column gap-2" style="max-height: 240px; overflow-y: auto;">
+                    @foreach (var room in _manageableRooms)
+                    {
+                        var isThisDeviceRoom = string.Equals(room.Id, _enrolledPhysicalRoomId, StringComparison.Ordinal);
+                        var isEditingThisRoom = string.Equals(room.Id, _editingRoomId, StringComparison.Ordinal);
+                        var deviceCount = room.EnrolledDevices?.Count ?? 0;
+                        var creatorLabel = ResolveRoomCreatorLabel(room);
+                        <div @key="room.Id" data-physical-room-row="@room.Id"
+                             class="d-flex align-center justify-space-between gap-2 px-3 py-2 rounded-lg"
+                             style="background: var(--mud-palette-background-grey); border: 1px solid var(--mud-palette-lines-default);">
+                            @if (isEditingThisRoom)
+                            {
+                                <MudTextField @bind-Value="_editingRoomName" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                              Placeholder="@Loc["Room name"]" Immediate="true" Class="ma-0 flex-grow-1"
+                                              OnKeyDown="@(async (e) => { if (e.Key == "Enter" || e.Key == "NumpadEnter") await SaveRoomNameAsync(room); else if (e.Key == "Escape") CancelEditingRoomName(); })" />
+                                <div class="d-flex align-center gap-1 flex-shrink-0">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Primary"
+                                                   Disabled="@string.IsNullOrWhiteSpace(_editingRoomName)"
+                                                   title="@Loc["Save"]" aria-label="@Loc["Save"]"
+                                                   OnClick="@(() => SaveRoomNameAsync(room))" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" Color="Color.Default"
+                                                   title="@Loc["Cancel"]" aria-label="@Loc["Cancel"]"
+                                                   OnClick="CancelEditingRoomName" />
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="d-flex flex-column overflow-hidden">
+                                    <div class="d-flex align-center flex-wrap gap-1">
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;" Class="text-truncate">@room.Name</MudText>
+                                        @if (isThisDeviceRoom)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined"
+                                                     Class="py-0 px-2 ma-0" Style="height: 18px; font-size: 0.65rem;">
+                                                @Loc["This Device"]
+                                            </MudChip>
+                                        }
+                                    </div>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="text-truncate">
+                                        @FormatRoomSummary(deviceCount, creatorLabel)
+                                    </MudText>
+                                </div>
+                                <div class="d-flex align-center gap-1 flex-shrink-0">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Default"
+                                                   title="@Loc["Edit Room Name"]" aria-label="@Loc["Edit Room Name"]"
+                                                   OnClick="@(() => StartEditingRoomName(room))" />
+                                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Error"
+                                               StartIcon="@Icons.Material.Filled.DeleteOutline"
+                                               title="@Loc["Delete Room"]" aria-label="@Loc["Delete Room"]"
+                                               OnClick="@(() => ConfirmAndDeleteRoomAsync(room))">
+                                        @Loc["Delete"]
+                                    </MudButton>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
+        @if (VoiceService.IsInVoiceCall && !string.IsNullOrEmpty(VoiceService.CurrentChannelId) && _physicalRooms.Count > 0)
+        {
+            var verifiedVoiceIds = VoiceState.GetVoiceParticipants(VoiceService.CurrentChannelId!)
+                .ToHashSet(StringComparer.Ordinal);
+            var callParticipants = VoiceService.CallParticipants
+                .Where(id => !string.IsNullOrEmpty(id) &&
+                             !id.StartsWith("bot:", StringComparison.OrdinalIgnoreCase) &&
+                             (id == VoiceService.CurrentUserId || verifiedVoiceIds.Contains(id)))
+                .Where(CanAssignCallParticipant)
+                .ToList();
+
+            @if (callParticipants.Count > 0)
+            {
+                <MudDivider Class="my-1" />
+                <MudText Typo="Typo.body2" Style="font-weight: 600;">@Loc["Admin: Assign Call Participants to a Physical Room"]</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @Loc["Assign connected participants' current devices to a physical room."]
+                </MudText>
+                <div class="d-flex flex-column gap-2 mt-1">
+                    @foreach (var pId in callParticipants)
+                    {
+                        var emp = ResolveVisibleEmployee?.Invoke(pId);
+                        var pName = emp?.FullName ?? Loc["Unknown Participant"].Value;
+                        var pDevice = VoiceState.GetVoiceParticipantDevice(VoiceService.CurrentChannelId!, pId);
+                        var effectiveDeviceId = pDevice?.DeviceId ?? (pId == CurrentUser?.Id ? _currentDeviceId : $"active-{pId}");
+                        var pRoom = PhysicalRoomService.GetRoomForUserDevice(pId, effectiveDeviceId);
+                        var currentRoomId = pRoom?.Id ?? string.Empty;
+
+                        <div class="d-flex align-center justify-space-between gap-2 pa-2 rounded" style="background: var(--mud-palette-background-grey);">
+                            <div class="d-flex align-center gap-2">
+                                <EmployeeAvatar Employee="@emp" Size="Size.Small" ShowPresence="false" />
+                                <div>
+                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@pName</MudText>
+                                    @if (pDevice != null && !string.IsNullOrWhiteSpace(pDevice.Value.DeviceName))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@pDevice.Value.DeviceName</MudText>
+                                    }
+                                </div>
+                            </div>
+                            <div style="min-width: 180px;">
+                                <MudSelect T="string" Value="@currentRoomId"
+                                           ValueChanged="@(roomId => AdminAssignParticipantRoomAsync(pId, roomId))"
+                                           Margin="Margin.Dense" Variant="Variant.Outlined" Dense="true">
+                                    <MudSelectItem Value="@string.Empty">@Loc["None"]</MudSelectItem>
+                                    @foreach (var r in _physicalRooms)
+                                    {
+                                        <MudSelectItem Value="@r.Id">@r.Name</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </div>
+</MudPaper>
+
+@code {
+    [Parameter] public Employee? CurrentUser { get; set; }
+    [Parameter] public Func<string?, Employee?>? ResolveVisibleEmployee { get; set; }
+
+    private List<PhysicalVoiceRoom> _physicalRooms = [];
+    private List<PhysicalVoiceRoom> _manageableRooms = [];
+    private string _currentDeviceId = string.Empty;
+    private string _currentDeviceName = string.Empty;
+    private string _enrolledPhysicalRoomId = string.Empty;
+    private PhysicalVoiceRoom? _enrolledPhysicalRoom;
+    private bool _muteUsersInMyRoom = false;
+    private bool _isCreatingRoom = false;
+    private string _newPhysicalRoomName = string.Empty;
+    private string? _editingRoomId;
+    private string _editingRoomName = string.Empty;
+    private bool _canManagePhysicalRooms = false;
+    private bool _isDisposed;
+    private string? _lastUserId;
+
+    protected override void OnInitialized()
+    {
+        _lastUserId = CurrentUser?.Id;
+        _currentDeviceId = VoiceService.CurrentDeviceId;
+        _currentDeviceName = VoiceService.CurrentDeviceName;
+        RefreshPhysicalRoomsState();
+        VoiceService.OnChange += OnVoiceOrRoomStateChanged;
+        VoiceService.OnDiagnosticsOrSettingsChanged += OnVoiceOrRoomStateChanged;
+        VoiceState.PhysicalRoomsChanged += OnVoiceOrRoomStateChanged;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!string.Equals(_lastUserId, CurrentUser?.Id, StringComparison.Ordinal))
+        {
+            _lastUserId = CurrentUser?.Id;
+            RefreshPhysicalRoomsState();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await ResolveAndRefreshPhysicalRoomFastAsync();
+        }
+    }
+
+    private void OnVoiceOrRoomStateChanged()
+    {
+        if (_isDisposed) return;
+        InvokeAsync(() =>
+        {
+            if (_isDisposed) return;
+            RefreshPhysicalRoomsState();
+            StateHasChanged();
+        });
+    }
+
+    private async Task ResolveAndRefreshPhysicalRoomFastAsync()
+    {
+        var previousDeviceId = _currentDeviceId;
+        var previousDeviceName = _currentDeviceName;
+        if (string.IsNullOrWhiteSpace(_currentDeviceId))
+        {
+            await ResolveCurrentDeviceIdentityAsync();
+        }
+        bool syncedDeviceName = false;
+        if (CurrentUser != null && !string.IsNullOrWhiteSpace(_currentDeviceId) && !string.IsNullOrWhiteSpace(_currentDeviceName))
+        {
+            syncedDeviceName = await PhysicalRoomService.SyncEnrolledDeviceNameAsync(CurrentUser.Id, _currentDeviceId, _currentDeviceName);
+        }
+        RefreshPhysicalRoomsState();
+        if (!_isDisposed &&
+            (syncedDeviceName ||
+             !string.Equals(previousDeviceId, _currentDeviceId, StringComparison.Ordinal) ||
+             !string.Equals(previousDeviceName, _currentDeviceName, StringComparison.Ordinal)))
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ResolveCurrentDeviceIdentityAsync()
+    {
+        try
+        {
+            var (jsDeviceId, jsDeviceName) = await VoiceService.GetOrCreatePhysicalDeviceIdentityAsync();
+            if (!string.IsNullOrWhiteSpace(jsDeviceId))
+            {
+                _currentDeviceId = jsDeviceId;
+                _currentDeviceName = jsDeviceName;
+            }
+        }
+        catch { }
+
+        if (string.IsNullOrWhiteSpace(_currentDeviceId))
+        {
+            try
+            {
+                var sessionId = await UserService.GetSessionIdAsync();
+                if (!string.IsNullOrWhiteSpace(sessionId))
+                {
+                    var session = Db.DeviceSessions.GetById(sessionId);
+                    if (session != null && !string.IsNullOrWhiteSpace(session.DeviceId))
+                    {
+                        _currentDeviceId = session.DeviceId;
+                        _currentDeviceName = string.IsNullOrWhiteSpace(session.DeviceName) ? "This Device" : session.DeviceName;
+                    }
+                }
+            }
+            catch { }
+        }
+
+        if (string.IsNullOrWhiteSpace(_currentDeviceId) && CurrentUser != null)
+        {
+            _currentDeviceId = $"dev-{CurrentUser.Id}";
+            _currentDeviceName = "This Device";
+        }
+    }
+
+    private void RefreshPhysicalRoomsState()
+    {
+        _physicalRooms = CurrentUser != null ? PhysicalRoomService.GetRoomsForUser(CurrentUser.Id) : [];
+        _canManagePhysicalRooms = PhysicalRoomService.CanUserManagePhysicalRooms(CurrentUser?.Id);
+        _manageableRooms = CurrentUser != null
+            ? _physicalRooms.Where(r => PhysicalRoomService.CanUserEditPhysicalRoom(r, CurrentUser.Id)).ToList()
+            : [];
+
+        if (_editingRoomId != null &&
+            !_manageableRooms.Any(r => string.Equals(r.Id, _editingRoomId, StringComparison.Ordinal)))
+        {
+            CancelEditingRoomName();
+        }
+
+        if (CurrentUser != null && !string.IsNullOrWhiteSpace(_currentDeviceId))
+        {
+            var room = PhysicalRoomService.GetRoomForUserDevice(CurrentUser.Id, _currentDeviceId);
+            var enrollment = PhysicalRoomService.GetEnrollment(CurrentUser.Id, _currentDeviceId);
+            _enrolledPhysicalRoom = room != null
+                ? (_physicalRooms.FirstOrDefault(r => string.Equals(r.Id, room.Id, StringComparison.Ordinal)) ?? room)
+                : null;
+            _enrolledPhysicalRoomId = _enrolledPhysicalRoom?.Id ?? string.Empty;
+            _muteUsersInMyRoom = enrollment?.MuteUsersInMyRoom ?? false;
+        }
+        else
+        {
+            _enrolledPhysicalRoom = null;
+            _enrolledPhysicalRoomId = string.Empty;
+        }
+    }
+
+    private void ToggleCreatePhysicalRoom()
+    {
+        _isCreatingRoom = !_isCreatingRoom;
+        _newPhysicalRoomName = string.Empty;
+    }
+
+    private async Task CreateAndJoinPhysicalRoomAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newPhysicalRoomName) || CurrentUser == null) return;
+        await ResolveCurrentDeviceIdentityAsync();
+
+        var res = await PhysicalRoomService.CreateRoomAsync(
+            _newPhysicalRoomName,
+            CurrentUser.Id,
+            _currentDeviceId,
+            _currentDeviceName,
+            _muteUsersInMyRoom,
+            PhysicalRoomAudioMode.LowLatencyCleaned);
+        if (!res.IsSuccess || res.Value == null)
+        {
+            Snackbar.Add(res.ErrorMessage ?? Loc["Could not create room."].Value, Severity.Warning);
+            return;
+        }
+
+        _isCreatingRoom = false;
+        _newPhysicalRoomName = string.Empty;
+        RefreshPhysicalRoomsState();
+        await VoiceService.RefreshPhysicalRoomStateAsync();
+        StateHasChanged();
+    }
+
+    private async Task OnPhysicalRoomSelectedAsync(string roomId)
+    {
+        if (CurrentUser == null) return;
+        await ResolveCurrentDeviceIdentityAsync();
+
+        if (string.IsNullOrWhiteSpace(roomId))
+        {
+            var removeRes = await PhysicalRoomService.RemoveUserDeviceAsync(CurrentUser.Id, _currentDeviceId, actorUserId: CurrentUser.Id);
+            if (!removeRes.IsSuccess)
+            {
+                Snackbar.Add(removeRes.ErrorMessage ?? Loc["Could not update room enrollment."].Value, Severity.Warning);
+            }
+        }
+        else
+        {
+            var enrollRes = await PhysicalRoomService.EnrollUserDeviceAsync(roomId, CurrentUser.Id, _currentDeviceId, _currentDeviceName, _muteUsersInMyRoom, actorUserId: CurrentUser.Id);
+            if (!enrollRes.IsSuccess)
+            {
+                Snackbar.Add(enrollRes.ErrorMessage ?? Loc["Could not update room enrollment."].Value, Severity.Warning);
+            }
+        }
+
+        RefreshPhysicalRoomsState();
+        await VoiceService.RefreshPhysicalRoomStateAsync();
+        StateHasChanged();
+    }
+
+    private async Task OnMuteUsersInMyRoomChangedAsync(bool muteRoommates)
+    {
+        if (CurrentUser == null || string.IsNullOrWhiteSpace(_currentDeviceId)) return;
+        _muteUsersInMyRoom = muteRoommates;
+        var res = await PhysicalRoomService.SetMuteUsersInMyRoomAsync(CurrentUser.Id, _currentDeviceId, muteRoommates, actorUserId: CurrentUser.Id);
+        if (!res.IsSuccess)
+        {
+            Snackbar.Add(res.ErrorMessage ?? Loc["Could not update room mute preference."].Value, Severity.Warning);
+        }
+        RefreshPhysicalRoomsState();
+        await VoiceService.RefreshPhysicalRoomStateAsync();
+        StateHasChanged();
+    }
+
+    private async Task RemoveDeviceEnrollmentAsync(string employeeId, string deviceId)
+    {
+        if (CurrentUser == null) return;
+        var res = await PhysicalRoomService.RemoveUserDeviceAsync(employeeId, deviceId, actorUserId: CurrentUser.Id);
+        if (!res.IsSuccess)
+        {
+            Snackbar.Add(res.ErrorMessage ?? Loc["Could not remove device from room."].Value, Severity.Warning);
+        }
+        RefreshPhysicalRoomsState();
+        await VoiceService.RefreshPhysicalRoomStateAsync();
+        StateHasChanged();
+    }
+
+    private async Task ConfirmAndDeleteRoomAsync(PhysicalVoiceRoom room)
+    {
+        if (CurrentUser == null || !PhysicalRoomService.CanUserEditPhysicalRoom(room, CurrentUser.Id))
+        {
+            return;
+        }
+
+        var deviceCount = room.EnrolledDevices?.Count ?? 0;
+        var confirmMessage = string.Format(Loc["Are you sure you want to delete '{0}'?"].Value, room.Name);
+        if (deviceCount == 1)
+        {
+            confirmMessage += "\n\n" + Loc["1 enrolled device will be removed from this room."].Value;
+        }
+        else if (deviceCount > 1)
+        {
+            confirmMessage += "\n\n" + string.Format(Loc["{0} enrolled devices will be removed from this room."].Value, deviceCount);
+        }
+
+        var options = new DialogOptions { CloseOnEscapeKey = true };
+        bool? confirmed = await DialogService.ShowMessageBoxAsync(
+            Loc["Delete Room"].Value,
+            confirmMessage,
+            yesText: Loc["Delete"].Value,
+            cancelText: Loc["Cancel"].Value,
+            options: options);
+
+        if (_isDisposed || confirmed != true)
+        {
+            return;
+        }
+
+        var res = await PhysicalRoomService.DeleteRoomAsync(room.Id, CurrentUser.Id);
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        if (!res.IsSuccess)
+        {
+            Snackbar.Add(res.ErrorMessage ?? Loc["Could not delete room."].Value, Severity.Warning);
+            return;
+        }
+
+        if (string.Equals(_editingRoomId, room.Id, StringComparison.Ordinal))
+        {
+            CancelEditingRoomName();
+        }
+
+        RefreshPhysicalRoomsState();
+        await VoiceService.RefreshPhysicalRoomStateAsync();
+        Snackbar.Add(Loc["Room deleted"].Value, Severity.Success);
+        StateHasChanged();
+    }
+
+    private string? ResolveRoomCreatorLabel(PhysicalVoiceRoom room)
+    {
+        if (string.IsNullOrWhiteSpace(room.CreatedByUserId))
+        {
+            return null;
+        }
+
+        if (string.Equals(room.CreatedByUserId, CurrentUser?.Id, StringComparison.Ordinal))
+        {
+            return Loc["Created by you"].Value;
+        }
+
+        var creator = ResolveVisibleEmployee?.Invoke(room.CreatedByUserId);
+        return creator != null
+            ? string.Format(Loc["Created by {0}"].Value, creator.FullName)
+            : null;
+    }
+
+    private string FormatRoomSummary(int deviceCount, string? creatorLabel)
+    {
+        var devicesText = deviceCount switch
+        {
+            0 => Loc["No devices"].Value,
+            1 => Loc["1 device"].Value,
+            _ => string.Format(Loc["{0} devices"].Value, deviceCount)
+        };
+
+        return string.IsNullOrEmpty(creatorLabel)
+            ? devicesText
+            : $"{devicesText} · {creatorLabel}";
+    }
+
+    private string GetRoomAudioModeDescription(PhysicalRoomAudioMode mode) => mode switch
+    {
+        PhysicalRoomAudioMode.LowLatencyCleaned => Loc["Default. Streams sub-20ms direct audio with echo and bleed cancellation, available only between Spokes Desktop clients on the same LAN. If the connected users in the room don't match that (e.g. Web, Mobile, or different network), Server Audio Cleanup is automatically used as a fallback."].Value,
+        _ => Loc["Cancels room echo and microphone bleed on the server across Desktop, Web, and Mobile on any network."].Value
+    };
+
+    private (string BadgeText, Color BadgeColor, Variant BadgeVariant, string DetailText) GetDirectRoomStatusDisplay(DirectRoomOperatingStatus status) => status switch
+    {
+        DirectRoomOperatingStatus.ActiveDirectLan => (
+            string.Format(Loc["Direct LAN Active (~{0:0.0} ms)"].Value, VoiceService.DirectRoomTelemetry?.EstimatedEndToEndMs ?? 0.0),
+            Color.Success,
+            Variant.Filled,
+            Loc["Connected Spokes Desktop roommates on the same LAN are streaming direct low-latency audio. Outside callers hear Server Audio Cleanup."].Value),
+        DirectRoomOperatingStatus.StandbyWaitingForRoommate => (
+            Loc["Direct LAN Ready"].Value,
+            Color.Info,
+            Variant.Outlined,
+            Loc["Waiting for another Spokes Desktop user in this room on the same LAN."].Value),
+        DirectRoomOperatingStatus.FallbackNotDesktopClient => (
+            Loc["Server Audio Cleanup (Fallback)"].Value,
+            Color.Warning,
+            Variant.Outlined,
+            Loc["Low-latency direct mode is only available between Spokes Desktop clients on the same LAN. This device is using Server Audio Cleanup."].Value),
+        DirectRoomOperatingStatus.FallbackNonDesktopRoommateInRoom => (
+            Loc["Server Audio Cleanup (Fallback)"].Value,
+            Color.Warning,
+            Variant.Outlined,
+            Loc["A connected user in this room is not on Spokes Desktop (Web or Mobile), so all room members are using Server Audio Cleanup."].Value),
+        DirectRoomOperatingStatus.FallbackDifferentNetworkOrFirewall => (
+            Loc["Server Audio Cleanup (Fallback)"].Value,
+            Color.Warning,
+            Variant.Outlined,
+            Loc["Connected Desktop users in this room are not reachable on the same LAN, so Server Audio Cleanup is active."].Value),
+        DirectRoomOperatingStatus.MutedRoommatesLocal => (
+            Loc["Roommates Muted Locally"].Value,
+            Color.Default,
+            Variant.Outlined,
+            string.Empty),
+        _ => (string.Empty, Color.Default, Variant.Outlined, string.Empty)
+    };
+
+    private async Task OnRoomAudioModeChangedAsync(PhysicalRoomAudioMode newMode)
+    {
+        if (_enrolledPhysicalRoom == null || CurrentUser == null || !PhysicalRoomService.CanUserEditPhysicalRoom(_enrolledPhysicalRoom, CurrentUser.Id)) return;
+        if (_enrolledPhysicalRoom.AudioMode == newMode) return;
+
+        var res = await PhysicalRoomService.SetRoomAudioModeAsync(_enrolledPhysicalRoom.Id, newMode, CurrentUser.Id);
+        if (!res.IsSuccess)
+        {
+            Snackbar.Add(res.ErrorMessage ?? Loc["Could not update room audio mode."].Value, Severity.Warning);
+            return;
+        }
+
+        RefreshPhysicalRoomsState();
+        await VoiceService.RefreshPhysicalRoomStateAsync();
+        StateHasChanged();
+    }
+
+    private void StartEditingRoomName(PhysicalVoiceRoom room)
+    {
+        if (!PhysicalRoomService.CanUserEditPhysicalRoom(room, CurrentUser?.Id)) return;
+        _editingRoomId = room.Id;
+        _editingRoomName = room.Name;
+    }
+
+    private void CancelEditingRoomName()
+    {
+        _editingRoomId = null;
+        _editingRoomName = string.Empty;
+    }
+
+    private async Task SaveRoomNameAsync(PhysicalVoiceRoom room)
+    {
+        if (CurrentUser == null ||
+            string.IsNullOrWhiteSpace(_editingRoomName) ||
+            !PhysicalRoomService.CanUserEditPhysicalRoom(room, CurrentUser.Id))
+        {
+            CancelEditingRoomName();
+            return;
+        }
+
+        var trimmed = _editingRoomName.Trim();
+        if (string.Equals(trimmed, room.Name, StringComparison.Ordinal))
+        {
+            CancelEditingRoomName();
+            return;
+        }
+
+        var res = await PhysicalRoomService.RenameRoomAsync(room.Id, trimmed, CurrentUser.Id);
+        if (!res.IsSuccess)
+        {
+            Snackbar.Add(res.ErrorMessage ?? Loc["Could not rename room."].Value, Severity.Warning);
+            return;
+        }
+
+        CancelEditingRoomName();
+        RefreshPhysicalRoomsState();
+        await VoiceService.RefreshPhysicalRoomStateAsync();
+        Snackbar.Add(Loc["Room name updated"].Value, Severity.Success);
+        StateHasChanged();
+    }
+
+    private bool CanAssignCallParticipant(string targetUserId)
+    {
+        if (CurrentUser == null || !CurrentUser.IsActive || CurrentUser.IsSuspended || CurrentUser.IsBanned)
+        {
+            return false;
+        }
+
+        if (!CurrentUser.IsAdmin && !CurrentUser.HasPermission(AppPermissions.Chat.Use))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(targetUserId))
+        {
+            return false;
+        }
+
+        var target = Db.Employees.GetById(targetUserId);
+        if (target == null || !target.IsActive || target.IsSuspended || target.IsBanned ||
+            !PrivacyService.CanDiscoverUser(CurrentUser, target))
+        {
+            return false;
+        }
+
+        if (target.IsAdmin && !CurrentUser.IsAdmin)
+        {
+            return false;
+        }
+
+        if (_canManagePhysicalRooms)
+        {
+            return target.IsAdmin || target.HasPermission(AppPermissions.Chat.Use);
+        }
+
+        if (!CurrentUser.HasPermission(AppPermissions.Chat.Moderator) ||
+            string.IsNullOrEmpty(VoiceService.CurrentChannelId))
+        {
+            return false;
+        }
+
+        var channel = Db.ChatChannels.GetById(VoiceService.CurrentChannelId);
+        if (channel == null ||
+            channel.ChannelType == ChatChannelType.Direct ||
+            channel.ChannelType == ChatChannelType.Group ||
+            !ChatAuth.CanUserAccessChannel(channel, CurrentUser))
+        {
+            return false;
+        }
+
+        if (!target.IsAdmin && !target.HasPermission(AppPermissions.Chat.Use))
+        {
+            return false;
+        }
+
+        if (string.Equals(targetUserId, CurrentUser.Id, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return UserService.CanModerateUserTarget(CurrentUser, target);
+    }
+
+    private async Task AdminAssignParticipantRoomAsync(string targetEmployeeId, string targetRoomId)
+    {
+        if (CurrentUser == null || string.IsNullOrEmpty(VoiceService.CurrentChannelId)) return;
+        var pDevice = VoiceState.GetVoiceParticipantDevice(VoiceService.CurrentChannelId, targetEmployeeId);
+        var targetDeviceId = pDevice?.DeviceId ?? (targetEmployeeId == CurrentUser.Id ? _currentDeviceId : $"active-{targetEmployeeId}");
+        var targetDeviceName = pDevice?.DeviceName ?? "Active Call Device";
+
+        var res = await PhysicalRoomService.AdminAssignParticipantDeviceToRoomAsync(
+            CurrentUser.Id,
+            targetEmployeeId,
+            targetDeviceId,
+            targetDeviceName,
+            string.IsNullOrWhiteSpace(targetRoomId) ? null : targetRoomId,
+            channelId: VoiceService.CurrentChannelId);
+        if (!res.IsSuccess)
+        {
+            Snackbar.Add(res.ErrorMessage ?? Loc["Could not assign room."].Value, Severity.Warning);
+        }
+        RefreshPhysicalRoomsState();
+        await VoiceService.RefreshPhysicalRoomStateAsync();
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        VoiceService.OnChange -= OnVoiceOrRoomStateChanged;
+        VoiceService.OnDiagnosticsOrSettingsChanged -= OnVoiceOrRoomStateChanged;
+        VoiceState.PhysicalRoomsChanged -= OnVoiceOrRoomStateChanged;
+    }
+}

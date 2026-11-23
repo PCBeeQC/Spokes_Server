@@ -4,14 +4,11 @@
 @using Spokes_Server.Core.Security
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
-@using Microsoft.Extensions.Localization
-@using Spokes_Server.Resources
 @layout LoginLayout
 @attribute [AllowAnonymous]
 @inject Database Db
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthStateProvider
-@inject IStringLocalizer<AppResources> Loc
 
 <PageTitle>@Loc["Mobile Login"]</PageTitle>
 
@@ -73,7 +70,6 @@
         const btn = document.getElementById('mobile-login-btn');
         if (btn) {
             btn.addEventListener('click', () => {
-                sessionStorage.removeItem('mobile_auto_login_attempts');
                 window.OpenNativeLoginJS(returnUrl);
             });
         }
@@ -84,7 +80,6 @@
         
         if (noAuto || isSsoError) {
             console.log('[MobileLogin] Loop guard or error detected. Halting auto-login loop.');
-            sessionStorage.removeItem('mobile_auto_login_attempts');
             return;
         }
 

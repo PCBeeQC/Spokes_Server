@@ -95,21 +95,76 @@ public class AssetExtensionsTests
     }
 
     [Theory]
-    [InlineData("css/app.css")]
-    [InlineData("css/chat.css")]
-    [InlineData("css/roboto.css")]
-    public void StaticWebAssets_EndpointsJson_HasFingerprintedLowercaseCssRoutes(string assetPath)
+    [InlineData("./js/voiceInterop.js")]
+    [InlineData("./js/voicePip.js")]
+    [InlineData("./js/mediaZoomGesture.js")]
+    [InlineData("./Components/Dialogs/Common/MediaViewerDialog.razor.js")]
+    public void ResolveModulePath_AppendsContentHashForProjectAssets_AndLeavesSyntheticTestPathsUnchanged(string assetPath)
     {
-        var baseDir = AppContext.BaseDirectory;
-        var endpointsFiles = System.IO.Directory.GetFiles(baseDir, "*staticwebassets*.endpoints.json");
-        if (endpointsFiles.Length == 0)
+        var resolved = AssetExtensions.ResolveModulePath(assetPath);
+        Assert.StartsWith($"{assetPath}?v=", resolved);
+
+        var hashPart = resolved.Substring($"{assetPath}?v=".Length);
+        Assert.False(string.IsNullOrWhiteSpace(hashPart));
+        Assert.NotEqual(AssetExtensions.AppVersion, hashPart);
+
+        // Synthetic test paths not on disk are left unchanged for unit test mocks
+        Assert.Equal("./testModule.js", AssetExtensions.ResolveModulePath("./testModule.js"));
+    }
+
+    [Fact]
+    public void BuildImportMapJson_IncludesAllWwwrootJsAndCollocatedRazorJsModulesWithContentHashes()
+    {
+        var json = AssetExtensions.BuildImportMapJson();
+        Assert.False(string.IsNullOrWhiteSpace(json));
+
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        Assert.True(doc.RootElement.TryGetProperty("imports", out var imports));
+
+        string[] expectedSpecifiers =
+        [
+            "./js/voiceInterop.js",
+            "/js/voiceInterop.js",
+            "./js/voicePip.js",
+            "/js/voicePip.js",
+            "./js/mediaZoomGesture.js",
+            "/js/mediaZoomGesture.js",
+            "./js/noiseSuppressionManager.js",
+            "./js/customRNNoiseProcessor.js",
+            "./js/voiceCaptureConditioner.js",
+            "/js/voiceLevelerWorklet.js",
+            "/lib/noise-suppression/deepfilternet-processor.js",
+            "/lib/noise-suppression/rnnoise-processor.js",
+            "./Components/Dialogs/Common/MediaViewerDialog.razor.js",
+            "./Components/Pages/Chat/Chat.razor.js",
+            "./Components/Shared/GlobalVoiceBar.razor.js"
+        ];
+
+        foreach (var spec in expectedSpecifiers)
         {
-            var projectDir = System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, "..", "..", "..", "..", "Spokes_Server"));
-            endpointsFiles = System.IO.Directory.GetFiles(projectDir, "*staticwebassets*.endpoints.json", System.IO.SearchOption.AllDirectories);
+            Assert.True(imports.TryGetProperty(spec, out var targetEl), $"Expected '{spec}' in importmap.");
+            var target = targetEl.GetString();
+            Assert.False(string.IsNullOrWhiteSpace(target));
+            Assert.Contains("?v=", target);
         }
 
-        Assert.NotEmpty(endpointsFiles);
-        var json = System.IO.File.ReadAllText(endpointsFiles[0]);
-        Assert.Contains($"\"Value\":\"{assetPath}\"", json);
+        string[] excludedClassicScripts =
+        [
+            "./js/spokes-boot.js",
+            "/js/spokes-boot.js",
+            "./js/spokes-app.js",
+            "./js/spokesbridge.js",
+            "./js/mediaLoader.js",
+            "./service-worker.js",
+            "./lib/quill/quill.js",
+            "./lib/cropperjs/cropper.min.js",
+            "./lib/livekit/livekit-client.umd.min.js",
+            "./lib/noise-suppression/generated/rnnoise-sync.js"
+        ];
+
+        foreach (var spec in excludedClassicScripts)
+        {
+            Assert.False(imports.TryGetProperty(spec, out _), $"Did not expect classic/UMD script '{spec}' in scoped importmap.");
+        }
     }
 }

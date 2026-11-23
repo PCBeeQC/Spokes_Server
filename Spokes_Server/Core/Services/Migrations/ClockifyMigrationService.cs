@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Aggregate.Contexts;
-using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
@@ -183,12 +182,8 @@ public class ClockifyMigrationService
         });
     }
 
-    private DateTime? ParseClockifyDate(string dateStr)
-    {
-        if (string.IsNullOrWhiteSpace(dateStr)) return null;
-        if (DateTime.TryParse(dateStr, out var d)) return d;
-        return null;
-    }
+    private static DateTime? ParseClockifyDate(string dateStr) =>
+        DateTime.TryParse(dateStr, out var d) ? d : null;
 
     public List<ClockifyUserMap> MapUsers(List<ClockifyRecord> allRecords)
     {
@@ -202,33 +197,84 @@ public class ClockifyMigrationService
             .Where(u => !string.IsNullOrEmpty(u.ClockifyEmail) || !string.IsNullOrEmpty(u.ClockifyName))
             .ToList();
 
-        var employees = _hr.Employees.GetAll();
+        var employees = _hr.Employees.GetAll().Where(e => !e.IsSystem).ToList();
 
         foreach (var u in uniqueUsers)
         {
-            // 1. Try exact email match
-            if (!string.IsNullOrEmpty(u.ClockifyEmail))
-            {
-                var match = employees.FirstOrDefault(e => e.Email.Equals(u.ClockifyEmail, StringComparison.OrdinalIgnoreCase));
-                if (match != null)
-                {
-                    u.SpokesEmployeeId = match.Id;
-                    continue;
-                }
-            }
-            
-            // 2. Try Name match
-            if (!string.IsNullOrEmpty(u.ClockifyName))
-            {
-                var match = employees.FirstOrDefault(e => e.FullName.Equals(u.ClockifyName, StringComparison.OrdinalIgnoreCase));
-                if (match != null)
-                {
-                    u.SpokesEmployeeId = match.Id;
-                }
-            }
+            TryLinkUserMapping(u, employees);
         }
 
         return uniqueUsers;
+    }
+
+    private static void TryLinkUserMapping(ClockifyUserMap mapping, List<Employee> employees)
+    {
+        if (!string.IsNullOrEmpty(mapping.ClockifyEmail))
+        {
+            var emailMatch = employees.FirstOrDefault(e => e.Email.Equals(mapping.ClockifyEmail, StringComparison.OrdinalIgnoreCase));
+            if (emailMatch != null)
+            {
+                mapping.SpokesEmployeeId = emailMatch.Id;
+                return;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(mapping.ClockifyName))
+        {
+            var nameMatch = employees.FirstOrDefault(e => e.FullName.Equals(mapping.ClockifyName, StringComparison.OrdinalIgnoreCase));
+            if (nameMatch != null)
+            {
+                mapping.SpokesEmployeeId = nameMatch.Id;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-links any previously unmatched Clockify user or project entries against freshly imported entities.
+    /// </summary>
+    public void RelinkUnmatchedMappings(List<ClockifyUserMap> userMappings, List<ClockifyProjectMap> projectMappings)
+    {
+        var employees = _hr.Employees.GetAll().Where(e => !e.IsSystem).ToList();
+        foreach (var cu in userMappings.Where(u => string.IsNullOrEmpty(u.SpokesEmployeeId)))
+        {
+            TryLinkUserMapping(cu, employees);
+        }
+
+        var projects = _projects.Projects.GetAll().ToList();
+        foreach (var cp in projectMappings.Where(p => string.IsNullOrEmpty(p.SpokesProjectId)))
+        {
+            TryLinkProjectMapping(cp, projects, markNewIfUnmatched: false);
+        }
+    }
+
+    private static void TryLinkProjectMapping(ClockifyProjectMap mapping, List<Project> projects, bool markNewIfUnmatched)
+    {
+        Project? match;
+        if (!string.IsNullOrWhiteSpace(mapping.ExtractedCode))
+        {
+            match = projects.FirstOrDefault(p =>
+                p.ProjectNumber.Equals(mapping.ExtractedCode, StringComparison.OrdinalIgnoreCase) ||
+                p.Name.Contains(mapping.ExtractedCode, StringComparison.OrdinalIgnoreCase));
+        }
+        else
+        {
+            match = projects.FirstOrDefault(p => p.Name.Equals(mapping.OriginalName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (match == null && !markNewIfUnmatched && !string.IsNullOrWhiteSpace(mapping.ExtractedCode))
+        {
+            match = projects.FirstOrDefault(p => p.Name.Equals(mapping.OriginalName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (match != null)
+        {
+            mapping.SpokesProjectId = match.Id;
+            mapping.IsNew = false;
+        }
+        else if (markNewIfUnmatched)
+        {
+            mapping.IsNew = true;
+        }
     }
 
     public List<ClockifyProjectMap> MapProjects(List<ClockifyRecord> allRecords)
@@ -254,35 +300,7 @@ public class ClockifyMigrationService
                 ExtractedCode = extractedCode
             };
 
-            if (!string.IsNullOrEmpty(extractedCode))
-            {
-                var existing = spokesProjects.FirstOrDefault(p => 
-                    p.ProjectNumber.Equals(extractedCode, StringComparison.OrdinalIgnoreCase) ||
-                    p.Name.Contains(extractedCode, StringComparison.OrdinalIgnoreCase));
-
-                if (existing != null)
-                {
-                    mapping.SpokesProjectId = existing.Id;
-                }
-                else
-                {
-                    mapping.IsNew = true;
-                }
-            }
-            else
-            {
-                // No code found, let's try exact name match
-                var existing = spokesProjects.FirstOrDefault(p => p.Name.Equals(cp, StringComparison.OrdinalIgnoreCase));
-                if (existing != null)
-                {
-                    mapping.SpokesProjectId = existing.Id;
-                }
-                else
-                {
-                    mapping.IsNew = true;
-                }
-            }
-
+            TryLinkProjectMapping(mapping, spokesProjects, markNewIfUnmatched: true);
             map.Add(mapping);
         }
 
@@ -296,7 +314,7 @@ public class ClockifyMigrationService
         Employee executingEmployee,
         CancellationToken cancellationToken = default)
     {
-        if (executingEmployee == null || (!executingEmployee.IsAdmin && !executingEmployee.HasPermission(AppPermissions.Admin.ManageSettings)))
+        if (executingEmployee is not { IsActiveUnsuspended: true } || !executingEmployee.IsEffectiveAdmin)
         {
             throw new UnauthorizedAccessException("User is not authorized to execute data migration.");
         }
@@ -327,7 +345,6 @@ public class ClockifyMigrationService
         }
 
         // 2. Create Missing Projects
-        var newProjectsCache = new Dictionary<string, Project>();
         foreach (var pm in projectMaps.Where(p => p.IsNew))
         {
             var p = new Project
@@ -339,7 +356,6 @@ public class ClockifyMigrationService
             };
             _projects.Projects.Save(p);
             pm.SpokesProjectId = p.Id;
-            newProjectsCache[p.Id] = p;
         }
 
         // 3. Generate Timesheets
@@ -358,7 +374,7 @@ public class ClockifyMigrationService
             foreach (var weekGroup in userGroup.GroupBy(r => 
             {
                 var dt = ParseClockifyDate(r.StartDateString) ?? DateTime.UtcNow;
-                return new { Year = GetIso8601Year(dt), Week = GetIso8601WeekOfYear(dt) };
+                return new { Year = ISOWeek.GetYear(dt), Week = ISOWeek.GetWeekOfYear(dt) };
             }))
             {
                 var existingTimesheet = _hr.Timesheets.GetAll().FirstOrDefault(t => 
@@ -384,9 +400,7 @@ public class ClockifyMigrationService
                     var projectId = pm?.SpokesProjectId;
                     if (string.IsNullOrEmpty(projectId)) continue;
 
-                    var hours = record.DurationDecimal ?? 0m;
-                    if (hours <= 0m) continue;
-
+                    var hours = record.DurationDecimal!.Value;
                     var date = ParseClockifyDate(record.StartDateString) ?? DateTime.UtcNow.Date;
 
                     var entry = new TimeEntry
@@ -415,23 +429,5 @@ public class ClockifyMigrationService
             userMaps.Count(u => u.CreateNew),
             projectMaps.Count(p => p.IsNew),
             allRecords.Count);
-    }
-
-    private static int GetIso8601WeekOfYear(DateTime time)
-    {
-        DayOfWeek day = CultureInfo.InvariantCulture.Calendar.GetDayOfWeek(time);
-        if (day >= DayOfWeek.Monday && day <= DayOfWeek.Wednesday)
-        {
-            time = time.AddDays(3);
-        }
-        return CultureInfo.InvariantCulture.Calendar.GetWeekOfYear(time, CalendarWeekRule.FirstFourDayWeek, DayOfWeek.Monday);
-    }
-
-    private static int GetIso8601Year(DateTime time)
-    {
-        int week = GetIso8601WeekOfYear(time);
-        if (week >= 52 && time.Month == 1) return time.Year - 1;
-        if (week == 1 && time.Month == 12) return time.Year + 1;
-        return time.Year;
     }
 }

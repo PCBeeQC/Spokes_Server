@@ -1,8 +1,10 @@
+@using Spokes_Server.Core.Constants
 @inject Database Db
+@inject UserService UserService
  
  <MudDialog>
      <DialogContent>
-         <MudTable Items="@_publicContacts" MultiSelection="true" @bind-SelectedItems="_selectedContacts" Hover="true"
+         <MudTable Elevation="0" Outlined="true" Items="@_publicContacts" MultiSelection="true" @bind-SelectedItems="_selectedContacts" Hover="true"
              Striped="true" Filter="FilterFunc">
             <ToolBarContent>
                 <MudText Typo="Typo.h6">Select Public Contacts</MudText>
@@ -41,8 +43,18 @@
     private HashSet<ContactPerson> _selectedContacts = new();
     private List<ContactPerson> _publicContacts = new();
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null ||
+            !emp.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: false) ||
+            !emp.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false))
+        {
+            _publicContacts = new();
+            MudDialog.Cancel();
+            return;
+        }
+
         _publicContacts = Db.PublicContacts.GetAll().OrderBy(c => c.Name).ToList();
     }
 
@@ -53,7 +65,19 @@
             || element.Email.Contains(_searchString, StringComparison.OrdinalIgnoreCase);
     }
 
-    private void Submit() => MudDialog.Close(DialogResult.Ok(_selectedContacts.ToList()));
+    private async Task Submit()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null ||
+            !emp.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: false) ||
+            !emp.HasEffectivePermission(AppPermissions.AddressBook.Manage, allowSuspended: false))
+        {
+            MudDialog.Cancel();
+            return;
+        }
+
+        MudDialog.Close(DialogResult.Ok(_selectedContacts.ToList()));
+    }
     private void Close() => MudDialog.Cancel();
 }
 

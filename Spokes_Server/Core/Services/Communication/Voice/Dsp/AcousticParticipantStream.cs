@@ -15,7 +15,6 @@ internal sealed class AcousticParticipantStream
     private const int BarkRingLength = RingBufferCapacity / BarkStepSamples;
 
     public string UserId { get; }
-    public string FilterType { get; set; } = "webrtc";
     public double? EstimatedCaptureLatencyMs { get; set; }
     public double? ServerToClientDelayMs { get; set; }
     public long WriteSampleIndex { get; private set; }
@@ -26,12 +25,11 @@ internal sealed class AcousticParticipantStream
 
     public float CurrentGain { get; set; } = 1.0f;
     public float TargetGain { get; set; } = 1.0f;
-    public float LevelerNoiseFloorRms { get; set; } = 0.0012f;
-    public float LevelerSpeechRmsEnv { get; set; } = PostLevelerTargetSpeechRms;
-    public float TargetMakeupGain { get; set; } = 1.0f;
-    public float CurrentMakeupGain { get; set; } = 1.0f;
+    public AcousticSpeechLeveler Leveler { get; } = new();
     public float CurrentDoubleTalkMakeupScale { get; set; } = 1.0f;
-    public bool HasSeededLevelerSpeechEnv { get; set; }
+    public float LevelerSpeechPresence { get; set; }
+    public int LevelerSpeechHoldSubFrames { get; set; }
+    public float IdleSilenceGateGain { get; set; } = 1.0f;
     public int ConsecutiveNearFieldSubFrames { get; set; }
     public int ActiveSpeechHoldoverSubFrames { get; set; }
     public float RecentSpeechRms { get; set; }
@@ -52,6 +50,8 @@ internal sealed class AcousticParticipantStream
     public AcousticGateState LastGateState { get; set; } = AcousticGateState.Open;
     public float LastVocalRms { get; set; }
     public float PeakVocalRms { get; set; }
+    public float PeakRawSample { get; set; }
+    public int ClippedSampleCount { get; set; }
     public int TotalSubFramesProcessed { get; set; }
     public int SpeechSubFrames { get; set; }
     public int GatedBleedSubFrames { get; set; }
@@ -87,6 +87,9 @@ internal sealed class AcousticParticipantStream
     private float _envAccumSq;
     private int _envAccumCount;
     private bool _envStepHadClick;
+    private long _lastNonZeroSampleIndex = -1L;
+
+    public long LastNonZeroSampleIndex => _lastNonZeroSampleIndex;
 
     public AcousticParticipantStream(string userId, long initialSampleIndex)
     {
@@ -107,6 +110,10 @@ internal sealed class AcousticParticipantStream
         Array.Clear(ReverbRefPowerSpectrum);
         LastReverbHopSample = -1L;
         CurrentDoubleTalkMakeupScale = 1.0f;
+        Leveler.Reset();
+        LevelerSpeechPresence = 0f;
+        LevelerSpeechHoldSubFrames = 0;
+        IdleSilenceGateGain = 1.0f;
         AdvanceWithSilenceTo(currentGlobalSampleClock);
         TrackEpochSample = WriteSampleIndex;
     }
@@ -130,6 +137,8 @@ internal sealed class AcousticParticipantStream
     public void ResetTelemetryCounters()
     {
         PeakVocalRms = 0f;
+        PeakRawSample = 0f;
+        ClippedSampleCount = 0;
         TotalSubFramesProcessed = 0;
         SpeechSubFrames = 0;
         GatedBleedSubFrames = 0;
@@ -226,14 +235,31 @@ internal sealed class AcousticParticipantStream
             LastWallClockMs = wallClockMs.Value;
         }
 
-        for (int i = 0; i < pcm16.Length; i++)
+        if (!pcm16.IsEmpty && !pcm16.ContainsAnyExcept((short)0) && IsFilterStateSilent())
         {
-            PushSingleSample(pcm16[i] / 32768.0f);
+            WriteSilenceSamplesFast(pcm16.Length);
+        }
+        else
+        {
+            for (int i = 0; i < pcm16.Length; i++)
+            {
+                PushSingleSample(pcm16[i] / 32768.0f);
+            }
         }
 
         FramesWritten++;
         return clockDriftCorrectionApplied;
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsFilterStateSilent() =>
+        MathF.Abs(_hpPrevIn) <= 1e-9f &&
+        MathF.Abs(_hpPrevOut) <= 1e-9f &&
+        MathF.Abs(_lpPrevOut) <= 1e-9f &&
+        _fastVocalEnv <= 1e-9f &&
+        _fastHighFreqEnv <= 1e-9f &&
+        _envAccumSq <= 1e-12f &&
+        !_envStepHadClick;
 
     private long AdvanceWithSilenceTo(long targetSampleIndex)
     {
@@ -252,10 +278,17 @@ internal sealed class AcousticParticipantStream
 
     private void WriteSilenceSamples(int count)
     {
+        if (count <= 0) return;
         int capped = Math.Min(count, RingBufferCapacity);
-        for (int i = 0; i < capped; i++)
+        int i = 0;
+        while (i < capped && !IsFilterStateSilent())
         {
             PushSingleSample(0f);
+            i++;
+        }
+        if (i < capped)
+        {
+            WriteSilenceSamplesFast(capped - i);
         }
         if (count > capped)
         {
@@ -263,8 +296,68 @@ internal sealed class AcousticParticipantStream
         }
     }
 
+    private void WriteSilenceSamplesFast(int count)
+    {
+        if (count <= 0) return;
+        _hpPrevIn = 0f;
+        _hpPrevOut = 0f;
+        _lpPrevOut = 0f;
+        _fastVocalEnv = 0f;
+        _fastHighFreqEnv = 0f;
+        _envAccumSq = 0f;
+        _envStepHadClick = false;
+
+        int ringClearCount = Math.Min(count, RingBufferCapacity);
+        int startRingIdx = (int)(WriteSampleIndex % RingBufferCapacity);
+        if (startRingIdx < 0) startRingIdx += RingBufferCapacity;
+        int firstChunk = Math.Min(ringClearCount, RingBufferCapacity - startRingIdx);
+        _rawRing.AsSpan(startRingIdx, firstChunk).Clear();
+        _vocalRing.AsSpan(startRingIdx, firstChunk).Clear();
+        _highFreqRing.AsSpan(startRingIdx, firstChunk).Clear();
+        if (firstChunk < ringClearCount)
+        {
+            int secondChunk = ringClearCount - firstChunk;
+            _rawRing.AsSpan(0, secondChunk).Clear();
+            _vocalRing.AsSpan(0, secondChunk).Clear();
+            _highFreqRing.AsSpan(0, secondChunk).Clear();
+        }
+
+        int totalEnvSamples = _envAccumCount + count;
+        int envStepsToAdvance = totalEnvSamples / EnvelopeStepSamples;
+        if (envStepsToAdvance > 0)
+        {
+            int envRingLen = _envelopeRing.Length;
+            int envClearCount = Math.Min(envStepsToAdvance, envRingLen);
+            long firstStepSample = WriteSampleIndex + (EnvelopeStepSamples - 1 - _envAccumCount);
+            int startEnvIdx = (int)((firstStepSample / EnvelopeStepSamples) % envRingLen);
+            if (startEnvIdx < 0) startEnvIdx += envRingLen;
+            int firstEnvChunk = Math.Min(envClearCount, envRingLen - startEnvIdx);
+            _envelopeRing.AsSpan(startEnvIdx, firstEnvChunk).Clear();
+            _clickMaskRing.AsSpan(startEnvIdx, firstEnvChunk).Clear();
+            if (firstEnvChunk < envClearCount)
+            {
+                int secondEnvChunk = envClearCount - firstEnvChunk;
+                _envelopeRing.AsSpan(0, secondEnvChunk).Clear();
+                _clickMaskRing.AsSpan(0, secondEnvChunk).Clear();
+            }
+        }
+
+        _envAccumCount = totalEnvSamples % EnvelopeStepSamples;
+        WriteSampleIndex += count;
+    }
+
     private void PushSingleSample(float raw)
     {
+        float absRaw = MathF.Abs(raw);
+        if (absRaw > PeakRawSample)
+        {
+            PeakRawSample = absRaw;
+        }
+        if (absRaw >= 0.985f)
+        {
+            ClippedSampleCount++;
+        }
+
         // High-pass at ~200 Hz + Low-pass at ~3400 Hz + High-frequency residual (> 3400 Hz)
         float hp = 0.974f * (_hpPrevOut + raw - _hpPrevIn);
         _hpPrevIn = raw;
@@ -286,6 +379,11 @@ internal sealed class AcousticParticipantStream
             _envStepHadClick = true;
         }
         float cleanVocal = isClickSample ? 0f : vocal;
+
+        if (MathF.Abs(raw) > 1e-9f || MathF.Abs(cleanVocal) > 1e-9f || MathF.Abs(highFreq) > 1e-9f)
+        {
+            _lastNonZeroSampleIndex = WriteSampleIndex;
+        }
 
         _rawRing[ringIdx] = raw;
         _vocalRing[ringIdx] = cleanVocal;
@@ -411,7 +509,7 @@ internal sealed class AcousticParticipantStream
 
     private double ComputeRingMeanSquare(float[] ring, long startSample, int count)
     {
-        if (count <= 0) return 0.0;
+        if (count <= 0 || startSample > _lastNonZeroSampleIndex) return 0.0;
         long validStart = Math.Max(startSample, Math.Max(0L, WriteSampleIndex - RingBufferCapacity + 1));
         long validEnd = Math.Min(startSample + count, WriteSampleIndex);
         if (validStart >= validEnd) return 0.0;
@@ -448,6 +546,7 @@ internal sealed class AcousticParticipantStream
 
     public float ComputeEnvelopeRms(long startSample, int sampleCount)
     {
+        if (startSample > _lastNonZeroSampleIndex + EnvelopeStepSamples) return 0f;
         int steps = sampleCount / EnvelopeStepSamples;
         if (steps <= 0) return ComputeVocalRms(startSample, sampleCount);
 

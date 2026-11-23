@@ -4,9 +4,9 @@
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.Documents
 @using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.Security
 @inject Database Db
 @inject ISnackbar Snackbar
-@inject IDialogService DialogService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ILogger<BusinessDocumentViewer> Logger
@@ -14,6 +14,7 @@
 @inject DocumentPdfService PdfService
 @inject MarkdownSanitizerService MarkdownSanitizer
 @inject ITimelineEventService TimelineEventService
+@inject FileUrlSigner FileUrls
 @implements IAsyncDisposable
 
 @if (_document != null)
@@ -143,8 +144,9 @@ else
 
                 @if (DocumentBlockLibrary.GetAll().Any())
                 {
-                    <DocumentBlocksEditor Blocks="_document.Blocks" BlocksChanged="@(b => { _document.Blocks = b; SaveBlocks(); })"
-                        OnBlockAdded="OnBlockAdded" OnBlockRenamed="OnBlockRenamed" />
+                    <DocumentBlocksEditor Blocks="_document.Blocks" BlocksChanged="@(async b => { _document.Blocks = b; await SaveBlocksAsync(); })"
+                        OnBlockAdded="OnBlockAdded" OnBlockRenamed="OnBlockRenamed"
+                        CloneCategory="signatures" CloneContextId="business" />
                 }
 
                 <MarkdownEditor @bind-Value="_editingBody" AvailableTags="GetAvailableTags()" />
@@ -192,15 +194,18 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        var emp = await UserService.GetEmployeeAsync();
-        if (emp == null || (!emp.IsAdmin && !emp.HasPermission(AppPermissions.BusinessDocuments.View)))
+        var emp = await UserService.GetEmployeeAsync(allowSuspended: true);
+        if (emp == null || emp.IsSystem ||
+            !emp.HasEffectivePermission(
+                AppPermissions.BusinessDocuments.View,
+                allowSuspended: AppPermissions.IsReadOnlyAllowed(AppPermissions.BusinessDocuments.View)))
         {
             Nav.NavigateTo("/");
             return;
         }
 
-        _isAdmin = emp.IsAdmin;
-        _canEdit = emp.IsAdmin || emp.HasPermission(AppPermissions.BusinessDocuments.View);
+        _isAdmin = emp.IsEffectiveAdmin;
+        _canEdit = emp.IsActiveUnsuspended && emp.HasPermission(AppPermissions.BusinessDocuments.View);
 
         var loadedDoc = Db.ProjectDocuments.GetById(DocumentId);
         if (loadedDoc == null || !string.IsNullOrEmpty(loadedDoc.ProjectId))
@@ -265,14 +270,31 @@ else
             "\n\n" + string.Join("", Enumerable.Repeat("<div style=\"height: 1rem;\"></div>\n\n", match.Length - 2)));
 
         text = text.Replace("<!-- pagebreak -->", "\n\n<div class=\"force-break\"></div>\n\n");
-        return new MarkupString(MarkdownSanitizer.RenderSanitizedHtml(text));
+        var html = MarkdownSanitizer.RenderSanitizedHtml(text);
+        return new MarkupString(FileUrls.SignHtmlFileUrls(html));
+    }
+
+    private async Task<Spokes_Server.Core.Models.HR.Employee?> ResolveDocumentEditorAsync()
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        _isAdmin = actor?.IsEffectiveAdmin ?? false;
+        _canEdit = actor != null && actor.IsActiveUnsuspended && actor.HasPermission(AppPermissions.BusinessDocuments.View);
+        if (!_canEdit)
+        {
+            _isEditing = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            StateHasChanged();
+            return null;
+        }
+        return actor;
     }
 
     private async Task UpdateStatusAsync(string newStatus)
     {
-        if (_document == null || !_canEdit) return;
+        var actor = await ResolveDocumentEditorAsync();
+        if (_document == null || actor == null) return;
 
-        if (_document.Status == ProjectDocumentStatus.Final && newStatus == ProjectDocumentStatus.Draft && !_isAdmin)
+        if (_document.Status == ProjectDocumentStatus.Final && newStatus == ProjectDocumentStatus.Draft && !actor.IsEffectiveAdmin)
         {
             Snackbar.Add("Only administrators can revert a finalized document to draft.", Severity.Warning);
             return;
@@ -295,7 +317,8 @@ else
             Db.ProjectDocuments.Save(_document);
 
             Snackbar.Add("Generating PDF document...", Severity.Info);
-            _document.PdfPath = await PdfService.GenerateBusinessDocumentPdfAsync(_document, Nav.BaseUri);
+            _document.PdfPath = await PdfService.GenerateBusinessDocumentPdfAsync(_document, Nav.BaseUri, actor.Id);
+            if (await ResolveDocumentEditorAsync() == null) return;
         }
 
         _document.Status = newStatus;
@@ -307,9 +330,9 @@ else
         await InvokeAsync(StateHasChanged);
     }
 
-    private void SaveEdits()
+    private async Task SaveEdits()
     {
-        if (_document == null || !_canEdit) return;
+        if (_document == null || await ResolveDocumentEditorAsync() == null) return;
 
         _document.ResolvedBody = _editingBody;
         _document.IsManualEdit = true;
@@ -327,9 +350,9 @@ else
         _needsPagination = true;
     }
 
-    private void SaveBlocks()
+    private async Task SaveBlocksAsync()
     {
-        if (_document == null || !_canEdit) return;
+        if (_document == null || await ResolveDocumentEditorAsync() == null) return;
         _document.IsManualEdit = true;
         _document.UpdatedAt = DateTime.UtcNow;
         Db.ProjectDocuments.Save(_document);
@@ -358,11 +381,12 @@ else
 
     private async Task StartEditing()
     {
-        if (_document == null || !_canEdit) return;
+        if (_document == null || await ResolveDocumentEditorAsync() == null) return;
 
         try { await JS.InvokeVoidAsync("cleanupPagination", "printable-area"); }
         catch { }
 
+        if (await ResolveDocumentEditorAsync() == null) return;
         _editingBody = _document.ResolvedBody;
         _isEditing = true;
     }
@@ -384,13 +408,25 @@ else
 
         try
         {
+            var actor = await UserService.GetEmployeeAsync();
+            if (actor == null || actor.IsSystem ||
+                !actor.HasEffectivePermission(
+                    AppPermissions.BusinessDocuments.View,
+                    allowSuspended: AppPermissions.IsReadOnlyAllowed(AppPermissions.BusinessDocuments.View)))
+            {
+                Snackbar.Add("Access denied.", Severity.Error);
+                return false;
+            }
             if (string.IsNullOrEmpty(_document.ResolvedBody))
             {
                 _document.ResolvedBody = GetResolvedBody();
             }
             Snackbar.Add("Generating PDF document...", Severity.Info);
-            _document.PdfPath = await PdfService.GenerateBusinessDocumentPdfAsync(_document, Nav.BaseUri);
-            Db.ProjectDocuments.Save(_document);
+            _document.PdfPath = await PdfService.GenerateBusinessDocumentPdfAsync(_document, Nav.BaseUri, actor.Id);
+            if (!actor.IsSuspended)
+            {
+                Db.ProjectDocuments.Save(_document);
+            }
             return true;
         }
         catch (Exception ex)
@@ -412,10 +448,7 @@ else
 
         try
         {
-            var bytes = await System.IO.File.ReadAllBytesAsync(_document.PdfPath);
-            var base64 = Convert.ToBase64String(bytes);
-            var dataUrl = $"data:application/pdf;base64,{base64}";
-            await JS.InvokeVoidAsync("window.openBase64InNewTab", dataUrl, $"{_document.Name}.pdf");
+            await JS.OpenPdfFileInNewTabAsync(_document.PdfPath, $"{_document.Name}.pdf");
         }
         catch (Exception ex)
         {

@@ -51,16 +51,9 @@ public class BackupDestinationCoordinator
 
         if (backupConfig == null) return results;
 
-        var enabledProviders = _providers.Where(provider => provider.DestinationType switch
-        {
-            BackupDestinationType.LocalMount => backupConfig.SecondaryMount.IsEnabled,
-            BackupDestinationType.S3 => backupConfig.S3.IsEnabled,
-            BackupDestinationType.GoogleDrive => backupConfig.GoogleDrive.IsEnabled,
-            BackupDestinationType.GitHub => backupConfig.GitHub.IsEnabled,
-            BackupDestinationType.WebDav => backupConfig.WebDav.IsEnabled,
-            BackupDestinationType.Sftp => backupConfig.Sftp.IsEnabled,
-            _ => false
-        }).ToList();
+        var enabledProviders = _providers
+            .Where(provider => backupConfig.GetDestinationConfig(provider.DestinationType).IsEnabled)
+            .ToList();
 
         if (enabledProviders.Count == 0) return results;
 
@@ -185,42 +178,6 @@ public class BackupDestinationCoordinator
             OnDestinationStatusChanged?.Invoke(provider.DestinationType, status);
             return (provider.DestinationType, BackupUploadResult.Failed(ex.Message));
         }
-    }
-
-    public async Task<List<RemoteBackupItem>> ListAllRemoteBackupsAsync(CancellationToken cancellationToken = default)
-    {
-        var all = new List<RemoteBackupItem>();
-        var profile = _profiles.Get();
-        var backupConfig = profile?.Backup;
-        if (backupConfig == null) return all;
-
-        foreach (var provider in _providers)
-        {
-            bool isEnabled = provider.DestinationType switch
-            {
-                BackupDestinationType.LocalMount => backupConfig.SecondaryMount.IsEnabled,
-                BackupDestinationType.S3 => backupConfig.S3.IsEnabled,
-                BackupDestinationType.GoogleDrive => backupConfig.GoogleDrive.IsEnabled,
-                BackupDestinationType.GitHub => backupConfig.GitHub.IsEnabled,
-                BackupDestinationType.WebDav => backupConfig.WebDav.IsEnabled,
-                BackupDestinationType.Sftp => backupConfig.Sftp.IsEnabled,
-                _ => false
-            };
-
-            if (!isEnabled) continue;
-
-            try
-            {
-                var items = await provider.ListBackupsAsync(cancellationToken);
-                all.AddRange(items);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "[BackupDispatcher] Error listing backups from {Destination}", provider.DestinationType);
-            }
-        }
-
-        return all.OrderByDescending(i => i.CreatedAtUtc).ToList();
     }
 
     public async Task<TestConnectionResult> TestConnectionAsync(BackupDestinationType type, CancellationToken cancellationToken = default)

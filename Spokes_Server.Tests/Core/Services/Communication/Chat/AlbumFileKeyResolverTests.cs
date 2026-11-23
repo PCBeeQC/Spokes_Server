@@ -11,6 +11,7 @@ using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Security;
 using Xunit;
@@ -56,8 +57,8 @@ public class AlbumFileKeyResolverTests : IDisposable
         _escrow = new ServerEscrowService(companyProfiles, serverConfigs, realCrypto, configuration: config);
         _escrow.Initialize();
 
-        _albumService = new AlbumService(_albums, _channels, _mockCrypto.Object, _escrow, _employees);
-        _resolver = new AlbumFileKeyResolver(_albums, _albumService, _keystore, _mockCrypto.Object);
+        _albumService = new AlbumService(_albums, _channels, _mockCrypto.Object, _escrow, _employees, new ChatAuthorizationService(_channels, new Spokes_Server.Core.Data.Repositories.Projects.ProjectRepository(_persistence, config), new Spokes_Server.Core.Data.Repositories.HR.TeamRepository(_persistence, config), _employees));
+        _resolver = new AlbumFileKeyResolver(_albums, _albumService, _keystore);
     }
 
     public void Dispose()
@@ -89,9 +90,9 @@ public class AlbumFileKeyResolverTests : IDisposable
     [Fact]
     public void ResolveAlbumKey_WithTokenKey_RejectsRemovedContributorAndUnsharedChannelMember()
     {
-        var owner = new Employee { Id = "u_owner", PublicKey = "owner_pub", EncryptedPrivateKey = "enc" };
-        var contrib = new Employee { Id = "u_contrib", PublicKey = "contrib_pub", EncryptedPrivateKey = "enc" };
-        var chanViewer = new Employee { Id = "u_viewer", PublicKey = "viewer_pub", EncryptedPrivateKey = "enc" };
+        var owner = new Employee { Id = "u_owner", PublicKey = "owner_pub", EncryptedPrivateKey = "enc", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
+        var contrib = new Employee { Id = "u_contrib", PublicKey = "contrib_pub", EncryptedPrivateKey = "enc", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
+        var chanViewer = new Employee { Id = "u_viewer", PublicKey = "viewer_pub", EncryptedPrivateKey = "enc", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
         _employees.Save(owner);
         _employees.Save(contrib);
         _employees.Save(chanViewer);
@@ -154,8 +155,8 @@ public class AlbumFileKeyResolverTests : IDisposable
     [Fact]
     public void ResolveAlbumKey_WithTokenKey_AllowsPublicSharedEscrowAlbumAndRejectsDisallowedPrivateEscrow()
     {
-        var vaultOwner = new Employee { Id = "u_vault_owner", PublicKey = "owner_pub", EncryptedPrivateKey = "enc" };
-        var viewer = new Employee { Id = "u_pub_viewer", IsActive = true };
+        var vaultOwner = new Employee { Id = "u_vault_owner", PublicKey = "owner_pub", EncryptedPrivateKey = "enc", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
+        var viewer = new Employee { Id = "u_pub_viewer", IsActive = true, Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
         _employees.Save(vaultOwner);
         _employees.Save(viewer);
 
@@ -177,7 +178,7 @@ public class AlbumFileKeyResolverTests : IDisposable
         Assert.Equal("tok_key", _resolver.ResolveDownloadKey("alb_pub_escrow", viewer, "tok_key").EncryptionKey);
 
         // Private album owned by a vault user without any unencrypted channel share must NOT allow Escrow fallback for a contributor missing their own key
-        var contribNoKey = new Employee { Id = "u_contrib_nokey", PublicKey = "c_pub", EncryptedPrivateKey = "enc" };
+        var contribNoKey = new Employee { Id = "u_contrib_nokey", PublicKey = "c_pub", EncryptedPrivateKey = "enc", Permissions = [AppPermissions.Albums.View, AppPermissions.Chat.Use] };
         _employees.Save(contribNoKey);
         _albums.Save(new Album
         {

@@ -31,25 +31,21 @@ namespace Spokes_Server.Tests.Core.Configuration;
 public class SecretsResolutionRegressionTests : IDisposable
 {
     private readonly string? _originalRelayKey;
-    private readonly string? _originalKlipyKey;
 
     public SecretsResolutionRegressionTests()
     {
         _originalRelayKey = Environment.GetEnvironmentVariable("SPOKES_RELAY_KEY");
-        _originalKlipyKey = Environment.GetEnvironmentVariable("SPOKES_KLIPY_KEY");
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable("SPOKES_RELAY_KEY", _originalRelayKey);
-        Environment.SetEnvironmentVariable("SPOKES_KLIPY_KEY", _originalKlipyKey);
     }
 
     [Fact]
     public void SpokesOptions_ResolvesEnvironmentVariables_WhenConfigSectionMissing()
     {
         Environment.SetEnvironmentVariable("SPOKES_RELAY_KEY", "env-docker-relay-secret-123");
-        Environment.SetEnvironmentVariable("SPOKES_KLIPY_KEY", "env-docker-klipy-secret-456");
 
         var services = new ServiceCollection();
         // Register configuration without the "Spokes" section, simulating standard container environment
@@ -61,7 +57,6 @@ public class SecretsResolutionRegressionTests : IDisposable
         var options = sp.GetRequiredService<IOptions<SpokesOptions>>().Value;
 
         Assert.Equal("env-docker-relay-secret-123", options.PushRelayKey);
-        Assert.Equal("env-docker-klipy-secret-456", options.DefaultKlipyApiKey);
         Assert.Equal(SpokesConstants.PushRelayUrl, options.PushRelayUrl);
     }
 
@@ -69,7 +64,6 @@ public class SecretsResolutionRegressionTests : IDisposable
     public void SpokesOptions_ResolvesEnvironmentVariables_WhenConfigurationInstanceIsNull()
     {
         Environment.SetEnvironmentVariable("SPOKES_RELAY_KEY", "direct-env-relay-key");
-        Environment.SetEnvironmentVariable("SPOKES_KLIPY_KEY", "direct-env-klipy-key");
 
         var services = new ServiceCollection();
         // AddSpokesConfiguration called without passing IConfiguration or registering it in DI
@@ -79,7 +73,6 @@ public class SecretsResolutionRegressionTests : IDisposable
         var options = sp.GetRequiredService<IOptions<SpokesOptions>>().Value;
 
         Assert.Equal("direct-env-relay-key", options.PushRelayKey);
-        Assert.Equal("direct-env-klipy-key", options.DefaultKlipyApiKey);
     }
 
     [Fact]
@@ -113,6 +106,7 @@ public class SecretsResolutionRegressionTests : IDisposable
         {
             var mockConfig = new Mock<IConfiguration>();
             mockConfig.Setup(c => c["DataPath"]).Returns(tempDir);
+            mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
             var mockPersistence = new Mock<DiskPersistenceService>(Mock.Of<ILogger<DiskPersistenceService>>());
             var sessionsRepo = new DeviceSessionRepository(mockPersistence.Object, mockConfig.Object);
             var mockSystemLog = new Mock<ISystemLogService>();
@@ -123,12 +117,12 @@ public class SecretsResolutionRegressionTests : IDisposable
                 PushRelayKey = expectedRelayKey
             });
 
+            var relayClient = new SpokesRelayClient(mockHttpClientFactory.Object, spokesOptions);
             var dispatcher = new NativeRelayDispatcher(
-                mockHttpClientFactory.Object,
+                relayClient,
                 sessionsRepo,
                 mockSystemLog.Object,
-                logger: null,
-                options: spokesOptions);
+                logger: null);
 
             var payload = new RelayPushPayload
             {
@@ -160,60 +154,5 @@ public class SecretsResolutionRegressionTests : IDisposable
                 Directory.Delete(tempDir, true);
             }
         }
-    }
-
-    [Fact]
-    public void SpokesConstants_BackwardsCompatibleAccessors_ReturnExpectedValues()
-    {
-        Environment.SetEnvironmentVariable("SPOKES_RELAY_KEY", "compat-relay-key");
-        Environment.SetEnvironmentVariable("SPOKES_KLIPY_KEY", "compat-klipy-key");
-
-#pragma warning disable CS0618 // Type or member is obsolete
-        Assert.Equal("compat-relay-key", SpokesConstants.PushRelayKey);
-        Assert.Equal("compat-klipy-key", SpokesConstants.DefaultKlipyApiKey);
-
-        Environment.SetEnvironmentVariable("SPOKES_RELAY_KEY", null);
-        Environment.SetEnvironmentVariable("SPOKES_KLIPY_KEY", null);
-
-        Assert.Equal(string.Empty, SpokesConstants.PushRelayKey);
-        Assert.Equal(string.Empty, SpokesConstants.DefaultKlipyApiKey);
-#pragma warning restore CS0618
-    }
-
-    [Fact]
-    public void GifProvider_ResolutionLogic_DistinguishesDefaultVsCustomProvider()
-    {
-        // Case A: User's local server configuration (provider is explicitly "Klipy" and has a saved key in database)
-        var localProfile = new CompanyProfile
-        {
-            GifProvider = "Klipy",
-            GifApiKey = "dummy-custom-klipy-api-key"
-        };
-
-        var options = Options.Create(new SpokesOptions
-        {
-            DefaultKlipyApiKey = "official-docker-github-secret-key"
-        });
-
-        // Exact resolution formula from EmojiPicker.razor:
-        var localProvider = localProfile.GifProvider == "Spokes Default Provider" ? "Klipy" : localProfile.GifProvider;
-        var localApiKey = localProfile.GifProvider == "Spokes Default Provider" ? options.Value.DefaultKlipyApiKey : localProfile.GifApiKey;
-
-        Assert.Equal("Klipy", localProvider);
-        Assert.Equal("dummy-custom-klipy-api-key", localApiKey);
-        Assert.NotEqual(options.Value.DefaultKlipyApiKey, localApiKey);
-
-        // Case B: Official Docker instance (provider is "Spokes Default Provider", key is provided via GitHub Secret)
-        var dockerProfile = new CompanyProfile
-        {
-            GifProvider = "Spokes Default Provider",
-            GifApiKey = string.Empty
-        };
-
-        var dockerProvider = dockerProfile.GifProvider == "Spokes Default Provider" ? "Klipy" : dockerProfile.GifProvider;
-        var dockerApiKey = dockerProfile.GifProvider == "Spokes Default Provider" ? options.Value.DefaultKlipyApiKey : dockerProfile.GifApiKey;
-
-        Assert.Equal("Klipy", dockerProvider);
-        Assert.Equal("official-docker-github-secret-key", dockerApiKey);
     }
 }

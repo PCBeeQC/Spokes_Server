@@ -8,10 +8,12 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
+using Spokes_Server.Core.Data.Repositories.Projects;
 using Spokes_Server.Core.Exceptions;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
@@ -36,7 +38,7 @@ public class ChatSecurityServiceTests : IDisposable
     private readonly AlbumService _albumService;
     private readonly Mock<ICryptoService> _mockCrypto;
     private readonly Mock<IChatAuthorizationService> _mockChatAuth;
-    private readonly Mock<IChatRealtimeGateway> _mockRealtimeGateway;
+    private readonly ChatStateService _chatState;
     private readonly Mock<IFileService> _mockFileService;
     private readonly ServerEscrowService _escrowService;
     private readonly ChatSecurityService _service;
@@ -46,7 +48,7 @@ public class ChatSecurityServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_ChatSecurityTest_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -70,13 +72,15 @@ public class ChatSecurityServiceTests : IDisposable
         var serverConfigs = new ServerConfigRepository(_persistence, _config);
         _escrowService = new ServerEscrowService(_companyProfiles, serverConfigs, _mockCrypto.Object);
 
-        _albumService = new AlbumService(_albums, _channels, _mockCrypto.Object, _escrowService, _employees);
-
         _mockChatAuth = new Mock<IChatAuthorizationService>();
         _mockChatAuth.Setup(a => a.CanUserAccessChannel(It.IsAny<ChatChannel>(), It.IsAny<Employee>()))
                      .Returns(true);
+        _mockChatAuth.Setup(a => a.CanUserManageChannel(It.IsAny<ChatChannel>(), It.IsAny<Employee>(), It.IsAny<bool>()))
+                     .Returns(true);
 
-        _mockRealtimeGateway = new Mock<IChatRealtimeGateway>();
+        _albumService = new AlbumService(_albums, _channels, _mockCrypto.Object, _escrowService, _employees, _mockChatAuth.Object);
+
+        _chatState = new ChatStateService();
         _mockFileService = new Mock<IFileService>();
 
         _service = new ChatSecurityService(
@@ -86,7 +90,7 @@ public class ChatSecurityServiceTests : IDisposable
             _escrowService,
             _mockCrypto.Object,
             _albumService,
-            _mockRealtimeGateway.Object,
+            _chatState,
             _mockChatAuth.Object,
             _mockFileService.Object,
             new Mock<ILogger<ChatSecurityService>>().Object);
@@ -105,8 +109,8 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ToggleChannelEncryptionAsync_WhenEnablingEncryption_GeneratesKeysAndEncryptsMessages()
     {
         // Arrange
-        var emp1 = new Employee { Id = "emp-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice" };
-        var emp2 = new Employee { Id = "emp-2", FirstName = "Bob", LastName = "Jones", IsActive = true, EncryptedPrivateKey = "vault-key-2", PublicKey = "pk-bob" };
+        var emp1 = new Employee { Id = "emp-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice", Permissions = [AppPermissions.Chat.Use] };
+        var emp2 = new Employee { Id = "emp-2", FirstName = "Bob", LastName = "Jones", IsActive = true, EncryptedPrivateKey = "vault-key-2", PublicKey = "pk-bob", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(emp1);
         _employees.Save(emp2);
 
@@ -127,6 +131,9 @@ public class ChatSecurityServiceTests : IDisposable
         };
         _messages.Save(message);
 
+        ChatChannel? notifiedChannel = null;
+        _chatState.ChannelUpdated += ch => notifiedChannel = ch;
+
         // Act
         await _service.ToggleChannelEncryptionAsync("chan-1", true, "emp-1", privateKeyContext: "vault-key-1");
 
@@ -142,16 +149,16 @@ public class ChatSecurityServiceTests : IDisposable
         Assert.True(updatedMsg.IsEncrypted);
         Assert.Equal("aes_enc(Hello World)", updatedMsg.Content);
 
-        _mockRealtimeGateway.Verify(
-            c => c.SendToChannelAsync("chan-1", "ChannelUpdated", It.IsAny<object>(), default),
-            Times.AtLeastOnce);
+        Assert.NotNull(notifiedChannel);
+        Assert.Equal("chan-1", notifiedChannel!.Id);
+        Assert.True(notifiedChannel.IsEncrypted);
     }
 
     [Fact]
     public async Task ToggleChannelEncryptionAsync_WhenEnablingEncryptionOnDMWithParticipantWithoutVaultPassword_ThrowsInvalidOperationException()
     {
         // Arrange
-        var emp1 = new Employee { Id = "emp-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1" };
+        var emp1 = new Employee { Id = "emp-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", Permissions = [AppPermissions.Chat.Use] };
         var emp2 = new Employee { Id = "emp-2", FirstName = "Bob", LastName = "Jones", IsActive = true, EncryptedPrivateKey = null };
         _employees.Save(emp1);
         _employees.Save(emp2);
@@ -160,6 +167,7 @@ public class ChatSecurityServiceTests : IDisposable
         {
             Id = "dm-1",
             ChannelType = ChatChannelType.Direct,
+            CreatedById = "emp-1",
             ParticipantIds = new List<string> { "emp-1", "emp-2" },
             IsEncrypted = false
         };
@@ -178,6 +186,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ToggleChannelEncryptionAsync_WhenDisablingEncryption_RequiresPrivateKeyAndDecryptsMessages()
     {
         // Arrange
+        _employees.Save(new Employee { Id = "emp-1", IsActive = true, Permissions = [AppPermissions.Chat.Use] });
         var channel = new ChatChannel
         {
             Id = "chan-2",
@@ -215,6 +224,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ToggleChannelEncryptionAsync_WhenDisablingWithoutPrivateKey_ThrowsInvalidOperationException()
     {
         // Arrange
+        _employees.Save(new Employee { Id = "emp-1", IsActive = true, Permissions = [AppPermissions.Chat.Use] });
         var channel = new ChatChannel
         {
             Id = "chan-3",
@@ -234,7 +244,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ClaimEscrowedKeysAsync_WhenUserHasAccess_ClaimsKeySuccessfully()
     {
         // Arrange
-        var emp = new Employee { Id = "emp-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice" };
+        var emp = new Employee { Id = "emp-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(emp);
 
         var channel = new ChatChannel
@@ -263,7 +273,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ClaimEscrowedKeysAsync_WhenUserLacksAccess_DoesNotClaimKey()
     {
         // Arrange
-        var emp = new Employee { Id = "emp-unauth", FirstName = "Unauth", LastName = "User", IsActive = true, EncryptedPrivateKey = "vault-key-unauth", PublicKey = "pk-unauth" };
+        var emp = new Employee { Id = "emp-unauth", FirstName = "Unauth", LastName = "User", IsActive = true, EncryptedPrivateKey = "vault-key-unauth", PublicKey = "pk-unauth", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(emp);
 
         var channel = new ChatChannel
@@ -292,7 +302,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ShareKeyOpportunisticallyAsync_WhenUserHasAccess_SharesKey()
     {
         // Arrange
-        var emp = new Employee { Id = "emp-share", FirstName = "Share", LastName = "User", IsActive = true, EncryptedPrivateKey = "vault-key-share", PublicKey = "pk-share" };
+        var emp = new Employee { Id = "emp-share", FirstName = "Share", LastName = "User", IsActive = true, EncryptedPrivateKey = "vault-key-share", PublicKey = "pk-share", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(emp);
 
         var channel = new ChatChannel
@@ -318,7 +328,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ShareKeyOpportunisticallyAsync_WhenUserLacksAccess_DoesNotShareKey()
     {
         // Arrange
-        var emp = new Employee { Id = "emp-no-share", FirstName = "NoShare", LastName = "User", IsActive = true, EncryptedPrivateKey = "vault-key-noshare", PublicKey = "pk-no-share" };
+        var emp = new Employee { Id = "emp-no-share", FirstName = "NoShare", LastName = "User", IsActive = true, EncryptedPrivateKey = "vault-key-noshare", PublicKey = "pk-no-share", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(emp);
 
         var channel = new ChatChannel
@@ -344,6 +354,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task SecureSearchMessagesAsync_UnencryptedChannel_ReturnsMatchingMessages()
     {
         // Arrange
+        _employees.Save(new Employee { Id = "user-1", IsActive = true, Permissions = [AppPermissions.Chat.Use] });
         var channel = new ChatChannel { Id = "chan-search-1", Name = "General", IsEncrypted = false };
         _channels.Save(channel);
 
@@ -364,6 +375,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task SecureSearchMessagesAsync_EncryptedChannel_WithUserPrivateKey_DecryptsAndFindsMatches()
     {
         // Arrange
+        _employees.Save(new Employee { Id = "user-1", IsActive = true, Permissions = [AppPermissions.Chat.Use] });
         var channel = new ChatChannel
         {
             Id = "chan-search-enc",
@@ -397,6 +409,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task SecureSearchMessagesAsync_EncryptedChannel_WithEscrowFallback_DecryptsAndFindsMatches()
     {
         // Arrange
+        _employees.Save(new Employee { Id = "user-auditor", IsActive = true, Permissions = [AppPermissions.Chat.Use] });
         var channel = new ChatChannel
         {
             Id = "chan-search-escrow",
@@ -419,8 +432,8 @@ public class ChatSecurityServiceTests : IDisposable
         };
         _messages.Save(msg);
 
-        // Act - user has no personal key, falls back to escrow
-        var results = await _service.SecureSearchMessagesAsync("chan-search-escrow", "escrow", "user-auditor");
+        // Act - user has unlocked vault but no personal key, falls back to escrow
+        var results = await _service.SecureSearchMessagesAsync("chan-search-escrow", "escrow", "user-auditor", "auditor-unlocked-priv-key");
 
         // Assert
         Assert.Single(results);
@@ -491,6 +504,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task SecureSearchMessagesAsync_WithIsPictureFilter_ReturnsOnlyMessagesWithPictures()
     {
         // Arrange
+        _employees.Save(new Employee { Id = "user-1", IsActive = true, Permissions = [AppPermissions.Chat.Use] });
         var channel = new ChatChannel { Id = "chan-filter-pic", Name = "General", IsEncrypted = false };
         _channels.Save(channel);
 
@@ -598,8 +612,8 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ToggleChannelEncryptionAsync_WhenChannelAlreadyMarkedEncryptedWithZeroKeys_HealsChannelAndDistributesKeys()
     {
         // Arrange: Corrupted channel state created when channel was saved with IsEncrypted = true before toggle
-        var emp1 = new Employee { Id = "emp-heal-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice" };
-        var emp2 = new Employee { Id = "emp-heal-2", FirstName = "Bob", LastName = "Jones", IsActive = true, EncryptedPrivateKey = "vault-key-2", PublicKey = "pk-bob" };
+        var emp1 = new Employee { Id = "emp-heal-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice", Permissions = [AppPermissions.Chat.Use] };
+        var emp2 = new Employee { Id = "emp-heal-2", FirstName = "Bob", LastName = "Jones", IsActive = true, EncryptedPrivateKey = "vault-key-2", PublicKey = "pk-bob", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(emp1);
         _employees.Save(emp2);
 
@@ -631,7 +645,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ToggleChannelEncryptionAsync_WhenEnablingWithoutPrivateKey_ThrowsDomainException()
     {
         // Arrange
-        var emp1 = new Employee { Id = "emp-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice" };
+        var emp1 = new Employee { Id = "emp-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(emp1);
 
         var channel = new ChatChannel
@@ -653,7 +667,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ToggleChannelEncryptionAsync_WhenEnabling_EncryptsAllAttachmentsAndThumbnailsOnDisk()
     {
         // Arrange
-        var emp1 = new Employee { Id = "emp-att-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice" };
+        var emp1 = new Employee { Id = "emp-att-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(emp1);
 
         var channel = new ChatChannel
@@ -707,7 +721,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ToggleChannelEncryptionAsync_WhenCalledOnAlreadyEncryptedChannel_PerformsIdempotentAttachmentSweep()
     {
         // Arrange
-        var emp1 = new Employee { Id = "emp-sync-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice" };
+        var emp1 = new Employee { Id = "emp-sync-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(emp1);
 
         var channel = new ChatChannel
@@ -762,7 +776,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task ToggleChannelEncryptionAsync_WhenDisabling_DecryptsAllAttachmentsAndThumbnailsOnDisk()
     {
         // Arrange
-        var emp1 = new Employee { Id = "emp-dec-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice" };
+        var emp1 = new Employee { Id = "emp-dec-1", FirstName = "Alice", LastName = "Smith", IsActive = true, EncryptedPrivateKey = "vault-key-1", PublicKey = "pk-alice", Permissions = [AppPermissions.Chat.Use] };
         _employees.Save(emp1);
 
         var channel = new ChatChannel
@@ -828,5 +842,232 @@ public class ChatSecurityServiceTests : IDisposable
         Assert.False(ChatSecurityService.IsPotentialBase64Cipher("Encrypted message"));
         Assert.False(ChatSecurityService.IsPotentialBase64Cipher(""));
         Assert.False(ChatSecurityService.IsPotentialBase64Cipher(null));
+    }
+
+    [Fact]
+    public async Task RotateAndSearch_MultiEpochEncryptedChannel_PreservesHistoricalSearchAndExcludesEvictedUsers()
+    {
+        var crypto = new CryptoService();
+        var (pubAlice, privAlice) = crypto.GenerateRsaKeyPair();
+        var (pubEve, privEve) = crypto.GenerateRsaKeyPair();
+
+        var alice = new Employee { Id = "emp-epoch-alice", IsActive = true, PublicKey = pubAlice, EncryptedPrivateKey = "enc-alice", Permissions = [AppPermissions.Chat.Use] };
+        var eve = new Employee { Id = "emp-epoch-eve", IsActive = true, PublicKey = pubEve, EncryptedPrivateKey = "enc-eve", Permissions = [AppPermissions.Chat.Use] };
+        _employees.Save(alice);
+        _employees.Save(eve);
+
+        var teams = new TeamRepository(_persistence, _config);
+        var chatAuth = new ChatAuthorizationService(_channels, new ProjectRepository(_persistence, _config), teams, _employees);
+        var escrowService = new ServerEscrowService(_companyProfiles, new ServerConfigRepository(_persistence, _config), crypto);
+        var realAlbumService = new AlbumService(_albums, _channels, crypto, escrowService, _employees, chatAuth);
+        var service = new ChatSecurityService(
+            _employees,
+            _channels,
+            _messages,
+            escrowService,
+            crypto,
+            realAlbumService,
+            _chatState,
+            chatAuth,
+            _mockFileService.Object,
+            new Mock<ILogger<ChatSecurityService>>().Object);
+
+        var key0 = crypto.GenerateAesKeyBase64();
+        var channel = new ChatChannel
+        {
+            Id = "chan-multi-epoch",
+            Name = "Epoch Search Room",
+            ChannelType = ChatChannelType.Group,
+            CreatedById = alice.Id,
+            IsEncrypted = true,
+            CurrentKeyEpoch = 0,
+            ParticipantIds = [alice.Id, eve.Id],
+            EncryptedChannelKeys = new Dictionary<string, string>
+            {
+                [alice.Id] = crypto.EncryptRsa(key0, pubAlice),
+                [eve.Id] = crypto.EncryptRsa(key0, pubEve)
+            }
+        };
+        _channels.Save(channel);
+
+        _messages.Save(new ChatMessage
+        {
+            Id = "m-epoch-0",
+            ChannelId = channel.Id,
+            SenderId = alice.Id,
+            Content = crypto.EncryptAes("Alpha epochzero keyword", key0),
+            IsEncrypted = true,
+            KeyEpoch = 0,
+            SentAt = DateTime.UtcNow.AddMinutes(-2)
+        });
+
+        // Evict Eve and rotate to Epoch 1
+        channel.ParticipantIds.Remove(eve.Id);
+        Assert.True(service.RotateChannelKeyOnEviction(channel, new[] { eve.Id }, new[] { alice }));
+        _channels.Save(channel);
+
+        Assert.True(channel.TryGetEncryptedKeyForEpoch(1, alice.Id, out var encKey1));
+        var key1 = crypto.DecryptRsa(encKey1!, privAlice);
+
+        _messages.Save(new ChatMessage
+        {
+            Id = "m-epoch-1",
+            ChannelId = channel.Id,
+            SenderId = alice.Id,
+            Content = crypto.EncryptAes("Omega epochone keyword", key1),
+            IsEncrypted = true,
+            KeyEpoch = 1,
+            SentAt = DateTime.UtcNow
+        });
+
+        // Alice can search and find messages from BOTH Epoch 0 and Epoch 1
+        var aliceMatches = await service.SecureSearchMessagesAsync(channel.Id, "keyword", alice.Id, privAlice);
+        Assert.Equal(2, aliceMatches.Count);
+        Assert.Contains(aliceMatches, m => m.Id == "m-epoch-0" && m.Content == "Alpha epochzero keyword");
+        Assert.Contains(aliceMatches, m => m.Id == "m-epoch-1" && m.Content == "Omega epochone keyword");
+
+        // Evicted Eve finds nothing even with her private key
+        var eveMatches = await service.SecureSearchMessagesAsync(channel.Id, "keyword", eve.Id, privEve);
+        Assert.Empty(eveMatches);
+        Assert.False(channel.HasAnyEpochKey(eve.Id));
+    }
+
+    [Fact]
+    public async Task ClaimEscrowedKeysAsync_NotifiesChatStateChannelUpdated()
+    {
+        var realCrypto = new CryptoService();
+        var (pubUser, _) = realCrypto.GenerateRsaKeyPair();
+
+        var profile = _companyProfiles.Get();
+        profile.PublicChannelMasterPassword = "escrow-test-password";
+        _companyProfiles.Save(profile);
+
+        var escrowService = new ServerEscrowService(_companyProfiles, new ServerConfigRepository(_persistence, _config), realCrypto, configuration: _config);
+        escrowService.Initialize();
+
+        var user = new Employee
+        {
+            Id = "emp-claim",
+            FirstName = "Claire",
+            LastName = "Claim",
+            IsActive = true,
+            EncryptedPrivateKey = "vault-key-claim",
+            PublicKey = pubUser,
+            Permissions = [AppPermissions.Chat.Use]
+        };
+        _employees.Save(user);
+
+        var plainChannelKey = realCrypto.GenerateAesKeyBase64();
+        var wrappedEscrow = realCrypto.EncryptRsa(plainChannelKey, escrowService.EscrowPublicKey!);
+        var channel = new ChatChannel
+        {
+            Id = "chan-escrow-notify",
+            Name = "Escrow Notify",
+            ChannelType = ChatChannelType.General,
+            IsEncrypted = true,
+            CurrentKeyEpoch = 0,
+            EncryptedChannelKeys = new Dictionary<string, string> { ["ServerMaster"] = wrappedEscrow },
+            EncryptedEpochKeys = new Dictionary<int, Dictionary<string, string>>
+            {
+                [0] = new Dictionary<string, string> { ["ServerMaster"] = wrappedEscrow }
+            }
+        };
+        _channels.Save(channel);
+
+        var chatState = new ChatStateService();
+        ChatChannel? notified = null;
+        chatState.ChannelUpdated += ch => notified = ch;
+
+        var albumService = new AlbumService(_albums, _channels, realCrypto, escrowService, _employees, _mockChatAuth.Object);
+        var service = new ChatSecurityService(
+            _employees,
+            _channels,
+            _messages,
+            escrowService,
+            realCrypto,
+            albumService,
+            chatState,
+            _mockChatAuth.Object,
+            _mockFileService.Object,
+            new Mock<ILogger<ChatSecurityService>>().Object);
+
+        await service.ClaimEscrowedKeysAsync(user.Id);
+
+        Assert.NotNull(notified);
+        Assert.Equal("chan-escrow-notify", notified!.Id);
+        Assert.True(notified.EncryptedChannelKeys.ContainsKey(user.Id));
+    }
+
+    [Fact]
+    public async Task ShareKeyOpportunisticallyAsync_NotifiesChatStateChannelUpdated()
+    {
+        var waitingUser = new Employee
+        {
+            Id = "emp-wait",
+            FirstName = "Wade",
+            LastName = "Waiting",
+            IsActive = true,
+            EncryptedPrivateKey = "vault-key-wait",
+            PublicKey = "pub-wait",
+            Permissions = [AppPermissions.Chat.Use]
+        };
+        _employees.Save(waitingUser);
+
+        var channel = new ChatChannel
+        {
+            Id = "chan-opp-notify",
+            Name = "DM",
+            ChannelType = ChatChannelType.Direct,
+            IsEncrypted = true,
+            CurrentKeyEpoch = 0,
+            ParticipantIds = ["emp-sender", waitingUser.Id],
+            EncryptedChannelKeys = new Dictionary<string, string> { ["emp-sender"] = "rsa_enc(key)" }
+        };
+        _channels.Save(channel);
+
+        ChatChannel? notified = null;
+        _chatState.ChannelUpdated += ch => notified = ch;
+
+        await _service.ShareKeyOpportunisticallyAsync(channel.Id, "plain-aes-key", expectedEpoch: 0);
+
+        Assert.NotNull(notified);
+        Assert.Equal("chan-opp-notify", notified!.Id);
+        Assert.True(notified.EncryptedChannelKeys.ContainsKey(waitingUser.Id));
+    }
+
+    [Fact]
+    public async Task ToggleChannelEncryptionAsync_WhenAlreadyEncrypted_MediaSyncNotifiesChatStateChannelUpdated()
+    {
+        var admin = new Employee
+        {
+            Id = "emp-media-sync",
+            FirstName = "Maya",
+            LastName = "Sync",
+            IsActive = true,
+            IsAdmin = true,
+            EncryptedPrivateKey = "vault-key-maya",
+            PublicKey = "pub-maya",
+            Permissions = [AppPermissions.Chat.Use]
+        };
+        _employees.Save(admin);
+
+        var channel = new ChatChannel
+        {
+            Id = "chan-media-notify",
+            Name = "Media",
+            ChannelType = ChatChannelType.General,
+            IsEncrypted = true,
+            CurrentKeyEpoch = 0,
+            EncryptedChannelKeys = new Dictionary<string, string> { [admin.Id] = "rsa_enc(plain-aes-key)" }
+        };
+        _channels.Save(channel);
+
+        ChatChannel? notified = null;
+        _chatState.ChannelUpdated += ch => notified = ch;
+
+        await _service.ToggleChannelEncryptionAsync(channel.Id, enableEncryption: true, requestingUserId: admin.Id, privateKeyContext: "priv-maya");
+
+        Assert.NotNull(notified);
+        Assert.Equal("chan-media-notify", notified!.Id);
     }
 }

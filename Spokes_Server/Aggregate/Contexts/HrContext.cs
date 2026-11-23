@@ -17,6 +17,7 @@ public class HrContext
     public virtual WeeklyPlanRepository WeeklyPlans { get; }
     public virtual TeamRepository Teams { get; }
     public virtual CalendarEventRepository CalendarEvents { get; }
+    public virtual PayRunRepository PayRuns { get; }
 
     protected HrContext()
     {
@@ -26,6 +27,7 @@ public class HrContext
         WeeklyPlans = null!;
         Teams = null!;
         CalendarEvents = null!;
+        PayRuns = null!;
     }
 
     [ActivatorUtilitiesConstructor]
@@ -36,7 +38,8 @@ public class HrContext
         WeeklyPlanRepository weeklyPlans,
         TeamRepository teams,
         CalendarEventRepository calendarEvents,
-        CompanyProfileRepository? companyProfile = null)
+        CompanyProfileRepository? companyProfile = null,
+        PayRunRepository? payRuns = null)
     {
         Employees = employees;
         Timesheets = timesheets;
@@ -45,6 +48,7 @@ public class HrContext
         Teams = teams;
         CalendarEvents = calendarEvents;
         _companyProfile = companyProfile;
+        PayRuns = payRuns!;
     }
 
     /// <summary>
@@ -63,12 +67,13 @@ public class HrContext
     public virtual void Initialize()
     {
         Parallel.Invoke(
-            () => Employees.LoadFromDisk(),
-            () => Timesheets.LoadFromDisk(),
-            () => HourBankAdjustments.LoadFromDisk(),
-            () => WeeklyPlans.LoadFromDisk(),
-            () => Teams.LoadFromDisk(),
-            () => CalendarEvents.LoadFromDisk()
+            () => Employees?.LoadFromDisk(),
+            () => Timesheets?.LoadFromDisk(),
+            () => HourBankAdjustments?.LoadFromDisk(),
+            () => WeeklyPlans?.LoadFromDisk(),
+            () => Teams?.LoadFromDisk(),
+            () => CalendarEvents?.LoadFromDisk(),
+            () => PayRuns?.LoadFromDisk()
         );
     }
 }

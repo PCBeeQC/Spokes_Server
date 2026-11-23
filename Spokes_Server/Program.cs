@@ -39,7 +39,6 @@ builder.Services.AddDataProtection()
 
 // --- SERVICES REGISTRATION ---
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddHttpClient();
 
 builder.Services.AddCors(options =>
 {
@@ -55,7 +54,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddSpokesConfiguration(builder.Configuration);
 builder.Services.AddSpokesDatabase();
 builder.Services.AddSpokesCoreServices();
-builder.Services.AddSpokesWebUi(builder.WebHost);
+builder.Services.AddSpokesWebUi();
 builder.Services.AddSpokesAuth();
 builder.Services.AddSpokesReverseProxy();
 

@@ -24,7 +24,7 @@ public class BoardServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_Board_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir } };
+        var configDict = new Dictionary<string, string?> { { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" } };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
             _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -317,14 +317,6 @@ public class BoardServiceTests : IDisposable
         public void AddComment_WhenCardNotFound_ReturnsFailure()
         {
             var result = _service.AddComment("non-existent-card-id", "user-1", "comment");
-            Assert.False(result.IsSuccess);
-            Assert.Equal("CARD_NOT_FOUND", result.Code);
-        }
-
-        [Fact]
-        public void LogActivity_WhenCardNotFound_ReturnsFailure()
-        {
-            var result = _service.LogActivity("non-existent-card-id", "user-1", "action", "details");
             Assert.False(result.IsSuccess);
             Assert.Equal("CARD_NOT_FOUND", result.Code);
         }

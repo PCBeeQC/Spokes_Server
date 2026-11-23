@@ -13,6 +13,7 @@ public class ChatFileKeyResolver : IFileKeyResolver
     private readonly ChatChannelRepository _channels;
     private readonly ScopedKeystoreService _keystore;
     private readonly ICryptoService _crypto;
+    private readonly ChatMessageRepository? _messages;
     private readonly ILogger<ChatFileKeyResolver>? _logger;
 
     public string Category => "chat";
@@ -21,12 +22,14 @@ public class ChatFileKeyResolver : IFileKeyResolver
         ChatChannelRepository channels,
         ScopedKeystoreService keystore,
         ICryptoService crypto,
-        ILogger<ChatFileKeyResolver>? logger = null)
+        ILogger<ChatFileKeyResolver>? logger = null,
+        ChatMessageRepository? messages = null)
     {
         _channels = channels;
         _keystore = keystore;
         _crypto = crypto;
         _logger = logger;
+        _messages = messages;
     }
 
     public FileKeyResolutionResult ResolveUploadKey(
@@ -36,7 +39,7 @@ public class ChatFileKeyResolver : IFileKeyResolver
         bool isThumbnail = false,
         HttpContext? httpContext = null)
     {
-        var res = ResolveChannelKey(contextId, user, tokenEncryptionKey, httpContext);
+        var res = ResolveChannelKey(contextId, user, tokenEncryptionKey, httpContext, null);
         if (!res.IsSuccess)
         {
             return isThumbnail
@@ -50,9 +53,17 @@ public class ChatFileKeyResolver : IFileKeyResolver
         string contextId,
         Employee user,
         string? tokenEncryptionKey = null,
-        HttpContext? httpContext = null)
+        HttpContext? httpContext = null) =>
+        ResolveDownloadKey(contextId, user, tokenEncryptionKey, httpContext, null);
+
+    public FileKeyResolutionResult ResolveDownloadKey(
+        string contextId,
+        Employee user,
+        string? tokenEncryptionKey,
+        HttpContext? httpContext,
+        string? fileName)
     {
-        var res = ResolveChannelKey(contextId, user, tokenEncryptionKey, httpContext);
+        var res = ResolveChannelKey(contextId, user, tokenEncryptionKey, httpContext, fileName);
         if (!res.IsSuccess && res.ErrorMessage != "Failed to decrypt channel key.")
         {
             return FileKeyResolutionResult.Failure("You do not have the encryption key for this channel.");
@@ -60,7 +71,7 @@ public class ChatFileKeyResolver : IFileKeyResolver
         return res;
     }
 
-    public FileKeyResolutionResult ResolveChannelKey(string channelId, Employee user, string? tokenEncryptionKey = null, HttpContext? httpContext = null)
+    public FileKeyResolutionResult ResolveChannelKey(string channelId, Employee user, string? tokenEncryptionKey = null, HttpContext? httpContext = null, string? fileName = null)
     {
         var channel = _channels.GetById(channelId);
         if (channel == null || !channel.IsEncrypted)
@@ -69,8 +80,8 @@ public class ChatFileKeyResolver : IFileKeyResolver
         if (!string.IsNullOrEmpty(tokenEncryptionKey))
         {
             bool hasEligibleKey = user != null &&
-                (channel.EncryptedChannelKeys.ContainsKey(user.Id) ||
-                 (!user.HasVaultPassword && channel.EncryptedChannelKeys.ContainsKey("ServerMaster")));
+                (channel.HasAnyEpochKey(user.Id) ||
+                 (!user.HasVaultPassword && channel.HasAnyEpochKey("ServerMaster")));
 
             if (!hasEligibleKey)
             {
@@ -90,8 +101,12 @@ public class ChatFileKeyResolver : IFileKeyResolver
             return FileKeyResolutionResult.Failure("Your chat vault is locked.");
         }
 
+        var targetEpoch = (channel.CurrentKeyEpoch > 0 && !string.IsNullOrEmpty(fileName) && _messages != null)
+            ? (_messages.ResolveAttachmentKeyEpoch(channelId, fileName) ?? channel.CurrentKeyEpoch)
+            : channel.CurrentKeyEpoch;
+
         var privateKey = _keystore.GetPrivateKey();
-        if (privateKey == null || !channel.EncryptedChannelKeys.TryGetValue(user.Id, out var cipherKey))
+        if (privateKey == null || !channel.TryGetEncryptedKeyForEpoch(targetEpoch, user.Id, out var cipherKey))
         {
             return FileKeyResolutionResult.Failure("You do not have the encryption key for this channel.");
         }

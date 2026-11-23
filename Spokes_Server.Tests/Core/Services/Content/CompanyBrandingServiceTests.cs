@@ -27,6 +27,7 @@ public class CompanyBrandingServiceTests : IDisposable
 
         var configMock = new Mock<IConfiguration>();
         configMock.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        configMock.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var persistenceLogger = new Mock<ILogger<DiskPersistenceService>>();
         _persistence = new DiskPersistenceService(persistenceLogger.Object);

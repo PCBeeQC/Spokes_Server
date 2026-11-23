@@ -45,7 +45,7 @@ else
         }
     </MudPaper>
 
-    <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Elevation="2" Rounded="true" TabPanelsClass="pa-4">
+    <MudTabs ActivePanelIndex="activeTabIndex" ActivePanelIndexChanged="UpdateActiveTab" Elevation="0" Outlined="true" Border="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
 
         <MudTabPanel Text="Projects" Icon="@Icons.Material.Filled.Work">
             <MudGrid>
@@ -69,7 +69,7 @@ else
             }
             else
             {
-                <MudTable Items="@GroupedProjects" Hover="true" Dense="true">
+                <MudTable Elevation="0" Outlined="true" Items="@GroupedProjects" Hover="true" Dense="true">
                     <HeaderContent>
                         <MudTh>Project</MudTh>
                         <MudTh>Status</MudTh>
@@ -101,16 +101,22 @@ else
             <MudCard Elevation="0" Class="pa-4">
                 <MudText Typo="Typo.h6" Class="mb-4">Group Administration</MudText>
                 <div class="d-flex gap-4">
-                    @if (CanEdit)
+                    @if (CanEdit || CanDeleteGroup)
                     {
-                        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                                   StartIcon="@Icons.Material.Filled.Edit" OnClick="EditGroup">
-                            Edit Group Details
-                        </MudButton>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Error"
-                                   StartIcon="@Icons.Material.Filled.Delete" OnClick="DeleteGroup">
-                            Delete Group
-                        </MudButton>
+                        @if (CanEdit)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.Edit" OnClick="EditGroup">
+                                Edit Group Details
+                            </MudButton>
+                        }
+                        @if (CanDeleteGroup)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Error"
+                                       StartIcon="@Icons.Material.Filled.Delete" OnClick="DeleteGroup">
+                                Delete Group
+                            </MudButton>
+                        }
                     }
                     else
                     {
@@ -128,35 +134,32 @@ else
     [Parameter] public string Id { get; set; } = string.Empty;
 
     private ProjectGroup? Group;
+    private string? _authorizedGroupId;
     private List<Project> GroupedProjects = [];
     private int activeTabIndex;
     private bool CanEdit;
+    private bool CanDeleteGroup;
     private List<ProjectStatusConfig> AvailableStatuses = [];
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
-        await LoadPermissions();
-        await LoadDataAsync();
-    }
-
-    private async Task LoadPermissions()
-    {
-        var emp = await UserService.GetEmployeeAsync();
-        if (emp != null)
+        ApplyTabFromQuery();
+        if (!string.Equals(_authorizedGroupId, Id, StringComparison.OrdinalIgnoreCase) || Group == null)
         {
-            CanEdit = emp.HasPermission(AppPermissions.Projects.Edit) || emp.IsAdmin;
+            await LoadDataAsync();
+            return;
         }
+
+        await RefreshPermissionsAsync();
     }
 
-    private async Task LoadDataAsync()
+    private async Task RefreshPermissionsAsync()
     {
-        Group = Db.ProjectGroups.GetById(Id);
-        if (Group == null) return;
-
         var emp = await UserService.GetEmployeeAsync();
-        if (emp == null || !emp.HasPermission(AppPermissions.Projects.View))
+        if (emp == null || Group == null)
         {
-            Nav.NavigateTo("/projects");
+            CanEdit = false;
+            CanDeleteGroup = false;
             return;
         }
 
@@ -164,50 +167,131 @@ else
             .Select(id => Db.Projects.GetById(id))
             .Where(p => p != null)
             .Cast<Project>()
-            .OrderBy(p => p.DisplayName)
             .ToList();
 
-        GroupedProjects = [];
-        foreach (var p in allProjects)
+        ApplyPermissions(emp, Group, allProjects);
+    }
+
+    private void ApplyPermissions(Employee? emp, ProjectGroup? group, List<Project> allProjects)
+    {
+        if (emp == null || group == null)
         {
-            if (await UserService.CanViewProjectAsync(p))
-            {
-                GroupedProjects.Add(p);
-            }
+            CanEdit = false;
+            CanDeleteGroup = false;
+            return;
         }
 
-        // If not an admin and cannot view any projects in this group, deny access to the group entirely
-        if (!emp.IsAdmin && !GroupedProjects.Any() && Group.ProjectIds.Any())
+        bool canAccessAnyProject = emp.IsEffectiveAdmin || allProjects.Count == 0 ||
+            allProjects.Any(p => UserService.CanViewProject(emp, p, allowAccountingFinancialRead: false));
+        CanEdit = emp.HasPermission(AppPermissions.Projects.Edit) && canAccessAnyProject;
+
+        bool canAccessAllProjects = emp.IsEffectiveAdmin ||
+            (allProjects.Count == group.ProjectIds.Count &&
+             allProjects.All(p => UserService.CanViewProject(emp, p, allowAccountingFinancialRead: false)));
+        CanDeleteGroup = emp.IsEffectiveAdmin ||
+            (emp.HasPermission(AppPermissions.Projects.Delete) && canAccessAllProjects);
+    }
+
+    private async Task LoadDataAsync()
+    {
+        _authorizedGroupId = null;
+        Group = null;
+        GroupedProjects = [];
+        CanEdit = false;
+        CanDeleteGroup = false;
+        AvailableStatuses = [];
+
+        var emp = await UserService.GetEmployeeAsync();
+        var candidateGroup = Db.ProjectGroups.GetById(Id);
+        if (candidateGroup == null) return;
+
+        bool canAccountingRead = emp != null &&
+            emp.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: true);
+
+        if (emp == null || (!emp.HasEffectivePermission(AppPermissions.Projects.View, allowSuspended: true) && !canAccountingRead))
         {
             Nav.NavigateTo("/projects");
             return;
         }
 
+        var allProjects = candidateGroup.ProjectIds
+            .Select(id => Db.Projects.GetById(id))
+            .Where(p => p != null)
+            .Cast<Project>()
+            .OrderBy(p => p.DisplayName)
+            .ToList();
+
+        var visibleProjects = allProjects
+            .Where(p => UserService.CanViewProject(emp, p, allowAccountingFinancialRead: false))
+            .ToList();
+
+        // Deny non-admin / non-accounting users who cannot view any projects in this group
+        if (!emp.IsEffectiveAdmin && !canAccountingRead && !visibleProjects.Any() && candidateGroup.ProjectIds.Any())
+        {
+            Nav.NavigateTo("/projects");
+            return;
+        }
+
+        Group = candidateGroup;
+        _authorizedGroupId = candidateGroup.Id;
+        GroupedProjects = visibleProjects;
+        ApplyPermissions(emp, candidateGroup, allProjects);
+
         var profile = Db.CompanyProfile.Get();
         AvailableStatuses = profile?.ProjectStatuses ?? [];
     }
 
-    private Color GetStatusColor(string status)
-    {
-        var match = AvailableStatuses.FirstOrDefault(s => s.Name == status);
-        if (match != null && Enum.TryParse<Color>(match.Color, out var c))
-        {
-            return c;
-        }
-        return StatusColorHelper.GetColor(status);
-    }
+    private Color GetStatusColor(string status) =>
+        StatusColorHelper.GetProjectStatusColor(status, AvailableStatuses, fallbackToSemantic: true);
 
     private async Task EditGroup()
     {
         if (Group == null) return;
 
+        var emp = await UserService.GetEmployeeAsync();
+        var liveGroup = Db.ProjectGroups.GetById(Group.Id);
+        if (emp == null || liveGroup == null || !emp.HasPermission(AppPermissions.Projects.Edit))
+        {
+            await LoadDataAsync();
+            Snackbar.Add("You do not have permission to edit this project group.", Severity.Warning);
+            return;
+        }
+
+        if (!emp.IsEffectiveAdmin && liveGroup.ProjectIds.Any() &&
+            !liveGroup.ProjectIds.Any(pid => ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, emp, pid)))
+        {
+            await LoadDataAsync();
+            Snackbar.Add("You do not have permission to edit this project group.", Severity.Warning);
+            return;
+        }
+
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-        var parameters = new DialogParameters { ["ExistingGroup"] = Group };
+        var parameters = new DialogParameters { ["ExistingGroup"] = liveGroup };
         var dialog = await DialogService.ShowAsync<ProjectGroupDialog>("Edit Project Group", parameters, options);
         var result = await dialog.Result;
 
         if (result is { Canceled: false, Data: ProjectGroup updatedGroup })
         {
+            var saveActor = await UserService.GetEmployeeAsync();
+            var saveTarget = Db.ProjectGroups.GetById(liveGroup.Id);
+            if (saveActor == null || saveTarget == null || !saveActor.HasPermission(AppPermissions.Projects.Edit))
+            {
+                await LoadDataAsync();
+                Snackbar.Add("You do not have permission to edit this project group.", Severity.Warning);
+                return;
+            }
+
+            // Preserve any restricted/inaccessible project IDs the caller could not view
+            var preservedInaccessible = saveTarget.ProjectIds
+                .Where(pid => !saveActor.IsEffectiveAdmin && !ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, saveActor, pid))
+                .ToList();
+            var authorizedSelected = updatedGroup.ProjectIds
+                .Where(pid => saveActor.IsEffectiveAdmin || ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, saveActor, pid))
+                .ToList();
+
+            updatedGroup.Id = saveTarget.Id;
+            updatedGroup.ProjectIds = authorizedSelected.Concat(preservedInaccessible).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
             Db.ProjectGroups.Save(updatedGroup);
             Snackbar.Add("Project Group Updated!", Severity.Success);
             await LoadDataAsync();
@@ -218,15 +302,43 @@ else
     {
         if (Group == null) return;
 
+        var emp = await UserService.GetEmployeeAsync();
+        var liveGroup = Db.ProjectGroups.GetById(Group.Id);
+        bool canDelete = emp != null && liveGroup != null && (
+            await UserService.IsAdminAsync() ||
+            (emp.HasPermission(AppPermissions.Projects.Delete) &&
+             liveGroup.ProjectIds.All(pid => ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, emp, pid))));
+
+        if (!canDelete)
+        {
+            await LoadDataAsync();
+            Snackbar.Add("You do not have permission to delete this project group.", Severity.Warning);
+            return;
+        }
+
         var result = await DialogService.ShowMessageBoxAsync(
             "Delete Project Group",
-            $"Are you sure you want to delete '{Group.Name}'? This will not delete the projects, but they will no longer be grouped.",
+            $"Are you sure you want to delete '{liveGroup!.Name}'? This will not delete the projects, but they will no longer be grouped.",
             yesText: "Delete", cancelText: "Cancel");
 
         if (result == true)
         {
+            var confirmActor = await UserService.GetEmployeeAsync();
+            var confirmGroup = Db.ProjectGroups.GetById(liveGroup.Id);
+            bool stillAuthorized = confirmActor != null && confirmGroup != null && (
+                await UserService.IsAdminAsync() ||
+                (confirmActor.HasPermission(AppPermissions.Projects.Delete) &&
+                 confirmGroup.ProjectIds.All(pid => ProjectAccessHelper.HasAccess(Db.Projects, Db.Teams, confirmActor, pid))));
+
+            if (!stillAuthorized)
+            {
+                await LoadDataAsync();
+                Snackbar.Add("You do not have permission to delete this project group.", Severity.Warning);
+                return;
+            }
+
             // Clear ProjectGroupId from all projects in this group
-            foreach (var projectId in Group.ProjectIds)
+            foreach (var projectId in confirmGroup!.ProjectIds)
             {
                 var project = Db.Projects.GetById(projectId);
                 if (project != null)
@@ -236,14 +348,14 @@ else
                 }
             }
 
-            Db.ProjectGroups.Delete(Group.Id);
+            Db.ProjectGroups.Delete(confirmGroup.Id);
             Nav.NavigateTo("/project-groups");
             Snackbar.Add("Project Group Deleted", Severity.Success);
         }
     }
     [SupplyParameterFromQuery] public string? Tab { get; set; }
 
-    protected override void OnParametersSet()
+    private void ApplyTabFromQuery()
     {
         if (!string.IsNullOrEmpty(Tab))
         {

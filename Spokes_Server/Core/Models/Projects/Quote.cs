@@ -2,8 +2,11 @@ namespace Spokes_Server.Core.Models.Projects;
 
 using System.Text.Json.Serialization;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Extensions;
+using Spokes_Server.Core.Models.Common;
+using Spokes_Server.Core.Services.Accounting;
 
-public class Quote : IDataEntity
+public class Quote : IDataEntity, IHasDocumentHistory, IHasAssociatedFiles
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -43,29 +46,6 @@ public class Quote : IDataEntity
         set { if (value != null && MaterialLineItems.Count == 0) MaterialLineItems = value; }
     }
 
-    [Obsolete("Prefer MaterialLineItems for consistency across models.")]
-    [JsonIgnore]
-    public List<QuoteItemRow> ItemRows
-    {
-        get => MaterialLineItems;
-        set => MaterialLineItems = value;
-    }
-
-    [Obsolete("Prefer MaterialLineItems for consistency across models.")]
-    [JsonIgnore]
-    public List<QuoteItemRow> LineItems
-    {
-        get => MaterialLineItems;
-        set => MaterialLineItems = value;
-    }
-
-    [JsonIgnore]
-    public List<QuoteLaborItem> LaborLineItems
-    {
-        get => LaborItems;
-        set => LaborItems = value;
-    }
-
     public List<PaymentTerm> PaymentTerms { get; set; } = [];
 
     // Monthly Payment Display
@@ -83,15 +63,19 @@ public class Quote : IDataEntity
     public decimal TotalClientBought => MaterialLineItems.Where(x => x.IsClientBought).Sum(x => x.Total);
 
     // NEW: Calculation Logic
-    public decimal SubTotal => TotalLabor + TotalItems;
-    public decimal TaxAmount => ShowTax ? SubTotal * TaxRate : 0;
+    public decimal SubTotal => Math.Round(TotalLabor + TotalItems, 2, MidpointRounding.AwayFromZero);
+    public decimal TaxAmount => ShowTax ? FinancialCalculationEngine.CalculateTax(SubTotal, TaxRate) : 0;
     public decimal GrandTotal => SubTotal + TaxAmount;
 
     public decimal TotalProjectBudget => GrandTotal + TotalClientBought;
 
     // NEW: Presentation Data
     public string ScopeOfWork { get; set; } = string.Empty; // Rich text / Long description
-    public string MainImageBase64 { get; set; } = string.Empty; // The "Rendering"
+    public string MainImageBase64 { get; set; } = string.Empty; // Legacy inline data URI
+    public string MainImagePath { get; set; } = string.Empty; // Uploaded /spokesapi/files/... path
+
+    [JsonIgnore]
+    public string EffectiveMainImageUrl => !string.IsNullOrWhiteSpace(MainImagePath) ? MainImagePath : MainImageBase64;
 
     // NEW: Legal
     // This gets copied from the Template when created, but can be edited per project
@@ -106,6 +90,39 @@ public class Quote : IDataEntity
     // NEW: Signatories
     public string ClientRepresentativeName { get; set; } = string.Empty;
     public string CompanyRepresentativeName { get; set; } = string.Empty;
+
+    public List<DocumentHistoryEntry> History { get; set; } = [];
+
+    public IEnumerable<string> GetAssociatedFilePaths()
+    {
+        if (!string.IsNullOrWhiteSpace(PdfPath)) yield return PdfPath;
+        if (!string.IsNullOrWhiteSpace(MainImagePath)) yield return MainImagePath;
+    }
+
+    /// <summary>
+    /// Creates an independent draft copy of this quote with regenerated identity and child item IDs
+    /// and cleared cached PDF reference.
+    /// </summary>
+    public Quote DuplicateAsDraft(string newQuoteNumber, string? changedBy = null)
+    {
+        var copy = this.DeepClone();
+
+        copy.Id = Guid.NewGuid().ToString();
+        copy.QuoteNumber = newQuoteNumber;
+        copy.Date = DateTime.Today;
+        copy.Status = QuoteStatus.Draft;
+        copy.PdfPath = string.Empty;
+        copy.Title = $"{Title} (Copy)";
+
+        foreach (var labor in copy.LaborItems) labor.Id = Guid.NewGuid().ToString();
+        foreach (var item in copy.MaterialLineItems) item.Id = Guid.NewGuid().ToString();
+        foreach (var term in copy.PaymentTerms) term.Id = Guid.NewGuid().ToString();
+
+        copy.History = [];
+        DocumentHistoryHelper.RecordCreated(copy, changedBy, $"Created (Duplicated from #{QuoteNumber})");
+
+        return copy;
+    }
 }
 
 public class QuoteLaborItem
@@ -126,7 +143,7 @@ public class QuoteLaborItem
     public string Note { get; set; } = string.Empty;
     public decimal Hours { get; set; }
     public decimal Rate { get; set; }
-    public decimal Total => Hours * Rate;
+    public decimal Total => Math.Round(Hours * Rate, 2, MidpointRounding.AwayFromZero);
 }
 
 public class QuoteItemRow
@@ -149,7 +166,7 @@ public class QuoteItemRow
     public decimal MarkupPercentage { get; set; }
 
     public decimal UnitPrice { get; set; }
-    public decimal Total => Quantity * UnitPrice;
+    public decimal Total => Math.Round(Quantity * UnitPrice, 2, MidpointRounding.AwayFromZero);
 }
 
 public class PaymentTerm

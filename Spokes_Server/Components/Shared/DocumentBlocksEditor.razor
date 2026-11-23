@@ -55,7 +55,7 @@
                                         @if (!string.IsNullOrEmpty(val))
                                         {
                                             <MudPaper Elevation="0" Outlined="true" Class="pa-2 mb-2 d-flex justify-center" Style="background-color: #fafafa; width: 100%; max-width: 300px;">
-                                                <img src="@val" style="max-height: 80px; object-fit: contain;" />
+                                                <img src="@FileUrls.SignUrl(val)" style="max-height: 80px; object-fit: contain;" />
                                             </MudPaper>
                                         }
                                         else
@@ -122,10 +122,14 @@
     [Parameter] public EventCallback<string> OnBlockAdded { get; set; }
     [Parameter] public EventCallback<(string OldName, string NewName)> OnBlockRenamed { get; set; }
     [Parameter] public List<ContextTagDefinition>? AvailableTags { get; set; }
+    [Parameter] public string? CloneCategory { get; set; }
+    [Parameter] public string? CloneContextId { get; set; }
 
     [Inject] private IDialogService DialogService { get; set; } = default!;
     [Inject] private ISnackbar Snackbar { get; set; } = default!;
     [Inject] private UserService UserService { get; set; } = default!;
+    [Inject] private Spokes_Server.Core.Services.Storage.IFileService FileService { get; set; } = default!;
+    [Inject] private Spokes_Server.Core.Services.Security.FileUrlSigner FileUrls { get; set; } = default!;
     [Inject] private ILogger<DocumentBlocksEditor> Logger { get; set; } = default!;
 
     // Track block names by ID to detect renames (OnFocus doesn't fire on MudTextField)
@@ -178,7 +182,22 @@
             Snackbar.Add("You do not have a signature set up in your profile.", Severity.Warning);
             return;
         }
-        await SetPropertyValue(block, field, user.SignatureImageBase64);
+
+        string signatureValue = user.SignatureImageBase64;
+        if (!string.IsNullOrWhiteSpace(CloneCategory) &&
+            !string.IsNullOrWhiteSpace(CloneContextId) &&
+            signatureValue.StartsWith("/spokesapi/files/", StringComparison.OrdinalIgnoreCase))
+        {
+            var clonedUrl = await FileService.CloneFileAsync(signatureValue, CloneCategory, CloneContextId, user);
+            if (string.IsNullOrEmpty(clonedUrl))
+            {
+                Snackbar.Add("Failed to attach signature to this document.", Severity.Error);
+                return;
+            }
+            signatureValue = clonedUrl;
+        }
+
+        await SetPropertyValue(block, field, signatureValue);
     }
 
     private async Task InsertTagIntoField(DocumentBlockInstance block, BlockFieldDefinition field, string tag)

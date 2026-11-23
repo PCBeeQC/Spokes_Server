@@ -1,0 +1,179 @@
+@using Spokes_Server.Core.Configuration
+@using Spokes_Server.Core.Services.Communication.Email
+@inject AppLabelService AppLabels
+
+<MudSelect T="string"
+           Value="@SelectedPresetId"
+           ValueChanged="OnPresetChangedAsync"
+           Label="@Loc["Outgoing Provider Preset"]"
+           Variant="Variant.Outlined"
+           Margin="Margin.Dense"
+           Class="@(IsInline ? "mb-2" : null)">
+    <MudSelectItem Value="@EmailProviderPresets.CustomPresetId">
+        @Loc["Custom SMTP Server"]
+    </MudSelectItem>
+    @foreach (var preset in EmailProviderPresets.OutgoingProviders)
+    {
+        <MudSelectItem Value="@preset.Id">@preset.Name (@preset.SmtpHost)</MudSelectItem>
+    }
+</MudSelect>
+
+<EmailProviderInstructionsAlert Preset="@SelectedPreset"
+                                SuppressForPresetId="@SuppressInstructionsForPresetId"
+                                Class="@(IsInline ? "mb-2" : null)" />
+
+<MudGrid Spacing="2">
+    <MudItem xs="12" sm="6">
+        <MudTextField @bind-Value="Server.Name"
+                      Label="@Loc["Outgoing Server Label"]"
+                      Placeholder="@NamePlaceholder"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Required="true" />
+    </MudItem>
+    <MudItem xs="12" sm="6">
+        <MudTextField @bind-Value="Server.Domain"
+                      Label="@Loc["Sending Domain"]"
+                      Placeholder="@DomainPlaceholder"
+                      Adornment="Adornment.Start"
+                      AdornmentText="@("@")"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      HelperText="@(IsInline ? null : Loc["Domain linked to this Outgoing Server"].Value)" />
+    </MudItem>
+
+    @if (IsCustomPreset)
+    {
+        <MudItem xs="12" sm="6">
+            <MudTextField @bind-Value="Server.Host"
+                          Label="@Loc["SMTP Host"]"
+                          Placeholder="smtp.example.com"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Required="true" />
+        </MudItem>
+        <MudItem xs="6" sm="3">
+            <MudNumericField @bind-Value="Server.Port"
+                             Label="@(IsInline ? Loc["SMTP Port"].Value : Loc["Port"].Value)"
+                             Variant="Variant.Outlined"
+                             Margin="Margin.Dense" />
+        </MudItem>
+        <MudItem xs="6" sm="3" Class="d-flex align-center">
+            <MudSwitch @bind-Value="Server.UseSsl"
+                       Color="Color.Primary"
+                       Label="@Loc["SSL / TLS"]" />
+        </MudItem>
+    }
+</MudGrid>
+
+@if (IsCustomPreset)
+{
+    <MudSwitch @bind-Value="Server.UseSharedCredentials"
+               Color="Color.Primary"
+               Class="@(IsInline ? "mt-2" : null)"
+               Label="@SharedCredentialsSwitchLabel" />
+}
+
+@if (Server.UseSharedCredentials)
+{
+    <MudGrid Spacing="2" Class="@(IsInline ? "mt-1" : null)">
+        @if (ShowSharedUsernameField)
+        {
+            <MudItem xs="12" sm="5">
+                <MudTextField @bind-Value="Server.SharedUsername"
+                              Label="@Loc["SMTP Username"]"
+                              Placeholder="@($"postmaster@{DomainPlaceholder}")"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Required="true" />
+            </MudItem>
+        }
+        <MudItem xs="12" sm="@(ShowSharedUsernameField ? 7 : 12)">
+            <MudTextField T="string"
+                          Value="@PlainSharedPassword"
+                          ValueChanged="OnPlainSharedPasswordChangedAsync"
+                          Label="@SharedCredentialLabel"
+                          Placeholder="@SharedCredentialPlaceholder"
+                          InputType="InputType.Password"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          HelperText="@Loc["Encrypted with server master password before storage"]" />
+        </MudItem>
+    </MudGrid>
+}
+else if (!IsInline)
+{
+    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">
+        @Loc["Each Real Inbox or Sending Identity on this server will authenticate with its own mailbox or SMTP credentials."]
+    </MudText>
+}
+
+@code {
+    [Parameter, EditorRequired] public SendingServerConfig Server { get; set; } = default!;
+    [Parameter] public string SelectedPresetId { get; set; } = EmailProviderPresets.CustomPresetId;
+    [Parameter] public EventCallback<string> SelectedPresetIdChanged { get; set; }
+    [Parameter] public string PlainSharedPassword { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> PlainSharedPasswordChanged { get; set; }
+    [Parameter] public string DomainPlaceholder { get; set; } = "example.com";
+    [Parameter] public string? FallbackDomain { get; set; }
+    [Parameter] public string? SuppressInstructionsForPresetId { get; set; }
+    [Parameter] public bool IsInline { get; set; }
+
+    public EmailProviderPreset? SelectedPreset => EmailProviderPresets.GetById(SelectedPresetId);
+
+    private bool IsCustomPreset => SelectedPresetId == EmailProviderPresets.CustomPresetId;
+
+    private bool ShowSharedUsernameField =>
+        IsCustomPreset || (SelectedPreset?.RequiresCustomSmtpUsername ?? false);
+
+    private string NamePlaceholder => IsInline
+        ? string.Format(Loc["e.g. {0} SMTP or Resend"].Value, AppLabels.Company)
+        : string.Format(Loc["e.g. Resend Relay or {0} SMTP"].Value, AppLabels.Company);
+
+    private string SharedCredentialsSwitchLabel => IsInline
+        ? Loc["Use shared relay credentials (API key) instead of each mailbox's own login"].Value
+        : Loc["Use shared relay credentials (API key) for all Sending Identities on this server"].Value;
+
+    private string SharedCredentialLabel
+    {
+        get
+        {
+            var baseLabel = SelectedPreset != null && !string.IsNullOrWhiteSpace(SelectedPreset.CredentialLabel)
+                ? Loc[SelectedPreset.CredentialLabel].Value
+                : Loc["API Key / SMTP Password"].Value;
+
+            return !string.IsNullOrEmpty(Server.EncryptedSharedPassword)
+                ? $"{baseLabel} ({Loc["Saved - enter to change"].Value})"
+                : baseLabel;
+        }
+    }
+
+    private string SharedCredentialPlaceholder
+    {
+        get
+        {
+            if (!string.IsNullOrEmpty(Server.EncryptedSharedPassword)) return "••••••••";
+            return SelectedPreset?.CredentialPlaceholder ?? string.Empty;
+        }
+    }
+
+    private async Task OnPresetChangedAsync(string presetId)
+    {
+        var previousPresetId = SelectedPresetId;
+        var nextPresetId = EmailServerConfigValidator.ApplyOutgoingPreset(
+            Server,
+            previousPresetId,
+            presetId,
+            IsInline,
+            FallbackDomain);
+
+        SelectedPresetId = nextPresetId;
+        await SelectedPresetIdChanged.InvokeAsync(nextPresetId);
+    }
+
+    private Task OnPlainSharedPasswordChangedAsync(string value)
+    {
+        PlainSharedPassword = value;
+        return PlainSharedPasswordChanged.InvokeAsync(value);
+    }
+}

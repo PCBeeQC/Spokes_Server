@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
@@ -36,7 +37,7 @@ public class CalendarReminderBackgroundServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_CalRemBg_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -98,7 +99,8 @@ public class CalendarReminderBackgroundServiceTests : IDisposable
             Id = "emp1",
             FirstName = "Alice",
             LastName = "Smith",
-            IsActive = true
+            IsActive = true,
+            Permissions = [AppPermissions.Calendar.View]
         };
         _employeesRepo.Save(employee);
 
@@ -139,7 +141,8 @@ public class CalendarReminderBackgroundServiceTests : IDisposable
             Id = "emp2",
             FirstName = "Bob",
             LastName = "Jones",
-            IsActive = true
+            IsActive = true,
+            Permissions = [AppPermissions.Calendar.View]
         };
         _employeesRepo.Save(employee);
 

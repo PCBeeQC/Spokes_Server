@@ -124,12 +124,15 @@
                 </MudSelect>
             </MudStack>
 
-            <MudSwitch @bind-Value="_showBudgetEstimates" Label="Show Budget" Color="Color.Primary" />
+            @if (CanViewBillingRates)
+            {
+                <MudSwitch @bind-Value="_showBudgetEstimates" Label="Show Budget" Color="Color.Primary" />
+            }
         </MudStack>
     </MudToolBar>
 
     <!-- Tree-style Grouped Table -->
-    <MudTable Items="@_groups" Dense="true" Hover="true" Bordered="false" Striped="false" Elevation="0">
+    <MudTable Items="@_groups" Dense="true" Hover="true" Bordered="false" Striped="false" Elevation="0" Outlined="true">
         <HeaderContent>
             <MudTh Style="width: 45%;">TITLE</MudTh>
             <MudTh Style="text-align: right; width: 15%;">DURATION</MudTh>
@@ -159,7 +162,7 @@
                     }
                 </MudStack>
 
-                @if (_showBudgetEstimates && context.AllocatedHours.HasValue && context.AllocatedHours > 0)
+                @if (CanViewBillingRates && _showBudgetEstimates && context.AllocatedHours.HasValue && context.AllocatedHours > 0)
                 {
                     <div class="ml-10 mt-1" style="max-width: 300px;">
                         <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
@@ -246,6 +249,7 @@
     [Parameter] public TimeDisplayFormat Format { get; set; } = TimeDisplayFormat.DurationHhmm;
     [Parameter] public AmountDisplayMode AmountMode { get; set; } = AmountDisplayMode.BillableAmount;
     [Parameter] public bool ApplyRounding { get; set; }
+    [Parameter] public bool CanViewBillingRates { get; set; } = true;
     [Parameter] public string CurrencySymbol { get; set; } = "$";
 
     public ReportGroupBy PrimaryGroupBy { get; set; } = ReportGroupBy.Project;

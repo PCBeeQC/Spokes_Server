@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Projects;
+using Spokes_Server.Core.Extensions;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Projects;
 
@@ -38,8 +39,6 @@ public class BoardService
         };
 
         // Add default "Status" property
-        var titleProp = new BoardProperty { Name = "Name", Type = BoardPropertyType.Text }; // Invisible main prop, but good to have tracked if we want
-
         var statusProp = new BoardProperty
         {
             Name = "Status",
@@ -110,6 +109,28 @@ public class BoardService
         return card;
     }
 
+    private bool TryGetCard(string? cardId, string operation, out BoardCard? card, out SpokesResult? failure)
+    {
+        if (string.IsNullOrWhiteSpace(cardId))
+        {
+            _logger?.LogWarning("{Operation} failed: card ID cannot be empty.", operation);
+            card = null;
+            failure = SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
+            return false;
+        }
+
+        card = _boardCards.GetById(cardId);
+        if (card == null)
+        {
+            _logger?.LogWarning("{Operation} failed: card '{CardId}' not found.", operation, cardId);
+            failure = SpokesResult.Failure($"Card '{cardId}' not found.", "CARD_NOT_FOUND");
+            return false;
+        }
+
+        failure = null;
+        return true;
+    }
+
     public SpokesResult UpdateCard(BoardCard card)
     {
         if (card == null)
@@ -118,17 +139,9 @@ public class BoardService
             return SpokesResult.Failure("Card cannot be null.", "INVALID_CARD");
         }
 
-        if (string.IsNullOrWhiteSpace(card.Id))
+        if (!TryGetCard(card.Id, nameof(UpdateCard), out _, out var failure))
         {
-            _logger?.LogWarning("UpdateCard failed: card ID cannot be empty.");
-            return SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
-        }
-
-        var existing = _boardCards.GetById(card.Id);
-        if (existing == null)
-        {
-            _logger?.LogWarning("UpdateCard failed: card '{CardId}' not found.", card.Id);
-            return SpokesResult.Failure($"Card '{card.Id}' not found.", "CARD_NOT_FOUND");
+            return failure!;
         }
 
         return SaveCardDirect(card);
@@ -143,17 +156,9 @@ public class BoardService
 
     public SpokesResult DeleteCard(string cardId)
     {
-        if (string.IsNullOrWhiteSpace(cardId))
+        if (!TryGetCard(cardId, nameof(DeleteCard), out _, out var failure))
         {
-            _logger?.LogWarning("DeleteCard failed: card ID cannot be empty.");
-            return SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
-        }
-
-        var existing = _boardCards.GetById(cardId);
-        if (existing == null)
-        {
-            _logger?.LogWarning("DeleteCard failed: card '{CardId}' not found.", cardId);
-            return SpokesResult.Failure($"Card '{cardId}' not found.", "CARD_NOT_FOUND");
+            return failure!;
         }
 
         _boardCards.Delete(cardId);
@@ -168,37 +173,21 @@ public class BoardService
     /// </summary>
     public SpokesResult UpdateCardProperty(string cardId, string propertyId, string value)
     {
-        if (string.IsNullOrWhiteSpace(cardId))
+        if (!TryGetCard(cardId, nameof(UpdateCardProperty), out var card, out var failure))
         {
-            _logger?.LogWarning("UpdateCardProperty failed: card ID cannot be empty.");
-            return SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
+            return failure!;
         }
 
-        var card = _boardCards.GetById(cardId);
-        if (card == null)
-        {
-            _logger?.LogWarning("UpdateCardProperty failed: card '{CardId}' not found.", cardId);
-            return SpokesResult.Failure($"Card '{cardId}' not found.", "CARD_NOT_FOUND");
-        }
-
-        card.PropertyValues[propertyId] = value;
+        card!.PropertyValues[propertyId] = value;
         return SaveCardDirect(card);
     }
 
     // --- COMMENTS & ACTIVITY ---
     public SpokesResult AddComment(string cardId, string userId, string text)
     {
-        if (string.IsNullOrWhiteSpace(cardId))
+        if (!TryGetCard(cardId, nameof(AddComment), out var card, out var failure))
         {
-            _logger?.LogWarning("AddComment failed: card ID cannot be empty.");
-            return SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
-        }
-
-        var card = _boardCards.GetById(cardId);
-        if (card == null)
-        {
-            _logger?.LogWarning("AddComment failed: card '{CardId}' not found.", cardId);
-            return SpokesResult.Failure($"Card '{cardId}' not found.", "CARD_NOT_FOUND");
+            return failure!;
         }
 
         var comment = new BoardCardComment
@@ -208,7 +197,7 @@ public class BoardService
             Text = text,
             CreatedAt = DateTime.Now
         };
-        card.Comments.Add(comment);
+        card!.Comments.Add(comment);
 
         var activity = new BoardCardActivity
         {
@@ -220,33 +209,6 @@ public class BoardService
         };
         card.ActivityLog.Insert(0, activity);
 
-        return SaveCardDirect(card);
-    }
-
-    public SpokesResult LogActivity(string cardId, string userId, string action, string details)
-    {
-        if (string.IsNullOrWhiteSpace(cardId))
-        {
-            _logger?.LogWarning("LogActivity failed: card ID cannot be empty.");
-            return SpokesResult.Failure("Card ID cannot be empty.", "INVALID_CARD_ID");
-        }
-
-        var card = _boardCards.GetById(cardId);
-        if (card == null)
-        {
-            _logger?.LogWarning("LogActivity failed: card '{CardId}' not found.", cardId);
-            return SpokesResult.Failure($"Card '{cardId}' not found.", "CARD_NOT_FOUND");
-        }
-
-        var activity = new BoardCardActivity
-        {
-            CardId = cardId,
-            UserId = userId,
-            Action = action,
-            Details = details,
-            CreatedAt = DateTime.Now
-        };
-        card.ActivityLog.Insert(0, activity); // Newest first
         return SaveCardDirect(card);
     }
 
@@ -275,16 +237,10 @@ public class BoardService
             Views = board.Views
         };
 
-        // Serialize/Deserialize to ensure deep clone and no reference sharing
-        var json = JsonSerializer.Serialize(template);
-        var clone = JsonSerializer.Deserialize<BoardTemplate>(json);
-
-        if (clone != null)
-        {
-            clone.Id = Guid.NewGuid().ToString();
-            clone.Name = templateName;
-            _boardTemplates.Save(clone);
-        }
+        var clone = template.DeepClone();
+        clone.Id = Guid.NewGuid().ToString();
+        clone.Name = templateName;
+        _boardTemplates.Save(clone);
     }
 
     public Board CreateBoardFromTemplate(string title, string templateName, string ownerId = "")
@@ -302,42 +258,36 @@ public class BoardService
                 MemberIds = !string.IsNullOrEmpty(ownerId) ? [ownerId] : []
             };
 
-            // Deep Clone logic: We use JSON serialization to avoid reference issues
-            var json = JsonSerializer.Serialize(customTemplate);
-            var tempClone = JsonSerializer.Deserialize<BoardTemplate>(json);
+            var tempClone = customTemplate.DeepClone();
+            // 1. Map Old IDs -> New IDs to preserve View-Property relationships
+            var map = new Dictionary<string, string>();
 
-            if (tempClone != null)
+            foreach (var p in tempClone.Properties)
             {
-                // 1. Map Old IDs -> New IDs to preserve View-Property relationships
-                var map = new Dictionary<string, string>();
+                var newId = Guid.NewGuid().ToString();
+                map[p.Id] = newId;
+                p.Id = newId;
 
-                foreach (var p in tempClone.Properties)
+                foreach (var o in p.Options)
                 {
-                    var newId = Guid.NewGuid().ToString();
-                    map[p.Id] = newId;
-                    p.Id = newId;
-
-                    foreach (var o in p.Options)
-                    {
-                        o.Id = Guid.NewGuid().ToString();
-                    }
+                    o.Id = Guid.NewGuid().ToString();
                 }
-
-                foreach (var v in tempClone.Views)
-                {
-                    v.Id = Guid.NewGuid().ToString();
-
-                    if (!string.IsNullOrEmpty(v.GroupByPropertyId) && map.ContainsKey(v.GroupByPropertyId))
-                    {
-                        v.GroupByPropertyId = map[v.GroupByPropertyId];
-                    }
-
-                    v.VisiblePropertyIds = v.VisiblePropertyIds.Select(id => map.ContainsKey(id) ? map[id] : id).ToList();
-                }
-
-                board.Properties = tempClone.Properties;
-                board.Views = tempClone.Views;
             }
+
+            foreach (var v in tempClone.Views)
+            {
+                v.Id = Guid.NewGuid().ToString();
+
+                if (!string.IsNullOrEmpty(v.GroupByPropertyId) && map.ContainsKey(v.GroupByPropertyId))
+                {
+                    v.GroupByPropertyId = map[v.GroupByPropertyId];
+                }
+
+                v.VisiblePropertyIds = v.VisiblePropertyIds.Select(id => map.ContainsKey(id) ? map[id] : id).ToList();
+            }
+
+            board.Properties = tempClone.Properties;
+            board.Views = tempClone.Views;
 
             _boards.Save(board);
             return board;

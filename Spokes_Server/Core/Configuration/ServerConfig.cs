@@ -15,5 +15,7 @@ public class ServerConfig : IDataEntity
     public string DatabaseCreationId { get; set; } = string.Empty;
     /// <summary>Native push trial ticket issued by the Spokes Push Relay on first contact. Null until the first relay push.</summary>
     public Spokes_Server.Core.Services.Licensing.RelayTrialTicket? RelayTrialTicket { get; set; }
+    /// <summary>Data-protected 32-byte HMAC key used to derive salted anonymous poll ballot tokens without storing plaintext user IDs.</summary>
+    public string? AnonymousPollBallotSecretProtected { get; set; }
     public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
 }

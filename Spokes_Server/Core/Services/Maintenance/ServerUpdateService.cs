@@ -23,8 +23,6 @@ public class ServerUpdateService : BackgroundService
     public bool IsUpdateAvailable { get; private set; }
     public string Channel { get; private set; } = "unknown";
 
-    public event Action? OnUpdateAvailable;
-
     [ActivatorUtilitiesConstructor]
     public ServerUpdateService(
         ILogger<ServerUpdateService> logger,
@@ -73,121 +71,130 @@ public class ServerUpdateService : BackgroundService
     private string? GetWatchtowerToken() =>
         _configuration != null ? _configuration["WATCHTOWER_HTTP_API_TOKEN"] : Environment.GetEnvironmentVariable("WATCHTOWER_HTTP_API_TOKEN");
 
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (Channel == "unknown")
         {
-            if (Channel == "unknown")
+            _logger.LogInformation("Update check disabled for development build (version: {Version})", CurrentVersion);
+            return;
+        }
+
+        _logger.LogInformation("Starting ServerUpdateService on channel '{Channel}'. Current Version: {Version}", Channel, CurrentVersion);
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
             {
-                _logger.LogInformation("Update check disabled for development build (version: {Version})", CurrentVersion);
-                return;
+                await CheckForUpdatesAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to check for server updates.");
             }
 
-            _logger.LogInformation("Starting ServerUpdateService on channel '{Channel}'. Current Version: {Version}", Channel, CurrentVersion);
+            // Check every 24 hours
+            await Task.Delay(TimeSpan.FromHours(24), stoppingToken);
+        }
+    }
 
-            while (!stoppingToken.IsCancellationRequested)
+    public async Task CheckForUpdatesAsync(CancellationToken stoppingToken = default)
+    {
+        if (Channel == "unknown") return;
+
+        string repoName = Channel switch
+        {
+            "test" => "spokes-test",
+            "beta" => "spokes-beta",
+            _ => "spokes"
+        };
+
+        string scope = $"repository:pcbeeqc/{repoName}:pull";
+        string tokenUrl = $"https://ghcr.io/token?scope={scope}";
+
+        // 1. Get anonymous token
+        var tokenResponse = await _httpClient.GetAsync(tokenUrl, stoppingToken);
+        tokenResponse.EnsureSuccessStatusCode();
+        
+        var tokenJson = await tokenResponse.Content.ReadAsStringAsync(stoppingToken);
+        using var doc = JsonDocument.Parse(tokenJson);
+        if (!doc.RootElement.TryGetProperty("token", out var tokenElement))
+        {
+            _logger.LogWarning("Failed to extract token from GHCR response.");
+            return;
+        }
+        
+        string token = tokenElement.GetString() ?? "";
+
+        // 2. Fetch tags
+        string tagsUrl = $"https://ghcr.io/v2/pcbeeqc/{repoName}/tags/list";
+        using var request = new HttpRequestMessage(HttpMethod.Get, tagsUrl);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var tagsResponse = await _httpClient.SendAsync(request, stoppingToken);
+        tagsResponse.EnsureSuccessStatusCode();
+
+        var tagsJson = await tagsResponse.Content.ReadAsStringAsync(stoppingToken);
+        using var tagsDoc = JsonDocument.Parse(tagsJson);
+        
+        if (!tagsDoc.RootElement.TryGetProperty("tags", out var tagsElement))
+        {
+            return;
+        }
+
+        string expectedPrefix = Channel switch
+        {
+            "test" => "test-v",
+            "beta" => "beta-v",
+            _ => "server-v"
+        };
+
+        Version? highestVersion = null;
+        string? highestTag = null;
+
+        foreach (var tag in tagsElement.EnumerateArray())
+        {
+            string tagStr = tag.GetString() ?? "";
+            if (string.IsNullOrWhiteSpace(tagStr))
+                continue;
+
+            bool hasExpectedPrefix = tagStr.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase);
+            bool isBareSemver = !hasExpectedPrefix && char.IsDigit(tagStr[0]);
+
+            if ((hasExpectedPrefix || isBareSemver)
+                && TryParseVersion(tagStr, expectedPrefix, out var parsedVersion)
+                && parsedVersion != null
+                && parsedVersion.Build >= 0)
             {
-                try
+                if (highestVersion == null || parsedVersion > highestVersion)
                 {
-                    await CheckForUpdatesAsync(stoppingToken);
+                    highestVersion = parsedVersion;
+                    highestTag = hasExpectedPrefix ? tagStr : $"{expectedPrefix}{tagStr}";
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to check for server updates.");
-                }
-
-                // Check every 24 hours
-                await Task.Delay(TimeSpan.FromHours(24), stoppingToken);
             }
         }
 
-        public async Task CheckForUpdatesAsync(CancellationToken stoppingToken = default)
+        if (highestVersion == null || highestTag == null)
+            return;
+
+        LatestVersion = highestTag;
+
+        if ((!TryParseVersion(_versionMetadata.RawVersion, expectedPrefix, out var currentParsed) || currentParsed == null) &&
+            (!TryParseVersion(CurrentVersion, expectedPrefix, out currentParsed) || currentParsed == null))
         {
-            if (Channel == "unknown") return;
-
-            string repoName = Channel switch
-            {
-                "test" => "spokes-test",
-                "beta" => "spokes-beta",
-                _ => "spokes"
-            };
-
-            string scope = $"repository:pcbeeqc/{repoName}:pull";
-            string tokenUrl = $"https://ghcr.io/token?scope={scope}";
-
-            // 1. Get anonymous token
-            var tokenResponse = await _httpClient.GetAsync(tokenUrl, stoppingToken);
-            tokenResponse.EnsureSuccessStatusCode();
-            
-            var tokenJson = await tokenResponse.Content.ReadAsStringAsync(stoppingToken);
-            using var doc = JsonDocument.Parse(tokenJson);
-            if (!doc.RootElement.TryGetProperty("token", out var tokenElement))
-            {
-                _logger.LogWarning("Failed to extract token from GHCR response.");
-                return;
-            }
-            
-            string token = tokenElement.GetString() ?? "";
-
-            // 2. Fetch tags
-            string tagsUrl = $"https://ghcr.io/v2/pcbeeqc/{repoName}/tags/list";
-            using var request = new HttpRequestMessage(HttpMethod.Get, tagsUrl);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            var tagsResponse = await _httpClient.SendAsync(request, stoppingToken);
-            tagsResponse.EnsureSuccessStatusCode();
-
-            var tagsJson = await tagsResponse.Content.ReadAsStringAsync(stoppingToken);
-            using var tagsDoc = JsonDocument.Parse(tagsJson);
-            
-            if (!tagsDoc.RootElement.TryGetProperty("tags", out var tagsElement))
-            {
-                return;
-            }
-
-            string expectedPrefix = Channel switch
-            {
-                "test" => "test-v",
-                "beta" => "beta-v",
-                _ => "server-v"
-            };
-
-            Version? highestVersion = null;
-            string? highestTag = null;
-
-            foreach (var tag in tagsElement.EnumerateArray())
-            {
-                string tagStr = tag.GetString() ?? "";
-                if (tagStr.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase)
-                    && TryParseVersion(tagStr, expectedPrefix, out var parsedVersion)
-                    && parsedVersion != null)
-                {
-                    if (highestVersion == null || parsedVersion > highestVersion)
-                    {
-                        highestVersion = parsedVersion;
-                        highestTag = tagStr;
-                    }
-                }
-            }
-
-            if (highestVersion == null || highestTag == null)
-                return;
-
-            LatestVersion = highestTag;
-
-            if (!TryParseVersion(CurrentVersion, expectedPrefix, out var currentParsed) || currentParsed == null)
-                return;
-
-            if (highestVersion <= currentParsed)
-                return;
-
-            if (IsUpdateAvailable)
-                return;
-
-            IsUpdateAvailable = true;
-            _logger.LogInformation("New update available: {LatestVersion}", LatestVersion);
-            OnUpdateAvailable?.Invoke();
-
-            TryTriggerAutoUpdate(highestVersion, highestTag, stoppingToken);
+            return;
         }
+
+        if (highestVersion <= currentParsed)
+            return;
+
+        if (IsUpdateAvailable)
+            return;
+
+        IsUpdateAvailable = true;
+        _logger.LogInformation("New update available: {LatestVersion}", LatestVersion);
+
+        TryTriggerAutoUpdate(highestVersion, highestTag, stoppingToken);
+    }
 
     internal static bool TryParseVersion(string versionRaw, string prefix, out Version? version)
     {

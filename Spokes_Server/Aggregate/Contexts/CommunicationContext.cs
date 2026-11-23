@@ -1,12 +1,10 @@
 namespace Spokes_Server.Aggregate.Contexts;
 
-using System;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Core.Configuration;
 using Spokes_Server.Core.Data.Repositories.Communication;
 using Spokes_Server.Core.Data.Repositories.Core;
-using Spokes_Server.Core.Models.Communication;
 
 public class CommunicationContext
 {
@@ -16,7 +14,6 @@ public class CommunicationContext
     public virtual ChatCategoryRepository ChatCategories { get; }
     public virtual ChatMessageRepository ChatMessages { get; }
     public virtual ChatReadStateRepository ChatReadStates { get; }
-    public virtual UserClientStateRepository ClientStates { get; }
     public virtual ReportedMessageRepository ReportedMessages { get; }
     public virtual AlbumRepository Albums { get; }
     public virtual EmailAccountRepository EmailAccounts { get; }
@@ -35,7 +32,6 @@ public class CommunicationContext
         ChatCategories = null!;
         ChatMessages = null!;
         ChatReadStates = null!;
-        ClientStates = null!;
         ReportedMessages = null!;
         Albums = null!;
         EmailAccounts = null!;
@@ -55,7 +51,6 @@ public class CommunicationContext
         ChatCategoryRepository chatCategories,
         ChatMessageRepository chatMessages,
         ChatReadStateRepository chatReadStates,
-        UserClientStateRepository clientStates,
         ReportedMessageRepository reportedMessages,
         AlbumRepository albums,
         EmailFolderRepository emailFolders,
@@ -73,7 +68,6 @@ public class CommunicationContext
         ChatCategories = chatCategories;
         ChatMessages = chatMessages;
         ChatReadStates = chatReadStates;
-        ClientStates = clientStates;
         ReportedMessages = reportedMessages;
         Albums = albums;
         EmailAccounts = emailAccounts!;
@@ -114,7 +108,6 @@ public class CommunicationContext
             () => ChatCategories.LoadFromDisk(),
             () => ChatMessages.LoadFromDisk(),
             () => ChatReadStates.LoadFromDisk(),
-            () => ClientStates.LoadFromDisk(),
             () => ReportedMessages.LoadFromDisk(),
             () => Albums.LoadFromDisk(),
             () => EmailAccounts?.LoadFromDisk(),

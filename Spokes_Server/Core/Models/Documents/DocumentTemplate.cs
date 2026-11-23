@@ -28,8 +28,6 @@ public class DocumentTemplate : IDataEntity
     public string BankName { get; set; } = string.Empty;
     public string BankAccountNumber { get; set; } = string.Empty; // Wire/Routing #
     public string BankSwiftCode { get; set; } = string.Empty;
-    public string TaxId1 { get; set; } = string.Empty; // e.g. GST Number
-    public string TaxId2 { get; set; } = string.Empty; // e.g. QST Number
     public string PaymentInstructions { get; set; } = "";
 
     // --- LABELS (Existing) ---
@@ -61,8 +59,6 @@ public class DocumentTemplate : IDataEntity
     public string Label_BankAccount { get; set; } = "Account";
     public string Label_SwiftCode { get; set; } = "Swift / Transit";
 
-    public string Label_TaxId1 { get; set; } = "Tax ID 1"; // e.g. "GST:"
-    public string Label_TaxId2 { get; set; } = "Tax ID 2"; // e.g. "QST:"
     public string Label_ProjectManager { get; set; } = "Project Manager";
     public string Label_ItemLaborTag { get; set; } = "(Labor)";
     public string Label_BlockOfHours { get; set; } = "Block of Hours";
@@ -114,7 +110,86 @@ public class DocumentTemplate : IDataEntity
     public string Label_BillTo { get; set; } = "Bill To";
     public string Label_ShipTo { get; set; } = "Ship To";
     public string Label_ProjectNumber { get; set; } = "Project #";
+
+    // PROJECT REPORT SPECIFIC LABELS
+    public string Label_ProjectReport { get; set; } = "PROJECT REPORT";
+    public string Label_InternalManagementReport { get; set; } = "Internal Management Report";
+    public string Label_ClientProjectReport { get; set; } = "Client Project Report";
+    public string Label_ReportSubtitle { get; set; } = "Project Status & Financial Report";
+    public string Label_ReportDetails { get; set; } = "Report & Project Details";
+    public string Label_ReportNumber { get; set; } = "Report #";
+    public string Label_ReportPeriod { get; set; } = "Reporting Period";
+    public string Label_AsOfDate { get; set; } = "As of";
+    public string Label_ProjectInception { get; set; } = "Project Start";
+    public string Label_ProjectSchedule { get; set; } = "Project Schedule";
+    public string Label_PreparedFor { get; set; } = "Prepared For";
+    public string Label_ProjectClient { get; set; } = "Project Client";
+    public string Label_ReportAudience { get; set; } = "Audience";
+    public string Label_ProjectStatus { get; set; } = "Project Status";
+    public string Label_PreTax { get; set; } = "Pre-Tax";
+    public string Label_PreTaxSeparateTaxBreakdown { get; set; } = "Pre-Tax + Separate Tax Breakdown";
+    public string Label_AmountsExclTax { get; set; } = "Amounts Excl. Tax (Pre-Tax)";
+    public string Label_AmountsInclTax { get; set; } = "Amounts Incl. Tax";
+
+    public string Label_ExecutiveSummary { get; set; } = "Executive Summary";
+    public string Label_FinancialSummary { get; set; } = "Financial & Profitability Summary";
+    public string Label_ProfitabilityStatement { get; set; } = "Project Profitability Statement";
+    public string Label_BillingAndCashSummary { get; set; } = "Billing, Taxes & Cash Flow";
+    public string Label_QuoteVsActualSummary { get; set; } = "Quote vs. Actual (Hours & Costs)";
+    public string Label_OverheadAllocationSummary { get; set; } = "Business Overhead Allocation";
+    public string Label_DirectProjectProfit { get; set; } = "Direct Project Profit";
+    public string Label_AllocatedOverhead { get; set; } = "Allocated Business Overhead";
+    public string Label_AllocatedInternalCosts { get; set; } = "Allocated Internal Costs";
+    public string Label_NetProfitAfterOverhead { get; set; } = "Net Profit After Overhead";
+    public string Label_FinancialCategory { get; set; } = "Financial Category";
+    public string Label_Details { get; set; } = "Details";
+    public string Label_LaborCost { get; set; } = "Direct Labor";
+    public string Label_InternalCost { get; set; } = "Internal Cost";
+    public string Label_LaborBreakdown { get; set; } = "Labor & Time Breakdown";
+    public string Label_LaborByTask { get; set; } = "Labor by Task";
+    public string Label_LaborByEmployee { get; set; } = "Labor by Employee";
+    public string Label_LaborByPeriod { get; set; } = "Periodic Labor Breakdown";
+    public string Label_PurchasesBreakdown { get; set; } = "Purchases & Procurement";
+    public string Label_MonthlyPurchasesSummary { get; set; } = "Monthly Purchases Summary";
+    public string Label_ExpensesBreakdown { get; set; } = "Expenses & Reimbursements";
+    public string Label_BillingSummary { get; set; } = "Quotes & Invoicing History";
+    public string Label_Quotes { get; set; } = "Quotes";
+    public string Label_Invoices { get; set; } = "Invoices";
+    public string Label_Item { get; set; } = "Item";
+    public string Label_Items { get; set; } = "Items";
+    public string Label_CommissionsBreakdown { get; set; } = "Commissions";
+    public string Label_ProjectTimeline { get; set; } = "Key Milestones & Notes";
+
+    public string Label_Budgeted { get; set; } = "Budgeted";
+    public string Label_Actual { get; set; } = "Actual";
+    public string Label_Variance { get; set; } = "Variance";
+    public string Label_Usage { get; set; } = "Usage";
+    public string Label_Hour { get; set; } = "Hour";
+    public string Label_Hours { get; set; } = "Hours";
+    public string Label_HourlyRate { get; set; } = "Rate";
+    public string Label_Employee { get; set; } = "Employee";
+    public string Label_Employees { get; set; } = "Employees";
+    public string Label_Week { get; set; } = "Week";
+    public string Label_Weeks { get; set; } = "Weeks";
+    public string Label_Month { get; set; } = "Month";
+    public string Label_Months { get; set; } = "Months";
+    public string Label_RunningTotal { get; set; } = "Cumulative";
+    public string Label_ExpectedRevenue { get; set; } = "Expected Revenue";
+    public string Label_TotalInvoiced { get; set; } = "Total Invoiced";
+    public string Label_TotalCost { get; set; } = "Total Cost";
+    public string Label_NetProfit { get; set; } = "Net Profit";
+    public string Label_NetMargin { get; set; } = "Net Margin";
+    public string Label_CashPosition { get; set; } = "Cash Position";
+
+    // FINANCIAL STATEMENTS (SHAREHOLDER / INVESTOR) SPECIFIC LABELS
+    public string Label_FinancialStatements { get; set; } = "Financial Statements";
+    public string Label_FinancialStatementsSubtitle { get; set; } = "Prepared for Shareholders & Investors";
+    public string Label_BasisOfPresentationTitle { get; set; } = "Notice to Reader / Basis of Presentation";
+    public string Label_BasisOfPresentationDefault { get; set; } =
+        "Prepared on an accrual basis from posted General Ledger records for management, shareholder, and investor review (Compilation / Notice to Reader). Not audited or reviewed by an independent public accountant unless signed off externally.";
+    public string Label_IncomeStatementSection { get; set; } = "Statement of Income (Profit & Loss)";
+    public string Label_BalanceSheetSection { get; set; } = "Balance Sheet (Statement of Financial Position)";
+    public string Label_CashFlowSection { get; set; } = "Statement of Cash Flows (Indirect Method)";
+    public string Label_FinancialRatiosSection { get; set; } = "Financial Ratios & Key Metrics";
+    public string Label_ManagementNotesSection { get; set; } = "Notes to Financial Statements & Management Discussion";
 }
-
-
-

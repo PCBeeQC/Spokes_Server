@@ -21,7 +21,7 @@ public class RenderTokenServiceTests
         var service = new RenderTokenService();
 
         // Act
-        var token = service.CreateToken();
+        var token = service.CreateToken("/projects/p1/quotes/q1", "emp-1");
 
         // Assert
         Assert.NotNull(token);
@@ -40,7 +40,7 @@ public class RenderTokenServiceTests
         // Act
         for (var i = 0; i < tokenCount; i++)
         {
-            var token = service.CreateToken();
+            var token = service.CreateToken("/projects/p1/quotes/q1", "emp-1");
             generatedTokens.Add(token);
         }
 
@@ -49,56 +49,40 @@ public class RenderTokenServiceTests
     }
 
     [Fact]
-    public void ValidateToken_ValidToken_AllowsMultipleRequestsInSameScope_AndReturnsSameSessionId()
+    public void RevokeToken_RemovesToken_AndSubsequentConsumptionReturnsFalse()
     {
         // Arrange
         var service = new RenderTokenService();
-        var token = service.CreateToken();
-
-        // Act
-        var firstResult = service.ValidateToken(token, out var sessionId1);
-        var secondResult = service.ValidateToken(token, out var sessionId2);
-
-        // Assert
-        Assert.True(firstResult);
-        Assert.True(secondResult);
-        Assert.False(string.IsNullOrWhiteSpace(sessionId1));
-        Assert.Equal(sessionId1, sessionId2);
-    }
-
-    [Fact]
-    public void RevokeToken_RemovesToken_AndSubsequentValidationReturnsFalse()
-    {
-        // Arrange
-        var service = new RenderTokenService();
-        var token = service.CreateToken();
-        Assert.True(service.ValidateToken(token, out var expectedSessionId));
+        var token = service.CreateToken("/projects/p1/quotes/q1", "emp-1");
+        Assert.True(service.ContainsToken(token));
 
         // Act
         var revoked = service.RevokeToken(token, out var revokedSessionId);
-        var validAfterRevoke = service.ValidateToken(token, out _);
-        var secondRevoke = service.RevokeToken(token);
+        var validAfterRevoke = service.TryConsumeToken(token, "/projects/p1/quotes/q1", out _);
+        var secondRevoke = service.RevokeToken(token, out _);
 
         // Assert
         Assert.True(revoked);
-        Assert.Equal(expectedSessionId, revokedSessionId);
+        Assert.False(string.IsNullOrWhiteSpace(revokedSessionId));
         Assert.False(validAfterRevoke);
         Assert.False(secondRevoke);
     }
 
     [Fact]
-    public void ValidateAndConsume_ValidToken_ReturnsTrueFirstTime_AndFalseSecondTime()
+    public void TryConsumeToken_ValidToken_ReturnsTrueFirstTime_AndFalseSecondTime()
     {
         // Arrange
         var service = new RenderTokenService();
-        var token = service.CreateToken();
+        var token = service.CreateToken(null, "emp-1");
 
         // Act
-        var firstResult = service.ValidateAndConsume(token);
-        var secondResult = service.ValidateAndConsume(token);
+        var firstResult = service.TryConsumeToken(token, null, out var sessionId, out var initiator);
+        var secondResult = service.TryConsumeToken(token, null, out _);
 
         // Assert
         Assert.True(firstResult);
+        Assert.False(string.IsNullOrWhiteSpace(sessionId));
+        Assert.Equal("emp-1", initiator);
         Assert.False(secondResult);
     }
 
@@ -106,38 +90,36 @@ public class RenderTokenServiceTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void ValidateToken_And_ValidateAndConsume_NullOrWhitespaceToken_ReturnsFalse(string? token)
+    public void RevokeAndConsume_NullOrWhitespaceToken_ReturnsFalse(string? token)
     {
         // Arrange
         var service = new RenderTokenService();
 
         // Act & Assert
-        Assert.False(service.ValidateToken(token!, out _));
         Assert.False(service.RevokeToken(token!, out _));
-        Assert.False(service.ValidateAndConsume(token!));
+        Assert.False(service.TryConsumeToken(token!, null, out _));
     }
 
     [Fact]
-    public void ValidateToken_NonExistentToken_ReturnsFalse()
+    public void TryConsumeToken_NonExistentToken_ReturnsFalse()
     {
         // Arrange
         var service = new RenderTokenService();
 
         // Act & Assert
-        Assert.False(service.ValidateToken("non-existent-token-12345", out _));
-        Assert.False(service.ValidateAndConsume("non-existent-token-12345"));
+        Assert.False(service.TryConsumeToken("non-existent-token-12345", null, out _));
     }
 
     [Fact]
-    public void ValidateToken_CaseInsensitiveMatching()
+    public void TryConsumeToken_CaseInsensitiveMatching()
     {
         // Arrange
         var service = new RenderTokenService();
-        var token = service.CreateToken();
+        var token = service.CreateToken("/projects/p1/quotes/q1", "emp-1");
         var upperToken = token.ToUpperInvariant();
 
         // Act
-        var result = service.ValidateToken(upperToken, out var sessionId);
+        var result = service.TryConsumeToken(upperToken, "/projects/p1/quotes/q1", out var sessionId);
 
         // Assert
         Assert.True(result);
@@ -145,18 +127,18 @@ public class RenderTokenServiceTests
     }
 
     [Fact]
-    public void ValidateToken_ExpiredToken_ReturnsFalse()
+    public void TryConsumeToken_ExpiredToken_ReturnsFalse()
     {
         // Arrange
         var timeProvider = new TestTimeProvider();
         var service = new RenderTokenService(timeProvider);
-        var token = service.CreateToken();
+        var token = service.CreateToken("/projects/p1/quotes/q1", "emp-1");
 
         // Advance past 2-minute token lifetime
         timeProvider.Advance(TimeSpan.FromMinutes(5));
 
         // Act
-        var result = service.ValidateToken(token, out _);
+        var result = service.TryConsumeToken(token, "/projects/p1/quotes/q1", out _);
 
         // Assert
         Assert.False(result);
@@ -169,17 +151,39 @@ public class RenderTokenServiceTests
         // Arrange
         var timeProvider = new TestTimeProvider();
         var service = new RenderTokenService(timeProvider);
-        var expiredToken = service.CreateToken();
+        var expiredToken = service.CreateToken("/projects/p1/quotes/q1", "emp-1");
 
         // Advance past 2-minute token lifetime
         timeProvider.Advance(TimeSpan.FromMinutes(5));
         Assert.True(service.ContainsToken(expiredToken));
 
         // Act
-        var newToken = service.CreateToken();
+        var newToken = service.CreateToken("/projects/p1/quotes/q2", "emp-1");
 
         // Assert
         Assert.False(service.ContainsToken(expiredToken));
         Assert.True(service.ContainsToken(newToken));
+    }
+
+    [Fact]
+    public void RevokeToken_AfterSlowRenderPastTokenLifetime_StillReturnsConsumedSessionId()
+    {
+        // Arrange
+        var timeProvider = new TestTimeProvider();
+        var service = new RenderTokenService(timeProvider);
+        var token = service.CreateToken("/projects/p1/invoices/i1", "emp-1");
+        Assert.True(service.TryConsumeToken(token, "/projects/p1/invoices/i1", out var consumedSessionId));
+
+        // Simulate a slow PDF render taking longer than the 2-minute unconsumed token lifetime
+        timeProvider.Advance(TimeSpan.FromMinutes(10));
+        // Creating a new token triggers CleanupExpired()
+        _ = service.CreateToken("/projects/p1/invoices/i2", "emp-1");
+
+        // Act
+        var revoked = service.RevokeToken(token, out var revokedSessionId);
+
+        // Assert
+        Assert.True(revoked);
+        Assert.Equal(consumedSessionId, revokedSessionId);
     }
 }

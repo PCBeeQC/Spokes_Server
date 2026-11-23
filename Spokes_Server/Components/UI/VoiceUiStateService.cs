@@ -62,11 +62,13 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
     public bool IsInAppPipMinimized { get; private set; }
     public bool IsOsPipActive { get; private set; }
     public bool IsNativeMobilePipMode { get; private set; }
+    private static readonly TimeSpan SpeakerHysteresis = TimeSpan.FromMilliseconds(1500);
     public string? FocusedParticipantId { get; private set; }
-    public bool IsGridLayoutForcedByUser { get; private set; }
-
-    private bool _prevShouldAutoFaceTime;
-    private int _prevCameraCount;
+    public string? FullscreenParticipantId { get; private set; }
+    public string? StickySpeakerId { get; private set; }
+    private DateTime _stickySpeakerUntilUtc = DateTime.MinValue;
+    private bool _isFocusedParticipantAutoAssigned;
+    private int _prevStageParticipantCount;
     private HashSet<string> _prevScreenSharers = new(StringComparer.Ordinal);
     private VoicePipMetadataPayload? _lastPipMetadataPayload;
 
@@ -100,9 +102,12 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
         _loc = loc;
 
         _voiceService.OnChange += HandleVoiceServiceStateChanged;
+        _voiceService.OnActiveSpeakersUpdated += HandleActiveSpeakersUpdated;
         _voiceService.OnVoiceLogReceived += ShowVoiceLog;
         _voiceService.OnRoomLeft += HandleRoomLeft;
         _voiceService.OnVoiceSensitivityChanged += HandleVoiceSensitivityChanged;
+        _voiceService.OnAutoGainControlChanged += HandleAutoGainControlChanged;
+        _voiceService.OnIncomingVoiceNormalizationChanged += HandleIncomingVoiceNormalizationChanged;
         _voiceService.OnMasterVolumeChanged += HandleMasterVolumeChanged;
         _voiceService.OnParticipantVolumeChanged += HandleParticipantVolumeChanged;
         _voiceService.OnVoiceSettingsUpdated += HandleVoiceSettingsUpdated;
@@ -125,6 +130,8 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
 
     private void HandleIosMicrophoneModeChanged(string mode) => IosMicrophoneMode = mode;
     private void HandleVoiceSensitivityChanged(double sensitivity) => VoiceSettings.VoiceSensitivity = sensitivity;
+    private void HandleAutoGainControlChanged(bool enabled) => VoiceSettings.AutoGainControl = enabled;
+    private void HandleIncomingVoiceNormalizationChanged(bool enabled) => VoiceSettings.IncomingVoiceNormalization = enabled;
     private void HandleMasterVolumeChanged(double volume) => VoiceSettings.MasterVolume = volume;
     private void HandleParticipantVolumeChanged(string id, double volume) => VoiceSettings.ParticipantVolumes[id] = volume;
     private void HandleActiveCameraChanged(string id) => ActiveCameraDeviceId = id;
@@ -259,9 +266,11 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
         IsOsPipActive = false;
         IsNativeMobilePipMode = false;
         FocusedParticipantId = null;
-        IsGridLayoutForcedByUser = false;
-        _prevShouldAutoFaceTime = false;
-        _prevCameraCount = 0;
+        FullscreenParticipantId = null;
+        StickySpeakerId = null;
+        _stickySpeakerUntilUtc = DateTime.MinValue;
+        _isFocusedParticipantAutoAssigned = false;
+        _prevStageParticipantCount = 0;
         _prevScreenSharers.Clear();
         _lastPipMetadataPayload = null;
         OnPipStateChanged?.Invoke();
@@ -285,10 +294,7 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
     public void SetFocusedParticipant(string? participantId, bool userInitiated = false)
     {
         var normalized = string.IsNullOrWhiteSpace(participantId) ? null : participantId;
-        if (userInitiated)
-        {
-            IsGridLayoutForcedByUser = normalized == null;
-        }
+        _isFocusedParticipantAutoAssigned = false;
         if (FocusedParticipantId == normalized) return;
         FocusedParticipantId = normalized;
         OnPipStateChanged?.Invoke();
@@ -297,6 +303,34 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
     public void ToggleFocusParticipant(string participantId)
     {
         if (string.IsNullOrWhiteSpace(participantId)) return;
+
+        var activeParticipants = _voiceService.CallParticipants
+            .Where(id => !string.IsNullOrEmpty(id) && !LiveKitService.IsSyntheticParticipantIdentity(id))
+            .ToList();
+
+        // <= 2 participants always stay in FaceTime layout:
+        // - Solo (1 participant): full-bleed self, tapping is a no-op.
+        // - 2 participants: tapping the corner tile swaps focus to that participant;
+        //   tapping the already-focused full-bleed tile keeps FaceTime layout intact.
+        if (activeParticipants.Count <= 2)
+        {
+            if (activeParticipants.Count <= 1)
+            {
+                return;
+            }
+
+            var currentFocused = !string.IsNullOrEmpty(FocusedParticipantId) && activeParticipants.Contains(FocusedParticipantId)
+                ? FocusedParticipantId
+                : (activeParticipants.FirstOrDefault(p => !string.Equals(p, _voiceService.CurrentUserId, StringComparison.Ordinal))
+                    ?? activeParticipants[0]);
+
+            if (!string.Equals(currentFocused, participantId, StringComparison.Ordinal))
+            {
+                SetFocusedParticipant(participantId, userInitiated: true);
+            }
+            return;
+        }
+
         if (FocusedParticipantId == participantId)
         {
             SetFocusedParticipant(null, userInitiated: true);
@@ -307,6 +341,91 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
         }
     }
 
+    public void SetFullscreenParticipant(string? participantId)
+    {
+        var normalized = string.IsNullOrWhiteSpace(participantId) ? null : participantId;
+        if (normalized != null && string.Equals(normalized, _voiceService.CurrentUserId, StringComparison.Ordinal))
+        {
+            return;
+        }
+        if (FullscreenParticipantId == normalized) return;
+        var prev = FullscreenParticipantId;
+        FullscreenParticipantId = normalized;
+        if (normalized == null && prev != null)
+        {
+            _ = _jsInterop.ExitParticipantFullscreenAsync(goBack: false);
+        }
+        OnPipStateChanged?.Invoke();
+    }
+
+    public async Task EnterParticipantFullscreenAsync<T>(string participantId, DotNetObjectReference<T> dotNetHelper) where T : class
+    {
+        if (string.IsNullOrWhiteSpace(participantId) || string.Equals(participantId, _voiceService.CurrentUserId, StringComparison.Ordinal))
+        {
+            return;
+        }
+        SetFullscreenParticipant(participantId);
+        try
+        {
+            if (!_jsInterop.IsModuleLoaded)
+            {
+                await _voiceService.EnsureModuleInitializedAsync();
+            }
+            await _jsInterop.EnterParticipantFullscreenAsync(participantId, dotNetHelper);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "EnterParticipantFullscreenAsync warning: {Message}", ex.Message);
+        }
+    }
+
+    public async Task SetParticipantFullscreenRotationAsync(int rotationDeg)
+    {
+        try
+        {
+            if (_jsInterop.IsModuleLoaded)
+            {
+                await _jsInterop.SetParticipantFullscreenRotationAsync(rotationDeg);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "SetParticipantFullscreenRotationAsync warning: {Message}", ex.Message);
+        }
+    }
+
+    public async Task ResetParticipantFullscreenZoomAsync()
+    {
+        try
+        {
+            if (_jsInterop.IsModuleLoaded)
+            {
+                await _jsInterop.ResetParticipantFullscreenZoomAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "ResetParticipantFullscreenZoomAsync warning: {Message}", ex.Message);
+        }
+    }
+
+    public async Task ExitParticipantFullscreenAsync(bool goBack = true)
+    {
+        FullscreenParticipantId = null;
+        OnPipStateChanged?.Invoke();
+        try
+        {
+            if (_jsInterop.IsModuleLoaded)
+            {
+                await _jsInterop.ExitParticipantFullscreenAsync(goBack);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "ExitParticipantFullscreenAsync warning: {Message}", ex.Message);
+        }
+    }
+
     private void HandlePipFocusChanged(string? participantId)
     {
         SetFocusedParticipant(participantId, userInitiated: true);
@@ -314,90 +433,357 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
 
     private void HandleVoiceServiceStateChanged()
     {
+        UpdateStickySpeaker();
         ReconcileStageFocusState();
+    }
+
+    private void HandleActiveSpeakersUpdated()
+    {
+        var previousSticky = StickySpeakerId;
+        UpdateStickySpeaker();
+        if (!string.Equals(previousSticky, StickySpeakerId, StringComparison.Ordinal))
+        {
+            OnPipStateChanged?.Invoke();
+        }
+    }
+
+    private void UpdateStickySpeaker()
+    {
+        if (!_voiceService.IsInVoiceCall)
+        {
+            StickySpeakerId = null;
+            _stickySpeakerUntilUtc = DateTime.MinValue;
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        var remoteSpeaking = _voiceService.ActiveSpeakers
+            .FirstOrDefault(id => id != _voiceService.CurrentUserId && !LiveKitService.IsSyntheticParticipantIdentity(id));
+
+        if (!string.IsNullOrEmpty(remoteSpeaking))
+        {
+            if (!string.IsNullOrEmpty(StickySpeakerId) && _voiceService.ActiveSpeakers.Contains(StickySpeakerId))
+            {
+                _stickySpeakerUntilUtc = now + SpeakerHysteresis;
+            }
+            else if (string.IsNullOrEmpty(StickySpeakerId) || now >= _stickySpeakerUntilUtc || !_voiceService.CallParticipants.Contains(StickySpeakerId))
+            {
+                StickySpeakerId = remoteSpeaking;
+                _stickySpeakerUntilUtc = now + SpeakerHysteresis;
+            }
+        }
+        else if (!string.IsNullOrEmpty(_voiceService.CurrentUserId) && _voiceService.ActiveSpeakers.Contains(_voiceService.CurrentUserId))
+        {
+            if (string.IsNullOrEmpty(StickySpeakerId) || now >= _stickySpeakerUntilUtc || !_voiceService.CallParticipants.Contains(StickySpeakerId))
+            {
+                StickySpeakerId = _voiceService.CurrentUserId;
+                _stickySpeakerUntilUtc = now + SpeakerHysteresis;
+            }
+        }
+    }
+
+    public VoicePipPresentationState ComputePipPresentationState(bool isNativeMobileClient = false, IReadOnlySet<string>? verifiedParticipants = null)
+    {
+        var localUserId = _voiceService.CurrentUserId ?? string.Empty;
+        bool isParticipantIncluded(string id) =>
+            !string.IsNullOrEmpty(id) &&
+            !LiveKitService.IsSyntheticParticipantIdentity(id) &&
+            (string.Equals(id, localUserId, StringComparison.Ordinal) || verifiedParticipants == null || verifiedParticipants.Contains(id));
+
+        var participants = _voiceService.CallParticipants
+            .Where(isParticipantIncluded)
+            .ToList();
+        int participantCount = participants.Count;
+
+        bool isSingleStagePip = IsNativeMobilePipMode || isNativeMobileClient || _voiceService.IsNativePlatform;
+        string? focusedId = !string.IsNullOrEmpty(FocusedParticipantId) && participants.Contains(FocusedParticipantId)
+            ? FocusedParticipantId
+            : null;
+        string? stickyId = !string.IsNullOrEmpty(StickySpeakerId) && participants.Contains(StickySpeakerId)
+            ? StickySpeakerId
+            : null;
+
+        bool canUseGrid = !isSingleStagePip && participantCount > 1;
+        bool isGridMode = string.IsNullOrEmpty(focusedId) && canUseGrid;
+
+        bool hasCamera(string id) => string.Equals(id, localUserId, StringComparison.Ordinal)
+            ? _voiceService.IsVideoOn
+            : _voiceService.ActiveCameraParticipants.Contains(id);
+
+        bool hasScreen(string id) => string.Equals(id, localUserId, StringComparison.Ordinal)
+            ? _voiceService.IsScreenSharing
+            : _voiceService.ActiveScreenShareParticipants.Contains(id);
+
+        string primaryVideoParticipantId = string.Empty;
+        string primaryVideoSource = string.Empty;
+
+        if (!string.IsNullOrEmpty(focusedId) && !IsNativeMobilePipMode)
+        {
+            if (hasScreen(focusedId))
+            {
+                primaryVideoParticipantId = focusedId;
+                primaryVideoSource = "screenshare";
+            }
+            else if (hasCamera(focusedId))
+            {
+                primaryVideoParticipantId = focusedId;
+                primaryVideoSource = "camera";
+            }
+        }
+
+        if (string.IsNullOrEmpty(primaryVideoParticipantId) && (string.IsNullOrEmpty(focusedId) || isSingleStagePip))
+        {
+            var remoteScreen = participants.FirstOrDefault(id => id != localUserId && hasScreen(id));
+            if (remoteScreen != null)
+            {
+                primaryVideoParticipantId = remoteScreen;
+                primaryVideoSource = "screenshare";
+            }
+            else if (!string.IsNullOrEmpty(stickyId) && stickyId != localUserId && hasCamera(stickyId))
+            {
+                primaryVideoParticipantId = stickyId;
+                primaryVideoSource = "camera";
+            }
+            else
+            {
+                var remoteCam = participants.FirstOrDefault(id => id != localUserId && hasCamera(id));
+                if (remoteCam != null)
+                {
+                    primaryVideoParticipantId = remoteCam;
+                    primaryVideoSource = "camera";
+                }
+                else if (!string.IsNullOrEmpty(localUserId) && hasScreen(localUserId))
+                {
+                    primaryVideoParticipantId = localUserId;
+                    primaryVideoSource = "screenshare";
+                }
+                else if ((isSingleStagePip || participantCount <= 1) && !string.IsNullOrEmpty(localUserId) && hasCamera(localUserId))
+                {
+                    primaryVideoParticipantId = localUserId;
+                    primaryVideoSource = "camera";
+                }
+            }
+        }
+
+        bool hasPrimaryVideo = !string.IsNullOrEmpty(primaryVideoParticipantId);
+
+        string? displayParticipantId = (!string.IsNullOrEmpty(focusedId) && !IsNativeMobilePipMode)
+            ? focusedId
+            : (hasPrimaryVideo
+                ? primaryVideoParticipantId
+                : (stickyId
+                    ?? participants.FirstOrDefault(id => id != localUserId)
+                    ?? (string.IsNullOrEmpty(localUserId) ? null : localUserId)));
+
+        string primaryTargetId = displayParticipantId ?? string.Empty;
+
+        bool useFaceTimeSelfCorner = _voiceService.IsVideoOn
+            && hasPrimaryVideo
+            && !string.Equals(primaryTargetId, localUserId, StringComparison.Ordinal)
+            && (isSingleStagePip || (!IsOsPipActive && participantCount == 2));
+
+        bool hasFilmstrip = !isGridMode
+            && !isSingleStagePip
+            && (participantCount > 2 || (participantCount == 2 && !useFaceTimeSelfCorner));
+
+        string modeClass = isGridMode ? "mode-grid" : (hasPrimaryVideo ? "mode-video" : "mode-avatar");
+
+        return new VoicePipPresentationState(
+            ParticipantCount: participantCount,
+            FocusedParticipantId: focusedId,
+            StickySpeakerId: stickyId,
+            DisplayParticipantId: displayParticipantId,
+            CanUseGrid: canUseGrid,
+            IsGridMode: isGridMode,
+            HasPrimaryVideo: hasPrimaryVideo,
+            PrimaryTargetId: primaryTargetId,
+            PrimaryVideoSource: primaryVideoSource,
+            UseFaceTimeSelfCorner: useFaceTimeSelfCorner,
+            HasFilmstrip: hasFilmstrip,
+            ModeClass: modeClass);
+    }
+
+    public VoiceStagePresentationState ComputeStagePresentationState(IReadOnlySet<string>? verifiedParticipants = null, string? ringingCalleeId = null)
+    {
+        var localUserId = _voiceService.CurrentUserId ?? string.Empty;
+        var participants = _voiceService.CallParticipants
+            .Where(id => !string.IsNullOrEmpty(id)
+                && !LiveKitService.IsSyntheticParticipantIdentity(id)
+                && (string.Equals(id, localUserId, StringComparison.Ordinal)
+                    || verifiedParticipants == null
+                    || verifiedParticipants.Contains(id)))
+            .ToList();
+
+        bool hasRingingCallee = !string.IsNullOrWhiteSpace(ringingCalleeId)
+            && !participants.Contains(ringingCalleeId);
+        int visualCount = participants.Count + (hasRingingCallee ? 1 : 0);
+
+        int activeVideoCount = participants.Count(p =>
+            (string.Equals(p, localUserId, StringComparison.Ordinal) && (_voiceService.IsVideoOn || _voiceService.IsScreenSharing)) ||
+            _voiceService.ActiveCameraParticipants.Contains(p) ||
+            _voiceService.ActiveScreenShareParticipants.Contains(p));
+
+        if (visualCount == 0)
+        {
+            return new VoiceStagePresentationState(
+                VisualParticipantCount: 0,
+                IsFaceTimeLayout: false,
+                FocusedParticipantId: null,
+                ActiveVideoCount: activeVideoCount);
+        }
+
+        if (visualCount <= 2)
+        {
+            string? effectiveFocusedId;
+            if (hasRingingCallee)
+            {
+                effectiveFocusedId = !string.IsNullOrEmpty(FocusedParticipantId) && participants.Contains(FocusedParticipantId)
+                    ? FocusedParticipantId
+                    : ringingCalleeId;
+            }
+            else if (participants.Count == 1)
+            {
+                effectiveFocusedId = participants[0];
+            }
+            else
+            {
+                effectiveFocusedId = !string.IsNullOrEmpty(FocusedParticipantId) && participants.Contains(FocusedParticipantId)
+                    ? FocusedParticipantId
+                    : (participants.FirstOrDefault(p => !string.Equals(p, localUserId, StringComparison.Ordinal))
+                        ?? participants[0]);
+            }
+
+            return new VoiceStagePresentationState(
+                VisualParticipantCount: visualCount,
+                IsFaceTimeLayout: true,
+                FocusedParticipantId: effectiveFocusedId,
+                ActiveVideoCount: activeVideoCount);
+        }
+
+        string? gridFocusedId = !string.IsNullOrEmpty(FocusedParticipantId) && participants.Contains(FocusedParticipantId)
+            ? FocusedParticipantId
+            : null;
+
+        return new VoiceStagePresentationState(
+            VisualParticipantCount: visualCount,
+            IsFaceTimeLayout: false,
+            FocusedParticipantId: gridFocusedId,
+            ActiveVideoCount: activeVideoCount);
+    }
+
+    public void TogglePipGridOrFocusLayout()
+    {
+        if (!string.IsNullOrEmpty(FocusedParticipantId))
+        {
+            SetFocusedParticipant(null, userInitiated: true);
+            return;
+        }
+
+        var nextFocus = _voiceService.ActiveScreenShareParticipants.FirstOrDefault(id => id != _voiceService.CurrentUserId)
+            ?? (_voiceService.IsScreenSharing ? _voiceService.CurrentUserId : null)
+            ?? StickySpeakerId
+            ?? _voiceService.CallParticipants.FirstOrDefault(id => id != _voiceService.CurrentUserId && !LiveKitService.IsSyntheticParticipantIdentity(id))
+            ?? _voiceService.CurrentUserId;
+        SetFocusedParticipant(nextFocus, userInitiated: true);
     }
 
     private void ReconcileStageFocusState()
     {
         var prevFocused = FocusedParticipantId;
+        var prevFullscreen = FullscreenParticipantId;
 
         if (!_voiceService.IsInVoiceCall)
         {
             FocusedParticipantId = null;
-            IsGridLayoutForcedByUser = false;
-            _prevShouldAutoFaceTime = false;
-            _prevCameraCount = 0;
+            FullscreenParticipantId = null;
+            _isFocusedParticipantAutoAssigned = false;
+            _prevStageParticipantCount = 0;
             _prevScreenSharers.Clear();
-            if (prevFocused != FocusedParticipantId)
+            if (prevFocused != FocusedParticipantId || prevFullscreen != FullscreenParticipantId)
             {
                 OnPipStateChanged?.Invoke();
             }
             return;
         }
 
-        if (FocusedParticipantId != null && !_voiceService.CallParticipants.Contains(FocusedParticipantId))
+        var activeParticipants = _voiceService.CallParticipants
+            .Where(id => !string.IsNullOrEmpty(id) && !LiveKitService.IsSyntheticParticipantIdentity(id))
+            .ToList();
+
+        if (FocusedParticipantId != null && !activeParticipants.Contains(FocusedParticipantId))
         {
             FocusedParticipantId = null;
+            _isFocusedParticipantAutoAssigned = false;
         }
 
         // 1. Clean exit when a focused screen share stops in a multi-person call
         var currentScreenSharers = _voiceService.ActiveScreenShareParticipants
-            .Where(p => _voiceService.CallParticipants.Contains(p))
+            .Where(p => activeParticipants.Contains(p))
             .ToHashSet(StringComparer.Ordinal);
         if (_voiceService.IsScreenSharing && !string.IsNullOrEmpty(_voiceService.CurrentUserId))
         {
             currentScreenSharers.Add(_voiceService.CurrentUserId);
         }
 
+        if (FullscreenParticipantId != null)
+        {
+            bool stillHasStream = activeParticipants.Contains(FullscreenParticipantId)
+                && !string.Equals(FullscreenParticipantId, _voiceService.CurrentUserId, StringComparison.Ordinal)
+                && (_voiceService.ActiveCameraParticipants.Contains(FullscreenParticipantId)
+                    || currentScreenSharers.Contains(FullscreenParticipantId));
+            if (!stillHasStream)
+            {
+                FullscreenParticipantId = null;
+                _ = _jsInterop.ExitParticipantFullscreenAsync(goBack: false);
+            }
+        }
+
         if (FocusedParticipantId != null
-            && _voiceService.CallParticipants.Count > 2
+            && activeParticipants.Count > 2
             && _prevScreenSharers.Contains(FocusedParticipantId)
             && !currentScreenSharers.Contains(FocusedParticipantId))
         {
             FocusedParticipantId = null;
+            _isFocusedParticipantAutoAssigned = false;
         }
 
         _prevScreenSharers = currentScreenSharers;
 
-        // 2. 2-Person Call ("FaceTime") Auto-Focus
-        bool isTwoPersonCall = _voiceService.CallParticipants.Count == 2;
-        bool hasAnyCamera = _voiceService.CallParticipants.Any(p =>
-            (p == _voiceService.CurrentUserId && (_voiceService.IsVideoOn || _voiceService.IsScreenSharing)) ||
-            _voiceService.ActiveCameraParticipants.Contains(p) ||
-            currentScreenSharers.Contains(p));
-        bool shouldAuto = isTwoPersonCall && hasAnyCamera;
-
-        int activeCameras = _voiceService.CallParticipants.Count(p =>
-            (p == _voiceService.CurrentUserId && (_voiceService.IsVideoOn || _voiceService.IsScreenSharing)) ||
-            _voiceService.ActiveCameraParticipants.Contains(p) ||
-            currentScreenSharers.Contains(p));
-
-        if (shouldAuto && !_prevShouldAutoFaceTime && !IsGridLayoutForcedByUser && FocusedParticipantId == null)
-        {
-            var otherPerson = _voiceService.CallParticipants.FirstOrDefault(p => p != _voiceService.CurrentUserId);
-            if (otherPerson != null)
-            {
-                FocusedParticipantId = otherPerson;
-            }
-        }
-        else if (!shouldAuto && _prevShouldAutoFaceTime)
-        {
-            if ((_voiceService.CallParticipants.Count != 2 || !hasAnyCamera) && currentScreenSharers.Count == 0)
-            {
-                FocusedParticipantId = null;
-                IsGridLayoutForcedByUser = false;
-            }
-        }
-        else if (!hasAnyCamera && _prevCameraCount > 0 && FocusedParticipantId != null)
+        // 2. Canonical <= 2 FaceTime vs > 2 Grid stage focus reconciliation
+        int count = activeParticipants.Count;
+        if (count <= 1)
         {
             FocusedParticipantId = null;
-            IsGridLayoutForcedByUser = false;
+            _isFocusedParticipantAutoAssigned = false;
+        }
+        else if (count == 2)
+        {
+            if (FocusedParticipantId == null)
+            {
+                var otherPerson = activeParticipants.FirstOrDefault(p => !string.Equals(p, _voiceService.CurrentUserId, StringComparison.Ordinal))
+                    ?? activeParticipants[0];
+                FocusedParticipantId = otherPerson;
+                _isFocusedParticipantAutoAssigned = true;
+            }
+        }
+        else if (_prevStageParticipantCount <= 2)
+        {
+            // Transitioned from <= 2 FaceTime into > 2 Grid: clear FaceTime focus unless actively screen-sharing
+            if (FocusedParticipantId == null || !currentScreenSharers.Contains(FocusedParticipantId))
+            {
+                FocusedParticipantId = null;
+                _isFocusedParticipantAutoAssigned = false;
+            }
+        }
+        else if (_isFocusedParticipantAutoAssigned && currentScreenSharers.Count == 0)
+        {
+            FocusedParticipantId = null;
+            _isFocusedParticipantAutoAssigned = false;
         }
 
-        _prevCameraCount = activeCameras;
-        _prevShouldAutoFaceTime = shouldAuto;
+        _prevStageParticipantCount = count;
 
-        if (prevFocused != FocusedParticipantId)
+        if (prevFocused != FocusedParticipantId || prevFullscreen != FullscreenParticipantId)
         {
             OnPipStateChanged?.Invoke();
         }
@@ -431,7 +817,12 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
                 _lastPipMetadataPayload.FocusedParticipantId = FocusedParticipantId ?? string.Empty;
                 await _jsInterop.SyncPipMetadataAsync(_lastPipMetadataPayload);
             }
-            return await _jsInterop.ToggleOsPipAsync();
+            var opened = await _jsInterop.ToggleOsPipAsync();
+            if (opened)
+            {
+                await _jsInterop.SyncSpeakingParticipantsAsync(_voiceService.CurrentChannelId, _voiceService.ActiveSpeakers.ToArray());
+            }
+            return opened;
         }
         catch (Exception ex)
         {
@@ -474,6 +865,19 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
         }
     }
 
+    public async Task SyncSpeakingParticipantsAsync(string? channelId, string[] speakerIds)
+    {
+        if (!_jsInterop.IsModuleLoaded) return;
+        try
+        {
+            await _jsInterop.SyncSpeakingParticipantsAsync(channelId, speakerIds ?? Array.Empty<string>());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "SyncSpeakingParticipantsAsync skipped: {Message}", ex.Message);
+        }
+    }
+
     public async Task SetInAppPipActiveAsync(bool active)
     {
         if (!_jsInterop.IsModuleLoaded) return;
@@ -507,6 +911,10 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
         {
             _ = _voiceService.ToggleVideoAsync(MaxVideoSendQuality, MaxVideoSendFps, ActiveCameraDeviceId);
         }
+        else if (action == "toggleScreenShare")
+        {
+            _ = _voiceService.ToggleScreenShareAsync(MaxScreenShareQuality, MaxScreenShareFps, ScreenShareMode, IsScreenShareAudioEnabled);
+        }
         else if (action == "returnToCall")
         {
             RequestReturnToCallStage();
@@ -527,21 +935,20 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
         _snackbar.Add(message, severity);
     }
 
-    public async Task PlayTestSpeakerSoundAsync(string? deviceId = null, IVoiceJsInteropService? jsInterop = null)
+    public async Task PlayTestSpeakerSoundAsync(string? deviceId = null)
     {
         var targetDevice = !string.IsNullOrEmpty(deviceId) ? deviceId : ActiveSpeakerDeviceId;
-        var interop = jsInterop ?? _jsInterop;
 
         try
         {
-            if (!interop.IsModuleLoaded)
+            if (!_jsInterop.IsModuleLoaded)
             {
                 await _voiceService.EnsureModuleInitializedAsync();
             }
 
-            if (interop.IsModuleLoaded)
+            if (_jsInterop.IsModuleLoaded)
             {
-                await interop.PlayTestSpeakerSoundAsync(targetDevice);
+                await _jsInterop.PlayTestSpeakerSoundAsync(targetDevice);
                 return;
             }
         }
@@ -559,7 +966,7 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
         {
             var json = await _js.InvokeAsync<string?>("localStorage.getItem", "spokes_voice_settings_v1");
             VoiceSettings = !string.IsNullOrEmpty(json)
-                ? System.Text.Json.JsonSerializer.Deserialize<VoiceUserSettings>(json) ?? new()
+                ? System.Text.Json.JsonSerializer.Deserialize<VoiceUserSettings>(json, VoiceUserSettings.JsonOptions) ?? new()
                 : new();
             HasLoadedVoiceSettings = true;
         }
@@ -573,9 +980,12 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
     public void Dispose()
     {
         _voiceService.OnChange -= HandleVoiceServiceStateChanged;
+        _voiceService.OnActiveSpeakersUpdated -= HandleActiveSpeakersUpdated;
         _voiceService.OnVoiceLogReceived -= ShowVoiceLog;
         _voiceService.OnRoomLeft -= HandleRoomLeft;
         _voiceService.OnVoiceSensitivityChanged -= HandleVoiceSensitivityChanged;
+        _voiceService.OnAutoGainControlChanged -= HandleAutoGainControlChanged;
+        _voiceService.OnIncomingVoiceNormalizationChanged -= HandleIncomingVoiceNormalizationChanged;
         _voiceService.OnMasterVolumeChanged -= HandleMasterVolumeChanged;
         _voiceService.OnParticipantVolumeChanged -= HandleParticipantVolumeChanged;
         _voiceService.OnVoiceSettingsUpdated -= HandleVoiceSettingsUpdated;
@@ -594,5 +1004,66 @@ public class VoiceUiStateService : IVoiceUiStateService, IDisposable
         _deviceService.OnActiveCameraChanged -= HandleActiveCameraChanged;
         _deviceService.OnActiveMicrophoneChanged -= HandleActiveMicrophoneChanged;
         _deviceService.OnActiveSpeakerChanged -= HandleActiveSpeakerChanged;
+    }
+
+    /// <summary>
+    /// Resolves an audio device ID to its human-readable label for MudSelect ToStringFunc rendering.
+    /// Prevents MudBlazor from displaying raw Chromium/OS device hash IDs before child items register.
+    /// </summary>
+    public static string ResolveAudioDeviceLabel(IReadOnlyList<AudioDevice> devices, string? deviceId) =>
+        ResolveDeviceLabelCore(devices, static d => d.DeviceId, static d => d.Label, deviceId);
+
+    /// <summary>
+    /// Resolves a camera device ID to its human-readable label for MudSelect ToStringFunc rendering.
+    /// </summary>
+    public static string ResolveCameraDeviceLabel(IReadOnlyList<CameraDevice> devices, string? deviceId) =>
+        ResolveDeviceLabelCore(devices, static d => d.DeviceId, static d => d.Label, deviceId);
+
+    private static string ResolveDeviceLabelCore<T>(
+        IReadOnlyList<T> devices,
+        Func<T, string> getId,
+        Func<T, string> getLabel,
+        string? deviceId)
+    {
+        if (devices.Count > 0)
+        {
+            if (!string.IsNullOrEmpty(deviceId))
+            {
+                for (int i = 0; i < devices.Count; i++)
+                {
+                    if (string.Equals(getId(devices[i]), deviceId, StringComparison.Ordinal))
+                    {
+                        var label = getLabel(devices[i]);
+                        if (!string.IsNullOrWhiteSpace(label))
+                        {
+                            return label;
+                        }
+                    }
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(deviceId) || string.Equals(deviceId, "default", StringComparison.Ordinal))
+            {
+                for (int i = 0; i < devices.Count; i++)
+                {
+                    if (string.Equals(getId(devices[i]), "default", StringComparison.Ordinal))
+                    {
+                        var label = getLabel(devices[i]);
+                        if (!string.IsNullOrWhiteSpace(label))
+                        {
+                            return label;
+                        }
+                    }
+                }
+            }
+
+            var firstLabel = getLabel(devices[0]);
+            if (!string.IsNullOrWhiteSpace(firstLabel))
+            {
+                return firstLabel;
+            }
+        }
+
+        return "System Default";
     }
 }

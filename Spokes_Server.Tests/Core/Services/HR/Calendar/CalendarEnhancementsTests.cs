@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using MudBlazor;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
@@ -36,7 +37,7 @@ public class CalendarEnhancementsTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_CalEnhance_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -60,6 +61,7 @@ public class CalendarEnhancementsTests : IDisposable
     {
         // Arrange
         var userId = "emp-unconfigured-push";
+        _employees.Save(new Employee { Id = userId, IsActive = true, Permissions = [AppPermissions.Calendar.View] });
         var circuitContext = new UserCircuitContext
         {
             DeviceType = DeviceType.Mobile,
@@ -107,7 +109,9 @@ public class CalendarEnhancementsTests : IDisposable
         {
             Id = userId,
             FirstName = "Alice",
-            LastName = "Smith"
+            LastName = "Smith",
+            IsActive = true,
+            Permissions = [AppPermissions.Calendar.View]
         };
         employee.SetNotificationSound(NotificationCategories.Calendar, "sound_bell_ring");
         _employees.Save(employee);
@@ -187,55 +191,5 @@ public class CalendarEnhancementsTests : IDisposable
 
         Assert.Contains("Starts in 10 minutes", desc);
         Assert.Contains("Room 402", desc);
-    }
-
-    [Fact]
-    public void MultiDayEvent_ContinuationViewModelMaintainsTitle()
-    {
-        // Simulate multi-day generation as done in MyCalendar.LoadData
-        var evt = new CalendarEvent
-        {
-            Id = "evt-multiday",
-            Title = "3-Day Workshop",
-            Start = new DateTime(2026, 10, 19, 9, 0, 0),
-            End = new DateTime(2026, 10, 21, 17, 0, 0)
-        };
-
-        var days = new List<DateTime>
-        {
-            new DateTime(2026, 10, 19),
-            new DateTime(2026, 10, 20),
-            new DateTime(2026, 10, 21)
-        };
-
-        var viewModels = new List<CalendarEventViewModel>();
-        foreach (var day in days)
-        {
-            var isStart = day == evt.Start.Date;
-            var isCont = !isStart;
-            var vm = new CalendarEventViewModel
-            {
-                Date = day,
-                Title = evt.Title,
-                SourceEvent = evt,
-                IsContinuation = isCont
-            };
-            viewModels.Add(vm);
-        }
-
-        // Assert: every single day has the event title preserved (never erased to nbsp)
-        Assert.Equal(3, viewModels.Count);
-        Assert.All(viewModels, vm => Assert.Equal("3-Day Workshop", vm.Title));
-        Assert.False(viewModels[0].IsContinuation);
-        Assert.True(viewModels[1].IsContinuation);
-        Assert.True(viewModels[2].IsContinuation);
-    }
-
-    private class CalendarEventViewModel
-    {
-        public DateTime Date { get; set; }
-        public string Title { get; set; } = string.Empty;
-        public CalendarEvent SourceEvent { get; set; } = new();
-        public bool IsContinuation { get; set; }
     }
 }

@@ -1,0 +1,654 @@
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Models.Projects
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.Identity
+@using Spokes_Server.Core.Services.Migrations
+@inject Database Db
+@inject IAccountingMigrationService MigrationService
+@inject UserService UserService
+
+<MudDialog Style="min-width: min(1120px, 96vw); max-width: 1280px;">
+    <TitleContent>
+        <div class="d-flex align-center justify-space-between w-100 pr-2">
+            <div class="d-flex align-center gap-2">
+                <MudIcon Icon="@Icons.Material.Filled.FactCheck" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">@BizLoc["Review & Curate Import Data"]</MudText>
+                <MudChip T="string" Size="Size.Small" Color="Color.Info">@Preview.DetectedFormat</MudChip>
+            </div>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudContainer Style="max-height: 76vh; overflow-y: auto;" Class="pa-1">
+            @* Notices, Warnings, Blocking Errors *@
+            @foreach (var notice in Preview.InformationalNotices)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined" Class="mb-2">@notice</MudAlert>
+            }
+            @foreach (var warn in Preview.Warnings)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mb-2">@warn</MudAlert>
+            }
+            @foreach (var err in Preview.BlockingErrors)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Filled" Class="mb-2">@err</MudAlert>
+            }
+
+            @if (Preview.GlMappings.Any(g => g.Include && g.Action != MigrationGlAction.Ignore))
+            {
+                <MudAlert Severity="@(Math.Abs(Preview.TotalDeltaDebits - Preview.TotalDeltaCredits) <= 0.01m ? Severity.Success : Severity.Error)"
+                          Dense="true"
+                          Variant="Variant.Outlined"
+                          Class="mb-3">
+                    <MudText Typo="Typo.body2">
+                        <b>@BizLoc["Trial Balance Summary"]:</b>
+                        Dr @Preview.TotalDeltaDebits.ToString("C2") / Cr @Preview.TotalDeltaCredits.ToString("C2")
+                        @if (Preview.OpenInvoices.Any(i => i.Include) || Preview.OpenBills.Any(b => b.Include))
+                        {
+                            <span> · @BizLoc["Open AR"]: @Preview.ExpectedOpenArTotal.ToString("C2") · @BizLoc["Open AP"]: @Preview.ExpectedOpenApTotal.ToString("C2") · @BizLoc["Acct 3900 Residual"]: @Preview.ProjectedClearing3900Residual.ToString("C2")</span>
+                        }
+                    </MudText>
+                </MudAlert>
+            }
+
+            <SpokesTabs TabPanelsClass="pa-3">
+                @* TAB 1: EMPLOYEES & PAYROLL *@
+                <MudTabPanel Text="@($"{BizLoc["Employees & Payroll"]} ({Preview.PayrollYtds.Count(e => e.Include && e.Action != MigrationEmployeeAction.Skip)}/{Preview.PayrollYtds.Count})")"
+                             Icon="@Icons.Material.Filled.Badge">
+                    <MudStack Spacing="2">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                            <SpokesSearchInput @bind-Value="_empSearch" Placeholder="@Loc["Search"]" Style="max-width: 280px;" />
+                            <div class="d-flex gap-2 flex-wrap">
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => SetAllEmployeesInclude(true))">@BizLoc["Select All"]</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => SetAllEmployeesInclude(false))">@BizLoc["Deselect All"]</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success" OnClick="@(() => SetUnmatchedEmployeesAction(MigrationEmployeeAction.CreateActive))">@BizLoc["Unmatched -> Create Active"]</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" OnClick="@(() => SetUnmatchedEmployeesAction(MigrationEmployeeAction.CreateInactiveFormer))">@BizLoc["Unmatched -> Former (Inactive)"]</MudButton>
+                            </div>
+                        </div>
+
+                        <MudTable Items="FilteredEmployees" Dense="true" Hover="true" Outlined="true" Elevation="0" RowsPerPage="25">
+                            <HeaderContent>
+                                <MudTh>@Loc["Include"]</MudTh>
+                                <MudTh>@BizLoc["Employee"]</MudTh>
+                                <MudTh>@BizLoc["SIN"]</MudTh>
+                                <MudTh>@BizLoc["Hire Date"]</MudTh>
+                                <MudTh>@BizLoc["Pay Periods"]</MudTh>
+                                <MudTh>@BizLoc["YTD Gross"]</MudTh>
+                                <MudTh>@BizLoc["Action"]</MudTh>
+                                <MudTh>@BizLoc["Target Spokes Employee"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="row">
+                                <MudTd>
+                                    <MudCheckBox T="bool" Value="@row.Include" ValueChanged="@(v => OnEmployeeIncludeChanged(row, v))" Dense="true" Color="Color.Primary" />
+                                </MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.body2"><b>@row.SourceEmployeeName</b></MudText>
+                                    @if (row.HasDuplicateSinWarning && !string.IsNullOrWhiteSpace(row.DuplicateMergedFromName))
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Info">@BizLoc["Deduplicated"]: @row.DuplicateMergedFromName</MudChip>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(row.City))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@row.City, @row.Province</MudText>
+                                    }
+                                </MudTd>
+                                <MudTd>@MaskSin(row.SocialInsuranceNumber)</MudTd>
+                                <MudTd>@(row.HireDate?.ToString("yyyy-MM-dd") ?? "-")</MudTd>
+                                <MudTd>@row.PayPeriodsPerYear</MudTd>
+                                <MudTd>@row.GrossPayYtd.ToString("C2")</MudTd>
+                                <MudTd>
+                                    <MudSelect T="MigrationEmployeeAction" Value="@row.Action" ValueChanged="@(a => OnEmployeeActionChanged(row, a))" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="min-width: 170px;">
+                                        <MudSelectItem Value="MigrationEmployeeAction.LinkExisting">@BizLoc["Link Existing"]</MudSelectItem>
+                                        <MudSelectItem Value="MigrationEmployeeAction.CreateActive">@BizLoc["Create Active"]</MudSelectItem>
+                                        <MudSelectItem Value="MigrationEmployeeAction.CreateInactiveFormer">@BizLoc["Create Former (Inactive)"]</MudSelectItem>
+                                        <MudSelectItem Value="MigrationEmployeeAction.Skip">@BizLoc["Skip"]</MudSelectItem>
+                                    </MudSelect>
+                                </MudTd>
+                                <MudTd>
+                                    @if (row.Action == MigrationEmployeeAction.LinkExisting)
+                                    {
+                                        <MudSelect T="string" Value="@row.MatchedEmployeeId" ValueChanged="@(id => OnEmployeeTargetChanged(row, id))" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Clearable="true" Style="min-width: 190px;">
+                                            @foreach (var emp in _existingEmployees)
+                                            {
+                                                <MudSelectItem T="string" Value="@emp.Id">@emp.FullName</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@row.MatchReason</MudText>
+                                    }
+                                </MudTd>
+                            </RowTemplate>
+                            <PagerContent><MudTablePager /></PagerContent>
+                        </MudTable>
+                    </MudStack>
+                </MudTabPanel>
+
+                @* TAB 2: ADDRESS BOOK (CLIENTS & SUPPLIERS) *@
+                <MudTabPanel Text="@($"{BizLoc["Address Book (Clients & Suppliers)"]} ({AllParties.Count(p => p.Include && p.Action != MigrationPartyAction.Skip)}/{AllParties.Count})")"
+                             Icon="@Icons.Material.Filled.Contacts">
+                    <MudStack Spacing="2">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                            <SpokesSearchInput @bind-Value="_partySearch" Placeholder="@Loc["Search"]" Style="max-width: 280px;" />
+                            <div class="d-flex align-center gap-3 flex-wrap">
+                                <MudSwitch T="bool" @bind-Value="_showClients" Label="@BizLoc["Clients"]" Color="Color.Info" />
+                                <MudSwitch T="bool" @bind-Value="_showSuppliers" Label="@BizLoc["Suppliers"]" Color="Color.Secondary" />
+                                <MudSwitch T="bool" @bind-Value="_showFlaggedParties" Label="@($"{BizLoc["Show Flagged (Employees / Tax Agencies)"]} ({AllParties.Count(p => p.IsFlaggedEmployeeOrTaxAgency)})")" Color="Color.Warning" />
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => SetFilteredPartiesInclude(true))">@BizLoc["Check Shown"]</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => SetFilteredPartiesInclude(false))">@BizLoc["Uncheck Shown"]</MudButton>
+                            </div>
+                        </div>
+
+                        <MudTable Items="FilteredParties" Dense="true" Hover="true" Outlined="true" Elevation="0" RowsPerPage="25">
+                            <HeaderContent>
+                                <MudTh>@Loc["Include"]</MudTh>
+                                <MudTh>@BizLoc["Company Name"]</MudTh>
+                                <MudTh>@BizLoc["Role"]</MudTh>
+                                <MudTh>@BizLoc["Contact"]</MudTh>
+                                <MudTh>@BizLoc["Currency"]</MudTh>
+                                <MudTh>@BizLoc["Status / Flag"]</MudTh>
+                                <MudTh>@BizLoc["Action"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="p">
+                                <MudTd>
+                                    <MudCheckBox T="bool" Value="@p.Include" ValueChanged="@(v => OnPartyIncludeChanged(p, v))" Dense="true" Color="Color.Primary" />
+                                </MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.body2"><b>@p.ContactInfo.BusinessName</b></MudText>
+                                    @if (!string.IsNullOrWhiteSpace(p.ContactInfo.BusinessAddressCity))
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@p.ContactInfo.BusinessAddressCity, @p.ContactInfo.BusinessAddressState</MudText>
+                                    }
+                                </MudTd>
+                                <MudTd>
+                                    @if (p.IsAlsoClient && p.IsAlsoVendor)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Primary">@BizLoc["Client & Supplier"]</MudChip>
+                                    }
+                                    else if (p.IsCustomer)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Info">@BizLoc["Client"]</MudChip>
+                                    }
+                                    else
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Default">@BizLoc["Supplier"]</MudChip>
+                                    }
+                                </MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.body2">@p.ContactInfo.ContactPersonName</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@p.ContactInfo.ContactPersonEmail @p.ContactInfo.ContactPersonPhone</MudText>
+                                </MudTd>
+                                <MudTd>@p.DefaultCurrency</MudTd>
+                                <MudTd>
+                                    @if (p.IsFlaggedEmployeeOrTaxAgency)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">@p.FlagReason</MudChip>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@p.MatchReason</MudText>
+                                    }
+                                </MudTd>
+                                <MudTd>
+                                    <MudSelect T="MigrationPartyAction" Value="@p.Action" ValueChanged="@(a => OnPartyActionChanged(p, a))" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="min-width: 150px;">
+                                        <MudSelectItem Value="MigrationPartyAction.CreateNew">@BizLoc["Add to Address Book"]</MudSelectItem>
+                                        <MudSelectItem Value="MigrationPartyAction.LinkExisting">@BizLoc["Link Existing"]</MudSelectItem>
+                                        <MudSelectItem Value="MigrationPartyAction.Skip">@BizLoc["Skip"]</MudSelectItem>
+                                    </MudSelect>
+                                </MudTd>
+                            </RowTemplate>
+                            <PagerContent><MudTablePager /></PagerContent>
+                        </MudTable>
+                    </MudStack>
+                </MudTabPanel>
+
+                @* TAB 3: PROJECTS WITH YEAR CUTOFF FILTER *@
+                <MudTabPanel Text="@($"{BizLoc["Projects"]} ({Preview.Projects.Count(p => p.Include && p.Action != MigrationProjectAction.Skip)}/{Preview.Projects.Count})")"
+                             Icon="@Icons.Material.Filled.FolderCopy">
+                    <MudStack Spacing="2">
+                        <MudPaper Elevation="0" Outlined="true" Class="pa-3">
+                            <div class="d-flex align-center flex-wrap gap-3">
+                                <SpokesSearchInput @bind-Value="_projSearch" Placeholder="@Loc["Search"]" Style="max-width: 240px;" />
+                                <MudNumericField T="int" @bind-Value="_activeCutoffYear" Label="@BizLoc["Active Since Year (>=)"]" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 170px;" Min="1990" Max="2100" />
+                                <MudSelect T="MigrationProjectAction" @bind-Value="_olderProjectsAction" Label="@BizLoc["Older Projects Action"]" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 200px;">
+                                    <MudSelectItem Value="MigrationProjectAction.CreateCompletedArchived">@BizLoc["Create as Completed (Archived)"]</MudSelectItem>
+                                    <MudSelectItem Value="MigrationProjectAction.Skip">@BizLoc["Skip Older Projects"]</MudSelectItem>
+                                    <MudSelectItem Value="MigrationProjectAction.CreateActive">@BizLoc["Keep Active"]</MudSelectItem>
+                                </MudSelect>
+                                <MudCheckBox T="bool" @bind-Value="_skipInternalProjectBuckets" Label="@BizLoc["Skip Internal Buckets (Admin / Vacance / Atelier)"]" Color="Color.Warning" Dense="true" />
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="ApplyProjectYearFilter">@BizLoc["Apply Year Rule"]</MudButton>
+                            </div>
+                        </MudPaper>
+
+                        <MudTable Items="FilteredProjects" Dense="true" Hover="true" Outlined="true" Elevation="0" RowsPerPage="25">
+                            <HeaderContent>
+                                <MudTh>@Loc["Include"]</MudTh>
+                                <MudTh>@BizLoc["Code"]</MudTh>
+                                <MudTh>@BizLoc["Project Name"]</MudTh>
+                                <MudTh>@BizLoc["Start Date"]</MudTh>
+                                <MudTh>@BizLoc["Matched Client"]</MudTh>
+                                <MudTh>@BizLoc["Action"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="pr">
+                                <MudTd>
+                                    <MudCheckBox T="bool" Value="@pr.Include" ValueChanged="@(v => OnProjectIncludeChanged(pr, v))" Dense="true" Color="Color.Primary" />
+                                </MudTd>
+                                <MudTd><b>@pr.ExtractedCode</b></MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.body2">@pr.CleanName</MudText>
+                                    @if (pr.IsInternalBucket)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">@BizLoc["Internal Bucket"]</MudChip>
+                                    }
+                                </MudTd>
+                                <MudTd>@(pr.StartDate?.ToString("yyyy-MM-dd") ?? "-")</MudTd>
+                                <MudTd>@(!string.IsNullOrWhiteSpace(pr.MatchedClientName) ? pr.MatchedClientName : "-")</MudTd>
+                                <MudTd>
+                                    <MudSelect T="MigrationProjectAction" Value="@pr.Action" ValueChanged="@(a => OnProjectActionChanged(pr, a))" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="min-width: 210px;">
+                                        <MudSelectItem Value="MigrationProjectAction.CreateActive">@BizLoc["Create Active"]</MudSelectItem>
+                                        <MudSelectItem Value="MigrationProjectAction.CreateCompletedArchived">@BizLoc["Create Completed (Archived)"]</MudSelectItem>
+                                        <MudSelectItem Value="MigrationProjectAction.LinkExisting">@BizLoc["Link Existing"]</MudSelectItem>
+                                        <MudSelectItem Value="MigrationProjectAction.Skip">@BizLoc["Skip"]</MudSelectItem>
+                                    </MudSelect>
+                                </MudTd>
+                            </RowTemplate>
+                            <PagerContent><MudTablePager /></PagerContent>
+                        </MudTable>
+                    </MudStack>
+                </MudTabPanel>
+
+                @* TAB 4: CHART OF ACCOUNTS & TRIAL BALANCE *@
+                <MudTabPanel Text="@($"{BizLoc["Chart of Accounts"]} ({Preview.GlMappings.Count(g => g.Include && g.Action != MigrationGlAction.Ignore)}/{Preview.GlMappings.Count})")"
+                             Icon="@Icons.Material.Filled.AccountBalance">
+                    <MudStack Spacing="2">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                            <SpokesSearchInput @bind-Value="_glSearch" Placeholder="@Loc["Search"]" Style="max-width: 280px;" />
+                            <div class="d-flex align-center gap-3 flex-wrap">
+                                <MudSwitch T="bool" Value="@_skipObsoleteGl" ValueChanged="ToggleSkipObsoleteGl" Label="@($"{BizLoc["Auto-Skip Obsolete Accounts"]} ({Preview.GlMappings.Count(g => g.IsLikelyObsolete)})")" Color="Color.Warning" />
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="Recalculate">@BizLoc["Recalculate"]</MudButton>
+                            </div>
+                        </div>
+
+                        <MudTable Items="FilteredGlAccounts" Dense="true" Hover="true" Outlined="true" Elevation="0" RowsPerPage="25">
+                            <HeaderContent>
+                                <MudTh>@Loc["Include"]</MudTh>
+                                <MudTh>@BizLoc["Code"]</MudTh>
+                                <MudTh>@BizLoc["Account Name"]</MudTh>
+                                <MudTh>@BizLoc["Type / SubType"]</MudTh>
+                                <MudTh>@BizLoc["GIFI"]</MudTh>
+                                <MudTh>@BizLoc["Debit"]</MudTh>
+                                <MudTh>@BizLoc["Credit"]</MudTh>
+                                <MudTh>@BizLoc["Action"]</MudTh>
+                                <MudTh>@BizLoc["Target Spokes Account"]</MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="g">
+                                <MudTd>
+                                    <MudCheckBox T="bool" Value="@g.Include" ValueChanged="@(v => OnGlIncludeChanged(g, v))" Dense="true" Color="Color.Primary" />
+                                </MudTd>
+                                <MudTd><b>@g.SourceCode</b></MudTd>
+                                <MudTd>
+                                    @g.SourceName
+                                    @if (g.IsLikelyObsolete)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">@BizLoc["Obsolete"]</MudChip>
+                                    }
+                                </MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.caption">@g.SourceType / @g.ExternalSubType</MudText>
+                                </MudTd>
+                                <MudTd>@g.StandardTaxCode</MudTd>
+                                <MudTd>@g.DebitAmount.ToString("N2")</MudTd>
+                                <MudTd>@g.CreditAmount.ToString("N2")</MudTd>
+                                <MudTd>
+                                    <MudSelect T="MigrationGlAction" Value="@g.Action" ValueChanged="@(a => OnGlActionChanged(g, a))" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="min-width: 155px;">
+                                        <MudSelectItem Value="MigrationGlAction.CreateAccount">@BizLoc["Create Account"]</MudSelectItem>
+                                        <MudSelectItem Value="MigrationGlAction.MapToExisting">@BizLoc["Map to Existing"]</MudSelectItem>
+                                        <MudSelectItem Value="MigrationGlAction.Ignore">@BizLoc["Skip / Ignore"]</MudSelectItem>
+                                    </MudSelect>
+                                </MudTd>
+                                <MudTd>
+                                    @if (g.Action == MigrationGlAction.MapToExisting)
+                                    {
+                                        <GlAccountSelect Value="@g.TargetGlCode" ValueChanged="@(c => OnGlTargetChanged(g, c))" ShowAccountCode="true" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="min-width: 220px;" />
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@g.SuggestedReason</MudText>
+                                    }
+                                </MudTd>
+                            </RowTemplate>
+                            <PagerContent><MudTablePager /></PagerContent>
+                        </MudTable>
+                    </MudStack>
+                </MudTabPanel>
+
+                @* TAB 5: OPEN AR / AP & CLOCKIFY TIMESHEETS *@
+                <MudTabPanel Text="@($"{BizLoc["Open AR/AP & Timesheets"]} ({Preview.OpenInvoices.Count(i => i.Include) + Preview.OpenBills.Count(b => b.Include) + ClockifyRecordCount})")"
+                             Icon="@Icons.Material.Filled.ReceiptLong">
+                    <MudStack Spacing="3">
+                        @if (Preview.OpenInvoices.Any())
+                        {
+                            <MudText Typo="Typo.subtitle1">@BizLoc["Open Receivable Invoices"] (@Preview.OpenInvoices.Count(i => i.Include)/@Preview.OpenInvoices.Count)</MudText>
+                            <MudTable Items="Preview.OpenInvoices" Dense="true" Hover="true" Outlined="true" Elevation="0">
+                                <HeaderContent>
+                                    <MudTh>@Loc["Include"]</MudTh>
+                                    <MudTh>@BizLoc["Invoice #"]</MudTh>
+                                    <MudTh>@BizLoc["Client"]</MudTh>
+                                    <MudTh>@BizLoc["Issue Date"]</MudTh>
+                                    <MudTh>@BizLoc["Open Amount"]</MudTh>
+                                </HeaderContent>
+                                <RowTemplate Context="inv">
+                                    <MudTd><MudCheckBox T="bool" Value="@inv.Include" ValueChanged="@(v => { inv.Include = v; Recalculate(); })" Dense="true" /></MudTd>
+                                    <MudTd>@inv.DocumentNumber</MudTd>
+                                    <MudTd>@inv.PartyName</MudTd>
+                                    <MudTd>@inv.IssueDate.ToString("yyyy-MM-dd")</MudTd>
+                                    <MudTd>@inv.OpenAmount.ToString("C2")</MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
+
+                        @if (Preview.OpenBills.Any())
+                        {
+                            <MudText Typo="Typo.subtitle1">@BizLoc["Open Payable Bills"] (@Preview.OpenBills.Count(b => b.Include)/@Preview.OpenBills.Count)</MudText>
+                            <MudTable Items="Preview.OpenBills" Dense="true" Hover="true" Outlined="true" Elevation="0">
+                                <HeaderContent>
+                                    <MudTh>@Loc["Include"]</MudTh>
+                                    <MudTh>@BizLoc["Bill #"]</MudTh>
+                                    <MudTh>@BizLoc["Supplier"]</MudTh>
+                                    <MudTh>@BizLoc["Issue Date"]</MudTh>
+                                    <MudTh>@BizLoc["Open Amount"]</MudTh>
+                                </HeaderContent>
+                                <RowTemplate Context="bill">
+                                    <MudTd><MudCheckBox T="bool" Value="@bill.Include" ValueChanged="@(v => { bill.Include = v; Recalculate(); })" Dense="true" /></MudTd>
+                                    <MudTd>@bill.DocumentNumber</MudTd>
+                                    <MudTd>@bill.PartyName</MudTd>
+                                    <MudTd>@bill.IssueDate.ToString("yyyy-MM-dd")</MudTd>
+                                    <MudTd>@bill.OpenAmount.ToString("C2")</MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
+
+                        @if (ClockifyRecordCount > 0 && ClockifyUsers != null && ClockifyProjects != null)
+                        {
+                            <MudText Typo="Typo.subtitle1">@BizLoc["Clockify Time Entries"]: @ClockifyRecordCount</MudText>
+                            <MudTable Items="ClockifyUsers" Dense="true" Hover="true" Outlined="true" Elevation="0">
+                                <HeaderContent>
+                                    <MudTh>Clockify User</MudTh>
+                                    <MudTh>Email</MudTh>
+                                    <MudTh>Target Employee</MudTh>
+                                    <MudTh>Create Missing</MudTh>
+                                </HeaderContent>
+                                <RowTemplate Context="cu">
+                                    <MudTd>@cu.ClockifyName</MudTd>
+                                    <MudTd>@cu.ClockifyEmail</MudTd>
+                                    <MudTd>
+                                        <MudSelect T="string" @bind-Value="cu.SpokesEmployeeId" Disabled="cu.CreateNew" Clearable="true" Dense="true" Margin="Margin.Dense">
+                                            @foreach (var emp in _existingEmployees)
+                                            {
+                                                <MudSelectItem T="string" Value="@emp.Id">@emp.FullName</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                    </MudTd>
+                                    <MudTd><MudSwitch T="bool" @bind-Value="cu.CreateNew" Color="Color.Primary" /></MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
+                    </MudStack>
+                </MudTabPanel>
+            </SpokesTabs>
+        </MudContainer>
+    </DialogContent>
+
+    <DialogActions>
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mr-auto ml-2">
+            @($"{Preview.PayrollYtds.Count(e => e.Include && e.Action != MigrationEmployeeAction.Skip)} {BizLoc["Employees"]} · {AllParties.Count(p => p.Include && p.Action != MigrationPartyAction.Skip)} {BizLoc["Address Book"]} · {Preview.Projects.Count(p => p.Include && p.Action != MigrationProjectAction.Skip)} {BizLoc["Projects"]} · {Preview.GlMappings.Count(g => g.Include && g.Action != MigrationGlAction.Ignore)} {BizLoc["GL Accounts"]}")
+        </MudText>
+        <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.PlayArrow"
+                   Disabled="@(!Preview.CanExecute)"
+                   OnClick="Confirm">
+            @BizLoc["Confirm & Execute Import"]
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public AccountingMigrationPreview Preview { get; set; } = new();
+    [Parameter] public List<ClockifyUserMap>? ClockifyUsers { get; set; }
+    [Parameter] public List<ClockifyProjectMap>? ClockifyProjects { get; set; }
+    [Parameter] public int ClockifyRecordCount { get; set; }
+
+    private List<Employee> _existingEmployees = [];
+    private string _empSearch = string.Empty;
+    private string _partySearch = string.Empty;
+    private string _projSearch = string.Empty;
+    private string _glSearch = string.Empty;
+
+    private bool _showClients = true;
+    private bool _showSuppliers = true;
+    private bool _showFlaggedParties = false;
+    private bool _skipObsoleteGl = true;
+
+    private int _activeCutoffYear;
+    private MigrationProjectAction _olderProjectsAction = MigrationProjectAction.CreateCompletedArchived;
+    private bool _skipInternalProjectBuckets = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await UserService.IsAdminAsync())
+        {
+            MudDialog.Cancel();
+            return;
+        }
+
+        _existingEmployees = Db.Employees?.GetAll().OrderBy(e => e.FullName).ToList() ?? [];
+        _activeCutoffYear = Preview.AsOfDate.Year - 1;
+    }
+
+    private List<PartyMigrationRow> AllParties => Preview.Customers.Concat(Preview.Vendors).ToList();
+
+    private IEnumerable<PayrollYtdMigrationRow> FilteredEmployees => Preview.PayrollYtds.Where(e =>
+        string.IsNullOrWhiteSpace(_empSearch) ||
+        (e.SourceEmployeeName?.Contains(_empSearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (e.SourceEmail?.Contains(_empSearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (e.City?.Contains(_empSearch, StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private IEnumerable<PartyMigrationRow> FilteredParties => AllParties.Where(p =>
+        ((p.IsCustomer && _showClients) || (!p.IsCustomer && _showSuppliers)) &&
+        (_showFlaggedParties || !p.IsFlaggedEmployeeOrTaxAgency) &&
+        (string.IsNullOrWhiteSpace(_partySearch) ||
+         (p.ContactInfo.BusinessName?.Contains(_partySearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+         (p.ContactInfo.ContactPersonName?.Contains(_partySearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+         (p.ContactInfo.BusinessAddressCity?.Contains(_partySearch, StringComparison.OrdinalIgnoreCase) ?? false)));
+
+    private IEnumerable<ProjectMigrationRow> FilteredProjects => Preview.Projects.Where(p =>
+        string.IsNullOrWhiteSpace(_projSearch) ||
+         (p.RawName?.Contains(_projSearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+         (p.ExtractedCode?.Contains(_projSearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+         (p.MatchedClientName?.Contains(_projSearch, StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private IEnumerable<GlAccountMappingRow> FilteredGlAccounts => Preview.GlMappings.Where(g =>
+        (!_skipObsoleteGl || !g.IsLikelyObsolete) &&
+        (string.IsNullOrWhiteSpace(_glSearch) ||
+         (g.SourceCode?.Contains(_glSearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+         (g.SourceName?.Contains(_glSearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+         (g.StandardTaxCode?.Contains(_glSearch, StringComparison.OrdinalIgnoreCase) ?? false)));
+
+    private void OnEmployeeIncludeChanged(PayrollYtdMigrationRow row, bool include)
+    {
+        row.Include = include;
+        if (include && row.Action == MigrationEmployeeAction.Skip)
+            row.Action = !string.IsNullOrWhiteSpace(row.MatchedEmployeeId) ? MigrationEmployeeAction.LinkExisting : MigrationEmployeeAction.CreateActive;
+        Recalculate();
+    }
+
+    private void OnEmployeeActionChanged(PayrollYtdMigrationRow row, MigrationEmployeeAction action)
+    {
+        row.Action = action;
+        row.Include = action != MigrationEmployeeAction.Skip;
+        Recalculate();
+    }
+
+    private void OnEmployeeTargetChanged(PayrollYtdMigrationRow row, string? empId)
+    {
+        row.MatchedEmployeeId = empId;
+        row.MatchedEmployeeName = _existingEmployees.FirstOrDefault(e => e.Id == empId)?.FullName;
+        if (!string.IsNullOrWhiteSpace(empId)) row.Include = true;
+        Recalculate();
+    }
+
+    private void SetAllEmployeesInclude(bool include)
+    {
+        foreach (var e in FilteredEmployees)
+        {
+            e.Include = include;
+            e.Action = include
+                ? (!string.IsNullOrWhiteSpace(e.MatchedEmployeeId) ? MigrationEmployeeAction.LinkExisting : MigrationEmployeeAction.CreateActive)
+                : MigrationEmployeeAction.Skip;
+        }
+        Recalculate();
+    }
+
+    private void SetUnmatchedEmployeesAction(MigrationEmployeeAction action)
+    {
+        foreach (var e in Preview.PayrollYtds.Where(x => string.IsNullOrWhiteSpace(x.MatchedEmployeeId)))
+        {
+            e.Action = action;
+            e.Include = action != MigrationEmployeeAction.Skip;
+        }
+        Recalculate();
+    }
+
+    private void OnPartyIncludeChanged(PartyMigrationRow p, bool include)
+    {
+        p.Include = include;
+        if (!include) p.Action = MigrationPartyAction.Skip;
+        else if (p.Action == MigrationPartyAction.Skip)
+            p.Action = !string.IsNullOrWhiteSpace(p.MatchedEntityId) ? MigrationPartyAction.LinkExisting : MigrationPartyAction.CreateNew;
+    }
+
+    private void OnPartyActionChanged(PartyMigrationRow p, MigrationPartyAction action)
+    {
+        p.Action = action;
+        p.Include = action != MigrationPartyAction.Skip;
+    }
+
+    private void SetFilteredPartiesInclude(bool include)
+    {
+        foreach (var p in FilteredParties) OnPartyIncludeChanged(p, include);
+    }
+
+    private void OnProjectIncludeChanged(ProjectMigrationRow pr, bool include)
+    {
+        pr.Include = include;
+        if (!include) pr.Action = MigrationProjectAction.Skip;
+        else if (pr.Action == MigrationProjectAction.Skip)
+            pr.Action = pr.StartDate.HasValue && pr.StartDate.Value.Year < _activeCutoffYear
+                ? _olderProjectsAction
+                : MigrationProjectAction.CreateActive;
+    }
+
+    private void OnProjectActionChanged(ProjectMigrationRow pr, MigrationProjectAction action)
+    {
+        pr.Action = action;
+        pr.Include = action != MigrationProjectAction.Skip;
+    }
+
+    private void ApplyProjectYearFilter()
+    {
+        foreach (var pr in Preview.Projects)
+        {
+            if (!string.IsNullOrWhiteSpace(pr.MatchedExistingProjectId))
+            {
+                pr.Action = MigrationProjectAction.LinkExisting;
+                pr.Include = true;
+                continue;
+            }
+
+            if (_skipInternalProjectBuckets && pr.IsInternalBucket)
+            {
+                pr.Action = MigrationProjectAction.Skip;
+                pr.Include = false;
+                continue;
+            }
+
+            if (pr.StartDate.HasValue && pr.StartDate.Value.Year < _activeCutoffYear)
+            {
+                pr.Action = _olderProjectsAction;
+                pr.Include = _olderProjectsAction != MigrationProjectAction.Skip;
+            }
+            else
+            {
+                pr.Action = MigrationProjectAction.CreateActive;
+                pr.Include = true;
+            }
+        }
+    }
+
+    private void ToggleSkipObsoleteGl(bool skip)
+    {
+        _skipObsoleteGl = skip;
+        foreach (var g in Preview.GlMappings.Where(x => x.IsLikelyObsolete && x.DebitAmount == 0m && x.CreditAmount == 0m))
+        {
+            g.Include = !skip;
+            g.Action = skip ? MigrationGlAction.Ignore : MigrationGlAction.CreateAccount;
+        }
+        Recalculate();
+    }
+
+    private void OnGlIncludeChanged(GlAccountMappingRow g, bool include)
+    {
+        g.Include = include;
+        if (!include) g.Action = MigrationGlAction.Ignore;
+        else if (g.Action == MigrationGlAction.Ignore)
+            g.Action = !string.IsNullOrWhiteSpace(g.TargetGlCode) ? MigrationGlAction.MapToExisting : MigrationGlAction.CreateAccount;
+        Recalculate();
+    }
+
+    private void OnGlActionChanged(GlAccountMappingRow g, MigrationGlAction action)
+    {
+        g.Action = action;
+        g.Include = action != MigrationGlAction.Ignore;
+        Recalculate();
+    }
+
+    private void OnGlTargetChanged(GlAccountMappingRow g, string? code)
+    {
+        g.TargetGlCode = code;
+        Recalculate();
+    }
+
+    private void Recalculate()
+    {
+        MigrationService.RecalculatePreviewTotals(Preview);
+    }
+
+    private static string MaskSin(string? sin)
+    {
+        if (string.IsNullOrWhiteSpace(sin)) return "-";
+        var digits = new string(sin.Where(char.IsDigit).ToArray());
+        if (digits.Length >= 3) return $"***-***-{digits[^3..]}";
+        return "***";
+    }
+
+    private async Task Confirm()
+    {
+        if (!await UserService.IsAdminAsync())
+        {
+            MudDialog.Cancel();
+            return;
+        }
+
+        MigrationService.RecalculatePreviewTotals(Preview);
+        if (!Preview.CanExecute) return;
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

@@ -3,9 +3,11 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Documents;
 
@@ -15,13 +17,19 @@ public class RenderTokenMiddleware
 {
     public const string SystemRendererId = "system-renderer";
     public const string HeadlessRendererName = "Headless Renderer";
+    public const string DocumentExportScope = "DocumentExport";
 
-    public static readonly string[] ScopedPermissions =
-    [
-        AppPermissions.Projects.View,
-        AppPermissions.Purchases.ViewPOs,
-        AppPermissions.BusinessDocuments.View
-    ];
+    /// <summary>
+    /// Returns true strictly for read-only permissions permitted inside a delegated
+    /// headless document export session. Write, manage, email, and Admin policies are always denied.
+    /// </summary>
+    public static bool IsAllowedDocumentExportPermission(string? permission)
+    {
+        return string.Equals(permission, AppPermissions.Projects.View, StringComparison.Ordinal) ||
+               string.Equals(permission, AppPermissions.Purchases.ViewPOs, StringComparison.Ordinal) ||
+               string.Equals(permission, AppPermissions.BusinessDocuments.View, StringComparison.Ordinal) ||
+               string.Equals(permission, AppPermissions.Finance.AccessAccounting, StringComparison.Ordinal);
+    }
 
     private readonly RequestDelegate _next;
     private readonly ILogger<RenderTokenMiddleware>? _logger;
@@ -53,18 +61,38 @@ public class RenderTokenMiddleware
                 return;
             }
 
-            if (tokenService.TryConsumeToken(token, context.Request.Path.Value, out var sessionId))
+            if (tokenService.TryConsumeToken(token, context.Request.Path.Value, out var sessionId, out var initiatorEmployeeId))
             {
-                // Create a scoped document-rendering identity for this request (no Admin role)
+                if (string.IsNullOrWhiteSpace(initiatorEmployeeId) ||
+                    string.Equals(initiatorEmployeeId, SystemRendererId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger?.LogWarning("Audit: Rejected renderToken with missing or disallowed system initiator from {RemoteIp}", rawRemoteIp);
+                    await _next(context);
+                    return;
+                }
+
+                var employeeRepo = context.RequestServices?.GetService<EmployeeRepository>();
+                var initiator = employeeRepo?.GetById(initiatorEmployeeId);
+                if (initiator == null || !initiator.IsActive || initiator.IsBanned || initiator.IsSystem)
+                {
+                    _logger?.LogWarning(
+                        "Audit: Rejected renderToken for ineligible initiator {InitiatorEmployeeId} from {RemoteIp}",
+                        initiatorEmployeeId,
+                        rawRemoteIp);
+                    await _next(context);
+                    return;
+                }
+
+                // Delegate strictly to the initiating real employee in read-only DocumentExport scope
                 Claim[] claims =
                 [
-                    new Claim(ClaimTypes.NameIdentifier, "headless-renderer"),
+                    new Claim(ClaimTypes.NameIdentifier, initiator.Id),
+                    new Claim("sub", initiator.Id),
                     new Claim(ClaimTypes.Name, HeadlessRendererName),
-                    new Claim("EmployeeId", SystemRendererId),
+                    new Claim("EmployeeId", initiator.Id),
                     new Claim("SessionId", sessionId),
                     new Claim("Spokes_InternalRenderer", "true"),
-                    new Claim("RenderScope", "DocumentExport"),
-                    .. ScopedPermissions.Select(p => new Claim("Permission", p))
+                    new Claim("RenderScope", DocumentExportScope)
                 ];
 
                 var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
@@ -76,7 +104,7 @@ public class RenderTokenMiddleware
                     var session = new DeviceSession
                     {
                         Id = sessionId,
-                        EmployeeId = SystemRendererId,
+                        EmployeeId = initiator.Id,
                         DeviceName = HeadlessRendererName,
                         CreatedAt = DateTime.UtcNow,
                         ExpiresAt = DateTime.UtcNow.AddMinutes(5)
@@ -91,7 +119,11 @@ public class RenderTokenMiddleware
                         ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(5)
                     });
 
-                    _logger?.LogInformation("Audit: Authenticated valid renderToken for headless rendering session {SessionId} from {RemoteIp}", sessionId, rawRemoteIp);
+                    _logger?.LogInformation(
+                        "Audit: Authenticated valid delegated renderToken for employee {EmployeeId} session {SessionId} from {RemoteIp}",
+                        initiator.Id,
+                        sessionId,
+                        rawRemoteIp);
                 }
 
                 context.User = principal;

@@ -48,7 +48,7 @@ public static class ServiceCollectionExtensions
 {
     /// <summary>
     /// Registers strongly-typed SpokesOptions bound from configuration section "Spokes"
-    /// and environment variable fallbacks (SPOKES_RELAY_KEY, SPOKES_KLIPY_KEY).
+    /// and environment variable fallback (SPOKES_RELAY_KEY).
     /// </summary>
     public static IServiceCollection AddSpokesConfiguration(this IServiceCollection services, IConfiguration? configuration = null)
     {
@@ -63,34 +63,13 @@ public static class ServiceCollectionExtensions
                     {
                         section.Bind(options);
                     }
-                    if (string.IsNullOrEmpty(options.PushRelayKey))
-                    {
-                        options.PushRelayKey = config["SPOKES_RELAY_KEY"]
-                            ?? Environment.GetEnvironmentVariable("SPOKES_RELAY_KEY")
-                            ?? string.Empty;
-                    }
-#pragma warning disable CS0618
-                    if (string.IsNullOrEmpty(options.DefaultKlipyApiKey))
-                    {
-                        options.DefaultKlipyApiKey = config["SPOKES_KLIPY_KEY"]
-                            ?? Environment.GetEnvironmentVariable("SPOKES_KLIPY_KEY")
-                            ?? string.Empty;
-                    }
-#pragma warning restore CS0618
                 }
-                else
+
+                if (string.IsNullOrEmpty(options.PushRelayKey))
                 {
-                    // If no IConfiguration was registered, still fall back to process environment variables
-                    if (string.IsNullOrEmpty(options.PushRelayKey))
-                    {
-                        options.PushRelayKey = Environment.GetEnvironmentVariable("SPOKES_RELAY_KEY") ?? string.Empty;
-                    }
-#pragma warning disable CS0618
-                    if (string.IsNullOrEmpty(options.DefaultKlipyApiKey))
-                    {
-                        options.DefaultKlipyApiKey = Environment.GetEnvironmentVariable("SPOKES_KLIPY_KEY") ?? string.Empty;
-                    }
-#pragma warning restore CS0618
+                    options.PushRelayKey = config?["SPOKES_RELAY_KEY"]
+                        ?? Environment.GetEnvironmentVariable("SPOKES_RELAY_KEY")
+                        ?? string.Empty;
                 }
             });
 
@@ -127,6 +106,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<StandardDocumentRepository>();
         services.AddSingleton<TermsAndConditionsRepository>();
         services.AddSingleton<ProjectDocumentRepository>();
+        services.AddSingleton<ProjectReportRepository>();
         services.AddSingleton<ExpenseReportRepository>();
         services.AddSingleton<BillRepository>();
         services.AddSingleton<ProjectNoteRepository>();
@@ -136,6 +116,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<OpenIdAccountRepository>();
         services.AddSingleton<EmployerContributionRepository>();
         services.AddSingleton<RecurringExpenseRepository>();
+        services.AddSingleton<GlAccountRepository>();
+        services.AddSingleton<JournalEntryRepository>();
+        services.AddSingleton<BankStatementRepository>();
+        services.AddSingleton<TaxFilingPeriodRepository>();
+        services.AddSingleton<AccountingMigrationBatchRepository>();
+        services.AddSingleton<FinancialReportRepository>();
+        services.AddSingleton<DirectTransactionRepository>();
+        services.AddSingleton<FinancialAccountRepository>();
+        services.AddSingleton<PayRunRepository>();
         services.AddSingleton<DeviceSessionRepository>();
         services.AddSingleton<DemoConfigRepository>();
 
@@ -145,7 +134,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ChatMessageCacheService>();
         services.AddSingleton<ChatMessageRepository>();
         services.AddSingleton<ChatReadStateRepository>();
-        services.AddSingleton<UserClientStateRepository>();
         services.AddSingleton<ReportedMessageRepository>();
         services.AddSingleton<AlbumRepository>();
         services.AddSingleton<ChatPollRepository>();
@@ -187,26 +175,25 @@ public static class ServiceCollectionExtensions
     {
         // 0. Permission Service
         services.AddScoped<UserService>();
-        services.AddSingleton<IUserPrivacyService, UserPrivacyService>();
         services.AddSingleton<UserPrivacyService>();
+        services.AddSingleton<IUserPrivacyService>(sp => sp.GetRequiredService<UserPrivacyService>());
         services.AddScoped<AccountDeletionService>();
         services.AddScoped<AppLabelService>(sp => new AppLabelService(
             sp.GetRequiredService<CoreContext>(),
             sp.GetService<Microsoft.Extensions.Localization.IStringLocalizer<Spokes_Server.Resources.AppResources>>()));
         services.AddScoped<OvertimeService>();
+        services.AddSingleton<ChatStateService>();
+        services.AddSingleton<VoiceStateService>();
         services.AddSingleton<PresenceStateService>(sp => new PresenceStateService(
-            sp.GetRequiredService<ChatStateService>(),
+            sp.GetRequiredService<VoiceStateService>(),
             sp.GetService<SessionService>(),
             sp.GetService<ILogger<PresenceStateService>>()));
         services.AddSingleton<IPushDecisionService>(sp => 
             sp.GetRequiredService<PresenceStateService>());
         services.AddHostedService<PresenceWatchdogHostedService>();
-        services.AddSingleton<ChatStateService>();
-        services.AddSingleton<IChatRealtimeGateway, ChatRealtimeGateway>();
         services.AddSingleton<UserClientStateService>(sp => new UserClientStateService(
             sp.GetRequiredService<CommunicationContext>(),
             sp.GetRequiredService<ChatStateService>(),
-            sp.GetRequiredService<IChatRealtimeGateway>(),
             sp.GetRequiredService<ILogger<UserClientStateService>>()));
         services.AddSingleton<IUserClientStateService>(sp => sp.GetRequiredService<UserClientStateService>());
         services.AddSingleton<VoiceChannelService>();
@@ -218,6 +205,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<VoiceStateSyncService>();
         services.AddSingleton<LiveKitService>();
         services.AddSingleton<PhysicalVoiceRoomService>();
+        services.AddSingleton<PhysicalRoomDirectSessionService>();
         services.AddSingleton<PhysicalRoomPipelineStage>();
         services.AddSingleton<IVoiceRoomPipelineStage>(sp => sp.GetRequiredService<PhysicalRoomPipelineStage>());
         services.AddSingleton<IVoiceBotService, VoiceBotService>();
@@ -237,18 +225,19 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<CommunicationContext>(),
             sp.GetRequiredService<HrContext>(),
             sp.GetRequiredService<ProjectsContext>(),
-            sp.GetRequiredService<IChatRealtimeGateway>(),
             sp.GetRequiredService<ChatStateService>(),
             sp.GetRequiredService<INotificationRoutingService>(),
             sp.GetRequiredService<PresenceStateService>(),
             sp.GetRequiredService<IFileService>(),
             sp.GetRequiredService<IContentModerationService>(),
             sp.GetRequiredService<AlbumService>(),
-            sp.GetRequiredService<MarkdownSanitizerService>(),
             sp.GetRequiredService<ILogger<ChatService>>(),
             sp.GetService<IChatAuthorizationService>(),
             sp.GetRequiredService<ICryptoService>(),
-            sp.GetService<IUserPrivacyService>()));
+            sp.GetService<IUserPrivacyService>(),
+            sp.GetService<FileTokenService>(),
+            sp.GetRequiredService<ChatSecurityService>(),
+            sp.GetRequiredService<VoiceChannelService>()));
         services.AddSingleton<IChatService>(sp => sp.GetRequiredService<ChatService>());
         services.AddSingleton<ModerationReportService>();
         services.AddSingleton<IModerationReportService>(sp => sp.GetRequiredService<ModerationReportService>());
@@ -257,8 +246,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<BoardService>();
         services.AddSingleton<ImageProcessingService>();
         services.AddSingleton<IMp4FastStartService, Mp4FastStartService>();
-        services.AddSingleton<ICompanyBrandingService, CompanyBrandingService>();
         services.AddSingleton<CompanyBrandingService>();
+        services.AddSingleton<ICompanyBrandingService>(sp => sp.GetRequiredService<CompanyBrandingService>());
 
         // Email Sync tracking
         services.AddSingleton<EmailSyncStateService>();
@@ -267,7 +256,6 @@ public static class ServiceCollectionExtensions
         services.AddScoped<CalendarNotificationService>();
         services.AddHostedService<CalendarReminderBackgroundService>();
         services.AddScoped<IUiNotificationPresenter, Spokes_Server.Components.UI.UiNotificationPresenter>();
-        services.AddScoped<Spokes_Server.Core.Services.Client.ISpokesClientBridge, Spokes_Server.Core.Services.Client.SpokesClientBridge>();
         services.AddScoped<ShareTargetStateService>();
         services.AddScoped<SearchService>();
         services.AddSingleton<TimesheetTimerService>();
@@ -320,6 +308,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<VersionMetadata>();
         services.AddSingleton<LicenseValidationService>();
         services.AddSingleton<RelayTrialTicketService>();
+        services.AddSingleton<SpokesRelayClient>();
         services.AddHttpClient();
         services.AddHttpClient("LinkPreview", client =>
         {
@@ -352,12 +341,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<DocumentPdfService>();
 
         // 0.5 File Services
+        services.AddSingleton<ThumbnailCacheService>();
         services.AddSingleton<IFileService, FileService>();
         services.AddSingleton<IFileAccessProvider, ProjectFileAccessProvider>();
         services.AddSingleton<IFileAccessProvider, ExpenseFileAccessProvider>();
         services.AddSingleton<IFileAccessProvider, BillFileAccessProvider>();
         services.AddSingleton<IFileAccessProvider, ChatFileAccessProvider>();
         services.AddSingleton<IFileAccessProvider, RecurringCostFileAccessProvider>();
+        services.AddSingleton<IFileAccessProvider, BankStatementFileAccessProvider>();
+        services.AddSingleton<IFileAccessProvider, DirectTransactionFileAccessProvider>();
         services.AddSingleton<IFileAccessProvider, ProjectNoteFileAccessProvider>();
         services.AddSingleton<IFileAccessProvider, AvatarFileAccessProvider>();
         services.AddSingleton<IFileAccessProvider, SignatureFileAccessProvider>();
@@ -374,43 +366,69 @@ public static class ServiceCollectionExtensions
             sp.GetService<ILogger<ServerEscrowService>>(),
             sp.GetService<IConfiguration>()));
         services.AddSingleton<FileTokenService>();
+        services.AddScoped<FileUrlSigner>();
+        services.AddSingleton<Spokes_Server.Core.Services.Security.OAuthStateNonceService>();
+        services.AddSingleton<Spokes_Server.Core.Services.Security.MobileOAuthChallengeService>();
+        services.AddScoped<Spokes_Server.Core.Services.Security.UploadCompletionVerifier>();
         services.AddSingleton<GlobalKeystoreService>();
         services.AddScoped<ScopedKeystoreService>();
         services.AddScoped<Spokes_Server.Core.Services.Storage.IFileKeyResolver, Spokes_Server.Core.Services.Communication.Chat.ChatFileKeyResolver>();
         services.AddScoped<Spokes_Server.Core.Services.Storage.IFileKeyResolver, Spokes_Server.Core.Services.Communication.Chat.AlbumFileKeyResolver>();
         services.AddScoped<Spokes_Server.Core.Services.Storage.IFileAuthorizationService, Spokes_Server.Core.Services.Storage.FileAuthorizationService>();
         services.AddScoped<ITimelineEventService, TimelineEventService>();
+        services.AddSingleton<IJurisdictionTemplateService, JurisdictionTemplateService>();
+        services.AddSingleton<JurisdictionTemplateService>(sp => (JurisdictionTemplateService)sp.GetRequiredService<IJurisdictionTemplateService>());
+        services.AddScoped<ILedgerService, LedgerService>();
+        services.AddScoped<LedgerService>(sp => (LedgerService)sp.GetRequiredService<ILedgerService>());
+        services.AddScoped<IDirectTransactionService, DirectTransactionService>();
+        services.AddScoped<DirectTransactionService>(sp => (DirectTransactionService)sp.GetRequiredService<IDirectTransactionService>());
+        services.AddScoped<IFinancialAccountService, FinancialAccountService>();
+        services.AddScoped<FinancialAccountService>(sp => (FinancialAccountService)sp.GetRequiredService<IFinancialAccountService>());
+        services.AddSingleton<BankStatementImportService>();
+        services.AddScoped<IBankReconciliationService, BankReconciliationService>();
+        services.AddScoped<BankReconciliationService>(sp => (BankReconciliationService)sp.GetRequiredService<IBankReconciliationService>());
+        services.AddScoped<ITaxRemittanceService, TaxRemittanceService>();
+        services.AddScoped<TaxRemittanceService>(sp => (TaxRemittanceService)sp.GetRequiredService<ITaxRemittanceService>());
+        services.AddScoped<IPayrollCalculationEngine, PayrollCalculationEngine>();
+        services.AddScoped<PayrollCalculationEngine>(sp => (PayrollCalculationEngine)sp.GetRequiredService<IPayrollCalculationEngine>());
+        services.AddScoped<IAccountantExportService, AccountantExportService>();
+        services.AddScoped<AccountantExportService>(sp => (AccountantExportService)sp.GetRequiredService<IAccountantExportService>());
         services.AddScoped<IAccountingService, AccountingService>();
         services.AddScoped<AccountingService>(sp => (AccountingService)sp.GetRequiredService<IAccountingService>());
+        services.AddScoped<IAccountingMigrationService, AccountingMigrationService>();
+        services.AddScoped<AccountingMigrationService>(sp => (AccountingMigrationService)sp.GetRequiredService<IAccountingMigrationService>());
+        services.AddScoped<IFinancialReportService, FinancialReportService>();
+        services.AddScoped<IBusinessOverheadService, BusinessOverheadService>();
+        services.AddScoped<BusinessOverheadService>(sp => (BusinessOverheadService)sp.GetRequiredService<IBusinessOverheadService>());
         services.AddScoped<BillingOrchestrationService>();
         services.AddSingleton<PdfInvoiceInspectionService>();
         services.AddScoped<SmartPoMatchingEngine>();
         services.AddScoped<CompanyBillInboxService>();
         services.AddHostedService<CompanyBillInboxBackgroundService>();
-        services.AddScoped<ISage50ExportService, Sage50ExportService>();
-        services.AddScoped<Sage50ExportService>(sp => (Sage50ExportService)sp.GetRequiredService<ISage50ExportService>());
         services.AddScoped<HRService>(sp => new HRService(
             sp.GetRequiredService<TimesheetRepository>(),
             sp.GetRequiredService<EmployeeRepository>(),
-            sp.GetRequiredService<TeamRepository>()));
+            sp.GetRequiredService<TeamRepository>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<HRService>>(),
+            sp.GetRequiredService<ProjectRepository>(),
+            sp.GetRequiredService<InvoiceRepository>()));
         services.AddScoped<Spokes_Server.Core.Services.Migrations.ClockifyMigrationService>();
         services.AddScoped<CalendarService>();
+        services.AddScoped<WeeklyPlanService>();
         services.AddScoped<Spokes_Server.Core.Services.Communication.IContactService, ContactService>();
         services.AddScoped<ContactService>();
         services.AddScoped<ProjectNoteService>();
+        services.AddScoped<ProjectReportService>();
+        services.AddScoped<IProjectService, ProjectService>();
+        services.AddScoped<ProjectService>();
 
-        // 0.7 Migration Pipeline
-        services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.EmailDataMigrationStep>();
+        // 0.7 Migration Pipeline (Family & shared infrastructure one-time migrations)
         services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.PushDeviceSessionMigrationStep>();
         services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.AvatarMigrationStep>();
-        services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.DocumentStatusMigrationStep>();
-        services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.InvoicePaymentMigrationStep>();
-        services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.LegacyAttachmentMigrationStep>();
-        services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.WorkTypeSubTaskMigrationStep>();
         services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.LegacyOidcSubMigrationStep>();
-        services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.SupplierContactsMigrationStep>();
         services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.EmployeeChannelOrderMigrationStep>();
         services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.LegacyChatAttachmentRouteMigrationStep>();
+        services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.PushSubscriptionsCaseFixMigrationStep>();
 
         services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationRunner>(sp => 
             new Spokes_Server.Core.Services.Migrations.MigrationRunnerService(
@@ -438,7 +456,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IStoragePersistenceLogger>(sp => sp.GetRequiredService<Spokes_Server.Core.Services.Logging.ISystemLogService>());
         services.AddSingleton<IStorageHealthService, StorageHealthService>();
         services.AddSingleton<IStorageHealthNotifier>(sp => sp.GetRequiredService<IStorageHealthService>());
-        services.AddScoped<Spokes_Server.Core.Services.UI.SpokesDomInteropService>();
         services.AddScoped<Spokes_Server.Core.Services.UI.ImageRecoveryService>();
         services.AddScoped<Spokes_Server.Core.Services.UI.ISoundService, Spokes_Server.Core.Services.UI.SoundService>();
         services.AddScoped<StartupTimingService>();

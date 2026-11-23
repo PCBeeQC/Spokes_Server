@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Core.Models.Accounting;
 
 namespace Spokes_Server.Core.Data.Repositories.Accounting;
@@ -8,16 +7,10 @@ public class PurchaseOrderRepository : JsonRepository<PurchaseOrder>
 {
     private readonly SequenceService _sequenceService;
 
-    [ActivatorUtilitiesConstructor]
     public PurchaseOrderRepository(DiskPersistenceService writer, IConfiguration config, SequenceService sequenceService)
         : base(writer, Path.Combine(config["DataPath"] ?? "Data", "Purchases"), "*.json")
     {
         _sequenceService = sequenceService;
-    }
-
-    public PurchaseOrderRepository(DiskPersistenceService writer, IConfiguration config)
-        : this(writer, config, new SequenceService(config))
-    {
     }
 
     protected override string GetFilePath(PurchaseOrder item) =>
@@ -39,6 +32,23 @@ public class PurchaseOrderRepository : JsonRepository<PurchaseOrder>
         return $"PO{date:yyMM}-{seq:00}";
     }
 
-    public string GeneratePoNumber(string prefix) =>
-        _sequenceService.GenerateNumber("PurchaseOrder", prefix);
+    public List<ProjectPurchaseRow> GetProjectPurchaseRows(string projectId)
+    {
+        return GetAll()
+            .Where(p => p.Status != PurchaseOrderStatus.Void)
+            .SelectMany(po => po.LineItems
+                .Where(item => item.ProjectId == projectId)
+                .Select(item => new ProjectPurchaseRow
+                {
+                    Id = po.Id,
+                    Date = po.Date,
+                    PoNumber = po.PoNumber,
+                    Description = item.Description,
+                    PartNumber = item.PartNumber,
+                    NetTotal = item.Total,
+                    TaxAmount = po.ApplyTax ? item.Total * po.TaxRate : 0m
+                }))
+            .OrderByDescending(row => row.Date)
+            .ToList();
+    }
 }

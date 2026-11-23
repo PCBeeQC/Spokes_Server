@@ -1,5 +1,4 @@
 @using Spokes_Server.Core.Models.Accounting
-@using Spokes_Server.Core.Data
 @using Spokes_Server.Core.Data.Repositories.Projects
 @inject RateCardRepository RateCards
 @inject IDialogService DialogService
@@ -50,7 +49,7 @@
     private async Task OpenDialog(RateCard item, string title)
     {
         // Clone to avoid live editing
-        var clone = System.Text.Json.JsonSerializer.Deserialize<RateCard>(System.Text.Json.JsonSerializer.Serialize(item));
+        var clone = item.DeepClone();
 
         var parameters = new DialogParameters { ["RateCard"] = clone };
         var dialog = await DialogService.ShowAsync<RateCardDialog>(title, parameters);

@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Amazon.S3;
 using Amazon.S3.Model;
 using Amazon.S3.Transfer;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Services.Security;
@@ -24,17 +25,16 @@ public class S3BackupProvider : IBackupDestinationProvider
     public S3BackupProvider(
         CompanyProfileRepository profiles,
         ILogger<S3BackupProvider>? logger = null,
-        EncryptionService? encryptionService = null)
+        EncryptionService? encryptionService = null,
+        IConfiguration? configuration = null)
     {
         _profiles = profiles;
         _logger = logger;
-        _encryptionService = encryptionService ?? profiles?.EncryptionService ?? new EncryptionService();
+        _encryptionService = BackupDestinationPruneHelper.ResolveEncryptionService(encryptionService, profiles, configuration);
     }
 
     private string ResolveCredential(string? value) =>
-        string.IsNullOrEmpty(value)
-            ? string.Empty
-            : (_encryptionService.TryDecrypt(value, out var decrypted) ? decrypted : value);
+        BackupDestinationPruneHelper.ResolveCredential(_encryptionService, value);
 
     private AmazonS3Client CreateClient()
     {

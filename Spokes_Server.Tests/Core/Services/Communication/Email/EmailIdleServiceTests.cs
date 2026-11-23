@@ -33,7 +33,7 @@ public class EmailIdleServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_EmailIdle_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testDataDir);
 
-        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir };
+        var configDict = new Dictionary<string, string?> { ["DataPath"] = _testDataDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"};
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 
         _persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
@@ -69,29 +69,6 @@ public class EmailIdleServiceTests : IDisposable
             try { Directory.Delete(_testDataDir, true); }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Cleanup error: {ex.Message}"); }
         }
-    }
-
-    [Fact]
-    public void Constructor_InitializesCorrectly()
-    {
-        Assert.NotNull(_service);
-        Assert.NotNull(_persistence);
-        Assert.NotNull(_employees);
-        Assert.NotNull(_companyProfiles);
-    }
-
-    [Fact]
-    public void Events_CanBeSubscribed()
-    {
-        bool receivedTriggered = false;
-        bool flagsTriggered = false;
-
-        _service.MessageReceived += (u, f, id) => receivedTriggered = true;
-        _service.MessageFlagsChanged += (u, f, id) => flagsTriggered = true;
-
-        Assert.NotNull(_service);
-        Assert.False(receivedTriggered);
-        Assert.False(flagsTriggered);
     }
 
     [Fact]

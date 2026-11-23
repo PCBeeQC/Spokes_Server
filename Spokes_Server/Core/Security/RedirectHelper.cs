@@ -71,6 +71,9 @@ public static class RedirectHelper
         return path.StartsWith("/mobile-login", StringComparison.OrdinalIgnoreCase) ||
                path.StartsWith("/sso/login", StringComparison.OrdinalIgnoreCase) ||
                path.StartsWith("/session-expired", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/access-denied", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/access-pending", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/banned", StringComparison.OrdinalIgnoreCase) ||
                path.StartsWith("/authentication/", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -80,7 +83,7 @@ public static class RedirectHelper
     public static string GetSafeRedirectUrl(string? returnUrl, HttpContext httpContext, string fallbackUrl = "/")
     {
         var safe = GetSafeRedirectUrl(returnUrl, httpContext.Request.Host.Host ?? "localhost", fallbackUrl);
-        if (Uri.TryCreate(safe, UriKind.Absolute, out var parsed))
+        if (!safe.StartsWith('/') && Uri.TryCreate(safe, UriKind.Absolute, out var parsed))
         {
             var isStandardPort = (parsed.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) && parsed.Port == 443) ||
                                  (parsed.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) && parsed.Port == 80);

@@ -1,18 +1,17 @@
 using System.Collections.Generic;
 using System.Linq;
-using Spokes_Server.Core.Services.Communication.Chat;
 
 namespace Spokes_Server.Core.Services.Communication.Voice;
 
 public class DemoVoiceAdapter : IDemoVoiceAdapter
 {
     private readonly GlobalVoiceService _voiceService;
-    private readonly ChatStateService _chatState;
+    private readonly VoiceStateService _voiceState;
 
-    public DemoVoiceAdapter(GlobalVoiceService voiceService, ChatStateService chatState)
+    public DemoVoiceAdapter(GlobalVoiceService voiceService, VoiceStateService voiceState)
     {
         _voiceService = voiceService;
-        _chatState = chatState;
+        _voiceState = voiceState;
     }
 
     public void ConnectMock(string channelId, string userId, HashSet<string> mockParticipants)
@@ -20,7 +19,7 @@ public class DemoVoiceAdapter : IDemoVoiceAdapter
         _voiceService.ApplyMockConnectedState(channelId, userId, mockParticipants);
         foreach (var p in mockParticipants)
         {
-            _chatState.NotifyVoiceMemberJoined(channelId, p);
+            _voiceState.NotifyVoiceMemberJoined(channelId, p);
         }
     }
 
@@ -32,7 +31,7 @@ public class DemoVoiceAdapter : IDemoVoiceAdapter
         {
             foreach (var p in participants)
             {
-                _chatState.NotifyVoiceMemberLeft(channelId, p);
+                _voiceState.NotifyVoiceMemberLeft(channelId, p);
             }
         }
         _voiceService.ApplyMockDisconnectedState();

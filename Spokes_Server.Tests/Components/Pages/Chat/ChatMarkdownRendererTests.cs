@@ -168,7 +168,9 @@ public class ChatMarkdownRendererTests : BunitContext
         Assert.DoesNotContain("evil.example/spokesapi/files/chat/chan-1/exfil.png?t=", markup);
         Assert.Contains("src=\"/spokesapi/files/chat/chan-2/other.png\"", markup);
         Assert.DoesNotContain("/spokesapi/files/chat/chan-2/other.png?t=", markup);
-        Assert.Contains("src=\"/spokesapi/files/chat/chan-1/legit.png?t=", markup);
+        Assert.Contains("data-media-src=\"/spokesapi/files/chat/chan-1/legit.png?t=", markup);
+        Assert.Contains("data-media-encrypted=\"true\"", markup);
+        Assert.DoesNotContain(" src=\"/spokesapi/files/chat/chan-1/legit.png?t=", markup);
     }
 
     [Fact]
@@ -190,5 +192,92 @@ public class ChatMarkdownRendererTests : BunitContext
         Assert.Contains("&lt;wan-ip&gt;.&lt;id&gt;.plex.direct:32400", markup);
         Assert.Contains("Final paragraph with", markup);
         Assert.Contains("@Alice", markup);
+    }
+
+    [Fact]
+    public void Render_HugeTruncatedCodeBlock_OmitsInlineRawCodeAndEmitsOnDemandCopyAttributes()
+    {
+        var hugeLog = new string('X', ChatMarkdownRenderer.MaxInlineRawCodeChars + 5000);
+        var fullContent = $"[code=txt]\n{hugeLog}\n[/code]";
+        var displayContent = $"[code=txt]\n{hugeLog[..500]}...\n[/code]";
+
+        var cut = Render<ChatMarkdownRenderer>(parameters => parameters
+            .Add(p => p.Content, displayContent)
+            .Add(p => p.FullContentRef, new ChatTextRef(fullContent))
+            .Add(p => p.MessageId, "msg-huge-1"));
+
+        var markup = cut.Markup;
+        Assert.DoesNotContain("data-raw-code=", markup);
+        Assert.Contains("data-copy-msg-id=\"msg-huge-1\"", markup);
+        Assert.Contains("data-copy-code-idx=\"0\"", markup);
+        Assert.True(markup.Length < 4096, $"Expected compact markup without huge inline log, got {markup.Length} chars.");
+    }
+
+    [Fact]
+    public void Render_SmallTruncatedCodeBlock_KeepsInlineRawCodeAttribute()
+    {
+        var smallCode = new string('A', 200);
+        var fullContent = $"[code=txt]{smallCode}[/code]";
+        var displayContent = $"[code=txt]{smallCode[..50]}...[/code]";
+
+        var cut = Render<ChatMarkdownRenderer>(parameters => parameters
+            .Add(p => p.Content, displayContent)
+            .Add(p => p.FullContentRef, new ChatTextRef(fullContent))
+            .Add(p => p.MessageId, "msg-small-1"));
+
+        var markup = cut.Markup;
+        Assert.Contains($"data-raw-code=\"{smallCode}\"", markup);
+        Assert.DoesNotContain("data-copy-msg-id=", markup);
+    }
+
+    [Fact]
+    public void ChatMarkdownRenderer_UsesReferenceWrapperForFullContent()
+    {
+        // Regression guard: string FullContent would be serialized verbatim into Blazor RenderBatch.Strings
+        var type = typeof(ChatMarkdownRenderer);
+        Assert.Null(type.GetProperty("FullContent"));
+        Assert.Equal(typeof(ChatTextRef), type.GetProperty(nameof(ChatMarkdownRenderer.FullContentRef))?.PropertyType);
+    }
+
+    [Fact]
+    public void Render_CodeBlock_UsesDeclarativeDelegatedCopyButtonWithZeroInlineOnclick()
+    {
+        var cut = Render<ChatMarkdownRenderer>(parameters => parameters
+            .Add(p => p.Content, "```csharp\nConsole.WriteLine(\"Hi\");\n```"));
+
+        var markup = cut.Markup;
+        Assert.Contains("class=\"copy-code-btn\"", markup);
+        Assert.Contains("data-copied-label=", markup);
+        Assert.Contains("#spokes-icon-copy", markup);
+        Assert.DoesNotContain("onclick=", markup, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Render_KlipyGifWithAspectRatio_UsesCssClassLayoutAndPreservesAspectRatioAndWatermark()
+    {
+        var cut = Render<ChatMarkdownRenderer>(parameters => parameters
+            .Add(p => p.Content, "![GIF](https://media.klipy.com/sample.gif#ar=1.77)"));
+
+        var container = cut.Find(".chat-markdown .gif-container");
+        Assert.Equal("aspect-ratio: 1.77;", container.GetAttribute("style"));
+
+        var gifImg = cut.Find(".chat-markdown .gif-container > img:not(.klipy-watermark)");
+        Assert.Equal("https://media.klipy.com/sample.gif", gifImg.GetAttribute("src"));
+        Assert.Null(gifImg.GetAttribute("style"));
+
+        var watermark = cut.Find(".chat-markdown .gif-container > img.klipy-watermark");
+        Assert.Equal("/Klipy/KLIPY Light with logo.svg", watermark.GetAttribute("src"));
+        Assert.Null(watermark.GetAttribute("style"));
+    }
+
+    [Fact]
+    public void Render_LegacyKlipyGifWithoutAspectRatio_UsesCssClassContainerAndWatermark()
+    {
+        var cut = Render<ChatMarkdownRenderer>(parameters => parameters
+            .Add(p => p.Content, "![GIF](https://media.klipy.com/legacy.gif)"));
+
+        var container = cut.Find(".chat-markdown .klipy-gif-container");
+        Assert.Null(container.GetAttribute("style"));
+        Assert.NotNull(cut.Find(".chat-markdown .klipy-gif-container > img.klipy-watermark"));
     }
 }

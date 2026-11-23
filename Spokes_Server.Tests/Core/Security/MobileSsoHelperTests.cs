@@ -17,7 +17,7 @@ public class MobileSsoHelperTests
 
         // Assert
         Assert.Contains($"window.location.replace('{targetUrl}');", html);
-        Assert.Contains("sessionStorage.removeItem('mobile_auto_login_attempts');", html);
+        Assert.DoesNotContain("mobile_auto_login_attempts", html);
     }
 
     [Fact]
@@ -31,7 +31,7 @@ public class MobileSsoHelperTests
 
         // Assert
         Assert.Contains($"window.location.replace('{targetUrl}');", html);
-        Assert.Contains("sessionStorage.removeItem('mobile_auto_login_attempts');", html);
+        Assert.DoesNotContain("mobile_auto_login_attempts", html);
     }
 
     [Fact]
@@ -83,12 +83,14 @@ public class MobileSsoHelperTests
         var html = MobileSsoHelper.CreateMobileLogoutPage(context, reqId);
 
         // Assert
-        Assert.Contains("const refreshKey = 'spokes_refresh_' + window.location.hostname;", html);
-        Assert.Contains("await window.Capacitor.Plugins.Preferences.remove({ key: refreshKey });", html);
-        Assert.Contains("const vaultKey = 'chat_vault_key_' + window.location.hostname;", html);
-        Assert.Contains("await window.Capacitor.Plugins.Preferences.remove({ key: vaultKey });", html);
-        Assert.Contains("await window.Capacitor.Plugins.Preferences.remove({ key: 'spokes_refresh' });", html);
-        Assert.Contains("await window.Capacitor.Plugins.Preferences.remove({ key: 'chat_vault_key' });", html);
+        Assert.Contains("const origin = window.location.origin.toLowerCase();", html);
+        Assert.Contains("'spokes_refresh::' + origin", html);
+        Assert.Contains("'chat_vault_key::' + origin", html);
+        Assert.Contains("'spokes_refresh_' + window.location.hostname", html);
+        Assert.Contains("'chat_vault_key_' + window.location.hostname", html);
+        Assert.Contains("'spokes_refresh'", html);
+        Assert.Contains("'chat_vault_key'", html);
+        Assert.Contains("await window.Capacitor.Plugins.Preferences.remove({ key: key });", html);
     }
 
     [Fact]

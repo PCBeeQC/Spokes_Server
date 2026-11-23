@@ -1,6 +1,4 @@
-@using Spokes_Server.Components.Shared
 @using Spokes_Server.Core.Configuration
-@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.Communication.Email
 @using Spokes_Server.Core.Services.Security
 @inject Database Db
@@ -11,141 +9,16 @@
 <MudDialog>
     <DialogContent>
         <MudStack Spacing="3">
-            @* 1. Provider Preset Selector *@
-            <MudSelect T="string"
-                       Value="@_selectedPresetId"
-                       ValueChanged="OnPresetSelected"
-                       Label="@Loc["Outgoing Provider Preset"]"
-                       Variant="Variant.Outlined"
-                       Margin="Margin.Dense">
-                <MudSelectItem Value="@EmailProviderPresets.CustomPresetId">
-                    @Loc["Custom SMTP Server"]
-                </MudSelectItem>
-                @foreach (var preset in EmailProviderPresets.OutgoingProviders)
-                {
-                    <MudSelectItem Value="@preset.Id">@preset.Name (@preset.SmtpHost)</MudSelectItem>
-                }
-            </MudSelect>
-
-            @if (SelectedPreset != null && !string.IsNullOrWhiteSpace(SelectedPreset.InstructionsText))
-            {
-                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                    <div class="d-flex flex-column gap-1">
-                        <span>@Loc[SelectedPreset.InstructionsText]</span>
-                        @if (!string.IsNullOrWhiteSpace(SelectedPreset.HelpUrl))
-                        {
-                            <div>
-                                <MudLink Href="@SelectedPreset.HelpUrl" Target="_blank" Typo="Typo.caption" Style="font-weight: 600;">
-                                    @(!string.IsNullOrWhiteSpace(SelectedPreset.HelpLinkLabel) ? Loc[SelectedPreset.HelpLinkLabel].Value : SelectedPreset.HelpUrl)
-                                </MudLink>
-                            </div>
-                        }
-                    </div>
-                </MudAlert>
-            }
-
-            <MudGrid Spacing="2">
-                <MudItem xs="12" sm="6">
-                    <MudTextField @bind-Value="Server.Name"
-                                  Label="@Loc["Outgoing Server Label"]"
-                                  Placeholder="e.g. Resend Relay or Company SMTP"
-                                  Variant="Variant.Outlined"
-                                  Margin="Margin.Dense"
-                                  Required="true" />
-                </MudItem>
-                <MudItem xs="12" sm="6">
-                    <MudTextField @bind-Value="Server.Domain"
-                                  Label="@Loc["Sending Domain"]"
-                                  Placeholder="poly-robotics.com"
-                                  Adornment="Adornment.Start"
-                                  AdornmentText="@("@")"
-                                  Variant="Variant.Outlined"
-                                  Margin="Margin.Dense"
-                                  HelperText="@Loc["Domain linked to this Outgoing Server"]" />
-                </MudItem>
-
-                @if (_selectedPresetId == EmailProviderPresets.CustomPresetId)
-                {
-                    <MudItem xs="12" sm="6">
-                        <MudTextField @bind-Value="Server.Host"
-                                      Label="@Loc["SMTP Host"]"
-                                      Placeholder="smtp.example.com"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Required="true" />
-                    </MudItem>
-                    <MudItem xs="6" sm="3">
-                        <MudNumericField @bind-Value="Server.Port"
-                                         Label="@Loc["Port"]"
-                                         Variant="Variant.Outlined"
-                                         Margin="Margin.Dense" />
-                    </MudItem>
-                    <MudItem xs="6" sm="3" Class="d-flex align-center">
-                        <MudSwitch @bind-Value="Server.UseSsl"
-                                   Color="Color.Primary"
-                                   Label="@Loc["SSL / TLS"]" />
-                    </MudItem>
-                }
-            </MudGrid>
-
-            @if (_selectedPresetId == EmailProviderPresets.CustomPresetId)
-            {
-                <MudSwitch @bind-Value="Server.UseSharedCredentials"
-                           Color="Color.Primary"
-                           Label="@Loc["Use shared relay credentials (API key) for all Sending Identities on this server"]" />
-            }
-
-            @if (Server.UseSharedCredentials)
-            {
-                <MudGrid Spacing="2">
-                    @if (_selectedPresetId == EmailProviderPresets.CustomPresetId ||
-                         (SelectedPreset?.RequiresCustomSmtpUsername ?? false))
-                    {
-                        <MudItem xs="12" sm="5">
-                            <MudTextField @bind-Value="Server.SharedUsername"
-                                          Label="@Loc["SMTP Username"]"
-                                          Placeholder="postmaster@yourdomain.com"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          Required="true" />
-                        </MudItem>
-                    }
-                    <MudItem xs="12" sm="@((_selectedPresetId == EmailProviderPresets.CustomPresetId || (SelectedPreset?.RequiresCustomSmtpUsername ?? false)) ? 7 : 12)">
-                        <MudTextField @bind-Value="_plainSharedPassword"
-                                      Label="@SharedCredentialLabel"
-                                      Placeholder="@SharedCredentialPlaceholder"
-                                      InputType="InputType.Password"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      HelperText="@Loc["Encrypted with server master password before storage"]" />
-                    </MudItem>
-                </MudGrid>
-            }
-            else
-            {
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">
-                    @Loc["Each Real Inbox or Sending Identity on this server will authenticate with its own mailbox or SMTP credentials."]
-                </MudText>
-            }
+            <EmailOutgoingServerFields Server="Server"
+                                       @bind-SelectedPresetId="_selectedPresetId"
+                                       @bind-PlainSharedPassword="_plainSharedPassword"
+                                       DomainPlaceholder="@_domainPlaceholder" />
 
             @if (AllowSharing)
             {
-                <MudDivider />
-                <div>
-                    <MudSwitch @bind-Value="Server.IsSharedWithAllUsers"
-                               Color="Color.Primary"
-                               Label="@Loc["Available to all users who are permitted to create identities or inboxes"]" />
-
-                    @if (!Server.IsSharedWithAllUsers)
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
-                            @Loc["Restrict which users and groups can select this Outgoing Server."]
-                        </MudText>
-                        <UserGroupPicker Target="UserGroupPickerTarget.Both"
-                                         SelectedUserIdsList="Server.AllowedUserIds"
-                                         SelectedGroupIdsList="Server.AllowedTeamIds" />
-                    }
-                </div>
+                <EmailServerSharingSection Server="Server"
+                                           SwitchLabel="@Loc["Available to all users who are permitted to create identities or inboxes"]"
+                                           RestrictionCaption="@Loc["Restrict which users and groups can select this Outgoing Server."]" />
             }
         </MudStack>
     </DialogContent>
@@ -163,95 +36,37 @@
 
     private string _selectedPresetId = EmailProviderPresets.CustomPresetId;
     private string _plainSharedPassword = string.Empty;
+    private string _domainPlaceholder = "example.com";
 
     private EmailProviderPreset? SelectedPreset =>
         EmailProviderPresets.GetById(_selectedPresetId);
 
-    private string SharedCredentialLabel
-    {
-        get
-        {
-            var baseLabel = SelectedPreset != null && !string.IsNullOrWhiteSpace(SelectedPreset.CredentialLabel)
-                ? Loc[SelectedPreset.CredentialLabel].Value
-                : Loc["API Key / SMTP Password"].Value;
-
-            return !string.IsNullOrEmpty(Server.EncryptedSharedPassword)
-                ? $"{baseLabel} ({Loc["Saved - enter to change"].Value})"
-                : baseLabel;
-        }
-    }
-
-    private string SharedCredentialPlaceholder
-    {
-        get
-        {
-            if (!string.IsNullOrEmpty(Server.EncryptedSharedPassword)) return "••••••••";
-            return SelectedPreset?.CredentialPlaceholder ?? string.Empty;
-        }
-    }
-
     protected override void OnInitialized()
     {
+        _domainPlaceholder = Db.CompanyProfile.Get().GetPrimaryDomainOrDefault("example.com");
+
+        if (!string.IsNullOrEmpty(Server.EncryptedSharedPassword) && !EncryptionService.CanDecrypt(Server.EncryptedSharedPassword))
+        {
+            Server.EncryptedSharedPassword = string.Empty;
+        }
+
         if (Server.Port <= 0)
         {
-            Server.Port = 465;
+            Server.Port = EmailServerConfigValidator.DefaultSmtpPort;
         }
 
         var matched = EmailProviderPresets.DetectBySmtpHost(Server.Host);
-        if (matched != null)
-        {
-            _selectedPresetId = matched.Id;
-        }
-        else
-        {
-            _selectedPresetId = EmailProviderPresets.CustomPresetId;
-        }
-    }
-
-    private void OnPresetSelected(string presetId)
-    {
-        var previousPreset = SelectedPreset;
-        _selectedPresetId = presetId ?? EmailProviderPresets.CustomPresetId;
-        var preset = SelectedPreset;
-        if (preset != null)
-        {
-            Server.Name = preset.Name;
-            Server.Host = preset.SmtpHost;
-            Server.Port = preset.SmtpPort;
-            Server.UseSsl = preset.SmtpSsl;
-            Server.UseSharedCredentials = preset.UseSharedCredentials;
-            Server.SharedUsername = preset.DefaultSharedUsername;
-            if (string.IsNullOrWhiteSpace(Server.Domain) ||
-                (previousPreset != null && string.Equals(Server.Domain, previousPreset.DefaultDomain, StringComparison.OrdinalIgnoreCase)))
-            {
-                Server.Domain = preset.DefaultDomain;
-            }
-        }
-        else if (previousPreset != null)
-        {
-            if (string.Equals(Server.Name, previousPreset.Name, StringComparison.OrdinalIgnoreCase))
-                Server.Name = string.Empty;
-            if (string.Equals(Server.Host, previousPreset.SmtpHost, StringComparison.OrdinalIgnoreCase))
-                Server.Host = string.Empty;
-            if (string.Equals(Server.Domain, previousPreset.DefaultDomain, StringComparison.OrdinalIgnoreCase))
-                Server.Domain = string.Empty;
-        }
+        _selectedPresetId = matched?.Id ?? EmailProviderPresets.CustomPresetId;
     }
 
     private async Task SaveAsync()
     {
         var currentUser = await UserService.GetEmployeeAsync();
-        if (currentUser == null || !currentUser.IsActive || currentUser.IsBanned || currentUser.IsSuspended)
-        {
-            Snackbar.Add(Loc["You do not have permission to manage email servers."].Value, Severity.Error);
-            return;
-        }
-
         var profile = Db.CompanyProfile.GetOrCreate();
         profile.EmailSettings ??= new EmailServerSettings();
-        bool isAdmin = currentUser.IsAdmin || currentUser.HasPermission(AppPermissions.Admin.ManageSettings);
-        bool canManageServers = isAdmin || profile.EmailSettings.AllowUsersToManageServers;
-        if (!canManageServers)
+
+        var (isAllowed, isAdmin) = EmailServerConfigValidator.AuthorizeServerManagement(currentUser, profile.EmailSettings);
+        if (!isAllowed)
         {
             Snackbar.Add(Loc["You do not have permission to manage email servers."].Value, Severity.Error);
             return;
@@ -263,44 +78,19 @@
             return;
         }
 
-        if (!isAdmin)
+        var securityError = await EmailServerConfigValidator.ValidateTransportSecurityAsync(Server, isAdmin);
+        if (securityError != EmailServerValidationError.None)
         {
-            if (!Server.UseSsl)
-            {
-                Snackbar.Add(Loc["SSL / TLS is required for custom mail servers."].Value, Severity.Error);
-                return;
-            }
-
-            try
-            {
-                await Spokes_Server.Core.Security.SafeExternalHttpHandler.AssertSafeExternalHostAsync(Server.Host);
-            }
-            catch
-            {
-                Snackbar.Add(MailTransportSecurityHelper.SanitizedConnectionErrorMessage, Severity.Error);
-                return;
-            }
+            Snackbar.Add(EmailServerConfigValidator.FormatValidationError(securityError, Loc), Severity.Error);
+            return;
         }
 
-        Server.Domain = Server.Domain?.Trim().TrimStart('@').ToLowerInvariant() ?? string.Empty;
+        EmailServerConfigValidator.NormalizeAndApplyDefaults(Server);
 
-        if (string.IsNullOrWhiteSpace(Server.Name))
+        var credError = EmailServerConfigValidator.ApplySharedCredentials(Server, _plainSharedPassword, SelectedPreset, EncryptionService);
+        if (credError != EmailServerValidationError.None)
         {
-            Server.Name = !string.IsNullOrWhiteSpace(Server.Domain) ? Server.Domain : Server.Host;
-        }
-
-        if (!string.IsNullOrWhiteSpace(_plainSharedPassword))
-        {
-            if (SelectedPreset?.MirrorPasswordToUsername == true)
-            {
-                Server.SharedUsername = _plainSharedPassword.Trim();
-            }
-            Server.EncryptedSharedPassword = EncryptionService.Encrypt(_plainSharedPassword.Trim());
-        }
-
-        if (Server.UseSharedCredentials && string.IsNullOrEmpty(Server.EncryptedSharedPassword))
-        {
-            Snackbar.Add(Loc["API Key / SMTP password is required when shared credentials are enabled."].Value, Severity.Warning);
+            Snackbar.Add(EmailServerConfigValidator.FormatValidationError(credError, Loc), Severity.Warning);
             return;
         }
 

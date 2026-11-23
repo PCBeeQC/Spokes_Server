@@ -4,6 +4,7 @@
 @inject EmployeeRepository EmployeeRepo
 @inject UserService UserService
 @inject IUserPrivacyService PrivacyService
+@inject AppLabelService AppLabels
 
 <div class="d-flex flex-column gap-2 @Class" style="@Style">
     <EmployeeAutocomplete Label="@Label"
@@ -34,6 +35,16 @@
                                   Size="@Size"
                                   Color="@ChipColor"
                                   Variant="@ChipVariant" />
+                }
+                else if (IsExistingUndiscoverableUser(userId))
+                {
+                    <MudChip T="string"
+                             Color="Color.Default"
+                             Variant="Variant.Outlined"
+                             Size="@Size"
+                             Disabled="@Disabled">
+                        @AppLabels.Employee
+                    </MudChip>
                 }
                 else
                 {
@@ -91,8 +102,26 @@
         }
     }
 
-    private Employee? GetEmployee(string id) =>
-        Employees?.FirstOrDefault(e => e.Id == id) ?? EmployeeRepo.GetById(id);
+    private Employee? _currentUser;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+    }
+
+    private Employee? ResolveCaller() =>
+        _currentUser ?? (!string.IsNullOrWhiteSpace(CurrentUserId) ? EmployeeRepo.GetById(CurrentUserId) : null);
+
+    private Employee? GetEmployee(string id)
+    {
+        var caller = ResolveCaller();
+        if (caller == null || string.IsNullOrWhiteSpace(id)) return null;
+        var emp = Employees?.FirstOrDefault(e => e.Id == id) ?? EmployeeRepo.GetById(id);
+        return emp != null && !emp.IsSystem && PrivacyService.CanDiscoverUser(caller, emp) ? emp : null;
+    }
+
+    private bool IsExistingUndiscoverableUser(string id) =>
+        !string.IsNullOrWhiteSpace(id) && EmployeeRepo.GetById(id) != null && GetEmployee(id) == null;
 
     private async Task HandleUserSelected(Employee? user)
     {
@@ -113,7 +142,7 @@
 
     private async Task RemoveUser(string userId)
     {
-        if (Disabled || SelectedUserIds == null) return;
+        if (Disabled || SelectedUserIds == null || IsExistingUndiscoverableUser(userId)) return;
 
         var removed = SelectedUserIds.RemoveAll(id => string.Equals(id, userId, StringComparison.OrdinalIgnoreCase)) > 0;
         if (removed)

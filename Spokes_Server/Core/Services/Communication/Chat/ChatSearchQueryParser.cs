@@ -93,7 +93,7 @@ public static class ChatSearchQueryParser
 
             // Media / Images
             case "ispicture" or "picture" or "image" or "photo" or "pic" or "img":
-                filter.HasImages = isNegated ? false : ParseBooleanOrTrue(val);
+                filter.HasImages = !isNegated && ParseBooleanOrTrue(val);
                 break;
 
             case "is" when val.Equals("picture", StringComparison.OrdinalIgnoreCase) ||
@@ -109,7 +109,7 @@ public static class ChatSearchQueryParser
 
             // Files / Documents
             case "isfile" or "file" or "attachment" or "attach" or "doc":
-                filter.HasFiles = isNegated ? false : ParseBooleanOrTrue(val);
+                filter.HasFiles = !isNegated && ParseBooleanOrTrue(val);
                 break;
 
             case "is" when val.Equals("file", StringComparison.OrdinalIgnoreCase) ||

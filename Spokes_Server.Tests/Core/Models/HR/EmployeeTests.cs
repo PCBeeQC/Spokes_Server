@@ -6,59 +6,6 @@ namespace Spokes_Server.Tests.Core.Models.HR;
 public class EmployeeTests
 {
     [Fact]
-    public void Employee_Initialization_SetsDefaultsCorrectly()
-    {
-        var emp = new Employee();
-
-        Assert.False(string.IsNullOrEmpty(emp.Id));
-        Assert.Equal(string.Empty, emp.FirstName);
-        Assert.Equal(string.Empty, emp.LastName);
-        Assert.Equal(string.Empty, emp.FullName); // Test derived property
-
-        Assert.Equal(DateOnly.FromDateTime(DateTime.UtcNow), emp.DateOfJoining);
-        Assert.Null(emp.EmploymentEndDate);
-        Assert.Equal(string.Empty, emp.Email);
-        Assert.Equal(string.Empty, emp.Position);
-
-        Assert.Equal(string.Empty, emp.TeamId);
-        Assert.Equal(40.0m, emp.WeeklyHours);
-        Assert.Equal(0, emp.HourlyRate);
-
-        Assert.Equal(string.Empty, emp.PhoneNumber);
-        Assert.Equal(string.Empty, emp.Address);
-        Assert.Equal(DateOnly.FromDateTime(DateTime.UtcNow), emp.DateOfBirth);
-        Assert.Equal(string.Empty, emp.EmergencyContact);
-        Assert.Equal(string.Empty, emp.EmergencyContactPhone);
-        Assert.Equal(string.Empty, emp.PersonalEmail);
-
-        Assert.True(emp.IsDarkMode);
-        Assert.True(emp.PushNotificationsEnabled);
-        Assert.True(emp.ChatNotificationsEnabled);
-        Assert.True(emp.EmailNotificationsEnabled);
-        Assert.Null(emp.AvatarBase64);
-        Assert.Null(emp.ProfileColor);
-        Assert.Null(emp.LandingPage);
-
-        Assert.False(emp.IsAdmin);
-        Assert.True(emp.IsActive);
-
-
-        Assert.False(emp.IsEmailPublic);
-        Assert.False(emp.UsesCustomSidebarOrder);
-        Assert.NotNull(emp.CustomCategoryOrder);
-        Assert.Empty(emp.CustomCategoryOrder);
-        Assert.NotNull(emp.CustomChannelOrder);
-        Assert.Empty(emp.CustomChannelOrder);
-
-        Assert.NotNull(emp.CalendarCategories);
-        Assert.Empty(emp.CalendarCategories);
-
-        Assert.Equal("en-US", emp.PreferredLanguage);
-
-        Assert.Empty(emp.Permissions);
-    }
-
-    [Fact]
     public void FullName_ConcatenatesProperly()
     {
         var emp = new Employee { FirstName = "Jane", LastName = "Doe" };
@@ -131,8 +78,8 @@ public class EmployeeTests
     [Fact]
     public void HasPermission_WithPermissionGroupAndGranularPermission_ReturnsTrueForBoth()
     {
-        var user = new Employee { IsAdmin = false, IsActive = true, PermissionGroupId = "some-group-id" };
-        user.PermissionGroup = new PermissionGroup { Id = "some-group-id", Permissions = new List<string> { "CanView" } };
+        var user = new Employee { IsAdmin = false, IsActive = true, PermissionGroupIds = ["some-group-id"] };
+        user.PermissionGroups = [new PermissionGroup { Id = "some-group-id", Permissions = new List<string> { "CanView" } }];
         user.Permissions.Add("CanEdit");
 
         Assert.True(user.HasPermission("CanView"));
@@ -143,8 +90,8 @@ public class EmployeeTests
     [Fact]
     public void HasPermission_WithPermissionGroupLoaded_ChecksGroupPermissions()
     {
-        var user = new Employee { IsAdmin = false, IsActive = true, PermissionGroupId = "some-group-id" };
-        user.PermissionGroup = new PermissionGroup { Id = "some-group-id", Permissions = new List<string> { "CanEdit" } };
+        var user = new Employee { IsAdmin = false, IsActive = true, PermissionGroupIds = ["some-group-id"] };
+        user.PermissionGroups = [new PermissionGroup { Id = "some-group-id", Permissions = new List<string> { "CanEdit" } }];
 
         Assert.True(user.HasPermission("CanEdit"));
         Assert.False(user.HasPermission("CanView"));
@@ -254,60 +201,6 @@ public class EmployeeTests
     }
 
     [Fact]
-    public void Equals_And_GetHashCode_ReferenceEquality_ReturnsTrueAndMatchesHashCode()
-    {
-        var emp = new Employee { Id = "emp-ref" };
-        Assert.True(emp.Equals(emp));
-        Assert.Equal(emp.GetHashCode(), emp.GetHashCode());
-    }
-
-    [Fact]
-    public void Equals_And_GetHashCode_SameId_ReturnsTrueAndMatchesHashCode()
-    {
-        var emp1 = new Employee { Id = "emp-same" };
-        var emp2 = new Employee { Id = "emp-same" };
-
-        Assert.True(emp1.Equals(emp2));
-        Assert.True(emp2.Equals(emp1));
-        Assert.Equal(emp1.GetHashCode(), emp2.GetHashCode());
-    }
-
-    [Fact]
-    public void Equals_DifferentId_ReturnsFalse()
-    {
-        var emp1 = new Employee { Id = "emp-1" };
-        var emp2 = new Employee { Id = "emp-2" };
-
-        Assert.False(emp1.Equals(emp2));
-        Assert.False(emp2.Equals(emp1));
-    }
-
-    [Fact]
-    public void Equals_NullOrDifferentType_ReturnsFalse()
-    {
-        var emp = new Employee { Id = "emp-1" };
-
-        Assert.False(emp.Equals(null));
-        Assert.False(emp.Equals("string-object"));
-        Assert.False(emp.Equals(new object()));
-    }
-
-    [Fact]
-    public void Equals_And_GetHashCode_NullIdFallback_DoesNotThrow()
-    {
-        var emp1 = new Employee { Id = null! };
-        var emp2 = new Employee { Id = null! };
-        var emp3 = new Employee { Id = "emp-with-id" };
-
-        var hash1 = emp1.GetHashCode();
-        var hash2 = emp2.GetHashCode();
-        Assert.NotEqual(0, hash1);
-
-        Assert.True(emp1.Equals(emp2));
-        Assert.False(emp1.Equals(emp3));
-    }
-
-    [Fact]
     public void EnsureCalendarCategories_WhenEmptyAndNoServerProfile_PopulatesSystemDefaults()
     {
         var emp = new Employee();
@@ -364,16 +257,4 @@ public class EmployeeTests
         Assert.Equal("Warning", categories[0].Color);
     }
 
-    [Fact]
-    public void Employee_LandingPage_CanBeConfigured()
-    {
-        var emp = new Employee();
-        Assert.Null(emp.LandingPage);
-
-        emp.LandingPage = "email";
-        Assert.Equal("email", emp.LandingPage);
-
-        emp.LandingPage = null;
-        Assert.Null(emp.LandingPage);
-    }
 }

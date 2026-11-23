@@ -8,8 +8,6 @@
 @inject EmailSyncStateService SyncStateService
 @inject IEmailSyncService EmailSyncService
 @inject IEmailInboxService InboxService
-@inject IEmailCacheMaintenanceService CacheMaintenance
-@inject UserService UserService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject NavigationManager Nav
@@ -17,7 +15,7 @@
 
 <MudDialog>
     <DialogContent>
-        <MudTabs Elevation="0" Rounded="true" TabPanelsClass="pa-2" KeepPanelsAlive="true" @bind-ActivePanelIndex="_activeTab">
+        <MudTabs Elevation="0" Outlined="true" Rounded="true" TabPanelsClass="pa-2" KeepPanelsAlive="true" @bind-ActivePanelIndex="_activeTab">
             <!-- Tab 1: Real Inboxes & Virtual Inboxes -->
             <MudTabPanel Text="@Loc["Inboxes & Mailboxes"]" Icon="@Icons.Material.Filled.Inbox">
                 <MudStack Spacing="4">
@@ -53,7 +51,7 @@
                                 {
                                     var status = SyncStateService.GetState(account.Id);
                                     var (localCount, serverCount) = GetAccountCounts(account.Id);
-                                    var canEditAccount = !account.IsServerManaged && account.OwnerEmployeeId == Employee.Id;
+                                    var canEditAccount = IsEmployeeEligible && !account.IsServerManaged && account.OwnerEmployeeId == Employee.Id;
                                     <MudPaper Outlined="true" Class="pa-3 rounded-lg">
                                         <div class="d-flex align-center justify-space-between flex-wrap gap-2">
                                             <div class="d-flex flex-column gap-1">
@@ -104,20 +102,23 @@
                                                 </div>
                                             </div>
                                             <div class="d-flex align-center gap-1">
-                                                <MudTooltip Text="@Loc["Sync Mailbox Now"]">
-                                                    <MudIconButton Icon="@Icons.Material.Filled.Sync"
-                                                                   Size="Size.Small"
-                                                                   Color="Color.Primary"
-                                                                   Disabled="@(_syncingAccountId == account.Id)"
-                                                                   OnClick="@(() => SyncAccountNowAsync(account))" />
-                                                </MudTooltip>
-                                                <MudTooltip Text="@Loc["Repair Cached Emails"]">
-                                                    <MudIconButton Icon="@Icons.Material.Filled.Build"
-                                                                   Size="Size.Small"
-                                                                   Color="Color.Secondary"
-                                                                   Disabled="IsRepairing"
-                                                                   OnClick="RepairAttachments" />
-                                                </MudTooltip>
+                                                @if (IsEmailFeatureAllowed)
+                                                {
+                                                    <MudTooltip Text="@Loc["Sync Mailbox Now"]">
+                                                        <MudIconButton Icon="@Icons.Material.Filled.Sync"
+                                                                       Size="Size.Small"
+                                                                       Color="Color.Primary"
+                                                                       Disabled="@(_syncingAccountId == account.Id)"
+                                                                       OnClick="@(() => SyncAccountNowAsync(account))" />
+                                                    </MudTooltip>
+                                                    <MudTooltip Text="@Loc["Repair Cached Emails"]">
+                                                        <MudIconButton Icon="@Icons.Material.Filled.Build"
+                                                                       Size="Size.Small"
+                                                                       Color="Color.Secondary"
+                                                                       Disabled="IsRepairing"
+                                                                       OnClick="@(() => RepairAttachments(account.Id))" />
+                                                    </MudTooltip>
+                                                }
                                                 @if (canEditAccount)
                                                 {
                                                     <MudTooltip Text="@Loc["Edit Real Inbox"]">
@@ -152,7 +153,7 @@
                                 {
                                     var status = SyncStateService.GetState(account.Id);
                                     var (localCount, serverCount) = GetAccountCounts(account.Id);
-                                    var canEditAccount = !account.IsServerManaged && account.OwnerEmployeeId == Employee.Id;
+                                    var canEditAccount = IsEmployeeEligible && !account.IsServerManaged && account.OwnerEmployeeId == Employee.Id;
                                     <MudPaper Outlined="true" Class="pa-3 rounded-lg">
                                         <div class="d-flex align-center justify-space-between flex-wrap gap-2">
                                             <div class="d-flex flex-column gap-1">
@@ -196,13 +197,16 @@
                                                            OnClick="@(() => BrowseArchivedAccount(account))">
                                                     @Loc["Browse Inbox"]
                                                 </MudButton>
-                                                <MudTooltip Text="@Loc["Sync Mailbox Now"]">
-                                                    <MudIconButton Icon="@Icons.Material.Filled.Sync"
-                                                                   Size="Size.Small"
-                                                                   Color="Color.Primary"
-                                                                   Disabled="@(_syncingAccountId == account.Id)"
-                                                                   OnClick="@(() => SyncAccountNowAsync(account))" />
-                                                </MudTooltip>
+                                                @if (IsEmployeeEligible)
+                                                {
+                                                    <MudTooltip Text="@Loc["Sync Mailbox Now"]">
+                                                        <MudIconButton Icon="@Icons.Material.Filled.Sync"
+                                                                       Size="Size.Small"
+                                                                       Color="Color.Primary"
+                                                                       Disabled="@(_syncingAccountId == account.Id)"
+                                                                       OnClick="@(() => SyncAccountNowAsync(account))" />
+                                                    </MudTooltip>
+                                                }
                                                 @if (canEditAccount)
                                                 {
                                                     <MudTooltip Text="@Loc["Restore to Active Inboxes"]">
@@ -254,7 +258,7 @@
                                 @foreach (var inbox in _inboxes)
                                 {
                                     var account = _accounts.FirstOrDefault(a => a.Id == inbox.AccountId) ?? Db.EmailAccounts.GetById(inbox.AccountId);
-                                    var canEditInbox = !inbox.IsServerManaged && inbox.OwnerEmployeeId == Employee.Id;
+                                    var canEditInbox = IsEmployeeEligible && !inbox.IsServerManaged && inbox.OwnerEmployeeId == Employee.Id;
                                     <MudPaper Outlined="true" Class="pa-3 rounded-lg">
                                         <div class="d-flex align-center justify-space-between flex-wrap gap-2">
                                             <div class="d-flex flex-column gap-1">
@@ -354,7 +358,7 @@
                         <MudStack Spacing="2">
                             @foreach (var identity in _identities)
                             {
-                                var canEditIdentity = !identity.IsServerManaged && identity.OwnerEmployeeId == Employee.Id;
+                                var canEditIdentity = IsEmployeeEligible && !identity.IsServerManaged && identity.OwnerEmployeeId == Employee.Id;
                                 <MudPaper Outlined="true" Class="pa-3 rounded-lg">
                                     <div class="d-flex align-center justify-space-between flex-wrap gap-2">
                                         <div class="d-flex flex-column gap-1">
@@ -415,19 +419,25 @@
                               Icon="@Icons.Material.Filled.Contacts"
                               Description="@Loc["Manage your personal address book and import or export vCard (.vcf) files."]">
                     <div class="d-flex justify-end gap-2 mb-3">
-                        <MudFileUpload T="IBrowserFile" Accept=".vcf" FilesChanged="ImportContacts" Class="mt-0">
-                            <CustomContent>
-                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Upload" OnClick="@context.OpenFilePickerAsync">
-                                    @Loc["Import"]
-                                </MudButton>
-                            </CustomContent>
-                            <SelectedTemplate></SelectedTemplate>
-                        </MudFileUpload>
+                        @if (IsEmployeeEligible)
+                        {
+                            <MudFileUpload T="IBrowserFile" Accept=".vcf" FilesChanged="ImportContacts" Class="mt-0">
+                                <CustomContent>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Upload" OnClick="@context.OpenFilePickerAsync">
+                                        @Loc["Import"]
+                                    </MudButton>
+                                </CustomContent>
+                                <SelectedTemplate></SelectedTemplate>
+                            </MudFileUpload>
+                        }
                         <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Download" OnClick="ExportContacts">
                             @Loc["Export"]
                         </MudButton>
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
-                                   OnClick="AddPrivateContact">@Loc["New Private Contact"]</MudButton>
+                        @if (IsEmployeeEligible)
+                        {
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
+                                       OnClick="AddPrivateContact">@Loc["New Private Contact"]</MudButton>
+                        }
                     </div>
                     <MudTable Items="@PrivateContacts" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0" Filter="new Func<ContactPerson, bool>(FilterPrivateContacts)">
                         <ToolBarContent>
@@ -447,10 +457,13 @@
                             <MudTd DataLabel="Email">@context.Email</MudTd>
                             <MudTd DataLabel="Phone">@context.Phone</MudTd>
                             <MudTd DataLabel="Actions">
-                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
-                                               OnClick="@(() => EditPrivateContact(context))" />
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
-                                               OnClick="@(() => DeletePrivateContact(context))" />
+                                @if (IsEmployeeEligible)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                                   OnClick="@(() => EditPrivateContact(context))" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                                   OnClick="@(() => DeletePrivateContact(context))" />
+                                }
                             </MudTd>
                         </RowTemplate>
                         <PagerContent>
@@ -469,7 +482,7 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public Employee Employee { get; set; } = default!;
-    [Parameter] public EventCallback OnRepairAttachments { get; set; }
+    [Parameter] public EventCallback<string> OnRepairAttachments { get; set; }
     [Parameter] public bool IsRepairing { get; set; }
     [Parameter] public int InitialTab { get; set; }
 
@@ -484,10 +497,14 @@
     private List<ContactPerson> PrivateContacts = [];
     private string searchStringPrivate = "";
 
-    private bool IsEmployeeEligible => Employee is { IsActive: true, IsBanned: false, IsSuspended: false };
-    private bool IsAdminUser => Employee.IsAdmin || Employee.HasPermission(AppPermissions.Admin.ManageSettings);
+    private Employee? LiveEmployee => !string.IsNullOrWhiteSpace(Employee?.Id) ? (Db.Employees.GetById(Employee.Id) ?? Employee) : Employee;
+    private bool IsEmployeeEligible => LiveEmployee is { IsActive: true, IsBanned: false, IsSuspended: false };
+    private bool IsAdminUser => LiveEmployee != null && (LiveEmployee.IsAdmin || LiveEmployee.HasPermission(AppPermissions.Admin.ManageSettings));
+    private bool IsEmailFeatureAllowed => IsEmployeeEligible &&
+                                          !string.Equals(Db.CompanyProfile.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase) &&
+                                          (LiveEmployee?.HasPermission(AppPermissions.Email.Use) ?? false);
     private bool CanConnectRealInboxes => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToConnectRealInboxes);
-    private bool CanCreateVirtualInboxes => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToCreateVirtualInboxes);
+    private bool CanCreateVirtualInboxes => IsEmailFeatureAllowed && (IsAdminUser || _emailSettings.AllowUsersToCreateVirtualInboxes);
     private bool CanCreateSendingIdentities => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToCreateSendingIdentities);
     private bool CanShareEntities => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToShareEmailEntities);
     private bool CanManageServers => IsEmployeeEligible && (IsAdminUser || _emailSettings.AllowUsersToManageServers);
@@ -507,7 +524,10 @@
         _emailSettings = Db.CompanyProfile.Get()?.EmailSettings ?? new();
         _accounts = InboxService.GetAccessibleRealInboxes(Employee.Id);
         _archivedAccounts = InboxService.GetAccessibleArchivedRealInboxes(Employee.Id);
-        _inboxes = InboxService.GetAccessibleInboxes(Employee.Id);
+        _inboxes = InboxService.GetManageableInboxesForSettings(Employee.Id)
+            .Concat(InboxService.GetAccessibleInboxes(Employee.Id))
+            .DistinctBy(i => i.Id)
+            .ToList();
         _identities = InboxService.GetPermittedIdentities(Employee.Id);
     }
 
@@ -563,8 +583,7 @@
     {
         if (!IsEmployeeEligible) return;
 
-        var clone = System.Text.Json.JsonSerializer.Deserialize<EmailAccount>(
-            System.Text.Json.JsonSerializer.Serialize(account)) ?? account;
+        var clone = account.DeepClone();
 
         var dialog = await DialogService.ShowAsync<EmailAccountDialog>(
             Loc["Edit Real Inbox"].Value,
@@ -589,14 +608,16 @@
 
     private void ArchiveAccount(EmailAccount account)
     {
-        InboxService.SetRealInboxArchived(account.Id, true);
+        if (!IsEmployeeEligible) return;
+        InboxService.SetRealInboxArchived(account.Id, true, Employee.Id);
         RefreshData();
         Snackbar.Add(Loc["Real Inbox archived. Emails remain on disk and automatic syncing is disabled."].Value, Severity.Info);
     }
 
     private void UnarchiveAccount(EmailAccount account)
     {
-        InboxService.SetRealInboxArchived(account.Id, false);
+        if (!IsEmployeeEligible) return;
+        InboxService.SetRealInboxArchived(account.Id, false, Employee.Id);
         RefreshData();
         Snackbar.Add(Loc["Real Inbox restored to active inboxes."].Value, Severity.Success);
     }
@@ -609,6 +630,8 @@
 
     private async Task DeleteAccountAsync(EmailAccount account)
     {
+        if (!IsEmployeeEligible) return;
+        var callerId = Employee.Id;
         var dialog = await DialogService.ShowAsync<ConfirmDialog>(
             Loc["Delete Real Inbox"].Value,
             new DialogParameters<ConfirmDialog>
@@ -617,7 +640,7 @@
                 { x => x.ButtonText, Loc["Delete"].Value },
                 { x => x.CancelText, Loc["Cancel"].Value },
                 { x => x.Color, Color.Error },
-                { x => x.OnConfirmAsync, () => Task.Run(() => InboxService.DeleteRealInbox(account.Id)) }
+                { x => x.OnConfirmAsync, () => Task.Run(() => InboxService.DeleteRealInbox(account.Id, callerId)) }
             },
             new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true, BackdropClick = false, CloseOnEscapeKey = false });
 
@@ -631,6 +654,7 @@
 
     private async Task SyncAccountNowAsync(EmailAccount account)
     {
+        if (!IsEmployeeEligible) return;
         _syncingAccountId = account.Id;
         StateHasChanged();
         try
@@ -671,6 +695,13 @@
         var result = await dialog.Result;
         if (result is { Canceled: false, Data: EmailInbox saved })
         {
+            if (!CanCreateVirtualInboxes) return;
+            if (!saved.IsServerManaged &&
+                !InboxService.GetAccessibleRealInboxes(Employee.Id).Any(a => string.Equals(a.Id, saved.AccountId, StringComparison.OrdinalIgnoreCase)))
+            {
+                Snackbar.Add(Loc["Selected Real Inbox is no longer accessible."].Value, Severity.Error);
+                return;
+            }
             Db.EmailInboxes.Save(saved);
             RefreshData();
             Snackbar.Add(Loc["Virtual Inbox created."].Value, Severity.Success);
@@ -679,8 +710,9 @@
 
     private async Task EditInboxAsync(EmailInbox inbox)
     {
-        var clone = System.Text.Json.JsonSerializer.Deserialize<EmailInbox>(
-            System.Text.Json.JsonSerializer.Serialize(inbox)) ?? inbox;
+        if (!IsEmailFeatureAllowed || inbox.IsServerManaged || inbox.OwnerEmployeeId != Employee.Id) return;
+
+        var clone = inbox.DeepClone();
 
         var dialog = await DialogService.ShowAsync<EmailInboxDialog>(
             Loc["Edit Virtual Inbox"].Value,
@@ -697,6 +729,12 @@
         var result = await dialog.Result;
         if (result is { Canceled: false, Data: EmailInbox updated })
         {
+            if (!IsEmailFeatureAllowed || updated.IsServerManaged || updated.OwnerEmployeeId != Employee.Id) return;
+            if (!InboxService.GetAccessibleRealInboxes(Employee.Id).Any(a => string.Equals(a.Id, updated.AccountId, StringComparison.OrdinalIgnoreCase)))
+            {
+                Snackbar.Add(Loc["Selected Real Inbox is no longer accessible."].Value, Severity.Error);
+                return;
+            }
             Db.EmailInboxes.Save(updated);
             RefreshData();
             Snackbar.Add(Loc["Virtual Inbox updated."].Value, Severity.Success);
@@ -705,6 +743,7 @@
 
     private async Task DeleteInboxAsync(EmailInbox inbox)
     {
+        if (!IsEmployeeEligible) return;
         var confirmed = await DialogService.ShowMessageBoxAsync(
             Loc["Delete Virtual Inbox"].Value,
             string.Format(Loc["Are you sure you want to delete Virtual Inbox '{0}'? Underlying emails remain in the Real Inbox."].Value, inbox.Name),
@@ -713,7 +752,8 @@
 
         if (confirmed == true)
         {
-            InboxService.DeleteVirtualInbox(inbox.Id);
+            if (!IsEmployeeEligible) return;
+            InboxService.DeleteVirtualInbox(inbox.Id, Employee.Id);
             RefreshData();
             Snackbar.Add(Loc["Virtual Inbox deleted."].Value, Severity.Success);
         }
@@ -756,8 +796,7 @@
     {
         if (!IsEmployeeEligible) return;
 
-        var clone = System.Text.Json.JsonSerializer.Deserialize<EmailSendingIdentity>(
-            System.Text.Json.JsonSerializer.Serialize(identity)) ?? identity;
+        var clone = identity.DeepClone();
 
         var dialog = await DialogService.ShowAsync<EmailSendingIdentityDialog>(
             Loc["Edit Sending Identity"].Value,
@@ -783,15 +822,17 @@
 
     private async Task DeleteIdentityAsync(EmailSendingIdentity identity)
     {
+        if (!IsEmployeeEligible) return;
         var confirmed = await DialogService.ShowMessageBoxAsync(
             Loc["Delete Sending Identity"].Value,
-            string.Format(Loc["Are you sure you want to delete sending identity '{0}'?"].Value, identity.DisplayLabel),
+            string.Format(Loc["Are you sure you want to delete sending identity '{0}'?"].Value, identity.FormattedFrom),
             yesText: Loc["Delete"].Value,
             cancelText: Loc["Cancel"].Value);
 
         if (confirmed == true)
         {
-            InboxService.DeleteSendingIdentity(identity.Id);
+            if (!IsEmployeeEligible) return;
+            InboxService.DeleteSendingIdentity(identity.Id, Employee.Id);
             RefreshData();
             Snackbar.Add(Loc["Sending Identity deleted."].Value, Severity.Success);
         }
@@ -816,6 +857,7 @@
 
     private async Task AddPrivateContact()
     {
+        if (!IsEmployeeEligible) return;
         var newContact = new ContactPerson();
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
 
@@ -827,6 +869,7 @@
 
         if (result is { Canceled: false, Data: ContactPerson created })
         {
+            if (!IsEmployeeEligible) return;
             Db.PrivateContacts.Save(Employee.Id, created);
             RefreshPrivateContacts();
             Snackbar.Add(Loc["Private contact created"].Value, Severity.Success);
@@ -835,6 +878,7 @@
 
     private async Task EditPrivateContact(ContactPerson contact)
     {
+        if (!IsEmployeeEligible) return;
         var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true };
         var dialog = await DialogService.ShowAsync<ContactPersonDialog>(Loc["Edit Private Contact"].Value, new DialogParameters
         {
@@ -844,6 +888,7 @@
 
         if (result is { Canceled: false, Data: ContactPerson updated })
         {
+            if (!IsEmployeeEligible) return;
             Db.PrivateContacts.Save(Employee.Id, updated);
             RefreshPrivateContacts();
             Snackbar.Add(Loc["Private contact updated"].Value, Severity.Success);
@@ -852,6 +897,7 @@
 
     private async Task DeletePrivateContact(ContactPerson contact)
     {
+        if (!IsEmployeeEligible) return;
         bool? result = await DialogService.ShowMessageBoxAsync(
             Loc["Warning"].Value,
             string.Format(Loc["Deleting a contact cannot be undone. Are you sure you want to delete '{0}'?"].Value, contact.Name),
@@ -859,6 +905,7 @@
 
         if (result == true)
         {
+            if (!IsEmployeeEligible) return;
             Db.PrivateContacts.Delete(Employee.Id, contact.Id);
             RefreshPrivateContacts();
             Snackbar.Add(Loc["Contact deleted"].Value, Severity.Success);
@@ -867,6 +914,7 @@
 
     private async Task ImportContacts(IBrowserFile file)
     {
+        if (!IsEmployeeEligible) return;
         try
         {
             if (file == null) return;
@@ -985,7 +1033,10 @@
         SyncStateService.OnUnreadCountChanged -= HandleCountChanged;
     }
 
-    private Task RepairAttachments() => OnRepairAttachments.InvokeAsync();
+    private Task RepairAttachments(string accountId) =>
+        IsEmailFeatureAllowed && !string.IsNullOrWhiteSpace(accountId)
+            ? OnRepairAttachments.InvokeAsync(accountId)
+            : Task.CompletedTask;
 
     private void Close() => MudDialog.Close(DialogResult.Ok(Employee));
 }

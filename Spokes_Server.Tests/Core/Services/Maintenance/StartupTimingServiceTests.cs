@@ -97,33 +97,38 @@ public class StartupTimingServiceTests
             Assert.Equal(expectedNames, actualNames);
         }
 
+        // On-demand chat transition profiler (off by default; enabled in memory per circuit)
         [Fact]
-        public void StartupTiming_PropertyGettersSetters_WorkCorrectly()
+        public void ChatTransition_DisabledByDefault_IsCompleteNoOp()
         {
-            // Arrange & Act - Default constructor values
-            var defaultTiming = new StartupTiming();
+            var service = new StartupTimingService();
+            Assert.False(service.IsChatProfilerEnabled);
+            Assert.Equal(0, service.BeginTransition("SelectChannel"));
+            Assert.Equal(0, service.EnsureTransition("SelectChannel", "Step"));
+            Assert.Equal(0, service.CurrentTransitionId);
 
-            // Assert defaults
-            Assert.Equal(string.Empty, defaultTiming.Name);
-            Assert.Equal(0L, defaultTiming.Timestamp);
-
-            // Act - Setting properties
-            var timing = new StartupTiming
-            {
-                Name = "CustomMilestone",
-                Timestamp = 1234567890L
-            };
-
-            // Assert assigned values
-            Assert.Equal("CustomMilestone", timing.Name);
-            Assert.Equal(1234567890L, timing.Timestamp);
+            service.AddChatTransition("IgnoredStep");
+            using (service.Span("IgnoredSpan")) { }
+            Assert.Empty(service.Drain(1, 0).Entries);
         }
 
-        // DIAG-TEMP: chat transition diagnostics
+        [Fact]
+        public void BootTimings_StopAccumulatingAfterRouteSettled()
+        {
+            var service = new StartupTimingService();
+            service.Add("Server: Layout OnInitialized");
+            Assert.True(service.TryMarkRouteSettled("ChatList"));
+            int countAtSettle = service.GetTimings().Count;
+
+            service.Add("Server: Post-Settle Rerender");
+            Assert.Equal(countAtSettle, service.GetTimings().Count);
+        }
+
         [Fact]
         public void ChatTransition_NoTransition_IgnoresMarks()
         {
             var service = new StartupTimingService();
+            service.SetChatProfilerEnabled(true);
             Assert.Equal(0, service.CurrentTransitionId);
 
             service.AddChatTransition("IgnoredStep");
@@ -135,6 +140,7 @@ public class StartupTimingServiceTests
         public void ChatTransition_DrainIsIncrementalAndIncludesRegularAddSteps()
         {
             var service = new StartupTimingService();
+            service.SetChatProfilerEnabled(true);
 
             var tid = service.EnsureTransition("SelectChannel (general)", "Server: SelectChannel Clicked (general)");
             Assert.Equal(tid, service.CurrentTransitionId);
@@ -152,12 +158,17 @@ public class StartupTimingServiceTests
             var pass2 = service.Drain(tid, pass1.NextCursor);
             Assert.Single(pass2.Entries);
             Assert.Equal("Server: MainLayout.HandleLocationChanged (_isChatChannelOpen=True)", pass2.Entries[0].Name);
+
+            service.SetChatProfilerEnabled(false);
+            Assert.False(service.IsChatProfilerEnabled);
+            Assert.Empty(service.Drain(tid, 0).Entries);
         }
 
         [Fact]
         public void ChatTransition_ClientBegunTransition_IsReusedAndNamedByEnsure()
         {
             var service = new StartupTimingService();
+            service.SetChatProfilerEnabled(true);
 
             var clientTid = service.BeginTransition("SelectChannel", isNamed: false);
             var serverTid = service.EnsureTransition("SelectChannel (general)", "Server: SelectChannel Clicked (general)");
@@ -170,6 +181,7 @@ public class StartupTimingServiceTests
         public void ChatTransition_SpansTrackOpenCountAndStayAttributedToOriginalTransition()
         {
             var service = new StartupTimingService();
+            service.SetChatProfilerEnabled(true);
             var first = service.BeginTransition("First");
             var span = service.Span("Server: Chain", first);
             Assert.Equal(1, service.Drain(first, 0).OpenSpans);

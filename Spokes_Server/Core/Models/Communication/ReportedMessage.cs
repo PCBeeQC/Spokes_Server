@@ -20,6 +20,11 @@ public class ReportedMessage : IDataEntity
     public string MessageId { get; set; } = string.Empty;
 
     /// <summary>
+    /// ID of the channel containing the reported message.
+    /// </summary>
+    public string ChannelId { get; set; } = string.Empty;
+
+    /// <summary>
     /// Employee ID of the user who submitted the report.
     /// </summary>
     public string ReporterId { get; set; } = string.Empty;
@@ -64,6 +69,7 @@ public class ReportedMessage : IDataEntity
     /// The name of the moderator who resolved this report.
     /// </summary>
     public string ResolvedBy { get; set; } = string.Empty;
+    public string ResolvedByEmployeeId { get; set; } = string.Empty;
 
     /// <summary>
     /// UTC timestamp when the report was dismissed or resolved.

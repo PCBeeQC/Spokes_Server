@@ -18,6 +18,7 @@ using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Middleware;
+using Spokes_Server.Core.Security;
 using Spokes_Server.Core.Services.Communication.Chat;
 using Spokes_Server.Core.Services.Identity;
 using Spokes_Server.Core.Services.UI;
@@ -94,16 +95,17 @@ public static class SpokesMiddlewareExtensions
     /// </summary>
     public static IApplicationBuilder UseSpokesResponseHeaders(this IApplicationBuilder app)
     {
-        // 1. Prevent browsers from caching HTML document responses & prevent Cloudflare from altering JS/CSS
-        app.Use(async (context, next) =>
+        return app.Use(async (context, next) =>
         {
             context.Response.OnStarting(() =>
             {
                 context.Response.Headers.TryAdd("X-Content-Type-Options", "nosniff");
 
-                bool isHtml = context.Response.ContentType?.StartsWith("text/html", StringComparison.OrdinalIgnoreCase) == true;
-                bool isLikelyPage = string.IsNullOrEmpty(context.Response.ContentType)
+                var contentType = context.Response.ContentType;
+                bool isHtml = contentType?.StartsWith("text/html", StringComparison.OrdinalIgnoreCase) == true;
+                bool isLikelyPage = string.IsNullOrEmpty(contentType)
                                     && SpokesRequestClassifier.IsHtmlPageNavigation(context);
+                bool isRazorJs = context.Request.Path.Value?.EndsWith(".razor.js", StringComparison.OrdinalIgnoreCase) == true;
 
                 if (isHtml || isLikelyPage)
                 {
@@ -111,9 +113,16 @@ public static class SpokesMiddlewareExtensions
                     context.Response.Headers["Pragma"] = "no-cache";
                     context.Response.Headers["Expires"] = "0";
                 }
-                else if (context.Response.ContentType?.StartsWith("application/javascript", StringComparison.OrdinalIgnoreCase) == true ||
-                         context.Response.ContentType?.StartsWith("text/javascript", StringComparison.OrdinalIgnoreCase) == true ||
-                         context.Response.ContentType?.StartsWith("text/css", StringComparison.OrdinalIgnoreCase) == true)
+                else if (isRazorJs)
+                {
+                    // Prevent CDN caching for collocated Blazor JS files
+                    context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+                    context.Response.Headers.Pragma = "no-cache";
+                    context.Response.Headers.Expires = "-1";
+                }
+                else if (contentType?.StartsWith("application/javascript", StringComparison.OrdinalIgnoreCase) == true ||
+                         contentType?.StartsWith("text/javascript", StringComparison.OrdinalIgnoreCase) == true ||
+                         contentType?.StartsWith("text/css", StringComparison.OrdinalIgnoreCase) == true)
                 {
                     var cc = context.Response.Headers["Cache-Control"].ToString();
                     if (!string.IsNullOrEmpty(cc) && !cc.Contains("no-transform"))
@@ -125,49 +134,23 @@ public static class SpokesMiddlewareExtensions
                         context.Response.Headers["Cache-Control"] = "no-cache, must-revalidate, no-transform";
                     }
                 }
-                return Task.CompletedTask;
-            });
 
-            await next();
-        });
-
-        // 2. TLS preconnect hint for mobile clients
-        app.Use(async (context, next) =>
-        {
-            context.Response.OnStarting(() =>
-            {
-                var ct = context.Response.ContentType;
-                if (ct != null && ct.StartsWith("text/html", StringComparison.OrdinalIgnoreCase))
+                // TLS preconnect hint for HTML responses
+                if (isHtml)
                 {
                     var publicUrl = context.RequestServices.GetService<SystemConfigRepository>()?.Get()?.ServerPublicUrl;
-                    var origin = Core.Security.ServerUrlResolver.GetSafeServerBaseUrl(context, publicUrl);
+                    var origin = ServerUrlResolver.GetSafeServerBaseUrl(context, publicUrl);
                     if (!string.IsNullOrEmpty(origin))
                     {
                         context.Response.Headers.Append("Link", $"<{origin}>; rel=preconnect");
                     }
                 }
+
                 return Task.CompletedTask;
             });
+
             await next();
         });
-
-        // 3. Prevent CDN caching for collocated Blazor JS files
-        app.Use(async (context, next) =>
-        {
-            context.Response.OnStarting(() =>
-            {
-                if (context.Request.Path.Value != null && context.Request.Path.Value.EndsWith(".razor.js", StringComparison.OrdinalIgnoreCase))
-                {
-                    context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
-                    context.Response.Headers.Pragma = "no-cache";
-                    context.Response.Headers.Expires = "-1";
-                }
-                return Task.CompletedTask;
-            });
-            await next();
-        });
-
-        return app;
     }
 
     /// <summary>
@@ -212,8 +195,18 @@ public static class SpokesMiddlewareExtensions
 
             if (requestPath.StartsWithSegments("/setup", StringComparison.OrdinalIgnoreCase))
             {
-                if (!SpokesRequestClassifier.IsApiOrNonHtmlRequest(context))
+                if (!requestPath.StartsWithSegments("/setup/api", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (SpokesRequestClassifier.IsApiOrNonHtmlRequest(context))
+                    {
+                        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                        context.Response.ContentType = "application/json; charset=utf-8";
+                        context.Response.Headers.CacheControl = "no-store";
+                        var payload = SpokesResult.Failure("Server initial setup is already complete.", "SETUP_ALREADY_COMPLETE");
+                        await JsonSerializer.SerializeAsync(context.Response.Body, payload, SetupErrorJsonOptions, context.RequestAborted);
+                        return;
+                    }
+
                     context.Response.Redirect("/");
                     return;
                 }
@@ -247,7 +240,10 @@ public static class SpokesMiddlewareExtensions
 
             var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
 
-            if (path.StartsWith("/spokesapi/auth/force-logout"))
+            if (path.StartsWith("/spokesapi/auth/force-logout") ||
+                path == "/logout" ||
+                path == "/sso/mobile-logout-post" ||
+                path == "/sso/mobile-logout-complete")
             {
                 await next();
                 return;
@@ -258,20 +254,8 @@ public static class SpokesMiddlewareExtensions
                              authResult?.Properties?.GetParameter<bool>("IsRevoked") == true;
             if (isRevoked)
             {
-                context.Response.Cookies.Delete("Spokes_Refresh", new CookieOptions
-                {
-                    HttpOnly = true,
-                    Secure = context.Request.IsHttps,
-                    SameSite = SameSiteMode.Lax,
-                    Path = "/"
-                });
-                context.Response.Cookies.Delete("chat_vault_key", new CookieOptions
-                {
-                    Path = "/",
-                    HttpOnly = true,
-                    Secure = true,
-                    SameSite = SameSiteMode.Lax
-                });
+                VaultCookieProtector.DeleteRefreshCookie(context);
+                VaultCookieProtector.DeleteVaultCookie(context.Response);
 
                 if (SpokesRequestClassifier.IsHtmlPageNavigation(context) && HttpMethods.IsGet(context.Request.Method))
                 {
@@ -333,8 +317,7 @@ public static class SpokesMiddlewareExtensions
                 !path.StartsWith("/callback") &&
                 !path.Contains('.'))
             {
-                var userAgent = context.Request.Headers["User-Agent"].ToString();
-                bool isCapacitor = userAgent.Contains("Capacitor", StringComparison.OrdinalIgnoreCase) || context.Request.Query["client"] == "mobile";
+                bool isCapacitor = IsMobileOrCapacitorRequest(context);
                 bool isAuthenticated = context.User.Identity?.IsAuthenticated == true;
                 
                 if (isCapacitor && !isAuthenticated)
@@ -347,12 +330,24 @@ public static class SpokesMiddlewareExtensions
                             <meta charset='utf-8' />
                             <meta name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover'>
                             <style>
-                                body { background-color: #1e1e2d; margin: 0; padding: 0; }
+                                body { background-color: #1e1e2d; margin: 0; padding: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+                                .spokes-boot-spinner { width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #7e6fff; border-radius: 50%; animation: spokes-spin 1s linear infinite; }
+                                @keyframes spokes-spin { to { transform: rotate(360deg); } }
                             </style>
                         </head>
                         <body>
+                            <div class='spokes-boot-spinner'></div>
                             <script>
                                 (async function() {
+                                    var withTimeout = function(promise, ms) {
+                                        var timerId = null;
+                                        return Promise.race([
+                                            Promise.resolve(promise).catch(function() { return null; }),
+                                            new Promise(function(resolve) { timerId = setTimeout(function() { resolve(null); }, ms); })
+                                        ]).finally(function() {
+                                            if (timerId) clearTimeout(timerId);
+                                        });
+                                    };
                                     try {
                                         var sp = new URLSearchParams(window.location.search);
                                         var sid = sp.get('startup_id');
@@ -365,6 +360,7 @@ public static class SpokesMiddlewareExtensions
                                     while ((!window.Capacitor || !window.Capacitor.Plugins || !window.Capacitor.Plugins.Preferences) && Date.now() < waitDeadline) {
                                         await new Promise(res => setTimeout(res, 4));
                                     }
+                                    var origin = window.location.origin.toLowerCase();
                                     var hostname = window.location.hostname;
                                     var prefs = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Preferences;
                                     var refreshRes = null;
@@ -372,13 +368,19 @@ public static class SpokesMiddlewareExtensions
                                     if (prefs) {
                                         try {
                                             var pair = await Promise.all([
-                                                prefs.get({ key: 'spokes_refresh_' + hostname }).catch(function() { return null; }),
-                                                prefs.get({ key: 'spokes_device_id' }).catch(function() { return null; })
+                                                withTimeout(prefs.get({ key: 'spokes_refresh::' + origin }), 2000),
+                                                withTimeout(prefs.get({ key: 'spokes_device_id::' + origin }), 2000)
                                             ]);
                                             refreshRes = pair[0];
                                             devRes = pair[1];
                                             if (!refreshRes || !refreshRes.value) {
-                                                refreshRes = await prefs.get({ key: 'spokes_refresh' });
+                                                refreshRes = await withTimeout(prefs.get({ key: 'spokes_refresh_' + hostname }), 2000);
+                                            }
+                                            if (!refreshRes || !refreshRes.value) {
+                                                refreshRes = await withTimeout(prefs.get({ key: 'spokes_refresh' }), 2000);
+                                            }
+                                            if (!devRes || !devRes.value) {
+                                                devRes = await withTimeout(prefs.get({ key: 'spokes_device_id' }), 2000);
                                             }
                                         } catch(e) {}
                                     }
@@ -394,10 +396,10 @@ public static class SpokesMiddlewareExtensions
                                         try {
                                             var devId = (devRes && devRes.value) || localStorage.getItem('spokes_device_id') || '';
                                             if ((!devId || devId.startsWith('dev_')) && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.NotificationCrypto && window.Capacitor.Plugins.NotificationCrypto.getStableDeviceId) {
-                                                var cryptoRes = await window.Capacitor.Plugins.NotificationCrypto.getStableDeviceId();
+                                                var cryptoRes = await withTimeout(window.Capacitor.Plugins.NotificationCrypto.getStableDeviceId(), 2000);
                                                 if (cryptoRes && cryptoRes.deviceId) {
                                                     devId = cryptoRes.deviceId;
-                                                    if (prefs) { try { await prefs.set({ key: 'spokes_device_id', value: devId }); } catch(e) {} }
+                                                    if (prefs) { try { await withTimeout(prefs.set({ key: 'spokes_device_id::' + origin, value: devId }), 1000); } catch(e) {} }
                                                 }
                                             }
                                             if (devId) {
@@ -428,6 +430,10 @@ public static class SpokesMiddlewareExtensions
         return app;
     }
 
+    private static bool IsMobileOrCapacitorRequest(HttpContext context) =>
+        string.Equals(context.Request.Query["client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase) ||
+        context.Request.Headers.UserAgent.ToString().Contains("Capacitor", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Reopens active chat draft for mobile clients on root navigation.
     /// </summary>
@@ -438,10 +444,7 @@ public static class SpokesMiddlewareExtensions
             if (HttpMethods.IsGet(context.Request.Method) &&
                 (context.Request.Path == "/" || context.Request.Path == "/chat" || string.IsNullOrEmpty(context.Request.Path.Value)))
             {
-                var isMobile = string.Equals(context.Request.Query["client"].ToString(), "mobile", StringComparison.OrdinalIgnoreCase)
-                    || context.Request.Headers.UserAgent.ToString().Contains("Capacitor", StringComparison.OrdinalIgnoreCase);
-
-                if (isMobile && context.User.Identity?.IsAuthenticated == true)
+                if (IsMobileOrCapacitorRequest(context) && context.User.Identity?.IsAuthenticated == true)
                 {
                     var userService = context.RequestServices.GetRequiredService<UserService>();
                     var employee = userService.GetEmployee(context.User);

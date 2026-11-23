@@ -28,6 +28,7 @@ public class SequenceServiceTests : IDisposable
     {
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         return new SequenceService(mockConfig.Object);
     }
 
@@ -167,6 +168,7 @@ public class SequenceServiceTests : IDisposable
         {
             var mockConfig = new Mock<IConfiguration>();
             mockConfig.Setup(c => c["DataPath"]).Returns((string?)null);
+            mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
             var service = new SequenceService(mockConfig.Object);
 
@@ -187,6 +189,7 @@ public class SequenceServiceTests : IDisposable
     {
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(Path.Combine(_testDataDir, "non_existent_subfolder", "nested"));
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         var service = new SequenceService(mockConfig.Object);
 
         // Should not throw even if directory doesn't exist for Save()

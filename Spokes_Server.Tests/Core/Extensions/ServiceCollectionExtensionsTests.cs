@@ -93,7 +93,7 @@ public class ServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         var mockWebHost = new Mock<IWebHostBuilder>();
 
-        services.AddSpokesWebUi(mockWebHost.Object);
+        services.AddSpokesWebUi();
 
         // Verify presentation circuit context and circuit handlers
         Assert.Contains(services, d => d.ServiceType == typeof(Spokes_Server.Core.Services.Communication.Presence.UserCircuitContext) && d.Lifetime == ServiceLifetime.Scoped);
@@ -107,7 +107,7 @@ public class ServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         var mockWebHost = new Mock<IWebHostBuilder>();
 
-        services.AddSpokesWebUi(mockWebHost.Object);
+        services.AddSpokesWebUi();
 
         using var sp = services.BuildServiceProvider();
         var kestrelSetup = new KestrelServerOptionsSetup(sp);
@@ -151,7 +151,7 @@ public class ServiceCollectionExtensionsTests
         });
         services.AddSingleton(mockCompanyProfileRepo.Object);
 
-        services.AddSpokesWebUi(mockWebHost.Object);
+        services.AddSpokesWebUi();
 
         using var sp = services.BuildServiceProvider();
 
@@ -203,7 +203,6 @@ public class ServiceCollectionExtensionsTests
         services.AddLogging();
         services.AddDataProtection();
         services.AddSingleton(new Mock<Microsoft.JSInterop.IJSRuntime>().Object);
-        services.AddSingleton(new Mock<Microsoft.AspNetCore.SignalR.IHubContext<Spokes_Server.Hubs.ChatHub>>().Object);
         services.AddSpokesConfiguration(mockConfig.Object);
         services.AddSpokesDatabase();
         services.AddSpokesCoreServices();

@@ -27,7 +27,7 @@ public class AvatarMigrationStepTests : TestDataTestBase
     {
         var configDict = new Dictionary<string, string?>
         {
-            { "DataPath", _testDataPath }
+            { "DataPath", _testDataPath }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" }
         };
         _config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
 

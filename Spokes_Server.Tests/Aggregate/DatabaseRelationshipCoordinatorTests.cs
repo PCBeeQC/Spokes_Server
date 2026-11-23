@@ -35,6 +35,7 @@ public class DatabaseRelationshipCoordinatorTests : TestDataTestBase
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());
@@ -251,8 +252,8 @@ public class DatabaseRelationshipCoordinatorTests : TestDataTestBase
 
         var updatedEmp = _db.Employees.GetById("emp-coord-1");
         Assert.NotNull(updatedEmp);
-        Assert.NotNull(updatedEmp.PermissionGroup);
-        Assert.Equal("Updated Group Name", updatedEmp.PermissionGroup.Name);
+        Assert.Single(updatedEmp.PermissionGroups);
+        Assert.Equal("Updated Group Name", updatedEmp.PermissionGroups[0].Name);
     }
 
     [Fact]
@@ -273,8 +274,8 @@ public class DatabaseRelationshipCoordinatorTests : TestDataTestBase
 
         var fetchedEmp = _db.Employees.GetById("emp-coord-2");
         Assert.NotNull(fetchedEmp);
-        Assert.NotNull(fetchedEmp.PermissionGroup);
-        Assert.Equal("Engineering", fetchedEmp.PermissionGroup.Name);
+        Assert.Single(fetchedEmp.PermissionGroups);
+        Assert.Equal("Engineering", fetchedEmp.PermissionGroups[0].Name);
     }
 
     [Fact]
@@ -292,14 +293,14 @@ public class DatabaseRelationshipCoordinatorTests : TestDataTestBase
             PermissionGroupId = "pg-coord-role2"
         };
         _db.Employees.Save(emp);
-        Assert.NotNull(_db.Employees.GetById("emp-coord-3")?.PermissionGroup);
+        Assert.Single(_db.Employees.GetById("emp-coord-3")!.PermissionGroups);
 
         emp.PermissionGroupId = null;
         _db.Employees.Save(emp);
 
         var clearedEmp = _db.Employees.GetById("emp-coord-3");
         Assert.NotNull(clearedEmp);
-        Assert.Null(clearedEmp.PermissionGroup);
+        Assert.Empty(clearedEmp.PermissionGroups);
     }
 
     [Fact]

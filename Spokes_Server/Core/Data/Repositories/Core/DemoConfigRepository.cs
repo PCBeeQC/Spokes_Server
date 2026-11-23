@@ -1,5 +1,3 @@
-using Spokes_Server.Core.Models.Core;
-
 namespace Spokes_Server.Core.Data.Repositories.Core;
 
 public class DemoConfigRepository : JsonRepository<DemoConfig>

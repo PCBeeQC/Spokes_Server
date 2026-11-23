@@ -3,7 +3,7 @@
 
 <MudDialog>
     <DialogContent>
-        <MudTextField @ref="_searchField" @bind-Value="_query" Placeholder="@Loc["SearchPlaceholder"]"
+        <MudTextField @bind-Value="_query" Placeholder="@Loc["SearchPlaceholder"]"
             Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
             DebounceInterval="500" OnDebounceIntervalElapsed="OnSearch"
             AutoFocus="true" Variant="Variant.Outlined" Class="mb-2 mt-2"
@@ -57,7 +57,6 @@
 @code {
     [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
 
-    private MudTextField<string>? _searchField;
     private string _query = string.Empty;
     private List<SearchResult> _results = new();
     private SearchResult? _selectedResult;

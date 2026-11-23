@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -30,40 +32,40 @@ namespace Spokes_Server.Controllers;
 [Route("spokesapi/auth")]
 public class MobileAuthController : SpokesControllerBase
 {
+    public const string AllowedMobileRedirectUri = "spokes://auth-callback";
+
     private readonly CoreContext _coreContext;
-    private readonly HrContext _hrContext;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly SessionService _sessionService;
     private readonly UserService _userService;
     private readonly ILogger<MobileAuthController>? _logger;
-    private readonly IOptionsMonitor<OpenIdConnectOptions>? _oidcOptionsMonitor;
     private readonly IConfigurationManager<OpenIdConnectConfiguration>? _configurationManager;
     private readonly IOpenIdConfigurationProvider? _openIdConfigurationProvider;
+    private readonly MobileOAuthChallengeService? _challengeService;
 
     [ActivatorUtilitiesConstructor]
     public MobileAuthController(
         CoreContext coreContext,
-        HrContext hrContext,
         IHttpClientFactory httpClientFactory,
         SessionService sessionService,
         UserService userService,
         ILogger<MobileAuthController>? logger = null,
         IOptionsMonitor<OpenIdConnectOptions>? oidcOptionsMonitor = null,
         IConfigurationManager<OpenIdConnectConfiguration>? configurationManager = null,
-        IOpenIdConfigurationProvider? openIdConfigurationProvider = null)
+        IOpenIdConfigurationProvider? openIdConfigurationProvider = null,
+        MobileOAuthChallengeService? challengeService = null)
     {
         _coreContext = coreContext ?? throw new ArgumentNullException(nameof(coreContext));
-        _hrContext = hrContext ?? throw new ArgumentNullException(nameof(hrContext));
         _httpClientFactory = httpClientFactory;
         _sessionService = sessionService;
         _userService = userService ?? throw new ArgumentNullException(nameof(userService));
         _logger = logger;
-        _oidcOptionsMonitor = oidcOptionsMonitor;
         _configurationManager = configurationManager;
         _openIdConfigurationProvider = openIdConfigurationProvider
             ?? (configurationManager != null || oidcOptionsMonitor != null
                 ? new OpenIdConfigurationProvider(httpClientFactory, oidcOptionsMonitor, configurationManager)
                 : OpenIdConfigurationProvider.Shared);
+        _challengeService = challengeService;
     }
 
     private IConfigurationManager<OpenIdConnectConfiguration> GetConfigurationManager(string authority)
@@ -108,12 +110,63 @@ public class MobileAuthController : SpokesControllerBase
             "openid profile email"));
     }
 
+    public class MobileChallengeRequest
+    {
+        public string? DeviceId { get; set; }
+    }
+
+    public record MobileChallengeResponse(
+        [property: JsonPropertyName("state")] string State,
+        [property: JsonPropertyName("nonce")] string Nonce);
+
+    [HttpPost("mobile/challenge")]
+    [AllowAnonymous]
+    public IActionResult CreateChallenge([FromBody] MobileChallengeRequest? req)
+    {
+        if (req == null || string.IsNullOrWhiteSpace(req.DeviceId) || req.DeviceId.Trim().Length > MobileOAuthChallengeService.MaxDeviceIdLength)
+        {
+            return BadRequestError("DeviceId is required to initiate mobile authentication.");
+        }
+
+        var challengeSvc = _challengeService ?? HttpContext?.RequestServices?.GetService<MobileOAuthChallengeService>();
+        if (challengeSvc == null)
+        {
+            return StatusCodeError(500, "Mobile OAuth challenge service is not available.");
+        }
+
+        var challenge = challengeSvc.CreateChallenge(req.DeviceId);
+        return Ok(new MobileChallengeResponse(challenge.State, challenge.Nonce));
+    }
+
+    public static bool IsValidPkceCodeVerifier(string? verifier)
+    {
+        if (string.IsNullOrEmpty(verifier) || verifier.Length < 43 || verifier.Length > 128)
+        {
+            return false;
+        }
+
+        foreach (char c in verifier)
+        {
+            bool isUnreserved = (c >= 'A' && c <= 'Z')
+                || (c >= 'a' && c <= 'z')
+                || (c >= '0' && c <= '9')
+                || c == '-' || c == '.' || c == '_' || c == '~';
+            if (!isUnreserved)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public class MobileExchangeRequest
     {
         public string Code { get; set; } = string.Empty;
         public string CodeVerifier { get; set; } = string.Empty;
         public string RedirectUri { get; set; } = string.Empty;
         public string? DeviceId { get; set; }
+        public string State { get; set; } = string.Empty;
     }
 
     [HttpPost("mobile/exchange")]
@@ -125,9 +178,35 @@ public class MobileAuthController : SpokesControllerBase
             return BadRequestError("DeviceId is required for mobile token exchange.");
         }
 
+        if (req.DeviceId.Trim().Length > MobileOAuthChallengeService.MaxDeviceIdLength)
+        {
+            return BadRequestError("DeviceId exceeds maximum length.");
+        }
+
         var sysConfig = _coreContext.SystemConfigs.Get();
         var authority = sysConfig.Authority?.TrimEnd('/');
         if (string.IsNullOrEmpty(authority)) return BadRequestError("Authority not configured");
+
+        if (string.IsNullOrWhiteSpace(req.Code))
+        {
+            return BadRequestError("Authorization code is required.");
+        }
+
+        if (!string.Equals(req.RedirectUri, AllowedMobileRedirectUri, StringComparison.Ordinal))
+        {
+            return BadRequestError("Invalid mobile redirect URI.");
+        }
+
+        if (!IsValidPkceCodeVerifier(req.CodeVerifier))
+        {
+            return BadRequestError("Invalid PKCE code verifier.");
+        }
+
+        var challengeSvc = _challengeService ?? HttpContext?.RequestServices?.GetService<MobileOAuthChallengeService>();
+        if (challengeSvc == null || !challengeSvc.TryConsumeChallenge(req.State, req.DeviceId, out var expectedNonce))
+        {
+            return BadRequestError("Invalid, expired, or already-used OAuth state challenge.");
+        }
 
         // 1. Exchange the code at the IDP's Token Endpoint
         var tokenEndpoint = $"{authority}/api/login/oauth/access_token";
@@ -153,7 +232,7 @@ public class MobileAuthController : SpokesControllerBase
             new KeyValuePair<string, string>("client_id", sysConfig.ClientId ?? ""),
             new KeyValuePair<string, string>("client_secret", sysConfig.ClientSecret ?? ""),
             new KeyValuePair<string, string>("code", req.Code),
-            new KeyValuePair<string, string>("redirect_uri", req.RedirectUri),
+            new KeyValuePair<string, string>("redirect_uri", AllowedMobileRedirectUri),
             new KeyValuePair<string, string>("code_verifier", req.CodeVerifier)
         });
 
@@ -263,6 +342,19 @@ public class MobileAuthController : SpokesControllerBase
             return BadRequestError($"Token validation failed: {ex.Message}");
         }
 
+        var tokenNonce = principal.FindFirst("nonce")?.Value;
+        if (string.IsNullOrEmpty(tokenNonce))
+        {
+            return BadRequestError("id_token missing required nonce claim.");
+        }
+
+        var tokenNonceHash = SHA256.HashData(Encoding.UTF8.GetBytes(tokenNonce));
+        var expectedNonceHash = SHA256.HashData(Encoding.UTF8.GetBytes(expectedNonce));
+        if (!CryptographicOperations.FixedTimeEquals(tokenNonceHash, expectedNonceHash))
+        {
+            return BadRequestError("id_token nonce mismatch.");
+        }
+
         var sub = principal.FindFirst("sub")?.Value 
                   ?? principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         var name = principal.FindFirst("name")?.Value ?? "Unknown User";
@@ -333,7 +425,9 @@ public class MobileAuthController : SpokesControllerBase
         await _sessionService.SignInAndExtendAsync(HttpContext, result.Value.Session, result.Value.Employee, body.DeviceId);
         _logger?.LogDebug("[AUTH-REFRESH] Session refresh successful for: {FullName} (device: {DeviceId})", result.Value.Employee.FullName, result.Value.Session.DeviceId);
 
-        return Ok(new MobileSessionRefreshResponse(90 * 86400));
+        var userScope = FileTokenService.ComputeUserMediaScope(result.Value.Employee.Id);
+        var hasVaultKey = result.Value.Session.HasVaultCookie;
+        return Ok(new MobileSessionRefreshResponse(90 * 86400, userScope, hasVaultKey));
     }
 
     [HttpGet("current-session")]
@@ -369,7 +463,9 @@ public record MobileExchangeResponse(
     [property: JsonPropertyName("refreshToken")] string RefreshToken);
 
 public record MobileSessionRefreshResponse(
-    [property: JsonPropertyName("expiresInSeconds")] int ExpiresInSeconds);
+    [property: JsonPropertyName("expiresInSeconds")] int ExpiresInSeconds,
+    [property: JsonPropertyName("userScope")] string? UserScope = null,
+    [property: JsonPropertyName("hasVaultKey")] bool HasVaultKey = false);
 
 public record MobileSessionStatusResponse(
     [property: JsonPropertyName("active")] bool Active,

@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -42,11 +43,25 @@ public class DocumentPdfServiceTests : IDisposable
         ILogger<DocumentPdfService>? logger = null,
         IBrowserManager? browserManager = null,
         RenderTokenService? tokenService = null,
-        DeviceSessionRepository? deviceSessions = null)
+        DeviceSessionRepository? deviceSessions = null,
+        IHttpContextAccessor? httpContextAccessor = null)
     {
         var tokens = tokenService ?? new RenderTokenService();
-        var httpContextAccessor = new Mock<IHttpContextAccessor>().Object;
-        var inMemoryConfig = new Dictionary<string, string?>();
+        if (httpContextAccessor == null)
+        {
+            var mockAccessor = new Mock<IHttpContextAccessor>();
+            mockAccessor.Setup(a => a.HttpContext).Returns(new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(
+                    [new Claim("EmployeeId", "emp-pdf-test")],
+                    "TestAuth"))
+            });
+            httpContextAccessor = mockAccessor.Object;
+        }
+        var inMemoryConfig = new Dictionary<string, string?>
+        {
+            ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"
+        };
         if (dataPath != null)
         {
             inMemoryConfig["DataPath"] = dataPath;
@@ -77,6 +92,7 @@ public class DocumentPdfServiceTests : IDisposable
         mockBrowser.Setup(b => b.CreateBrowserContextAsync(It.IsAny<BrowserContextOptions>())).ReturnsAsync(mockBrowserContext.Object);
         mockBrowserContext.Setup(c => c.NewPageAsync(It.IsAny<CreatePageOptions>())).ReturnsAsync(mockPage.Object);
         mockBrowserContext.Setup(c => c.CloseAsync()).Returns(Task.CompletedTask);
+        mockPage.Setup(p => p.SetRequestInterceptionAsync(It.IsAny<bool>())).Returns(Task.CompletedTask);
         mockPage.Setup(p => p.SetExtraHttpHeadersAsync(It.IsAny<Dictionary<string, string>>())).Returns(Task.CompletedTask);
         mockPage.Setup(p => p.SetViewportAsync(It.IsAny<ViewPortOptions>())).Returns(Task.CompletedTask);
         mockPage.Setup(p => p.EmulateMediaTypeAsync(MediaType.Print)).Returns(Task.CompletedTask);
@@ -89,7 +105,6 @@ public class DocumentPdfServiceTests : IDisposable
         mockBrowserManager.Setup(bm => bm.GetBrowserAsync(It.IsAny<CancellationToken>())).ReturnsAsync(mockBrowser.Object);
 
         var service = CreateService(dataPath ?? _testTempDir, mockLogger.Object, mockBrowserManager.Object, tokenService, deviceSessions);
-        service.Browser = mockBrowser.Object;
 
         return (service, mockBrowser, mockBrowserContext, mockPage, mockLogger);
     }
@@ -97,7 +112,7 @@ public class DocumentPdfServiceTests : IDisposable
     [Fact]
     public void Constructor_WithDefaultDataPath_UsesDataDirectory()
     {
-        using var service = CreateService(dataPath: null);
+        var service = CreateService(dataPath: null);
 
         Assert.Equal("Data", service.DataPath);
     }
@@ -107,35 +122,9 @@ public class DocumentPdfServiceTests : IDisposable
     {
         var customPath = @"C:\CustomDataPath\Spokes";
 
-        using var service = CreateService(dataPath: customPath);
+        var service = CreateService(dataPath: customPath);
 
         Assert.Equal(customPath, service.DataPath);
-    }
-
-    [Fact]
-    public void Dispose_WhenBrowserIsNull_DoesNotThrow()
-    {
-        var service = CreateService();
-
-        var exception = Record.Exception(() => service.Dispose());
-        Assert.Null(exception);
-
-        var secondException = Record.Exception(() => service.Dispose());
-        Assert.Null(secondException);
-    }
-
-    [Fact]
-    public void Dispose_WhenBrowserIsSet_DisposesBrowserAndSetsNull()
-    {
-        var (service, mockBrowser, _, _, _) = CreateServiceWithMockBrowser();
-
-        service.Dispose();
-
-        mockBrowser.Verify(b => b.Dispose(), Times.Once);
-        Assert.Null(service.Browser);
-
-        service.Dispose();
-        mockBrowser.Verify(b => b.Dispose(), Times.Once);
     }
 
     [Fact]
@@ -156,6 +145,7 @@ public class DocumentPdfServiceTests : IDisposable
         mockBrowser.Verify(b => b.NewPageAsync(It.IsAny<CreatePageOptions>()), Times.Never);
         mockBrowserContext.Verify(c => c.NewPageAsync(It.IsAny<CreatePageOptions>()), Times.Once);
         mockBrowserContext.Verify(c => c.CloseAsync(), Times.Once);
+        mockPage.Verify(p => p.SetRequestInterceptionAsync(true), Times.Once);
         mockPage.Verify(p => p.SetExtraHttpHeadersAsync(It.IsAny<Dictionary<string, string>>()), Times.Never);
 
         mockPage.Verify(p => p.GoToAsync(
@@ -395,7 +385,7 @@ public class DocumentPdfServiceTests : IDisposable
         var mockBrowserManager = new Mock<IBrowserManager>();
         mockBrowserManager.Setup(bm => bm.GetBrowserAsync(It.IsAny<CancellationToken>())).ReturnsAsync(mockBrowser.Object);
 
-        using var service = CreateService(dataPath: _testTempDir, browserManager: mockBrowserManager.Object);
+        var service = CreateService(dataPath: _testTempDir, browserManager: mockBrowserManager.Object);
         var quote = new Quote { Id = "quote-bm" };
 
         await service.GenerateQuotePdfAsync(quote, "proj-bm", "http://localhost:5000");
@@ -438,7 +428,7 @@ public class DocumentPdfServiceTests : IDisposable
         Directory.CreateDirectory(_testTempDir);
         var tokenService = new RenderTokenService();
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testTempDir })
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = _testTempDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"})
             .Build();
         using var persistence = new DiskPersistenceService(new Mock<ILogger<DiskPersistenceService>>().Object);
         var deviceSessions = new DeviceSessionRepository(persistence, config);
@@ -462,15 +452,16 @@ public class DocumentPdfServiceTests : IDisposable
                 Assert.False(tokenService.TryConsumeToken(renderToken, "/projects/proj-1/invoices/other", out var rejectedSession));
                 Assert.Empty(rejectedSession);
 
-                // Consuming on the bound path succeeds once and persists the temporary DeviceSession
-                Assert.True(tokenService.TryConsumeToken(renderToken, uri.AbsolutePath, out var sessionId));
+                // Consuming on the bound path succeeds once and persists the temporary DeviceSession bound to the initiator
+                Assert.True(tokenService.TryConsumeToken(renderToken, uri.AbsolutePath, out var sessionId, out var initiatorEmployeeId));
                 Assert.False(string.IsNullOrEmpty(sessionId));
+                Assert.Equal("emp-pdf-test", initiatorEmployeeId);
                 capturedSessionId = sessionId;
 
                 deviceSessions.Save(new DeviceSession
                 {
                     Id = sessionId,
-                    EmployeeId = "system-renderer",
+                    EmployeeId = initiatorEmployeeId!,
                     DeviceName = "Headless Renderer",
                     CreatedAt = DateTime.UtcNow,
                     ExpiresAt = DateTime.UtcNow.AddMinutes(5)
@@ -478,10 +469,7 @@ public class DocumentPdfServiceTests : IDisposable
             })
             .Returns(Task.FromResult<IResponse?>(null));
 
-        using (service)
-        {
-            await service.GenerateInvoicePdfAsync(new Invoice { Id = "inv-revoke" }, "proj-1", "http://localhost:5000");
-        }
+        await service.GenerateInvoicePdfAsync(new Invoice { Id = "inv-revoke" }, "proj-1", "http://localhost:5000");
 
         Assert.Equal(0, tokenService.TokenCount);
         Assert.NotNull(capturedSessionId);
@@ -493,7 +481,7 @@ public class DocumentPdfServiceTests : IDisposable
     [Fact]
     public void IsValidCachedPdf_DetectsAndDeletesCorruptedAccessDeniedPdf_AndAcceptsValidPdf()
     {
-        using var service = CreateService(_testTempDir);
+        var service = CreateService(_testTempDir);
         Directory.CreateDirectory(_testTempDir);
 
         var corruptedPath = Path.Combine(_testTempDir, "corrupted.pdf");
@@ -507,5 +495,48 @@ public class DocumentPdfServiceTests : IDisposable
 
         Assert.True(service.IsValidCachedPdf(validPath));
         Assert.True(File.Exists(validPath));
+    }
+
+    [Fact]
+    public async Task GeneratePdfAsync_WithoutInitiatorOrWithSystemRenderer_ThrowsUnauthorizedAccessException()
+    {
+        var anonymousAccessor = new Mock<IHttpContextAccessor>();
+        anonymousAccessor.Setup(a => a.HttpContext).Returns(new DefaultHttpContext());
+        var mockBrowserManager = new Mock<IBrowserManager>();
+        var service = CreateService(
+            dataPath: _testTempDir,
+            browserManager: mockBrowserManager.Object,
+            httpContextAccessor: anonymousAccessor.Object);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.GenerateQuotePdfAsync(new Quote { Id = "q1" }, "proj-1", "http://localhost:5000"));
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.GenerateQuotePdfAsync(new Quote { Id = "q1" }, "proj-1", "http://localhost:5000", "system-renderer"));
+
+        mockBrowserManager.Verify(bm => bm.GetBrowserAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.1:5000/_framework/blazor.web.js", "http://127.0.0.1:5000", true)]
+    [InlineData("ws://127.0.0.1:5000/_blazor?id=abc", "http://127.0.0.1:5000", true)]
+    [InlineData("https://app.example.com:8443/spokesapi/files/avatars/u1/a.png", "https://app.example.com:8443", true)]
+    [InlineData("wss://app.example.com:8443/_blazor", "https://app.example.com:8443", true)]
+    [InlineData("about:blank", "http://127.0.0.1:5000", true)]
+    [InlineData("data:image/png;base64,iVBORw0KGgo=", "http://127.0.0.1:5000", true)]
+    [InlineData("data:font/woff2;base64,AAAA", "http://127.0.0.1:5000", true)]
+    [InlineData("http://127.0.0.1:8000/api/get-users", "http://127.0.0.1:5000", false)]
+    [InlineData("http://169.254.169.254/latest/meta-data/", "http://127.0.0.1:5000", false)]
+    [InlineData("https://evil.example/exfiltrate.png", "http://127.0.0.1:5000", false)]
+    [InlineData("file:///etc/passwd", "http://127.0.0.1:5000", false)]
+    [InlineData("data:text/html,<script>alert(1)</script>", "http://127.0.0.1:5000", false)]
+    [InlineData("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>", "http://127.0.0.1:5000", false)]
+    [InlineData("http://user:pass@127.0.0.1:5000/projects/p1", "http://127.0.0.1:5000", false)]
+    public void IsAllowedPdfRenderRequestUrl_EnforcesSameOriginAndSafeDataUris(
+        string requestUrl,
+        string effectiveBaseUrl,
+        bool expectedAllowed)
+    {
+        Assert.Equal(expectedAllowed, DocumentPdfService.IsAllowedPdfRenderRequestUrl(requestUrl, effectiveBaseUrl));
     }
 }

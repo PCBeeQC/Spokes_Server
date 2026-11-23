@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Spokes_Server.Aggregate.Contexts;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Models.Projects;
+using Spokes_Server.Core.Services.Projects;
 using Spokes_Server.Core.Services.Reports.Helpers;
 
 namespace Spokes_Server.Core.Services.Accounting;
@@ -91,6 +94,7 @@ public class BillingPrePayItem
 
 public class BillingSubmissionRequest
 {
+    public Employee? Actor { get; set; }
     public Invoice Invoice { get; set; } = default!;
     public DocumentTemplate? Template { get; set; }
     public decimal DefaultMarkupRate { get; set; } = 0.15m;
@@ -100,11 +104,6 @@ public class BillingSubmissionRequest
     public List<BillingMilestoneSelection> SelectedMilestones { get; set; } = new();
     public List<QuoteLaborItem> SelectedQuoteLabor { get; set; } = new();
     public List<QuoteItemRow> SelectedQuoteItems { get; set; } = new();
-    public List<QuoteItemRow> SelectedQuoteMaterialItems
-    {
-        get => SelectedQuoteItems;
-        set => SelectedQuoteItems = value;
-    }
     public List<BillingPrePayItem> PrePayItems { get; set; } = new();
     public List<InvoiceLine> CustomLaborLines { get; set; } = new();
     public List<InvoiceLine> CustomMaterialLines { get; set; } = new();
@@ -132,16 +131,84 @@ public class BillingOrchestrationService
         _core = core;
     }
 
-    public List<AvailablePrepaymentCredit> CalculateAvailablePrepaymentCredits(IEnumerable<Project> projects, Invoice invoice)
+    private static bool CanActorReadBillingData(Employee actor) =>
+        actor is { IsActive: true, IsBanned: false, IsSystem: false } &&
+        (actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting, allowSuspended: true) ||
+         actor.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices, allowSuspended: true));
+
+    private List<Project> FilterReadableProjects(IEnumerable<Project> projects, Employee? actor)
     {
+        var nonNullProjects = projects?.Where(p => p != null).ToList() ?? [];
+        if (actor == null) return nonNullProjects;
+        if (!CanActorReadBillingData(actor)) return [];
+
+        return nonNullProjects
+            .Where(p => ProjectAccessHelper.CanAccess(actor, p, _hr.Teams, allowAccountingFinancialRead: true))
+            .ToList();
+    }
+
+    private void EnsureCanAccessInvoiceTarget(Employee actor, Invoice invoice)
+    {
+        if (!string.IsNullOrEmpty(invoice.ProjectGroupId))
+        {
+            var group = _projects.ProjectGroups.GetById(invoice.ProjectGroupId);
+            if (group == null || group.ProjectIds == null || group.ProjectIds.Count == 0)
+            {
+                throw new UnauthorizedAccessException("Referenced project group could not be resolved.");
+            }
+
+            foreach (var pid in group.ProjectIds)
+            {
+                var gp = _projects.Projects.GetById(pid);
+                if (gp == null || !ProjectAccessHelper.CanAccess(actor, gp, _hr.Teams, allowAccountingFinancialRead: true))
+                {
+                    throw new UnauthorizedAccessException("You do not have access to all projects in the referenced project group.");
+                }
+            }
+        }
+
+        if (!string.IsNullOrEmpty(invoice.ProjectId))
+        {
+            var proj = _projects.Projects.GetById(invoice.ProjectId);
+            if (proj == null || !ProjectAccessHelper.CanAccess(actor, proj, _hr.Teams, allowAccountingFinancialRead: true))
+            {
+                throw new UnauthorizedAccessException("You do not have access to the referenced project.");
+            }
+        }
+    }
+
+    public List<AvailablePrepaymentCredit> CalculateAvailablePrepaymentCredits(IEnumerable<Project> projects, Invoice invoice, Employee? actor = null)
+    {
+        if (actor != null && !CanActorReadBillingData(actor))
+        {
+            return [];
+        }
+
+        var authorizedProjects = FilterReadableProjects(projects, actor);
         var result = new List<AvailablePrepaymentCredit>();
 
-        var groupInvoices = !string.IsNullOrEmpty(invoice.ProjectGroupId)
-            ? _accounting.Invoices.GetByProjectGroup(invoice.ProjectGroupId)
-            : new List<Invoice>();
+        var groupInvoices = new List<Invoice>();
+        if (!string.IsNullOrEmpty(invoice.ProjectGroupId))
+        {
+            bool canReadGroup = true;
+            if (actor != null)
+            {
+                var group = _projects.ProjectGroups.GetById(invoice.ProjectGroupId);
+                canReadGroup = group != null && group.ProjectIds.Count > 0 && group.ProjectIds.All(pid =>
+                {
+                    var gp = _projects.Projects.GetById(pid);
+                    return gp != null && ProjectAccessHelper.CanAccess(actor, gp, _hr.Teams, allowAccountingFinancialRead: true);
+                });
+            }
+
+            if (canReadGroup)
+            {
+                groupInvoices = _accounting.Invoices.GetByProjectGroup(invoice.ProjectGroupId);
+            }
+        }
 
         var allInvoices = new List<Invoice>();
-        foreach (var project in projects)
+        foreach (var project in authorizedProjects)
         {
             allInvoices.AddRange(_accounting.Invoices.GetByProject(project.Id));
         }
@@ -212,10 +279,13 @@ public class BillingOrchestrationService
         return result;
     }
 
-    public List<BillingLaborGroup> LoadUnbilledLabor(IEnumerable<Project> projects, Invoice invoice, IReadOnlyDictionary<string, WorkType> workTypes)
+    public List<BillingLaborGroup> LoadUnbilledLabor(IEnumerable<Project> projects, Invoice invoice, IReadOnlyDictionary<string, WorkType> workTypes, Employee? actor = null)
     {
-        var projectIds = projects.Select(p => p.Id).ToHashSet();
-        var billedTimeIds = GetBilledTimeEntryIds(projectIds, invoice);
+        var authorizedProjects = FilterReadableProjects(projects, actor);
+        if (authorizedProjects.Count == 0) return [];
+
+        var projectIds = authorizedProjects.Select(p => p.Id).ToHashSet();
+        var billedTimeIds = GetBilledIds(projectIds, invoice, i => i.BilledTimeEntryIds);
         var currentInvoiceTimeIds = invoice.BilledTimeEntryIds.ToHashSet();
 
         var allSheets = _hr.Timesheets.GetAll();
@@ -271,18 +341,21 @@ public class BillingOrchestrationService
         return result;
     }
 
-    public List<BillingExpenseItem> LoadUnbilledExpenses(IEnumerable<Project> projects, Invoice invoice, decimal defaultMarkupRate)
+    public List<BillingExpenseItem> LoadUnbilledExpenses(IEnumerable<Project> projects, Invoice invoice, decimal defaultMarkupRate, Employee? actor = null)
     {
-        var projectIds = projects.Select(p => p.Id).ToHashSet();
-        var billedPoIds = GetBilledPoItemIds(projectIds, invoice);
-        var billedExpenseIds = GetBilledExpenseItemIds(projectIds, invoice);
+        var authorizedProjects = FilterReadableProjects(projects, actor);
+        if (authorizedProjects.Count == 0) return [];
+
+        var projectIds = authorizedProjects.Select(p => p.Id).ToHashSet();
+        var billedPoIds = GetBilledIds(projectIds, invoice, i => i.BilledPoItemIds);
+        var billedExpenseIds = GetBilledIds(projectIds, invoice, i => i.BilledExpenseItemIds);
         var currentInvoicePoIds = invoice.BilledPoItemIds.ToHashSet();
         var currentInvoiceExpenseIds = invoice.BilledExpenseItemIds.ToHashSet();
 
         var result = new List<BillingExpenseItem>();
 
         var allPos = _accounting.PurchaseOrders.GetAll();
-        foreach (var po in allPos)
+        foreach (var po in allPos.Where(p => !string.Equals(p.Status, PurchaseOrderStatus.Void, StringComparison.OrdinalIgnoreCase)))
         {
             var myItems = po.LineItems.Where(i => projectIds.Contains(i.ProjectId) &&
                 (!billedPoIds.Contains(i.Id) || currentInvoicePoIds.Contains(i.Id)));
@@ -312,7 +385,7 @@ public class BillingOrchestrationService
         }
 
         var allReports = _accounting.ExpenseReports.GetAll();
-        foreach (var report in allReports.Where(r => r.DateSubmitted.HasValue))
+        foreach (var report in allReports.Where(r => r.DateSubmitted.HasValue && !string.Equals(r.Status, ExpenseReportStatus.Draft, StringComparison.OrdinalIgnoreCase)))
         {
             var myItems = report.LineItems.Where(i => projectIds.Contains(i.ProjectId) &&
                 (!billedExpenseIds.Contains(i.Id) || currentInvoiceExpenseIds.Contains(i.Id)));
@@ -344,9 +417,12 @@ public class BillingOrchestrationService
         return result;
     }
 
-    public BillingMilestonesAndQuotesResult LoadMilestonesAndQuotes(IEnumerable<Project> projects, Invoice invoice)
+    public BillingMilestonesAndQuotesResult LoadMilestonesAndQuotes(IEnumerable<Project> projects, Invoice invoice, Employee? actor = null)
     {
-        var projectIds = projects.Select(p => p.Id).ToHashSet();
+        var authorizedProjects = FilterReadableProjects(projects, actor);
+        if (authorizedProjects.Count == 0) return new BillingMilestonesAndQuotesResult();
+
+        var projectIds = authorizedProjects.Select(p => p.Id).ToHashSet();
         var acceptedQuotes = new List<Quote>();
         var availableTerms = new List<BillingMilestoneSelection>();
         var laborSelections = new Dictionary<string, HashSet<QuoteLaborItem>>();
@@ -403,7 +479,35 @@ public class BillingOrchestrationService
 
     public void ProcessAndSaveInvoice(BillingSubmissionRequest request)
     {
-        var invoice = request.Invoice;
+        if (request == null) throw new ArgumentNullException(nameof(request));
+
+        var actor = request.Actor;
+        if (actor is not { IsSystem: false, IsActiveUnsuspended: true } ||
+            (!actor.HasEffectivePermission(AppPermissions.Finance.AccessAccounting) &&
+             !actor.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices)))
+        {
+            throw new UnauthorizedAccessException("You do not have permission to create or modify invoices.");
+        }
+
+        var invoice = request.Invoice ?? throw new ArgumentNullException(nameof(request.Invoice));
+
+        var existingInvoice = !string.IsNullOrWhiteSpace(invoice.Id)
+            ? _accounting.Invoices.GetById(invoice.Id)
+            : null;
+        if (existingInvoice != null)
+        {
+            EnsureCanAccessInvoiceTarget(actor, existingInvoice);
+        }
+
+        bool isDraftTarget = string.Equals(invoice.Status, InvoiceStatus.Draft, StringComparison.OrdinalIgnoreCase);
+        bool isDraftExisting = existingInvoice == null || string.Equals(existingInvoice.Status, InvoiceStatus.Draft, StringComparison.OrdinalIgnoreCase);
+        if ((!isDraftTarget || !isDraftExisting) &&
+            !actor.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices))
+        {
+            throw new UnauthorizedAccessException("Invoice approval permission is required to finalize or modify non-draft invoices.");
+        }
+
+        EnsureCanAccessInvoiceTarget(actor, invoice);
 
         var invoiceProjects = new List<Project>();
         if (!string.IsNullOrEmpty(invoice.ProjectGroupId))
@@ -430,7 +534,155 @@ public class BillingOrchestrationService
             }
         }
 
-        var availableCreditsById = CalculateAvailablePrepaymentCredits(invoiceProjects, invoice)
+        if (invoiceProjects.Count == 0)
+        {
+            throw new UnauthorizedAccessException("Invoice must reference at least one accessible project.");
+        }
+
+        var invoiceProjectIds = invoiceProjects.Select(p => p.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var billedElsewhereTimeIds = GetBilledIds(invoiceProjectIds, invoice, i => i.BilledTimeEntryIds);
+        var billedElsewherePoIds = GetBilledIds(invoiceProjectIds, invoice, i => i.BilledPoItemIds);
+        var billedElsewhereExpenseIds = GetBilledIds(invoiceProjectIds, invoice, i => i.BilledExpenseItemIds);
+
+        // Pre-validate all submitted entities belong to the target invoice's projects and are eligible for billing
+        var sheetsToSave = new Dictionary<string, Timesheet>(StringComparer.OrdinalIgnoreCase);
+        var resolvedLaborGroups = new List<(BillingLaborGroup Group, List<(Timesheet Sheet, TimeEntry Entry)> Entries)>();
+        foreach (var group in request.LaborGroups.Where(g => g.HoursToBill > 0))
+        {
+            var resolvedEntries = new List<(Timesheet Sheet, TimeEntry Entry)>();
+            foreach (var refObj in group.Entries)
+            {
+                var sheetId = refObj.ParentSheet?.Id;
+                var entryId = refObj.Entry?.Id;
+                if (string.IsNullOrWhiteSpace(sheetId) || string.IsNullOrWhiteSpace(entryId))
+                {
+                    throw new UnauthorizedAccessException("Invalid timesheet reference in billing submission.");
+                }
+
+                if (!sheetsToSave.TryGetValue(sheetId, out var liveSheet))
+                {
+                    liveSheet = _hr.Timesheets.GetById(sheetId)
+                        ?? throw new UnauthorizedAccessException("Referenced timesheet could not be found.");
+                    sheetsToSave[sheetId] = liveSheet;
+                }
+
+                var liveEntry = liveSheet.Entries.FirstOrDefault(e => string.Equals(e.Id, entryId, StringComparison.Ordinal))
+                    ?? throw new UnauthorizedAccessException("Referenced time entry could not be found.");
+                if (!invoiceProjectIds.Contains(liveEntry.ProjectId))
+                {
+                    throw new UnauthorizedAccessException("Cannot bill time entries from projects outside this invoice.");
+                }
+                if (billedElsewhereTimeIds.Contains(liveEntry.Id))
+                {
+                    throw new InvalidOperationException("One or more selected time entries are already billed on another invoice.");
+                }
+
+                resolvedEntries.Add((liveSheet, liveEntry));
+            }
+            resolvedLaborGroups.Add((group, resolvedEntries));
+        }
+
+        var eligiblePoItems = _accounting.PurchaseOrders.GetAll()
+            .Where(po => !string.Equals(po.Status, PurchaseOrderStatus.Void, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(po => po.LineItems)
+            .Where(li => invoiceProjectIds.Contains(li.ProjectId))
+            .ToDictionary(li => li.Id, StringComparer.OrdinalIgnoreCase);
+
+        var eligibleExpenseItems = _accounting.ExpenseReports.GetAll()
+            .Where(r => r.DateSubmitted.HasValue && !string.Equals(r.Status, ExpenseReportStatus.Draft, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(r => r.LineItems)
+            .Where(li => invoiceProjectIds.Contains(li.ProjectId))
+            .ToDictionary(li => li.Id, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in request.SelectedExpenses)
+        {
+            if (!invoiceProjectIds.Contains(item.ProjectId))
+            {
+                throw new UnauthorizedAccessException("Cannot bill expenses from projects outside this invoice.");
+            }
+
+            if (string.Equals(item.Source, "PO", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!eligiblePoItems.TryGetValue(item.Id, out var livePoItem) ||
+                    !string.Equals(livePoItem.ProjectId, item.ProjectId, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new UnauthorizedAccessException("Referenced purchase order item is not eligible for billing on this invoice.");
+                }
+                if (billedElsewherePoIds.Contains(item.Id))
+                {
+                    throw new InvalidOperationException("One or more selected purchase order items are already billed on another invoice.");
+                }
+            }
+            else
+            {
+                if (!eligibleExpenseItems.TryGetValue(item.Id, out var liveExpItem) ||
+                    !string.Equals(liveExpItem.ProjectId, item.ProjectId, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new UnauthorizedAccessException("Referenced expense report item is not eligible for billing on this invoice.");
+                }
+                if (billedElsewhereExpenseIds.Contains(item.Id))
+                {
+                    throw new InvalidOperationException("One or more selected expense items are already billed on another invoice.");
+                }
+            }
+        }
+
+        var liveQuotesById = invoiceProjectIds
+            .SelectMany(pid => _projects.Quotes.GetByProject(pid))
+            .Where(q => q.Status == QuoteStatus.Accepted)
+            .ToDictionary(q => q.Id, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var quote in request.AcceptedQuotes)
+        {
+            if (quote == null || !liveQuotesById.ContainsKey(quote.Id))
+            {
+                throw new UnauthorizedAccessException("Referenced quote is not an accepted quote for this invoice's projects.");
+            }
+        }
+
+        var availableMilestoneTermIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var milestone in request.SelectedMilestones)
+        {
+            if (milestone?.Quote == null || milestone.Term == null ||
+                !liveQuotesById.TryGetValue(milestone.Quote.Id, out var liveQuote))
+            {
+                throw new UnauthorizedAccessException("Referenced milestone quote is outside this invoice's projects.");
+            }
+
+            var liveTerm = liveQuote.PaymentTerms.FirstOrDefault(t => string.Equals(t.Id, milestone.Term.Id, StringComparison.Ordinal));
+            if (liveTerm == null || (liveTerm.IsInvoiced && !string.Equals(liveTerm.InvoiceId, invoice.Id, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException("Referenced milestone payment term is invalid or already invoiced.");
+            }
+
+            availableMilestoneTermIds.Add(liveTerm.Id);
+        }
+
+        var availableQuoteLaborIds = liveQuotesById.Values
+            .SelectMany(q => q.LaborItems)
+            .Select(l => l.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var l in request.SelectedQuoteLabor)
+        {
+            if (l == null || !availableQuoteLaborIds.Contains(l.Id))
+            {
+                throw new UnauthorizedAccessException("Referenced quote labor item does not belong to an accepted quote for this invoice.");
+            }
+        }
+
+        var availableQuoteItemIds = liveQuotesById.Values
+            .SelectMany(q => q.MaterialLineItems)
+            .Select(i => i.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var i in request.SelectedQuoteItems)
+        {
+            if (i == null || !availableQuoteItemIds.Contains(i.Id))
+            {
+                throw new UnauthorizedAccessException("Referenced quote material item does not belong to an accepted quote for this invoice.");
+            }
+        }
+
+        var availableCreditsById = CalculateAvailablePrepaymentCredits(invoiceProjects, invoice, actor)
             .ToDictionary(c => c.PrepaymentLineId, StringComparer.OrdinalIgnoreCase);
 
         // Clear all Billed ID lists for this invoice so we can rebuild them
@@ -444,7 +696,7 @@ public class BillingOrchestrationService
             ?? _core.DocumentTemplates.GetDefault();
 
         // 1. Labor Groups (Unbilled)
-        foreach (var group in request.LaborGroups.Where(g => g.HoursToBill > 0))
+        foreach (var (group, resolvedEntries) in resolvedLaborGroups)
         {
             decimal remainingToBill = group.HoursToBill;
             string taskLabel = TimesheetSearchHelper.FormatTaskAndSubTask(group.TaskName, group.SubTaskName, ": ");
@@ -461,11 +713,9 @@ public class BillingOrchestrationService
                 SourceType = "Time"
             });
 
-            foreach (var refObj in group.Entries)
+            foreach (var (sheet, entry) in resolvedEntries)
             {
                 if (remainingToBill <= 0) break;
-                var entry = refObj.Entry;
-                var sheet = refObj.ParentSheet;
 
                 if (entry.Hours <= remainingToBill)
                 {
@@ -517,13 +767,13 @@ public class BillingOrchestrationService
         }
 
         // 3. Milestones & Quotes
-        var selectedMilestoneTermIds = request.SelectedMilestones.Select(m => m.Term.Id).ToHashSet();
         foreach (var quote in request.AcceptedQuotes)
         {
-            foreach (var term in quote.PaymentTerms)
+            var liveQuote = liveQuotesById[quote.Id];
+            foreach (var term in liveQuote.PaymentTerms)
             {
                 var milestone = request.SelectedMilestones.FirstOrDefault(v => v.Term.Id == term.Id);
-                if (milestone != null && selectedMilestoneTermIds.Contains(term.Id))
+                if (milestone != null && availableMilestoneTermIds.Contains(term.Id))
                 {
                     term.InvoiceId = invoice.Id;
                     invoice.LineItems.Add(new InvoiceLine
@@ -541,7 +791,7 @@ public class BillingOrchestrationService
                     term.InvoiceId = "";
                 }
             }
-            _projects.Quotes.Save(quote);
+            _projects.Quotes.Save(liveQuote);
         }
 
         // 4. Quote Labor & Items
@@ -622,72 +872,62 @@ public class BillingOrchestrationService
             });
         }
 
-        // 8. Status transitions
-        if (invoice.BalanceDue <= 0 && invoice.GrandTotal > 0 && invoice.Status != InvoiceStatus.Paid)
+        // 8. Status transitions (do not transition out of Draft unless actor has ApproveInvoices)
+        if (!string.Equals(invoice.Status, InvoiceStatus.Draft, StringComparison.OrdinalIgnoreCase) ||
+            actor.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices))
         {
-            invoice.Status = InvoiceStatus.Paid;
-            invoice.DatePaid ??= DateTime.Today;
+            if (Math.Round(invoice.BalanceDue, 2, MidpointRounding.AwayFromZero) <= 0 && invoice.GrandTotal > 0 && !InvoiceStatus.IsSettled(invoice.Status))
+            {
+                if (invoice.AmountPaid <= 0m && invoice.HasWriteOffs)
+                {
+                    invoice.Status = InvoiceStatus.WrittenOff;
+                    invoice.DatePaid = null;
+                }
+                else
+                {
+                    invoice.Status = InvoiceStatus.Paid;
+                    invoice.DatePaid ??= DateTime.Today;
+                }
+            }
+            else if (InvoiceStatus.IsSettled(invoice.Status) && Math.Round(invoice.BalanceDue, 2, MidpointRounding.AwayFromZero) > 0)
+            {
+                invoice.Status = (invoice.AmountPaid > 0 || invoice.AmountWrittenOff > 0) ? InvoiceStatus.Partial : InvoiceStatus.Final;
+                if (!invoice.Payments.Any()) invoice.DatePaid = null;
+            }
         }
-        else if (invoice.Status == InvoiceStatus.Paid && invoice.BalanceDue > 0)
+
+        if (!string.IsNullOrEmpty(invoice.PdfPath))
         {
-            invoice.Status = InvoiceStatus.Sent;
-            if (!invoice.Payments.Any()) invoice.DatePaid = null;
+            if (File.Exists(invoice.PdfPath))
+            {
+                try { File.Delete(invoice.PdfPath); } catch { }
+            }
+            invoice.PdfPath = string.Empty;
         }
 
         _accounting.Invoices.Save(invoice);
     }
 
-    private HashSet<string> GetBilledTimeEntryIds(IEnumerable<string> projectIds, Invoice currentInvoice)
+    private HashSet<string> GetBilledIds(
+        IEnumerable<string> projectIds,
+        Invoice currentInvoice,
+        Func<Invoice, IEnumerable<string>> selector)
     {
-        var billedTimeIds = new HashSet<string>();
+        var billedIds = new HashSet<string>();
         foreach (var projectId in projectIds)
         {
-            var projectInvoices = _accounting.Invoices.GetByProject(projectId).Where(i => i.Id != currentInvoice.Id);
-            billedTimeIds.UnionWith(projectInvoices.SelectMany(i => i.BilledTimeEntryIds));
+            var projectInvoices = _accounting.Invoices.GetByProject(projectId)
+                .Where(i => i.Id != currentInvoice.Id && i.Status != InvoiceStatus.Void);
+            billedIds.UnionWith(projectInvoices.SelectMany(selector));
         }
 
         if (!string.IsNullOrEmpty(currentInvoice.ProjectGroupId))
         {
-            var groupInvoices = _accounting.Invoices.GetByProjectGroup(currentInvoice.ProjectGroupId).Where(i => i.Id != currentInvoice.Id);
-            billedTimeIds.UnionWith(groupInvoices.SelectMany(i => i.BilledTimeEntryIds));
+            var groupInvoices = _accounting.Invoices.GetByProjectGroup(currentInvoice.ProjectGroupId)
+                .Where(i => i.Id != currentInvoice.Id && i.Status != InvoiceStatus.Void);
+            billedIds.UnionWith(groupInvoices.SelectMany(selector));
         }
 
-        return billedTimeIds;
-    }
-
-    private HashSet<string> GetBilledPoItemIds(IEnumerable<string> projectIds, Invoice currentInvoice)
-    {
-        var billedPoIds = new HashSet<string>();
-        foreach (var projectId in projectIds)
-        {
-            var projectInvoices = _accounting.Invoices.GetByProject(projectId).Where(i => i.Id != currentInvoice.Id);
-            billedPoIds.UnionWith(projectInvoices.SelectMany(i => i.BilledPoItemIds));
-        }
-
-        if (!string.IsNullOrEmpty(currentInvoice.ProjectGroupId))
-        {
-            var groupInvoices = _accounting.Invoices.GetByProjectGroup(currentInvoice.ProjectGroupId).Where(i => i.Id != currentInvoice.Id);
-            billedPoIds.UnionWith(groupInvoices.SelectMany(i => i.BilledPoItemIds));
-        }
-
-        return billedPoIds;
-    }
-
-    private HashSet<string> GetBilledExpenseItemIds(IEnumerable<string> projectIds, Invoice currentInvoice)
-    {
-        var billedExpenseIds = new HashSet<string>();
-        foreach (var projectId in projectIds)
-        {
-            var projectInvoices = _accounting.Invoices.GetByProject(projectId).Where(i => i.Id != currentInvoice.Id);
-            billedExpenseIds.UnionWith(projectInvoices.SelectMany(i => i.BilledExpenseItemIds));
-        }
-
-        if (!string.IsNullOrEmpty(currentInvoice.ProjectGroupId))
-        {
-            var groupInvoices = _accounting.Invoices.GetByProjectGroup(currentInvoice.ProjectGroupId).Where(i => i.Id != currentInvoice.Id);
-            billedExpenseIds.UnionWith(groupInvoices.SelectMany(i => i.BilledExpenseItemIds));
-        }
-
-        return billedExpenseIds;
+        return billedIds;
     }
 }

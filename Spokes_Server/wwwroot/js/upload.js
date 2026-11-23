@@ -1,5 +1,54 @@
 window.spokesUpload = {
 
+    MAX_LOCAL_PREVIEW_SEED_COUNT: 8,
+
+    /**
+     * Canonical upload cache pre-seeder shared across Web, Desktop, Android, and iOS upload paths.
+     * Populates window.spokesMediaLoader with local bytes immediately upon HTTP 200 so the sender's
+     * chat bubble paints on frame 1 with zero skeleton wait and zero redundant WAN re-download.
+     */
+    seedUploadedMediaPreviews: function(results, previewItems, defaultEncrypted = false) {
+        const loader = window.spokesMediaLoader;
+        if (!loader || !Array.isArray(results) || results.length === 0 || !previewItems) return;
+
+        for (let i = 0; i < results.length; i++) {
+            const res = results[i];
+            const item = Array.isArray(previewItems) ? previewItems[i] : previewItems[String(i)];
+            if (!res || !res.filePath || !item) continue;
+
+            const cleanPath = String(res.filePath).split('?')[0].split('#')[0];
+            const isRasterImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(cleanPath);
+            const useThumb = Boolean(res.hasThumbnail) || isRasterImage;
+            const targetUrl = (useThumb && cleanPath.startsWith('/spokesapi/files/'))
+                ? cleanPath.replace('/spokesapi/files/', '/spokesapi/files/thumb/')
+                : cleanPath;
+            const encrypted = typeof res.isEncrypted === 'boolean' ? res.isEncrypted : Boolean(defaultEncrypted);
+            const contentType = item.contentType || res.contentType || 'image/jpeg';
+
+            try {
+                if (item.blob && typeof loader.seedMedia === 'function') {
+                    loader.seedMedia(targetUrl, item.blob, { encrypted, contentType });
+                } else if (item.base64 && typeof loader.seedMediaBase64 === 'function') {
+                    loader.seedMediaBase64(targetUrl, item.base64, contentType, { encrypted });
+                }
+            } catch (e) {
+                console.warn('[spokesUpload] Failed to pre-seed media cache for', targetUrl, e);
+            }
+        }
+    },
+
+    _seedNativeUploadResult: function(result) {
+        if (!result || !result.responseJson || !result.localPreviews) return;
+        try {
+            const parsed = JSON.parse(result.responseJson);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                window.spokesUpload.seedUploadedMediaPreviews(parsed, result.localPreviews, Boolean(result.isEncrypted));
+            }
+        } catch (e) {
+            console.warn('[spokesUpload] Failed parsing native upload response for preview pre-seed:', e);
+        }
+    },
+
     robustInvoke: async function(dotNetRef, methodName, argsArray, maxRetries = 120) {
         if (!dotNetRef) return null;
         for (let i = 0; i < maxRetries; i++) {
@@ -17,6 +66,29 @@ window.spokesUpload = {
         throw new Error(`Max retries reached for ${methodName}`);
     },
 
+    confirmNativeUploadStarted: async function(dotNetRef, swallowErrors = false) {
+        if (!dotNetRef || window.spokesUpload.uploadStartConfirmed) return;
+        try {
+            await window.spokesUpload.robustInvoke(dotNetRef, 'OnUploadStartedCallback', [0], 60);
+            window.spokesUpload.uploadStartConfirmed = true;
+        } catch (e) {
+            if (!swallowErrors) throw e;
+        }
+    },
+
+    beginNativeUpload: async function(uploadUrl, dotNetRef, inputId = null) {
+        const absoluteUrl = new URL(uploadUrl, window.location.origin).href;
+        window.spokesUpload.ensureNativeUploadListener();
+        if (inputId !== null) {
+            window.spokesUpload.activeInputId = inputId;
+        }
+        window.spokesUpload.activeDotNetRef = dotNetRef;
+        window.spokesUpload.uploadStartConfirmed = false;
+        window.spokesUpload.pendingProgress = null;
+        const authToken = await window.spokesAuth.getRefreshToken();
+        return { absoluteUrl, authToken };
+    },
+
     sendPendingProgress: async function() {
         if (window.spokesUpload.isSendingProgress) return;
         window.spokesUpload.isSendingProgress = true;
@@ -28,11 +100,7 @@ window.spokesUpload = {
             const activeRef = window.spokesUpload.dotNetRefs?.[activeId] || window.spokesUpload.activeDotNetRef;
             if (!activeRef) return;
             
-            if (!window.spokesUpload.uploadStartConfirmed) {
-                window.spokesUpload.activeUploadStarted = true;
-                await window.spokesUpload.robustInvoke(activeRef, 'OnUploadStartedCallback', [0], 60);
-                window.spokesUpload.uploadStartConfirmed = true;
-            }
+            await window.spokesUpload.confirmNativeUploadStarted(activeRef, false);
             
             const currentInfo = window.spokesUpload.pendingProgress;
             if (currentInfo) {
@@ -110,19 +178,8 @@ window.spokesUpload = {
             const uploadUrl = input.getAttribute('data-upload-url');
             const accept = input.getAttribute('accept') || '*/*';
             const multiple = input.hasAttribute('multiple');
-            let absoluteUrl = new URL(uploadUrl, window.location.origin).href;
             const dotNetRef = window.spokesUpload.dotNetRefs?.[inputId];
-
-            window.spokesUpload.ensureNativeUploadListener();
-
-            window.spokesUpload.activeInputId = inputId;
-            window.spokesUpload.activeDotNetRef = dotNetRef;
-            window.spokesUpload.activeUploadStarted = false;
-            window.spokesUpload.uploadStartConfirmed = false;
-            window.spokesUpload.pendingProgress = null;
-
-            // Get auth token for native HTTP request (Bearer token from Capacitor Preferences)
-            const authToken = await window.spokesAuth.getRefreshToken();
+            const { absoluteUrl, authToken } = await window.spokesUpload.beginNativeUpload(uploadUrl, dotNetRef, inputId);
 
             const maxDimension = input.dataset.maxDimension !== undefined ? parseInt(input.dataset.maxDimension, 10) : undefined;
             const quality = input.dataset.quality !== undefined ? parseInt(input.dataset.quality, 10) : undefined;
@@ -148,14 +205,9 @@ window.spokesUpload = {
                 const dynamicRef = window.spokesUpload.dotNetRefs?.[activeId] || window.spokesUpload.activeDotNetRef;
 
                 if (dynamicRef) {
-                    if (!window.spokesUpload.uploadStartConfirmed) {
-                        try {
-                            window.spokesUpload.activeUploadStarted = true;
-                            await window.spokesUpload.robustInvoke(dynamicRef, 'OnUploadStartedCallback', [0], 60);
-                            window.spokesUpload.uploadStartConfirmed = true;
-                        } catch (e) {}
-                    }
+                    await window.spokesUpload.confirmNativeUploadStarted(dynamicRef, true);
                     if (result.responseJson) {
+                        window.spokesUpload._seedNativeUploadResult(result);
                         await window.spokesUpload.robustInvoke(dynamicRef, 'OnUploadCompletedCallback', [result.responseJson], 60).catch(() => {});
                     } else {
                         await window.spokesUpload.robustInvoke(dynamicRef, 'OnUploadErrorCallback', ["Native upload failed"], 60).catch(() => {});
@@ -167,13 +219,7 @@ window.spokesUpload = {
                 const dynamicRef = window.spokesUpload.dotNetRefs?.[activeId] || window.spokesUpload.activeDotNetRef;
 
                 if (dynamicRef) {
-                    if (!window.spokesUpload.uploadStartConfirmed) {
-                        try {
-                            window.spokesUpload.activeUploadStarted = true;
-                            await window.spokesUpload.robustInvoke(dynamicRef, 'OnUploadStartedCallback', [0], 60);
-                            window.spokesUpload.uploadStartConfirmed = true;
-                        } catch (e) {}
-                    }
+                    await window.spokesUpload.confirmNativeUploadStarted(dynamicRef, true);
                     await window.spokesUpload.robustInvoke(dynamicRef, 'OnUploadErrorCallback', [err.message || "Native upload failed"], 60).catch(() => {});
                 }
             }).finally(() => {
@@ -186,17 +232,6 @@ window.spokesUpload = {
 
         console.log('[spokesUpload] Found input element, triggering click() programmatically.');
         input.click();
-    },
-
-    /**
-     * Safely clears the input value so the same file could be picked again
-     * @param {string} inputId The ID of the file input element
-     */
-    clearInput: function(inputId) {
-        const input = document.getElementById(inputId);
-        if (input) {
-            input.value = '';
-        }
     },
 
     /**
@@ -240,17 +275,7 @@ window.spokesUpload = {
             }
 
             console.log('[spokesUpload] Routing to native BridgeManager.uploadSharedFiles with', uris.length, 'URIs');
-            const absoluteUrl = new URL(uploadUrl, window.location.origin).href;
-
-            window.spokesUpload.ensureNativeUploadListener();
-
-            window.spokesUpload.activeDotNetRef = dotNetRef;
-            window.spokesUpload.activeUploadStarted = false;
-            window.spokesUpload.uploadStartConfirmed = false;
-            window.spokesUpload.pendingProgress = null;
-
-            // Get auth token for native HTTP request (Bearer token from Capacitor Preferences)
-            const authToken = await window.spokesAuth.getRefreshToken();
+            const { absoluteUrl, authToken } = await window.spokesUpload.beginNativeUpload(uploadUrl, dotNetRef);
 
             window.Capacitor.Plugins.BridgeManager.uploadSharedFiles({
                 url: absoluteUrl,
@@ -268,14 +293,9 @@ window.spokesUpload = {
                 }
                 
                 if (dotNetRef) {
-                    if (!window.spokesUpload.uploadStartConfirmed) {
-                        try {
-                            window.spokesUpload.activeUploadStarted = true;
-                            await window.spokesUpload.robustInvoke(dotNetRef, 'OnUploadStartedCallback', [0], 60);
-                            window.spokesUpload.uploadStartConfirmed = true;
-                        } catch (e) {}
-                    }
+                    await window.spokesUpload.confirmNativeUploadStarted(dotNetRef, true);
                     if (result.responseJson) {
+                        window.spokesUpload._seedNativeUploadResult(result);
                         try {
                             const parsed = JSON.parse(result.responseJson);
                             resolve(parsed);
@@ -286,6 +306,7 @@ window.spokesUpload = {
                         reject(new Error("Native upload failed: no responseJson"));
                     }
                 } else {
+                    window.spokesUpload._seedNativeUploadResult(result);
                     resolve(result);
                 }
             }).catch(async (err) => {
@@ -348,24 +369,6 @@ window.spokesUpload = {
         });
     },
 
-    /**
-     * Uploads files from an input element to the given URL and tracks progress.
-     * @param {string} inputId The ID of the file input element
-     * @param {string} uploadUrl The API endpoint url
-     * @param {object} dotNetRef DotNet reference to trigger callback methods
-     * @param {number} maxAllowedSize Max total size in bytes
-     * @param {number} compressionMaxDim Max dimension for compression
-     * @param {number} compressionQuality Quality for compression
-     */
-    uploadFromInput: function(inputId, uploadUrl, dotNetRef, maxAllowedSize, compressionMaxDim = 3840, compressionQuality = 0.9) {
-        const input = document.getElementById(inputId);
-        if (!input) {
-            console.error(`[spokesUpload] Input ${inputId} not found`);
-            return Promise.resolve([]);
-        }
-        return this.executeUploadFromInput(input, uploadUrl, dotNetRef, maxAllowedSize, compressionMaxDim, compressionQuality);
-    },
-
     executeUploadFromInput: function(input, uploadUrl, dotNetRef, maxAllowedSize, compressionMaxDim = 3840, compressionQuality = 0.9) {
         console.log(`[spokesUpload] executeUploadFromInput triggered on ${input.id} to ${uploadUrl}`);
         return new Promise((resolve, reject) => {
@@ -381,6 +384,11 @@ window.spokesUpload = {
             // Check size limits
             for (const file of files) {
                 console.log(`[spokesUpload] File: ${file.name} - Size: ${file.size} bytes`);
+                if (!file.size || file.size <= 0) {
+                    console.error(`[spokesUpload] Empty file rejected: ${file.name}`);
+                    reject(new Error(`File "${file.name}" is empty (0 bytes) and cannot be uploaded.`));
+                    return;
+                }
                 if (file.size > maxAllowedSize) {
                     console.error(`[spokesUpload] Size limit exceeded. File: ${file.name} (${file.size} bytes), Max: ${maxAllowedSize}`);
                     const limitMb = Math.round(maxAllowedSize / 1024 / 1024);
@@ -394,41 +402,68 @@ window.spokesUpload = {
 
             const formData = new FormData();
             const thumbnailPromises = [];
+            const previewItems = [];
+            const shouldCollectPreviews = files.length <= window.spokesUpload.MAX_LOCAL_PREVIEW_SEED_COUNT;
             
             const processFiles = async () => {
-                dotNetRef.invokeMethodAsync('OnCompressingCallback', -1).catch(() => {});
+                const hasCompressibleImages = files.some(f => f.type && f.type.startsWith('image/') && f.type !== 'image/gif');
+                if (hasCompressibleImages) {
+                    dotNetRef.invokeMethodAsync('OnCompressingCallback', -1).catch(() => {});
+                }
                 for (let i = 0; i < files.length; i++) {
-                    if (files.length > 1) {
+                    if (files.length > 1 && hasCompressibleImages) {
                         dotNetRef.invokeMethodAsync('OnCompressingCallback', (i / files.length) * 100).catch(() => {});
                     }
-                    const file = files[i];
-                    if (file.type && file.type.startsWith('image/') && file.type !== 'image/gif') {
-                        try {
-                            console.log(`[spokesUpload] Compressing image: ${file.name}`);
-                            const compressedBlob = await window.spokesUpload.compressImage(file, compressionMaxDim, compressionQuality);
-                            formData.append('files', compressedBlob, file.name);
-                        } catch (e) {
-                            console.warn(`[spokesUpload] Compression failed for ${file.name}, using original.`, e);
-                            formData.append('files', file);
-                        }
-                    } else {
-                        formData.append('files', file);
-                    }
-                    
-                    if (file.type && file.type.startsWith('video/')) {
-                        thumbnailPromises.push(
-                            window.spokesUpload.extractVideoThumbnail(file).then(blob => ({ fileName: file.name, blob: blob }))
-                            .catch(() => null)
-                        );
-                    }
+                    const previewItem = await window.spokesUpload._appendPreparedFile(files[i], formData, thumbnailPromises, compressionMaxDim, compressionQuality, shouldCollectPreviews);
+                    previewItems.push(previewItem);
                 }
                 
                 console.log('[spokesUpload] Payload constructed, beginning upload request...');
-                window.spokesUpload.performUpload(formData, uploadUrl, dotNetRef, resolve, reject, thumbnailPromises);
+                window.spokesUpload.performUpload(formData, uploadUrl, dotNetRef, resolve, reject, thumbnailPromises, previewItems);
             };
             
             processFiles();
         });
+    },
+
+    _appendPreparedFile: async function(file, formData, thumbnailPromises, compressionMaxDim, compressionQuality, collectPreview = false) {
+        let previewItem = null;
+        if (file.type && file.type.startsWith('image/') && file.type !== 'image/gif') {
+            let preparedBlob = file;
+            try {
+                console.log(`[spokesUpload] Compressing image: ${file.name}`);
+                preparedBlob = await window.spokesUpload.compressImage(file, compressionMaxDim, compressionQuality);
+                formData.append('files', preparedBlob, file.name);
+            } catch (e) {
+                console.warn(`[spokesUpload] Compression failed for ${file.name}, using original.`, e);
+                formData.append('files', file);
+            }
+
+            if (collectPreview && preparedBlob && preparedBlob.size > 0) {
+                try {
+                    const thumbBlob = preparedBlob.size <= 512 * 1024
+                        ? preparedBlob
+                        : await window.spokesUpload.compressImage(preparedBlob, 1280, 0.82);
+                    if (thumbBlob && thumbBlob.size > 0) {
+                        previewItem = { blob: thumbBlob, contentType: thumbBlob.type || 'image/jpeg' };
+                    }
+                } catch (_) { }
+            }
+        } else {
+            formData.append('files', file);
+            if (collectPreview && file.type === 'image/gif' && file.size > 0 && file.size <= 12 * 1024 * 1024) {
+                previewItem = { blob: file, contentType: 'image/gif' };
+            }
+        }
+
+        if (file.type && file.type.startsWith('video/')) {
+            thumbnailPromises.push(
+                window.spokesUpload.extractVideoThumbnail(file).then(blob => ({ fileName: file.name, blob: blob }))
+                .catch(() => null)
+            );
+        }
+
+        return previewItem;
     },
 
     /**
@@ -436,35 +471,23 @@ window.spokesUpload = {
      */
     uploadFileObject: function(file, uploadUrl, dotNetRef, compressionMaxDim = 3840, compressionQuality = 0.9) {
         return new Promise(async (resolve, reject) => {
+            if (!file || !file.size || file.size <= 0) {
+                reject(new Error(`File "${file?.name || 'file'}" is empty (0 bytes) and cannot be uploaded.`));
+                return;
+            }
             const formData = new FormData();
-            dotNetRef.invokeMethodAsync('OnCompressingCallback', -1).catch(() => {});
-            
             if (file.type && file.type.startsWith('image/') && file.type !== 'image/gif') {
-                try {
-                    console.log(`[spokesUpload] Compressing image: ${file.name}`);
-                    const compressedBlob = await window.spokesUpload.compressImage(file, compressionMaxDim, compressionQuality);
-                    formData.append('files', compressedBlob, file.name);
-                } catch (e) {
-                    console.warn(`[spokesUpload] Compression failed for ${file.name}, using original.`, e);
-                    formData.append('files', file);
-                }
-            } else {
-                formData.append('files', file);
+                dotNetRef.invokeMethodAsync('OnCompressingCallback', -1).catch(() => {});
             }
             
             const thumbnailPromises = [];
-            if (file.type && file.type.startsWith('video/')) {
-                thumbnailPromises.push(
-                    window.spokesUpload.extractVideoThumbnail(file).then(blob => ({ fileName: file.name, blob: blob }))
-                    .catch(() => null)
-                );
-            }
+            const previewItem = await window.spokesUpload._appendPreparedFile(file, formData, thumbnailPromises, compressionMaxDim, compressionQuality, true);
             
-            window.spokesUpload.performUpload(formData, uploadUrl, dotNetRef, resolve, reject, thumbnailPromises);
+            window.spokesUpload.performUpload(formData, uploadUrl, dotNetRef, resolve, reject, thumbnailPromises, [previewItem]);
         });
     },
 
-    performUpload: function(formData, uploadUrl, dotNetRef, resolve, reject, thumbnailPromises = []) {
+    performUpload: function(formData, uploadUrl, dotNetRef, resolve, reject, thumbnailPromises = [], previewItems = []) {
         const xhr = new XMLHttpRequest();
         window.spokesUpload.activeXhr = xhr;
         const startTime = performance.now();
@@ -475,21 +498,21 @@ window.spokesUpload = {
         xhr.upload.addEventListener("progress", function(e) {
             if (e.lengthComputable) {
                 totalBytes = e.total;
-                if (dotNetRef) {
-                    const now = performance.now();
-                    if (now - lastProgressNotify > 500 || e.loaded === e.total) {
-                        lastProgressNotify = now;
-                        const percentComplete = (e.loaded / e.total) * 100;
-                        dotNetRef.invokeMethodAsync('OnProgressUpdateCallback', percentComplete);
-                    }
-                }
                 if (e.loaded === e.total && !transferDoneTime) {
                     transferDoneTime = performance.now();
+                    lastProgressNotify = transferDoneTime;
                     const transferSec = (transferDoneTime - startTime) / 1000;
                     const mbps = ((totalBytes * 8) / transferSec / 1000000).toFixed(1);
                     console.log(`[UPLOAD DIAG] Transfer complete: ${(totalBytes/1024/1024).toFixed(2)} MB in ${transferSec.toFixed(2)}s = ${mbps} Mbps`);
                     if (dotNetRef) {
                         dotNetRef.invokeMethodAsync('OnProcessingCallback', 'Processing...').catch(() => {});
+                    }
+                } else if (dotNetRef && e.loaded < e.total) {
+                    const now = performance.now();
+                    if (now - lastProgressNotify > 500) {
+                        lastProgressNotify = now;
+                        const percentComplete = (e.loaded / e.total) * 100;
+                        dotNetRef.invokeMethodAsync('OnProgressUpdateCallback', percentComplete);
                     }
                 }
             }
@@ -505,6 +528,11 @@ window.spokesUpload = {
                 try {
                     const response = JSON.parse(xhr.responseText);
                     console.log('[spokesUpload] Successful JSON parse:', response);
+                    const uploadMediaScope = (xhr.getResponseHeader && xhr.getResponseHeader('X-Spokes-Media-Scope') || '').toLowerCase();
+                    const defaultEncrypted = uploadMediaScope === 'encrypted';
+                    if (previewItems && previewItems.length > 0) {
+                        window.spokesUpload.seedUploadedMediaPreviews(response, previewItems, defaultEncrypted);
+                    }
                     
                     if (thumbnailPromises.length > 0) {
                         const thumbStart = performance.now();
@@ -528,6 +556,7 @@ window.spokesUpload = {
                                     const fetchRes = await fetch(thumbUrl, { method: 'POST', body: thumbFormData });
                                     if (fetchRes.ok) {
                                         res.hasThumbnail = true;
+                                        window.spokesUpload.seedUploadedMediaPreviews([res], [{ blob: matchingThumb.blob, contentType: 'image/jpeg' }], defaultEncrypted);
                                     }
                                 }
                             }
@@ -535,10 +564,6 @@ window.spokesUpload = {
                             console.warn("[spokesUpload] Thumbnail upload failed", e);
                         }
                         console.log(`[UPLOAD DIAG] Thumbnail phase: ${((performance.now() - thumbStart)/1000).toFixed(2)}s`);
-                    }
-                    
-                    if (dotNetRef) {
-                        dotNetRef.invokeMethodAsync('OnProcessingCallback', 'Saving...').catch(() => {});
                     }
                     
                     const endTime = performance.now();
@@ -742,5 +767,117 @@ window.spokesUpload = {
         }
 
         return await response.text();
+    },
+
+    uploadFilesWithDotNet: async function(fileList, dotNetHelper, options = {}) {
+        let uploadUrl = null;
+        if (dotNetHelper && typeof dotNetHelper.invokeMethodAsync === 'function') {
+            try {
+                uploadUrl = await dotNetHelper.invokeMethodAsync('GetUploadUrl');
+            } catch (e) {
+                if (options.allowInputUrlFallback) {
+                    console.warn("Could not retrieve upload URL from dotNetHelper:", e);
+                }
+            }
+        }
+        if (!uploadUrl && options.allowInputUrlFallback) {
+            const fileInput = document.querySelector('input[data-upload-url]');
+            if (fileInput) {
+                uploadUrl = fileInput.getAttribute('data-upload-url');
+            }
+        }
+        if (!uploadUrl) {
+            if (options.allowInputUrlFallback) {
+                console.error("Could not find upload input or URL to route pasted file");
+            }
+            return;
+        }
+        if (!fileList || fileList.length === 0) return;
+
+        const maxAllowedSize = options.maxAllowedSize;
+        if (maxAllowedSize) {
+            for (const file of fileList) {
+                if (file.size > maxAllowedSize) {
+                    const limitMb = Math.round(maxAllowedSize / 1024 / 1024);
+                    const errorMsg = fileList.length > 1
+                        ? `File "${file.name}" exceeds the allowed limit of ${limitMb}MB`
+                        : `Total file size exceeds the allowed limit of ${limitMb}MB`;
+                    dotNetHelper.invokeMethodAsync('OnPasteUploadError', errorMsg);
+                    return;
+                }
+            }
+        }
+
+        for (const file of fileList) {
+            await dotNetHelper.invokeMethodAsync('OnPasteUploadStarted');
+            try {
+                const proxyDotNetRef = {
+                    invokeMethodAsync: async (methodName, ...args) => {
+                        if (methodName === 'OnProgressUpdateCallback') {
+                            return dotNetHelper.invokeMethodAsync('OnPasteProgressUpdate', ...args);
+                        } else if (options.forwardProcessing && methodName === 'OnProcessingCallback') {
+                            return dotNetHelper.invokeMethodAsync('OnPasteProcessingUpdate', ...args);
+                        }
+                    }
+                };
+
+                const result = await window.spokesUpload.uploadFileObject(
+                    file,
+                    uploadUrl,
+                    proxyDotNetRef,
+                    options.compressionMaxDim,
+                    options.compressionQuality);
+                const jsonStr = typeof result === 'string' ? result : JSON.stringify(result);
+                await dotNetHelper.invokeMethodAsync('OnPasteUploadCompleted', jsonStr);
+            } catch (error) {
+                console.error(options.errorPrefix || "Error uploading dragged file:", error);
+                await dotNetHelper.invokeMethodAsync('OnPasteUploadError', error.message || "Upload failed");
+            }
+        }
+    },
+
+    initDropZone: function(containerId, dotNetHelper, maxAllowedSize = 268435456, options = {}) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        container._maxAllowedSize = maxAllowedSize;
+
+        if (container._spokesFileHandlersInit) return;
+        container._spokesFileHandlersInit = true;
+
+        let dragCounter = 0;
+
+        container.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            dragCounter++;
+            dotNetHelper.invokeMethodAsync('SetDraggingState', true);
+        });
+
+        container.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        container.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dragCounter--;
+            if (dragCounter <= 0) {
+                dragCounter = 0;
+                dotNetHelper.invokeMethodAsync('SetDraggingState', false);
+            }
+        });
+
+        container.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dragCounter = 0;
+            dotNetHelper.invokeMethodAsync('SetDraggingState', false);
+
+            const files = e.dataTransfer.files;
+            if (files && files.length > 0) {
+                window.spokesUpload.uploadFilesWithDotNet(files, dotNetHelper, {
+                    ...options,
+                    maxAllowedSize: container._maxAllowedSize || maxAllowedSize
+                });
+            }
+        });
     }
 };

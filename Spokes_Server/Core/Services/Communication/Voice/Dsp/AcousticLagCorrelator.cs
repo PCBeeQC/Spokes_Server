@@ -10,8 +10,6 @@ internal readonly record struct PairAlignmentMeasurement(
     int MeasuredLagSamples,
     float MeasuredGain,
     float PeakOnsetGain,
-    float SrcAlignedRms,
-    float TgtAlignedRms,
     double BestEnvCorr,
     double FineWaveCorr,
     double BarkCorr,
@@ -35,7 +33,6 @@ internal static class AcousticLagCorrelator
         long startSample,
         int windowSamples,
         int maxPositiveLagSteps,
-        bool requireDominancePass,
         out PairAlignmentMeasurement measurement)
     {
         measurement = default;
@@ -121,6 +118,10 @@ internal static class AcousticLagCorrelator
             double bestJointScore = -1.0;
 
             float candidateEnvFloor = (float)Math.Max(0.42, bestEnvCorr * 0.78);
+            int numBarkSteps = windowSamples / BarkStepSamples;
+            Span<float> cachedSrcBarkCentered = numBarkSteps >= 8 ? stackalloc float[numBarkSteps * BarkBandCount] : Span<float>.Empty;
+            double cachedSrcBarkVar = -1.0;
+
             for (int lagStep = -MaxLagEnvelopeSteps; lagStep <= clampedMaxPosSteps; lagStep++)
             {
                 int idx = lagStep + MaxLagEnvelopeSteps;
@@ -158,7 +159,13 @@ internal static class AcousticLagCorrelator
                 }
 
                 int barkEvalLag = localFineWaveCorr >= 0.28 ? localFineLag : candidateCoarseSamples;
-                double barkCorr = ComputeBarkFormantCorrelation(source, target, startSample, windowSamples, barkEvalLag);
+                if (cachedSrcBarkVar < 0.0 && numBarkSteps >= 8)
+                {
+                    cachedSrcBarkVar = PopulateCenteredBarkMatrix(source, startSample, numBarkSteps, cachedSrcBarkCentered);
+                }
+                double barkCorr = numBarkSteps >= 8
+                    ? ComputeBarkFormantCorrelationWithCachedSource(cachedSrcBarkCentered, cachedSrcBarkVar, target, startSample, numBarkSteps, barkEvalLag)
+                    : 0.0;
 
                 if (hasStrongReverseDirect &&
                     reversePairState!.PeakWaveformCorrelation >= 0.45 &&
@@ -234,10 +241,6 @@ internal static class AcousticLagCorrelator
 
             double directnessDb = ComputeAcousticDirectnessDifferentialDb(source, target, startSample, srcEnv, srcMean, measuredLagSamples);
             double dominanceScoreDb = ComputeDirectionalDominanceScoreDb(srcAlignedRms, tgtAlignedRms, directnessDb, bestEnvCorr, reversePairState);
-            if (requireDominancePass && dominanceScoreDb < 3.1)
-            {
-                return false;
-            }
 
             MeasureAlignedBleedAndOnsetGains(
                 target,
@@ -254,8 +257,6 @@ internal static class AcousticLagCorrelator
                 measuredLagSamples,
                 measuredGain,
                 peakOnsetGain,
-                srcAlignedRms,
-                tgtAlignedRms,
                 bestEnvCorr,
                 fineBestScore,
                 selectedBarkCorr,
@@ -268,6 +269,198 @@ internal static class AcousticLagCorrelator
             ArrayPool<float>.Shared.Return(rentedFloats);
             ArrayPool<double>.Shared.Return(rentedDoubles);
         }
+    }
+
+    /// <summary>
+    /// Verifies when a dominant near-field speaker (<paramref name="source"/>) has spoken a balanced phrase while
+    /// a co-located roommate (<paramref name="target"/>)wearing an isolated/closed-back headset picked up
+    /// negligible acoustic bleed (&lt; -36.5 dB average and &lt; -32.0 dB peak) across the feasible lag range.
+    /// </summary>
+    public static bool TryMeasureNegligibleBleed(
+        AcousticParticipantStream source,
+        AcousticParticipantStream target,
+        int? topologicalPriorLagSamples,
+        long startSample,
+        int windowSamples,
+        int maxPositiveLagSteps,
+        out PairAlignmentMeasurement measurement)
+    {
+        measurement = default;
+
+        if (target.FramesWritten <= 0 || startSample < target.TrackEpochSample)
+        {
+            return false;
+        }
+
+        bool hasHardwarePrior = source.EstimatedCaptureLatencyMs.HasValue && target.EstimatedCaptureLatencyMs.HasValue;
+        int minRequiredWindowSamples = (hasHardwarePrior ? FastOnsetWindowEnvelopeSteps : CorrelationWindowEnvelopeSteps) * EnvelopeStepSamples;
+        if (windowSamples < minRequiredWindowSamples)
+        {
+            return false;
+        }
+
+        int numSteps = windowSamples / EnvelopeStepSamples;
+        if (numSteps < 20)
+        {
+            return false;
+        }
+
+        Span<float> srcEnv = stackalloc float[numSteps];
+        float srcMean = source.ReadEnvelopeSteps(startSample, srcEnv);
+        if (srcMean < VocalActivityFloorRms || !HasBalancedSpeechDutyCycle(srcEnv, srcMean))
+        {
+            return false;
+        }
+
+        float srcAlignedRms = source.ComputeEnvelopeRms(startSample, windowSamples);
+        if (srcAlignedRms < VocalActivityFloorRms * 1.35f)
+        {
+            return false;
+        }
+
+        int clampedMaxPosSteps = Math.Clamp(maxPositiveLagSteps, 1, MaxLagEnvelopeSteps);
+        double? expectedLagSamplesOpt = ResolveExpectedHardwareLagSamples(source, target, topologicalPriorLagSamples);
+        int resolvedLagSamples = expectedLagSamplesOpt.HasValue
+            ? Math.Clamp((int)Math.Round(expectedLagSamplesOpt.Value), -MaxLagSamples, clampedMaxPosSteps * EnvelopeStepSamples)
+            : DefaultAirDelaySamples;
+
+        if (target.WriteSampleIndex < startSample + Math.Max(0, resolvedLagSamples) + windowSamples)
+        {
+            return false;
+        }
+
+        int minLagStep;
+        int maxLagStep = clampedMaxPosSteps;
+        if (hasHardwarePrior && expectedLagSamplesOpt.HasValue)
+        {
+            int expectedStep = (int)Math.Round(expectedLagSamplesOpt.Value / EnvelopeStepSamples);
+            int radiusSteps = ((SampleRate * 45) / 1000) / EnvelopeStepSamples;
+            minLagStep = Math.Max(-MaxLagEnvelopeSteps, Math.Min(0, expectedStep - radiusSteps));
+        }
+        else
+        {
+            minLagStep = -(DefaultPositiveHeadroomSamples / EnvelopeStepSamples);
+        }
+
+        int searchSpanSteps = (maxLagStep - minLagStep) + numSteps;
+        Span<float> tgtSearchEnv = stackalloc float[searchSpanSteps];
+        Span<double> tgtPrefixSum = stackalloc double[searchSpanSteps + 1];
+        long baseTargetSample = startSample + ((long)minLagStep * EnvelopeStepSamples);
+        PopulateTargetEnvelopePrefixSums(target, baseTargetSample, tgtSearchEnv, tgtPrefixSum);
+
+        int minOverlapSteps = (int)(numSteps * 0.55);
+        float maxWindowTgtMean = 0f;
+        int evaluatedLagWindows = 0;
+        float maxAllowedWindowMean = Math.Min(srcMean * NegligibleBleedGainThreshold, VocalActivityFloorRms * 0.55f);
+
+        for (int lagStep = minLagStep; lagStep <= maxLagStep; lagStep++)
+        {
+            long lagSamples = (long)lagStep * EnvelopeStepSamples;
+            if (startSample + lagSamples + windowSamples > target.WriteSampleIndex)
+            {
+                continue;
+            }
+
+            int kStart = ComputeOverlapStartStep(startSample + lagSamples, target.TrackEpochSample);
+            int overlapSteps = numSteps - kStart;
+            if (overlapSteps < minOverlapSteps)
+            {
+                continue;
+            }
+
+            int sliceStart = (lagStep - minLagStep) + kStart;
+            float tgtMean = (float)((tgtPrefixSum[sliceStart + overlapSteps] - tgtPrefixSum[sliceStart]) / overlapSteps);
+            if (tgtMean >= maxAllowedWindowMean)
+            {
+                return false;
+            }
+
+            if (tgtMean > maxWindowTgtMean)
+            {
+                maxWindowTgtMean = tgtMean;
+            }
+            evaluatedLagWindows++;
+        }
+
+        if (evaluatedLagWindows == 0)
+        {
+            return false;
+        }
+
+        long alignedTargetStart = Math.Max(target.TrackEpochSample, startSample + resolvedLagSamples);
+        int alignedWindowSamples = (int)((startSample + resolvedLagSamples + windowSamples) - alignedTargetStart);
+        if (alignedWindowSamples < minOverlapSteps * EnvelopeStepSamples)
+        {
+            return false;
+        }
+
+        float tgtAlignedRms = target.ComputeEnvelopeRms(alignedTargetStart, alignedWindowSamples);
+        if (tgtAlignedRms >= srcAlignedRms * NegligibleBleedGainThreshold ||
+            tgtAlignedRms >= VocalActivityFloorRms * 0.55f)
+        {
+            return false;
+        }
+
+        float peakSrcEnv = 0f;
+        for (int k = 0; k < numSteps; k++)
+        {
+            if (srcEnv[k] > peakSrcEnv) peakSrcEnv = srcEnv[k];
+        }
+
+        int alignedSliceStart = Math.Clamp((resolvedLagSamples / EnvelopeStepSamples) - minLagStep, 0, searchSpanSteps - numSteps);
+        float peakTgtEnv = 0f;
+        for (int k = 0; k < numSteps; k++)
+        {
+            float te = tgtSearchEnv[alignedSliceStart + k];
+            if (te > peakTgtEnv) peakTgtEnv = te;
+        }
+
+        float rawGainRatio = Math.Max(tgtAlignedRms / Math.Max(srcAlignedRms, 1e-5f), maxWindowTgtMean / Math.Max(srcMean, 1e-5f));
+        float rawPeakRatio = peakTgtEnv / Math.Max(peakSrcEnv, 1e-5f);
+        if (rawGainRatio >= NegligibleBleedGainThreshold || rawPeakRatio >= NegligiblePeakBleedGainThreshold)
+        {
+            return false;
+        }
+
+        float measuredGain = Math.Clamp(rawGainRatio, 0.001f, NegligibleBleedGainThreshold - 0.001f);
+        float peakOnsetGain = Math.Clamp(Math.Max(measuredGain, rawPeakRatio), measuredGain, NegligiblePeakBleedGainThreshold - 0.001f);
+
+        measurement = new PairAlignmentMeasurement(
+            resolvedLagSamples,
+            measuredGain,
+            peakOnsetGain,
+            BestEnvCorr: 0.0,
+            FineWaveCorr: 0.0,
+            BarkCorr: 0.0,
+            DirectnessDb: 20.0,
+            DominanceScoreDb: 20.0);
+        return true;
+    }
+
+    private static void PopulateTargetEnvelopePrefixSums(
+        AcousticParticipantStream target,
+        long baseTargetSample,
+        Span<float> targetEnv,
+        Span<double> targetPrefixSum)
+    {
+        targetPrefixSum[0] = 0.0;
+        for (int i = 0; i < targetEnv.Length; i++)
+        {
+            float e = target.GetEnvelopeAt(baseTargetSample + (long)i * EnvelopeStepSamples);
+            targetEnv[i] = e;
+            targetPrefixSum[i + 1] = targetPrefixSum[i] + e;
+        }
+    }
+
+    private static int ComputeOverlapStartStep(long targetWindowStart, long trackEpochSample)
+    {
+        if (targetWindowStart >= trackEpochSample)
+        {
+            return 0;
+        }
+
+        long missingSamples = trackEpochSample - targetWindowStart;
+        return (int)((missingSamples + EnvelopeStepSamples - 1) / EnvelopeStepSamples);
     }
 
     private static bool HasBalancedSpeechDutyCycle(ReadOnlySpan<float> srcEnv, float srcMean)
@@ -321,19 +514,21 @@ internal static class AcousticLagCorrelator
         }
 
         int minOverlapSteps = numSteps >= CorrelationWindowEnvelopeSteps ? (int)(numSteps * 0.60) : numSteps;
-        Span<float> tgtEnv = stackalloc float[numSteps];
+        int totalTargetSteps = MaxLagEnvelopeSteps + clampedMaxPosSteps + numSteps;
+        Span<float> tgtAllEnv = stackalloc float[totalTargetSteps];
+        Span<double> tgtPrefixSum = stackalloc double[totalTargetSteps + 1];
+        long baseTargetSample = startSample - ((long)MaxLagEnvelopeSteps * EnvelopeStepSamples);
+        PopulateTargetEnvelopePrefixSums(target, baseTargetSample, tgtAllEnv, tgtPrefixSum);
+
+        if (tgtPrefixSum[totalTargetSteps] <= 0.0)
+        {
+            return 0;
+        }
 
         for (int lagStep = -MaxLagEnvelopeSteps; lagStep <= clampedMaxPosSteps; lagStep++)
         {
             long lagSamples = lagStep * EnvelopeStepSamples;
-            int kStart = 0;
-            long targetWindowStart = startSample + lagSamples;
-            if (targetWindowStart < target.TrackEpochSample)
-            {
-                long missingSamples = target.TrackEpochSample - targetWindowStart;
-                kStart = (int)((missingSamples + EnvelopeStepSamples - 1) / EnvelopeStepSamples);
-            }
-
+            int kStart = ComputeOverlapStartStep(startSample + lagSamples, target.TrackEpochSample);
             int overlapSteps = numSteps - kStart;
             if (overlapSteps < minOverlapSteps) continue;
 
@@ -348,8 +543,9 @@ internal static class AcousticLagCorrelator
                 if (effSrcMean < 0.0035f || effSrcVar < 1e-7) continue;
             }
 
-            Span<float> tgtOverlap = tgtEnv.Slice(kStart, overlapSteps);
-            float tgtMean = target.ReadEnvelopeSteps(startSample + (kStart * EnvelopeStepSamples) + lagSamples, tgtOverlap);
+            int sliceStart = lagStep + MaxLagEnvelopeSteps + kStart;
+            ReadOnlySpan<float> tgtOverlap = tgtAllEnv.Slice(sliceStart, overlapSteps);
+            float tgtMean = (float)((tgtPrefixSum[sliceStart + overlapSteps] - tgtPrefixSum[sliceStart]) / overlapSteps);
             if (tgtMean < 0.00020f || tgtMean < effSrcMean * 0.0020f || tgtMean > effSrcMean * MaxAllowedAgcBleedGain)
             {
                 continue;
@@ -367,7 +563,7 @@ internal static class AcousticLagCorrelator
             }
 
             double corr = kStart == 0
-                ? AcousticDspMath.ComputeCenteredPearson(srcMeanNorm, effSrcVar, tgtEnv, tgtMean, 1e-7)
+                ? AcousticDspMath.ComputeCenteredPearson(srcMeanNorm, effSrcVar, tgtOverlap, tgtMean, 1e-7)
                 : AcousticDspMath.ComputePearson(srcEnv.Slice(kStart, overlapSteps), effSrcMean, effSrcVar, tgtOverlap, tgtMean, 1e-7);
 
             if (corr > -1.0)
@@ -406,18 +602,45 @@ internal static class AcousticLagCorrelator
             Math.Max(startSample, startSample + windowSamples - GccPhatFftSize));
     }
 
+    internal static double? ComputeExpectedHardwareDelayMs(
+        AcousticParticipantStream source,
+        AcousticParticipantStream target,
+        bool includeDefaultAirPropagation = true)
+    {
+        if (!source.EstimatedCaptureLatencyMs.HasValue || !target.EstimatedCaptureLatencyMs.HasValue)
+        {
+            return null;
+        }
+
+        double deltaMs = (target.EstimatedCaptureLatencyMs.Value - source.EstimatedCaptureLatencyMs.Value)
+                       + (((target.ServerToClientDelayMs ?? 0.0) - (source.ServerToClientDelayMs ?? 0.0)) * 0.5);
+        if (includeDefaultAirPropagation)
+        {
+            deltaMs += (DefaultAirDelaySamples * 1000.0) / SampleRate;
+        }
+
+        return deltaMs;
+    }
+
+    internal static int? TryComputeExpectedHardwareDelaySamples(
+        AcousticParticipantStream source,
+        AcousticParticipantStream target)
+    {
+        double? deltaMs = ComputeExpectedHardwareDelayMs(source, target, includeDefaultAirPropagation: true);
+        return deltaMs.HasValue
+            ? (int)Math.Round((deltaMs.Value * SampleRate) / 1000.0)
+            : null;
+    }
+
     private static double? ResolveExpectedHardwareLagSamples(
         AcousticParticipantStream source,
         AcousticParticipantStream target,
         int? topologicalPriorLagSamples)
     {
         if (topologicalPriorLagSamples.HasValue) return topologicalPriorLagSamples.Value;
-        if (!source.EstimatedCaptureLatencyMs.HasValue || !target.EstimatedCaptureLatencyMs.HasValue) return null;
 
-        double deltaMs = (target.EstimatedCaptureLatencyMs.Value - source.EstimatedCaptureLatencyMs.Value)
-                       + (((target.ServerToClientDelayMs ?? 0.0) - (source.ServerToClientDelayMs ?? 0.0)) * 0.5)
-                       + 4.0;
-        return (deltaMs * SampleRate) / 1000.0;
+        double? deltaMs = ComputeExpectedHardwareDelayMs(source, target, includeDefaultAirPropagation: true);
+        return deltaMs.HasValue ? (deltaMs.Value * SampleRate) / 1000.0 : null;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -656,7 +879,9 @@ internal static class AcousticLagCorrelator
 
         if (severelyConflictsWithPrior)
         {
-            return fineBestScore >= 0.38 || selectedBarkCorr >= 0.46 || (bestEnvCorr >= 0.84 && fineBestScore >= 0.32);
+            return fineBestScore >= 0.38 ||
+                   (selectedBarkCorr >= 0.46 && fineBestScore >= 0.26) ||
+                   (bestEnvCorr >= 0.84 && fineBestScore >= 0.32);
         }
 
         if (bestEnvCorr >= 0.64 || fineBestScore >= 0.38 || selectedBarkCorr >= 0.48)
@@ -887,6 +1112,60 @@ internal static class AcousticLagCorrelator
         return effectiveLevelDb + directnessDb;
     }
 
+    private static double PopulateCenteredBarkMatrix(
+        AcousticParticipantStream stream,
+        long startSample,
+        int numBarkSteps,
+        Span<float> centeredMatrix)
+    {
+        Span<float> bandMeans = stackalloc float[BarkBandCount];
+        for (int k = 0; k < numBarkSteps; k++)
+        {
+            long stepSample = startSample + (long)k * BarkStepSamples;
+            Span<float> row = centeredMatrix.Slice(k * BarkBandCount, BarkBandCount);
+            stream.ReadBarkBandsAt(stepSample, row);
+            for (int b = 0; b < BarkBandCount; b++)
+            {
+                bandMeans[b] += row[b];
+            }
+        }
+
+        float invSteps = 1.0f / numBarkSteps;
+        for (int b = 0; b < BarkBandCount; b++)
+        {
+            bandMeans[b] *= invSteps;
+        }
+
+        for (int k = 0; k < numBarkSteps; k++)
+        {
+            int rowBase = k * BarkBandCount;
+            for (int b = 0; b < BarkBandCount; b++)
+            {
+                centeredMatrix[rowBase + b] -= bandMeans[b];
+            }
+        }
+
+        return AcousticDspMath.DotProductSimd(centeredMatrix, centeredMatrix);
+    }
+
+    private static double ComputeBarkFormantCorrelationWithCachedSource(
+        ReadOnlySpan<float> srcCenteredMatrix,
+        double srcVar,
+        AcousticParticipantStream target,
+        long startSample,
+        int numBarkSteps,
+        int lagSamples)
+    {
+        if (srcVar < 0.05) return 0.0;
+
+        Span<float> tgtCenteredMatrix = stackalloc float[numBarkSteps * BarkBandCount];
+        double tgtVar = PopulateCenteredBarkMatrix(target, startSample + lagSamples, numBarkSteps, tgtCenteredMatrix);
+        if (tgtVar < 0.05) return 0.0;
+
+        double cross = AcousticDspMath.DotProductSimd(srcCenteredMatrix, tgtCenteredMatrix);
+        return cross / Math.Sqrt(srcVar * tgtVar);
+    }
+
     public static double ComputeBarkFormantCorrelation(
         AcousticParticipantStream source,
         AcousticParticipantStream target,
@@ -897,48 +1176,9 @@ internal static class AcousticLagCorrelator
         int numBarkSteps = windowSamples / BarkStepSamples;
         if (numBarkSteps < 8) return 0.0;
 
-        Span<float> srcMatrix = stackalloc float[numBarkSteps * BarkBandCount];
-        Span<float> tgtMatrix = stackalloc float[numBarkSteps * BarkBandCount];
-        Span<float> srcBandMeans = stackalloc float[BarkBandCount];
-        Span<float> tgtBandMeans = stackalloc float[BarkBandCount];
-
-        for (int k = 0; k < numBarkSteps; k++)
-        {
-            long stepSample = startSample + k * BarkStepSamples;
-            Span<float> sRow = srcMatrix.Slice(k * BarkBandCount, BarkBandCount);
-            Span<float> tRow = tgtMatrix.Slice(k * BarkBandCount, BarkBandCount);
-            source.ReadBarkBandsAt(stepSample, sRow);
-            target.ReadBarkBandsAt(stepSample + lagSamples, tRow);
-
-            for (int b = 0; b < BarkBandCount; b++)
-            {
-                srcBandMeans[b] += sRow[b];
-                tgtBandMeans[b] += tRow[b];
-            }
-        }
-
-        float invSteps = 1.0f / numBarkSteps;
-        for (int b = 0; b < BarkBandCount; b++)
-        {
-            srcBandMeans[b] *= invSteps;
-            tgtBandMeans[b] *= invSteps;
-        }
-
-        double cross = 0, srcVar = 0, tgtVar = 0;
-        for (int k = 0; k < numBarkSteps; k++)
-        {
-            int rowBase = k * BarkBandCount;
-            for (int b = 0; b < BarkBandCount; b++)
-            {
-                float sd = srcMatrix[rowBase + b] - srcBandMeans[b];
-                float td = tgtMatrix[rowBase + b] - tgtBandMeans[b];
-                cross += sd * td;
-                srcVar += sd * sd;
-                tgtVar += td * td;
-            }
-        }
-
-        return (srcVar < 0.05 || tgtVar < 0.05) ? 0.0 : cross / Math.Sqrt(srcVar * tgtVar);
+        Span<float> srcCenteredMatrix = stackalloc float[numBarkSteps * BarkBandCount];
+        double srcVar = PopulateCenteredBarkMatrix(source, startSample, numBarkSteps, srcCenteredMatrix);
+        return ComputeBarkFormantCorrelationWithCachedSource(srcCenteredMatrix, srcVar, target, startSample, numBarkSteps, lagSamples);
     }
 
     public static bool ComputeGccPhatFineLag(

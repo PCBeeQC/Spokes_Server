@@ -3,7 +3,7 @@
 @using Spokes_Server.Core.Models.Reports
 
 <MudPaper Elevation="0" Outlined="true" Class="rounded-lg" Style="background: var(--mud-palette-surface);">
-    <MudTable Items="@FilteredEntries" Dense="true" Hover="true" Bordered="false" Striped="true" FixedHeader="true" Height="550px">
+    <MudTable Elevation="0" Outlined="true" Items="@FilteredEntries" Dense="true" Hover="true" Bordered="false" Striped="true" FixedHeader="true" Height="550px">
         <ToolBarContent>
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
                 <MudIcon Icon="@Icons.Material.Filled.ListAlt" Color="Color.Primary" />
@@ -71,7 +71,9 @@
                 }
             </MudTd>
             <MudTd DataLabel="Rate" Style="text-align: right; font-size: 0.85rem; opacity: 0.9;">
-                @TimesheetFormatHelper.FormatCurrency(context.HourlyRate, CurrencySymbol)
+                @(CanViewBillingRates && AmountMode != AmountDisplayMode.HideAmounts
+                    ? TimesheetFormatHelper.FormatCurrency(context.HourlyRate, CurrencySymbol)
+                    : "-")
             </MudTd>
             <MudTd DataLabel="Duration" Style="text-align: right; font-weight: 700;">
                 @TimesheetFormatHelper.FormatDuration(context.Entry.Hours, Format)
@@ -133,6 +135,7 @@
     [Parameter] public List<TimesheetReportEntry> Entries { get; set; } = [];
     [Parameter] public TimeDisplayFormat Format { get; set; } = TimeDisplayFormat.DurationHhmm;
     [Parameter] public AmountDisplayMode AmountMode { get; set; } = AmountDisplayMode.BillableAmount;
+    [Parameter] public bool CanViewBillingRates { get; set; } = true;
     [Parameter] public string CurrencySymbol { get; set; } = "$";
 
     private string _searchString = "";

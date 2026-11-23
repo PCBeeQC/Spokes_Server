@@ -29,7 +29,25 @@ public class Album : IDataEntity, IHasAssociatedFiles
 
     public IEnumerable<string> GetAssociatedFilePaths()
     {
-        return Media?.Select(m => m.FilePath).Where(p => !string.IsNullOrWhiteSpace(p)) ?? Enumerable.Empty<string>();
+        if (Media == null || string.IsNullOrWhiteSpace(Id))
+        {
+            return Enumerable.Empty<string>();
+        }
+
+        var expectedPrefix = $"/spokesapi/files/albums/{Id}/";
+        return Media
+            .Select(m => m.FilePath)
+            .Where(p =>
+            {
+                if (string.IsNullOrWhiteSpace(p)) return false;
+                var clean = p.Split('?', '#')[0].Trim();
+                if (!clean.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase)) return false;
+                var fileSegment = clean[expectedPrefix.Length..];
+                return !string.IsNullOrWhiteSpace(fileSegment) &&
+                       !fileSegment.Contains('/', StringComparison.Ordinal) &&
+                       !fileSegment.Contains('\\', StringComparison.Ordinal) &&
+                       !fileSegment.Contains("..", StringComparison.Ordinal);
+            });
     }
 }
 
@@ -48,21 +66,12 @@ public class AlbumMedia : IHasAssociatedFiles
     public double? DurationSeconds { get; set; }
 
     [JsonIgnore]
-    public string ThumbnailUrl
-    {
-        get
-        {
-            if (!HasServerThumbnail || string.IsNullOrWhiteSpace(FilePath)) 
-                return FilePath;
-                
-            if (FilePath.StartsWith("/spokesapi/files/"))
-            {
-                return FilePath.Replace("/spokesapi/files/", "/spokesapi/files/thumb/");
-            }
-            
-            return FilePath;
-        }
-    }
+    public bool CanUseServerThumbnail =>
+        HasServerThumbnail || Spokes_Server.Core.Helpers.FileHelper.CanSelfHealThumbnail(FilePath);
+
+    [JsonIgnore]
+    public string ThumbnailUrl =>
+        Spokes_Server.Core.Helpers.FileHelper.BuildThumbnailUrl(FilePath, CanUseServerThumbnail);
 
     public IEnumerable<string> GetAssociatedFilePaths()
     {

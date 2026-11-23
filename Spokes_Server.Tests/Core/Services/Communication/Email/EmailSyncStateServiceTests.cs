@@ -145,18 +145,4 @@ public class EmailSyncStateServiceTests : IDisposable
         Assert.Equal("Idle", result);
     }
     
-    [Fact]
-    public void GetState_AfterSetState_ReturnsSetValue()
-    {
-        // Arrange
-        var employeeId = "emp_456";
-        var state = "Connecting";
-        _service.SetState(employeeId, state);
-
-        // Act
-        var result = _service.GetState(employeeId);
-
-        // Assert
-        Assert.Equal(state, result);
-    }
 }

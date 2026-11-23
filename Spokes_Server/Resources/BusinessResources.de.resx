@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <root>
   <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
     <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
@@ -74,9 +74,6 @@
   <data name="Stop Timer" xml:space="preserve">
     <value>Timer stoppen</value>
   </data>
-  <data name="PROJECTS" xml:space="preserve">
-    <value>PROJEKTE</value>
-  </data>
   <data name="Linked to Project" xml:space="preserve">
     <value>Mit Projekt verknüpft</value>
   </data>
@@ -94,9 +91,6 @@
   </data>
   <data name="Project Statuses" xml:space="preserve">
     <value>Projektstatus</value>
-  </data>
-  <data name="Timesheets" xml:space="preserve">
-    <value>Stundenzettel</value>
   </data>
   <!-- HR & Employee Details -->
   <data name="HR Details" xml:space="preserve">

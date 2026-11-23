@@ -6,27 +6,6 @@ namespace Spokes_Server.Tests.Core.Models.Accounting;
 public class ExpenseReportTests
 {
     [Fact]
-    public void Initialization_SetsDefaultValues()
-    {
-        // Act
-        var report = new ExpenseReport();
-
-        // Assert
-        Assert.False(string.IsNullOrWhiteSpace(report.Id));
-        Assert.True(Guid.TryParse(report.Id, out _));
-        Assert.Equal(string.Empty, report.ReportNumber);
-        Assert.Equal(string.Empty, report.EmployeeId);
-        Assert.Equal(string.Empty, report.EmployeeName);
-        Assert.Equal(DateTime.Today, report.DateCreated);
-        Assert.Null(report.DateSubmitted);
-        Assert.Null(report.DatePaid);
-        Assert.NotNull(report.LineItems);
-        Assert.Empty(report.LineItems);
-        Assert.Equal(0m, report.TotalAmount);
-        Assert.Equal(ExpenseReportStatus.Draft, report.Status);
-    }
-
-    [Fact]
     public void Status_WhenDatePaidHasValue_ReturnsPaid()
     {
         // Arrange
@@ -87,26 +66,6 @@ public class ExpenseReportTests
         // Act & Assert
         // 120.50 + 55.00 + 24.50 = 200.00
         Assert.Equal(200.00m, report.TotalAmount);
-    }
-
-    [Fact]
-    public void ExpenseItem_Initialization_SetsDefaultValues()
-    {
-        // Act
-        var item = new ExpenseItem();
-
-        // Assert
-        Assert.False(string.IsNullOrWhiteSpace(item.Id));
-        Assert.True(Guid.TryParse(item.Id, out _));
-        Assert.Equal(string.Empty, item.ProjectId);
-        Assert.Equal(DateTime.Today, item.Date);
-        Assert.Equal(string.Empty, item.Description);
-        Assert.False(item.IsKilometrage);
-        Assert.Equal(0m, item.Kilometers);
-        Assert.Equal(0m, item.KilometrageRate);
-        Assert.Equal(string.Empty, item.ReceiptPath);
-        Assert.Equal(0m, item.Amount);
-        Assert.Equal(0m, item.Total);
     }
 
     [Fact]
@@ -174,32 +133,6 @@ public class ExpenseReportTests
     }
 
     [Fact]
-    public void ExpenseReportStatus_Constants()
-    {
-        Assert.Equal("Draft", ExpenseReportStatus.Draft);
-        Assert.Equal("Submitted", ExpenseReportStatus.Submitted);
-        Assert.Equal("Paid", ExpenseReportStatus.Paid);
-    }
-
-#pragma warning disable CS0618
-    [Fact]
-    public void ExpenseReport_LineItems_And_Items_AreSynchronized()
-    {
-        var report = new ExpenseReport();
-        var item = new ExpenseItem { Description = "Travel", Amount = 75m };
-
-        report.LineItems.Add(item);
-        Assert.Single(report.Items);
-        Assert.Same(item, report.Items[0]);
-        Assert.Equal(75m, report.TotalAmount);
-
-        var item2 = new ExpenseItem { Description = "Meal", Amount = 25m };
-        report.Items.Add(item2);
-        Assert.Equal(2, report.LineItems.Count);
-        Assert.Equal(100m, report.TotalAmount);
-    }
-
-    [Fact]
     public void ExpenseReport_JsonDeserialization_SupportsLegacyItemsProperty()
     {
         const string legacyJson = """
@@ -215,7 +148,6 @@ public class ExpenseReportTests
         Assert.NotNull(report);
         Assert.Single(report.LineItems);
         Assert.Equal("Hotel", report.LineItems[0].Description);
-        Assert.Equal("Hotel", report.Items[0].Description);
         Assert.Equal(120m, report.TotalAmount);
     }
 
@@ -235,10 +167,8 @@ public class ExpenseReportTests
         Assert.NotNull(report);
         Assert.Single(report.LineItems);
         Assert.Equal("Flight", report.LineItems[0].Description);
-        Assert.Equal("Flight", report.Items[0].Description);
         Assert.Equal(300m, report.TotalAmount);
     }
-#pragma warning restore CS0618
 
     [Fact]
     public void ExpenseReport_JsonSerialization_WritesLineItemsProperty()

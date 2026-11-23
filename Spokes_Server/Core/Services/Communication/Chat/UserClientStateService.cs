@@ -2,26 +2,21 @@
 
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Aggregate.Contexts;
 using Spokes_Server.Core.Data.Repositories.Communication;
-using Spokes_Server.Core.Models.Communication;
 
 /// <summary>
-/// Singleton service managing transient mobile client state.
-/// Drafts are held purely in memory during typing and only flushed to disk via Db.ClientStates
-/// when the user backgrounds, disconnects, or closes the app before sending.
+/// Singleton service managing transient in-memory client state:
+/// RAM-only chat drafts, active channel tracking, and active typing indicators.
 /// </summary>
 public class UserClientStateService : IUserClientStateService
 {
-    private readonly UserClientStateRepository _clientStates;
     private readonly Func<ChatChannelRepository?>? _channelRepoAccessor;
     private readonly ChatStateService _chatState;
-    private readonly IChatRealtimeGateway _realtimeGateway;
     private readonly ILogger<UserClientStateService> _logger;
 
     // In-memory drafts: Key: (UserId, ChannelId), Value: Draft message
@@ -37,27 +32,20 @@ public class UserClientStateService : IUserClientStateService
     private readonly ConcurrentDictionary<(string UserId, string ChannelId), bool> _autoOpenedDrafts = new();
 
     public UserClientStateService(
-        UserClientStateRepository clientStates,
         ChatChannelRepository? channels,
         ChatStateService chatState,
-        IChatRealtimeGateway realtimeGateway,
         ILogger<UserClientStateService> logger)
-        : this(clientStates, () => channels, chatState, realtimeGateway, logger)
+        : this(() => channels, chatState, logger)
     {
     }
 
     public UserClientStateService(
-        UserClientStateRepository clientStates,
         Func<ChatChannelRepository?> channelRepoAccessor,
         ChatStateService chatState,
-        IChatRealtimeGateway realtimeGateway,
         ILogger<UserClientStateService> logger)
     {
-        ArgumentNullException.ThrowIfNull(clientStates);
-        _clientStates = clientStates;
         _channelRepoAccessor = channelRepoAccessor;
         _chatState = chatState;
-        _realtimeGateway = realtimeGateway;
         _logger = logger;
     }
 
@@ -65,9 +53,8 @@ public class UserClientStateService : IUserClientStateService
     public UserClientStateService(
         CommunicationContext communicationContext,
         ChatStateService chatState,
-        IChatRealtimeGateway realtimeGateway,
         ILogger<UserClientStateService> logger)
-        : this(communicationContext.ClientStates, () => communicationContext.ChatChannels, chatState, realtimeGateway, logger)
+        : this(() => communicationContext.ChatChannels, chatState, logger)
     {
     }
 
@@ -84,7 +71,6 @@ public class UserClientStateService : IUserClientStateService
         {
             _inMemoryDrafts.TryRemove((userId, channelId), out _);
             _autoOpenedDrafts.TryRemove((userId, channelId), out _);
-            _clientStates.ClearDraft(userId, channelId);
         }
         else
         {
@@ -186,7 +172,7 @@ public class UserClientStateService : IUserClientStateService
     }
 
     /// <summary>
-    /// Immediately stops the typing indicator for this user across SignalR and local events.
+    /// Immediately stops the typing indicator for this user across local circuit subscribers.
     /// </summary>
     public virtual void StopActiveTyping(string userId)
     {
@@ -194,48 +180,19 @@ public class UserClientStateService : IUserClientStateService
 
         if (_activeTypingChannels.TryRemove(userId, out var channelId) && !string.IsNullOrEmpty(channelId))
         {
-            _ = StopTypingInternalAsync(userId, channelId);
-        }
-    }
-
-    private async Task StopTypingInternalAsync(string userId, string channelId)
-    {
-        try
-        {
-            _chatState.NotifyUserStoppedTyping(channelId, userId);
-            await _realtimeGateway.SendToChannelAsync(channelId, "UserStoppedTyping", new
+            try
             {
-                ChannelId = channelId,
-                UserId = userId
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to broadcast UserStoppedTyping for user {UserId} in channel {ChannelId}", userId, channelId);
-        }
-    }
-
-    /// <summary>
-    /// Cancels active typing on app exit triggers (unfocus, circuit down, push unfocus beacon).
-    /// Drafts remain strictly in RAM and are never written to disk.
-    /// </summary>
-    public virtual void FlushToDiskIfUnsent(string userId)
-    {
-        if (string.IsNullOrEmpty(userId)) return;
-
-        StopActiveTyping(userId);
-
-        var state = _clientStates.GetByUserId(userId);
-        if (state != null && state.ChannelDrafts.Count > 0)
-        {
-            state.ChannelDrafts.Clear();
-            state.LastUpdatedAt = DateTime.UtcNow;
-            _clientStates.Save(state);
+                _chatState.NotifyUserStoppedTyping(channelId, userId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to notify UserStoppedTyping for user {UserId} in channel {ChannelId}", userId, channelId);
+            }
         }
     }
 
     /// <summary>
-    /// Clears the draft both from memory and from disk when the message has been sent.
+    /// Clears the in-memory draft when the message has been sent and stops any active typing indicator.
     /// </summary>
     public virtual void ClearDraft(string userId, string channelId)
     {
@@ -243,7 +200,6 @@ public class UserClientStateService : IUserClientStateService
 
         _inMemoryDrafts.TryRemove((userId, channelId), out _);
         _autoOpenedDrafts.TryRemove((userId, channelId), out _);
-        _clientStates.ClearDraft(userId, channelId);
         StopActiveTyping(userId);
     }
 }

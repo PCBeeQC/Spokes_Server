@@ -74,56 +74,6 @@ public static class MailTransportSecurityHelper
     }
 
     /// <summary>
-    /// Resolves IMAP TLS mode for <see cref="CompanyBillInboxSettings"/>.
-    /// Enforces <see cref="SecureSocketOptions.SslOnConnect"/> on port 993 when <see cref="CompanyBillInboxSettings.ImapSsl"/> is true,
-    /// or mandatory <see cref="SecureSocketOptions.StartTls"/> unless <see cref="CompanyBillInboxSettings.AllowPlaintextTransport"/> is explicitly enabled.
-    /// </summary>
-    public static SecureSocketOptions ResolveBillInboxImapTlsOptions(CompanyBillInboxSettings settings)
-    {
-        ArgumentNullException.ThrowIfNull(settings);
-
-        var effectivePort = NormalizeImapPort(settings.ImapPort, settings.ImapSsl);
-        if (settings.ImapSsl)
-        {
-            return effectivePort == 993
-                ? SecureSocketOptions.SslOnConnect
-                : SecureSocketOptions.StartTls;
-        }
-
-        return settings.AllowPlaintextTransport
-            ? SecureSocketOptions.None
-            : SecureSocketOptions.StartTls;
-    }
-
-    /// <summary>
-    /// Resolves SMTP TLS mode for <see cref="CompanyBillInboxSettings"/>.
-    /// Historically <see cref="CompanyBillInboxSettings.SmtpPort"/> defaulted to 587 with <c>SmtpSsl = false</c> for STARTTLS;
-    /// this enforces mandatory <see cref="SecureSocketOptions.StartTls"/> (or <see cref="SecureSocketOptions.SslOnConnect"/> on 465)
-    /// unless <see cref="CompanyBillInboxSettings.AllowPlaintextTransport"/> is explicitly enabled.
-    /// </summary>
-    public static SecureSocketOptions ResolveBillInboxSmtpTlsOptions(CompanyBillInboxSettings settings)
-    {
-        ArgumentNullException.ThrowIfNull(settings);
-
-        var effectivePort = NormalizeSmtpPort(settings.SmtpPort, settings.SmtpSsl);
-        if (settings.SmtpSsl)
-        {
-            return effectivePort == 465
-                ? SecureSocketOptions.SslOnConnect
-                : SecureSocketOptions.StartTls;
-        }
-
-        if (settings.AllowPlaintextTransport)
-        {
-            return SecureSocketOptions.None;
-        }
-
-        return effectivePort == 465
-            ? SecureSocketOptions.SslOnConnect
-            : SecureSocketOptions.StartTls;
-    }
-
-    /// <summary>
     /// Connects a MailKit <see cref="IMailService"/> (<c>ImapClient</c> or <c>SmtpClient</c>).
     /// When <paramref name="requireSafeExternalHost"/> is true, opens a DNS-pinned SSRF-validated TCP <see cref="Socket"/>
     /// via <see cref="SafeExternalHttpHandler.ConnectSafeExternalTcpSocketAsync"/> and passes the connected socket directly to MailKit.

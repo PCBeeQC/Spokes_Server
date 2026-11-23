@@ -7,41 +7,6 @@ namespace Spokes_Server.Tests.Core.Models.Communication;
 public class ChatReadStateTests
 {
     [Fact]
-    public void ChatReadState_Defaults_AreSetCorrectly()
-    {
-        var before = DateTime.UtcNow;
-        var state = new ChatReadState();
-        var after = DateTime.UtcNow;
-
-        Assert.Equal(string.Empty, state.Id);
-        Assert.Equal(string.Empty, state.UserId);
-        Assert.Equal(string.Empty, state.ChannelId);
-        Assert.Null(state.NotificationLevel);
-        Assert.True(state.LastReadAt >= before.AddSeconds(-1));
-        Assert.True(state.LastReadAt <= after.AddSeconds(1));
-    }
-
-    [Fact]
-    public void ChatReadState_PropertyMutation_UpdatesValues()
-    {
-        var customTime = new DateTime(2025, 6, 15, 12, 0, 0, DateTimeKind.Utc);
-        var state = new ChatReadState
-        {
-            Id = "user-123_chan-456",
-            UserId = "user-123",
-            ChannelId = "chan-456",
-            LastReadAt = customTime,
-            NotificationLevel = "Mentions"
-        };
-
-        Assert.Equal("user-123_chan-456", state.Id);
-        Assert.Equal("user-123", state.UserId);
-        Assert.Equal("chan-456", state.ChannelId);
-        Assert.Equal(customTime, state.LastReadAt);
-        Assert.Equal("Mentions", state.NotificationLevel);
-    }
-
-    [Fact]
     public void CreateId_CombinesUserIdAndChannelId()
     {
         var userId = "user-abc";

@@ -177,7 +177,7 @@ public class SeekableAesStream : Stream
             read += r;
         }
 
-        var aes = Aes.Create();
+        using var aes = Aes.Create();
         aes.Key = _key;
         aes.IV = iv;
         aes.Mode = CipherMode.CBC;

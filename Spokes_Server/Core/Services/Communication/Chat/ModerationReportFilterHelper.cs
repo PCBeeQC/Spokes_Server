@@ -15,11 +15,13 @@ public sealed class ModerationReportItem
     public required string ReporterName { get; init; }
     public Employee? ReportedUser { get; init; }
     public required string ReportedUserName { get; init; }
+    public string ResolvedByName { get; init; } = string.Empty;
     public required string LocalizedReason { get; init; }
     public required string LocalizedStatus { get; init; }
     public required string LocalizedResolutionAction { get; init; }
     public required string LocalizedSnapshotContent { get; init; }
     public bool IsOpen { get; init; }
+    public bool CanAct { get; init; } = true;
 
     public bool CanModerateReportedUser =>
         ReportedUser is { IsSystem: false } &&
@@ -42,7 +44,9 @@ public static class ModerationReportFilterHelper
         Func<string?, Employee?> resolveEmployee,
         string unknownUserLabel = "Unknown",
         Func<string, string>? localize = null,
-        bool sortByReportedAtDescending = true)
+        bool sortByReportedAtDescending = true,
+        Func<ReportedMessage, Employee?, bool>? canActPredicate = null,
+        Func<ReportedMessage, string>? resolveByName = null)
     {
         ArgumentNullException.ThrowIfNull(reports);
         ArgumentNullException.ThrowIfNull(resolveEmployee);
@@ -86,11 +90,13 @@ public static class ModerationReportFilterHelper
                 ReporterName = ResolveDisplayName(reporter, fallbackUserLabel),
                 ReportedUser = reportedUser,
                 ReportedUserName = ResolveDisplayName(reportedUser, fallbackUserLabel),
+                ResolvedByName = resolveByName != null ? resolveByName(report) : (report.ResolvedBy ?? string.Empty),
                 LocalizedReason = LocalizeOrFallback(report.Reason, localize),
                 LocalizedStatus = LocalizeOrFallback(statusKey, localize),
                 LocalizedResolutionAction = localizedResolutionAction,
                 LocalizedSnapshotContent = localizedSnapshot,
-                IsOpen = isOpen
+                IsOpen = isOpen,
+                CanAct = canActPredicate == null || canActPredicate(report, reportedUser)
             });
         }
 
@@ -153,7 +159,7 @@ public static class ModerationReportFilterHelper
         // 5. Status & Resolution Metadata (canonical & localized)
         if (ContainsIgnoreCase(item.Report.Status, trimmed) ||
             ContainsIgnoreCase(item.LocalizedStatus, trimmed) ||
-            ContainsIgnoreCase(item.Report.ResolvedBy, trimmed) ||
+            ContainsIgnoreCase(item.ResolvedByName, trimmed) ||
             ContainsIgnoreCase(item.Report.ResolutionAction, trimmed) ||
             ContainsIgnoreCase(item.LocalizedResolutionAction, trimmed))
         {

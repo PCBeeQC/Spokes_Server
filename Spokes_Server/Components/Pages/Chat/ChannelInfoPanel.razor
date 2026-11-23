@@ -64,7 +64,7 @@
                                 @if (_isEditingName && CanEditChannelInfo())
                                 {
                                     <MudTextField @bind-Value="_editingName" Variant="Variant.Outlined" Margin="Margin.Dense"
-                                        Placeholder="@Loc["Channel name"]" Immediate="true" Class="ma-0"
+                                        Placeholder="@Loc["Channel Name"]" Immediate="true" Class="ma-0"
                                         OnKeyDown="@(async (e) => { if (e.Key == "Enter" || e.Key == "NumpadEnter") await SaveName(); })"
                                         Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Check"
                                         OnAdornmentClick="SaveName" />
@@ -90,7 +90,7 @@
                                 }
                                 else if (PrivacyService.ShouldHideMemberList(Channel, _currentUserObj))
                                 {
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@(Channel.IsAnnouncementOnly ? Loc["Announcement channel"].Value : string.Format(Loc["{0} channel"].Value, Channel.ChannelType))</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@(Channel.IsAnnouncementOnly ? Loc["Announcement Channel"].Value : string.Format(Loc["{0} channel"].Value, Channel.ChannelType))</MudText>
                                 }
                                 else
                                 {
@@ -101,8 +101,16 @@
                     }
                     else
                     {
+                        var dmParticipant = ChatChannelFormatter.GetDirectMessageParticipant(Channel, CurrentUserId, Employees);
                         <div class="d-flex align-center gap-2">
-                            <MudIcon Icon="@GetChannelIcon()" Size="Size.Medium" />
+                            @if (dmParticipant != null)
+                            {
+                                <EmployeeAvatar Employee="@dmParticipant" Size="Size.Medium" Style="width: 40px; height: 40px; flex-shrink: 0;" />
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@GetChannelIcon()" Size="Size.Medium" />
+                            }
                             <div>
                                 <MudText Typo="Typo.subtitle2"><b>@CurrentDisplayName</b></MudText>
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@string.Format(Loc["{0} channel"].Value, Channel!.ChannelType)</MudText>
@@ -113,7 +121,7 @@
                     @* Description *@
                     <div>
                         <div class="d-flex align-center justify-space-between mb-1">
-                            <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["DESCRIPTION"]</MudText>
+                            <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["Description"]</MudText>
                             @if (CanEditChannelInfo() && !_isEditingDescription)
                             {
                                 <MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Style="opacity: 0.4; font-size: 14px; cursor: pointer;" @onclick="StartEditingDescription" />
@@ -169,7 +177,7 @@
                         else if (!string.IsNullOrEmpty(Channel.CategoryId))
                         {
                             <div>
-                                <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["CATEGORY"]</MudText>
+                                <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["Category"]</MudText>
                                 <MudText Typo="Typo.body2">@(_allCategories.FirstOrDefault(c => c.Id == Channel.CategoryId)?.Name ?? Loc["Unknown"].Value)</MudText>
                             </div>
                         }
@@ -177,7 +185,7 @@
 
                     @* Created *@
                     <div>
-                        <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["CREATED"]</MudText>
+                        <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["Created"]</MudText>
                         <MudText Typo="Typo.body2">
                             @string.Format(Loc["{0} by {1}"].Value, Channel.CreatedAt.ToLocalTime().ToString("MMM d, yyyy"), GetCreatorName())
                         </MudText>
@@ -185,320 +193,188 @@
                 </div>
             </MudPaper>
 
-            @* ──────── Announcement Channel Settings ──────── *@
-            @if (Channel != null && Channel.SupportsAnnouncements && (CanEditChannelInfo() || Channel.IsAnnouncementOnly))
+            @* ════════ SECTION: YOUR PREFERENCES (Personal to current user) ════════ *@
+            @if (!string.IsNullOrEmpty(CurrentUserId))
             {
-                bool lockAnnouncement = Channel.IsPublicChannel && PrivacyService.GetPrivacyConfig().PublicChannels == Spokes_Server.Core.Configuration.PublicChannelPolicy.AnnouncementOnly;
-                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                    <div class="d-flex align-center justify-space-between my-1 ml-3 mr-1">
-                        <div class="d-flex align-center">
-                            <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Class="mr-2" />
-                            <MudText Typo="Typo.subtitle2">@Loc["Announcement Channel"]</MudText>
-                        </div>
-                        @if (CanEditChannelInfo())
-                        {
-                            <MudSwitch T="bool" Value="@Channel.IsAnnouncementOnly" ValueChanged="UpdateAnnouncementToggleAsync" Color="Color.Primary" Disabled="@lockAnnouncement" Class="ma-0" />
-                        }
+                <div class="channel-info-section-header d-flex align-center justify-space-between" data-section="user-preferences">
+                    <div class="d-flex align-center gap-1">
+                        <MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" Color="Color.Primary" Class="channel-info-section-icon" />
+                        <MudText Typo="Typo.overline" Class="channel-info-section-title">@Loc["Your Preferences"]</MudText>
                     </div>
-                    @if (lockAnnouncement)
-                    {
-                        <div class="px-3 pb-2">
-                            <MudText Typo="Typo.caption" Color="Color.Info">@Loc["Public channels must remain announcement-only per server policy."]</MudText>
-                        </div>
-                    }
-                    <MudDivider />
-                    @if (Channel.IsAnnouncementOnly)
-                    {
-                        <div class="px-3 py-2 d-flex flex-column gap-2">
-                            @if (CanEditChannelInfo())
-                            {
-                                <MudText Color="Color.Info" Typo="Typo.caption" Class="mb-1">@string.Format(Loc["Only specific users/{0} can post."].Value, AppLabels.Teams.ToLower())</MudText>
-                                
-                                <div class="d-flex align-center justify-space-between mb-n1">
-                                    <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["ALLOWED"] @(AppLabels.Teams.ToUpper())</MudText>
-                                    <MudIconButton Icon="@Icons.Material.Filled.GroupAdd" Size="Size.Small" OnClick="@(() => _showAddPostTeam = !_showAddPostTeam)" Color="@(_showAddPostTeam ? Color.Primary : Color.Default)" Class="pa-1" />
-                                </div>
-                                @if (_showAddPostTeam)
-                                {
-                                    <TeamAutocomplete Margin="Margin.Dense" Label="@(string.Format(Loc["Add {0}..."].Value, AppLabels.Team.ToLower()))"
-                                        ExcludedIds="@Channel.AllowedPostTeamIds" ValueChanged="AddPostTeamAsync" ResetOnSelect="true" Class="ma-0" />
-                                }
-                                <div class="d-flex flex-wrap gap-1">
-                                    @foreach(var teamId in Channel.AllowedPostTeamIds ?? new())
-                                    {
-                                        var team = Db.Teams.GetById(teamId);
-                                        if (team != null)
-                                        {
-                                            <TeamChip Team="@team" OnClose="@(() => RemovePostTeamAsync(teamId))" Color="Color.Secondary" Size="Size.Small" />
-                                        }
-                                    }
-                                </div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="channel-info-section-scope">@Loc["Only affects you"]</MudText>
+                </div>
 
-                                <div class="d-flex align-center justify-space-between mb-n1 mt-1">
-                                    <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["ALLOWED USERS"]</MudText>
-                                    <MudIconButton Icon="@Icons.Material.Filled.PersonAdd" Size="Size.Small" OnClick="@(() => _showAddPostUser = !_showAddPostUser)" Color="@(_showAddPostUser ? Color.Primary : Color.Default)" Class="pa-1" />
-                                </div>
-                                @if (_showAddPostUser)
-                                {
-                                    <EmployeeAutocomplete Margin="Margin.Dense" Label="@Loc["Add user..."]" Employees="@Employees"
-                                        ExcludedIds="@Channel.AllowedPostUserIds" ValueChanged="AddPostUserAsync" ResetOnSelect="true" Class="ma-0" />
-                                }
-                                <div class="d-flex flex-wrap gap-1">
-                                    @foreach(var userId in Channel.AllowedPostUserIds ?? new())
-                                    {
-                                        var user = Employees.FirstOrDefault(u => u.Id == userId);
-                                        if (user != null && !user.IsSystem)
-                                        {
-                                            <EmployeeChip Employee="@user" OnClose="@(() => RemovePostUserAsync(userId))" Size="Size.Small" />
-                                        }
-                                        else
-                                        {
-                                            <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small" OnClose="@(() => RemovePostUserAsync(userId))">
-                                                @(user?.FullName ?? Loc["Deleted User"].Value)
-                                            </MudChip>
-                                        }
-                                    }
-                                </div>
-                            }
-                            else
-                            {
-                                <MudText Typo="Typo.body2">@Loc["Only authorized users can post."]</MudText>
-                            }
-                        </div>
-                    }
-                </MudPaper>
-            }
-
-            @* ──────── Audio Bitrate ──────── *@
-            @if (Channel?.IsVoiceChannel == true)
-            {
-                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0 channel-info-notifications-card channel-info-personal-card">
                     <div class="d-flex align-center my-1 ml-3">
-                        <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Size="Size.Small" Class="mr-2" />
-                        <MudText Typo="Typo.subtitle2">@Loc["Voice Channel"]</MudText>
+                        <MudIcon Icon="@ChatUiHelper.GetNotificationIcon(_currentNotificationLevel)"
+                                 Size="Size.Small"
+                                 Color="@ChatUiHelper.GetNotificationColor(_currentNotificationLevel)"
+                                 Class="mr-2" />
+                        <MudText Typo="Typo.subtitle2">@Loc["Notification settings"]</MudText>
                     </div>
                     <MudDivider />
-                    <div class="px-3 py-2">
-                        @if (CanEditChannelInfo())
-                        {
-                            <MudSelect Margin="Margin.Dense" T="int" Label="@Loc["Audio Bitrate"]" Value="@(Channel?.AudioBitrateKbps ?? 96)" ValueChanged="UpdateAudioBitrateAsync"
-                                AnchorOrigin="Origin.BottomLeft" Variant="Variant.Outlined" Class="ma-0">
-                                <MudSelectItem Value="64">@Loc["64 kbps (Low)"]</MudSelectItem>
-                                <MudSelectItem Value="96">@Loc["96 kbps (Standard)"]</MudSelectItem>
-                                <MudSelectItem Value="128">@Loc["128 kbps (High)"]</MudSelectItem>
-                                <MudSelectItem Value="256">@Loc["256 kbps (Very High)"]</MudSelectItem>
-                                <MudSelectItem Value="384">@Loc["384 kbps (Extreme)"]</MudSelectItem>
-                            </MudSelect>
-                        }
-                        else
-                        {
-                            <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["AUDIO BITRATE"]</MudText>
-                            <MudText Typo="Typo.body2">@(Channel?.AudioBitrateKbps ?? 96) @Loc["kbps"]</MudText>
-                        }
+                    <div class="pa-2 d-flex flex-column gap-1" role="radiogroup" aria-label="@Loc["Notification settings"]">
+                        @RenderNotificationOption(ChatNotificationLevel.All, Icons.Material.Filled.Notifications, Color.Success, Loc["All Messages"].Value, Loc["Get notified for every new message"].Value)
+                        @RenderNotificationOption(ChatNotificationLevel.Mentions, Icons.Material.Filled.AlternateEmail, Color.Warning, Loc["Mentions Only"].Value, Loc["Only when you're @mentioned"].Value)
+                        @RenderNotificationOption(ChatNotificationLevel.None, Icons.Material.Filled.NotificationsOff, Color.Error, Loc["Muted"].Value, Loc["No notifications from this channel"].Value)
                     </div>
                 </MudPaper>
             }
 
-            @* ──────── Encryption ──────── *@
-            @{
-                bool canEncrypt = CanEditChannelInfo() || (Channel!.ChannelType == ChatChannelType.Direct && Channel.CreatedById == CurrentUserId);
-            }
-            @if (Channel!.IsEncrypted || canEncrypt)
+            @* ════════ SECTION: CHANNEL DETAILS (Pinned Messages & Members) ════════ *@
+            @if (HasChannelDetails)
             {
-                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                    <div class="d-flex align-center my-1 ml-3">
-                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2" />
-                        <MudText Typo="Typo.subtitle2">@Loc["Channel Encryption"]</MudText>
+                <div class="channel-info-section-header d-flex align-center justify-space-between" data-section="channel-details">
+                    <div class="d-flex align-center gap-1">
+                        <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Color="Color.Secondary" Class="channel-info-section-icon" />
+                        <MudText Typo="Typo.overline" Class="channel-info-section-title">@Loc["Channel Details"]</MudText>
                     </div>
-                    <MudDivider />
-                    <div class="px-3 py-2">
-                        @if (Channel.IsEncrypted)
-                        {
-                            <MudAlert Severity="Severity.Info" Dense="true" Icon="@Icons.Material.Filled.Lock" Class="ma-0 pa-2">
-                                @Loc["Encrypted channel."]
-                            </MudAlert>
-                            @if (canEncrypt)
-                            {
-                                <div class="d-flex justify-end mt-2">
-                                    <MudButton StartIcon="@Icons.Material.Filled.SyncLock" 
-                                               Color="Color.Default" 
-                                               Variant="Variant.Text" 
-                                               Size="Size.Small" 
-                                               OnClick="SyncMediaEncryptionAsync" 
-                                               Style="font-size: 0.75rem; text-transform: none;">
-                                        @Loc["Sync Media Encryption"]
-                                    </MudButton>
-                                </div>
-                            }
-                        }
-                        else if (canEncrypt)
-                        {
-                            <MudText Color="Color.Error" Typo="Typo.caption" Class="mb-2 d-block">@Loc["Not E2E encryption. Protects against db leaks."]</MudText>
-                            <MudButton StartIcon="@Icons.Material.Filled.Lock" 
-                                       Color="Color.Success" 
-                                       Variant="Variant.Filled" 
-                                       Size="Size.Small" 
-                                       FullWidth="true" 
-                                       OnClick="ConfirmEncryptionAsync">
-                                @Loc["Enable Encryption"]
-                            </MudButton>
-                        }
-                    </div>
-                </MudPaper>
-            }
+                </div>
 
-            @* ──────── Access Control ──────── *@
-            @if (Channel.ChannelType != ChatChannelType.Direct && Channel.ChannelType != ChatChannelType.Project)
-            {
-                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                    <div class="d-flex align-center justify-space-between my-1 ml-3 mr-1">
-                        <div class="d-flex align-center">
-                            <MudIcon Icon="@Icons.Material.Filled.Security" Size="Size.Small" Class="mr-2" />
-                            <MudText Typo="Typo.subtitle2">@Loc["Access Control"]</MudText>
+                @* ──────── Pinned Messages ──────── *@
+                @if (_pinnedMessages.Any())
+                {
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                        <div class="d-flex align-center my-1 ml-3">
+                            <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Class="mr-2" />
+                            <MudText Typo="Typo.subtitle2">@Loc["Pinned Messages"] (@_pinnedMessages.Count)</MudText>
                         </div>
-                    </div>
-                    <MudDivider />
-                    <div class="px-3 py-2">
-                        @if (Channel.IsDefaultGeneral)
-                        {
-                            <MudAlert Severity="Severity.Info" Dense="true" Class="ma-0 pa-2">
-                                @Loc["Public — Default organization channel (access cannot be restricted)."]
-                            </MudAlert>
-                        }
-                        else if (!CanEditChannelInfo())
-                        {
-                            if (IsPublicChannel)
+                        <MudDivider />
+                        <div class="px-2 py-2 d-flex flex-column gap-1">
+                            @foreach (var msg in _pinnedMessages)
                             {
-                                <div class="d-flex align-center gap-2">
-                                    <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Color="Color.Primary" />
-                                    <MudText Typo="Typo.body2">@Loc["Public (Everyone)"]</MudText>
-                                </div>
-                            }
-                            else
-                            {
-                                <div class="d-flex align-center gap-2">
-                                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Color="Color.Warning" />
-                                    <MudText Typo="Typo.body2">@string.Format(Loc["Restricted ({0} {1}, {2} members)"].Value, Channel.AllowedTeamIds.Count, AppLabels.Teams.ToLower(), Channel.ParticipantIds.Count)</MudText>
-                                </div>
-                            }
-                        }
-                        else
-                        {
-                            <MudSelect Margin="Margin.Dense" T="string" Label="@Loc["Access Type"]" Value="@CurrentAccessType" ValueChanged="OnAccessTypeChanged"
-                                       AnchorOrigin="Origin.BottomLeft" Variant="Variant.Outlined" Class="ma-0 mb-3">
-                                <MudSelectItem Value="@("Public")">@Loc["Public (Everyone)"]</MudSelectItem>
-                                <MudSelectItem Value="@("Restricted")">@string.Format(Loc["Restricted (Specific {0}/People)"].Value, AppLabels.Teams)</MudSelectItem>
-                            </MudSelect>
+                                var sender = Employees.FirstOrDefault(e => e.Id == msg.SenderId);
+                                var senderName = sender?.FullName ?? Loc["Unknown"].Value;
+                                var timeStr = msg.SentAt.ToLocalTime().ToString("MMM d, yyyy");
+                                var content = string.IsNullOrEmpty(msg.Content)
+                                ? Loc["[Attachment]"].Value
+                                : (msg.IsEncrypted && DecryptedContents != null && DecryptedContents.TryGetValue(msg.Id, out var dec) ? dec : msg.Content);
+                                content = System.Text.RegularExpressions.Regex.Replace(content, @"!\[gif\]\([^)]+\)|\[gif\]", Loc["Sent a GIF"].Value, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                content = content.Length > 100 ? content.Substring(0, 97) + "..." : content;
 
-                            @if (!IsPublicChannel)
-                            {
-                                @* Allowed Teams *@
-                                <div class="mb-3">
-                                    <div class="d-flex align-center justify-space-between mb-1">
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;">@Loc["ALLOWED"] @(AppLabels.Teams.ToUpper()) (@Channel.AllowedTeamIds.Count)</MudText>
+                                <MudPaper Elevation="0" Class="pa-2"
+                                    Style="background: var(--mud-palette-background-grey); border-radius: 6px; cursor: pointer;"
+                                @onclick="@(() => OnPinnedMessageClicked.InvokeAsync(msg.Id))">
+                                    <div class="d-flex align-center gap-1 mb-1">
+                                        <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Color="Color.Warning"
+                                            Style="font-size: 12px;" />
+                                        <MudText Typo="Typo.caption" Style="font-weight: 600;">@senderName</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@timeStr</MudText>
                                     </div>
-                                    <TeamAutocomplete Label="@(string.Format(Loc["Add {0}..."].Value, AppLabels.Team.ToLower()))"
-                                                      ExcludedIds="@Channel.AllowedTeamIds" ValueChanged="AddTeam"
-                                                      ResetOnSelect="true" Margin="Margin.Dense" ShowProgressIndicator="true" Class="mb-2 ma-0" />
-                                    <div class="d-flex flex-wrap gap-1">
-                                        @foreach (var teamId in Channel.AllowedTeamIds)
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary" Style="line-height: 1.2;">@content</MudText>
+                                </MudPaper>
+                            }
+                        </div>
+                    </MudPaper>
+                }
+
+                @* ──────── Teams / Members ──────── *@
+                @if (IsTeamChannel)
+                {
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                        <div class="d-flex align-center justify-space-between my-1 ml-3 mr-1">
+                            <div class="d-flex align-center">
+                                <MudIcon Icon="@Icons.Material.Filled.Groups" Size="Size.Small" Class="mr-2" />
+                                <MudText Typo="Typo.subtitle2">@(AppLabels.Teams) (@_teams.Count)</MudText>
+                            </div>
+                            @if (IsOwner)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.GroupAdd" Size="Size.Small"
+                                    OnClick="@(() => _showAddTeam = !_showAddTeam)"
+                                    Color="@(_showAddTeam ? Color.Primary : Color.Default)" Class="pa-1" />
+                            }
+                        </div>
+                        <MudDivider />
+                        <div class="px-3 py-2">
+                            @if (_showAddTeam && IsOwner)
+                            {
+                                <TeamAutocomplete Label="@(string.Format(Loc["Add {0}..."].Value, AppLabels.Team.ToLower()))"
+                                    ExcludedIds="@Channel.AllowedTeamIds" ValueChanged="AddTeam"
+                                    ResetOnSelect="true" Margin="Margin.Dense" ShowProgressIndicator="true" Class="mb-2 ma-0" />
+                            }
+
+                            <div class="d-flex flex-column gap-1">
+                                @foreach (var team in _teams)
+                                {
+                                    <div class="d-flex align-center gap-2 py-1">
+                                        <TeamAvatar Team="@team" Size="Size.Small" UseIcon="true" Style="width: 24px; height: 24px; flex-shrink: 0;" />
+                                        <MudText Typo="Typo.body2" Style="flex: 1;" Class="text-truncate">@team.Name</MudText>
+                                        @if (IsOwner && _teams.Count > 1)
                                         {
-                                            var team = Db.Teams.GetById(teamId);
-                                            if (team != null)
-                                            {
-                                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined"
-                                                         OnClose="@(() => RemoveTeam(teamId))">
-                                                    @team.Name
-                                                </MudChip>
-                                            }
+                                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                OnClick="@(() => RemoveTeam(team.Id))"
+                                                Style="opacity: 0.4;" Class="pa-0" />
                                         }
                                     </div>
-                                </div>
-
-                                @* Allowed Members *@
-                                <div>
-                                    <div class="d-flex align-center justify-space-between mb-1">
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;">@Loc["ALLOWED MEMBERS"] (@Channel.ParticipantIds.Count)</MudText>
-                                    </div>
-                                    <EmployeeAutocomplete Label="@Loc["Add member..."]" Employees="@Employees"
-                                                          ExcludedIds="@Channel.ParticipantIds" ValueChanged="AddMember"
-                                                          ResetOnSelect="true" Margin="Margin.Dense" ShowProgressIndicator="true" Class="mb-2 ma-0" />
-                                    <div class="d-flex flex-wrap gap-1">
-                                        @foreach (var memberId in Channel.ParticipantIds)
-                                        {
-                                            var emp = Employees.FirstOrDefault(e => e.Id == memberId);
-                                            if (emp != null && PrivacyService.CanDiscoverUser(_currentUserObj, emp))
-                                            {
-                                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined"
-                                                         OnClose="@(() => RemoveMember(memberId))">
-                                                    @emp.FullName
-                                                </MudChip>
-                                            }
-                                        }
-                                    </div>
-                                </div>
-                            }
-                        }
-                    </div>
-                </MudPaper>
-            }
-
-            @* ──────── Teams / Members ──────── *@
-            @if (IsTeamChannel)
-            {
-                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                    <div class="d-flex align-center justify-space-between my-1 ml-3 mr-1">
-                        <div class="d-flex align-center">
-                            <MudIcon Icon="@Icons.Material.Filled.Groups" Size="Size.Small" Class="mr-2" />
-                            <MudText Typo="Typo.subtitle2">@(AppLabels.Teams) (@_teams.Count)</MudText>
-                        </div>
-                        @if (IsOwner)
-                        {
-                            <MudIconButton Icon="@Icons.Material.Filled.GroupAdd" Size="Size.Small"
-                                OnClick="@(() => _showAddTeam = !_showAddTeam)"
-                                Color="@(_showAddTeam ? Color.Primary : Color.Default)" Class="pa-1" />
-                        }
-                    </div>
-                    <MudDivider />
-                    <div class="px-3 py-2">
-                        @if (_showAddTeam && IsOwner)
-                        {
-                            <TeamAutocomplete Label="@(string.Format(Loc["Add {0}..."].Value, AppLabels.Team.ToLower()))"
-                                ExcludedIds="@Channel.AllowedTeamIds" ValueChanged="AddTeam"
-                                ResetOnSelect="true" Margin="Margin.Dense" ShowProgressIndicator="true" Class="mb-2 ma-0" />
-                        }
-
-                        <div class="d-flex flex-column gap-1">
-                            @foreach (var team in _teams)
-                            {
-                                <div class="d-flex align-center gap-2 py-1">
-                                    <TeamAvatar Team="@team" Size="Size.Small" UseIcon="true" Style="width: 24px; height: 24px; flex-shrink: 0;" />
-                                    <MudText Typo="Typo.body2" Style="flex: 1;" Class="text-truncate">@team.Name</MudText>
-                                    @if (IsOwner && _teams.Count > 1)
+                                }
+                            </div>
+                            
+                            <div class="mt-2">
+                                <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["Members"] (@_members.Count)</MudText>
+                                <div class="d-flex flex-column mt-1">
+                                    @foreach (var member in _members)
                                     {
-                                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
-                                            OnClick="@(() => RemoveTeam(team.Id))"
-                                            Style="opacity: 0.4;" Class="pa-0" />
+                                        var isLeader = IsMemberTeamLeader(member.Id);
+                                        <div class="d-flex align-center gap-2 py-1">
+                                            <EmployeeAvatar Employee="@member" Size="Size.Small" Style="width: 24px; height: 24px;" />
+                                            <div style="flex: 1; min-width: 0;">
+                                                <div class="d-flex align-center gap-1">
+                                                    <MudText Typo="Typo.body2" Class="text-truncate" Style="line-height: 1.2;">@member.FullName</MudText>
+                                                    @if (isLeader)
+                                                    {
+                                                        <MudIcon Icon="@Icons.Material.Filled.Star" Size="Size.Small"
+                                                            Style="font-size: 12px; color: #fbbf24;" Title="@Loc["Team Leader"]" />
+                                                    }
+                                                </div>
+                                                @if (!string.IsNullOrEmpty(member.Position))
+                                                {
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1; display: block;">@member.Position</MudText>
+                                                }
+                                            </div>
+                                        </div>
                                     }
                                 </div>
+                            </div>
+                        </div>
+                    </MudPaper>
+                }
+                else if (!PrivacyService.ShouldHideMemberList(Channel, _currentUserObj))
+                {
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                        <div class="d-flex align-center justify-space-between my-1 ml-3 mr-1">
+                            <div class="d-flex align-center">
+                                <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Class="mr-2" />
+                                <MudText Typo="Typo.subtitle2">@Loc["Members"] (@_members.Count)</MudText>
+                            </div>
+                            @if (CanEditChannelInfo() && !IsPublicChannel && Channel.ChannelType != ChatChannelType.Project)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.PersonAdd" Size="Size.Small"
+                                    OnClick="@(() => _showAddMember = !_showAddMember)"
+                                    Color="@(_showAddMember ? Color.Primary : Color.Default)" Class="pa-1" />
                             }
                         </div>
-                        
-                        <div class="mt-2">
-                            <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["MEMBERS"] (@_members.Count)</MudText>
-                            <div class="d-flex flex-column mt-1">
+                        <MudDivider />
+                        <div class="px-3 py-2">
+                            @if (_showAddMember && CanEditChannelInfo() && !IsPublicChannel && Channel.ChannelType != ChatChannelType.Project)
+                            {
+                                <EmployeeAutocomplete Label="@Loc["Add people..."]" Employees="@Employees"
+                                    ExcludedIds="@(Channel?.ParticipantIds ?? [])" ValueChanged="AddMember"
+                                    ResetOnSelect="true" Margin="Margin.Dense" ShowProgressIndicator="true" Class="mb-2 ma-0" />
+                            }
+
+                            <div class="d-flex flex-column gap-1">
                                 @foreach (var member in _members)
                                 {
-                                    var isLeader = IsMemberTeamLeader(member.Id);
+                                    var isCreator = member.Id == Channel?.CreatedById;
                                     <div class="d-flex align-center gap-2 py-1">
                                         <EmployeeAvatar Employee="@member" Size="Size.Small" Style="width: 24px; height: 24px;" />
                                         <div style="flex: 1; min-width: 0;">
                                             <div class="d-flex align-center gap-1">
                                                 <MudText Typo="Typo.body2" Class="text-truncate" Style="line-height: 1.2;">@member.FullName</MudText>
-                                                @if (isLeader)
+                                                @if (isCreator)
                                                 {
                                                     <MudIcon Icon="@Icons.Material.Filled.Star" Size="Size.Small"
-                                                        Style="font-size: 12px; color: #fbbf24;" Title="@Loc["Team Leader"]" />
+                                                        Style="font-size: 12px; color: #fbbf24;" Title="@Loc["Group Owner"]" />
                                                 }
                                             </div>
                                             @if (!string.IsNullOrEmpty(member.Position))
@@ -506,150 +382,343 @@
                                                 <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1; display: block;">@member.Position</MudText>
                                             }
                                         </div>
+                                        @if (CanEditChannelInfo() && !IsPublicChannel && Channel?.ChannelType != ChatChannelType.Project && !isCreator && Channel?.ParticipantIds.Contains(member.Id) == true)
+                                        {
+                                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                OnClick="@(() => RemoveMember(member.Id))"
+                                                Style="opacity: 0.4;" Class="pa-0" />
+                                        }
                                     </div>
                                 }
                             </div>
                         </div>
-                    </div>
-                </MudPaper>
+                    </MudPaper>
+                }
             }
-            else if (!PrivacyService.ShouldHideMemberList(Channel, _currentUserObj))
-            {
-                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                    <div class="d-flex align-center justify-space-between my-1 ml-3 mr-1">
-                        <div class="d-flex align-center">
-                            <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Class="mr-2" />
-                            <MudText Typo="Typo.subtitle2">@Loc["Members"] (@_members.Count)</MudText>
-                        </div>
-                        @if (CanEditChannelInfo() && !IsPublicChannel && Channel.ChannelType != ChatChannelType.Project)
-                        {
-                            <MudIconButton Icon="@Icons.Material.Filled.PersonAdd" Size="Size.Small"
-                                OnClick="@(() => _showAddMember = !_showAddMember)"
-                                Color="@(_showAddMember ? Color.Primary : Color.Default)" Class="pa-1" />
-                        }
-                    </div>
-                    <MudDivider />
-                    <div class="px-3 py-2">
-                        @if (_showAddMember && CanEditChannelInfo() && !IsPublicChannel && Channel.ChannelType != ChatChannelType.Project)
-                        {
-                            <EmployeeAutocomplete Label="@Loc["Add people..."]" Employees="@Employees"
-                                ExcludedIds="@(Channel?.ParticipantIds ?? [])" ValueChanged="AddMember"
-                                ResetOnSelect="true" Margin="Margin.Dense" ShowProgressIndicator="true" Class="mb-2 ma-0" />
-                        }
 
-                        <div class="d-flex flex-column gap-1">
-                            @foreach (var member in _members)
+            @* ════════ SECTION: CHANNEL CONFIGURATION (Shared settings for all members) ════════ *@
+            @if (HasChannelConfiguration)
+            {
+                <MudDivider Class="my-1 flex-shrink-0" />
+                <div class="channel-info-section-header d-flex align-center justify-space-between" data-section="channel-configuration">
+                    <div class="d-flex align-center gap-1">
+                        <MudIcon Icon="@Icons.Material.Filled.Settings" Size="Size.Small" Color="Color.Secondary" Class="channel-info-section-icon" />
+                        <MudText Typo="Typo.overline" Class="channel-info-section-title">@Loc["Channel Configuration"]</MudText>
+                    </div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="channel-info-section-scope">@Loc["Applies to everyone"]</MudText>
+                </div>
+
+                @* ──────── Announcement Channel Settings ──────── *@
+                @if (HasAnnouncementConfig)
+                {
+                    bool lockAnnouncement = Channel!.IsPublicChannel && PrivacyService.GetPrivacyConfig().PublicChannels == Spokes_Server.Core.Configuration.PublicChannelPolicy.AnnouncementOnly;
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                        <div class="d-flex align-center justify-space-between my-1 ml-3 mr-1">
+                            <div class="d-flex align-center">
+                                <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Class="mr-2" />
+                                <MudText Typo="Typo.subtitle2">@Loc["Announcement Channel"]</MudText>
+                            </div>
+                            @if (CanEditChannelInfo())
                             {
-                                var isCreator = member.Id == Channel?.CreatedById;
-                                <div class="d-flex align-center gap-2 py-1">
-                                    <EmployeeAvatar Employee="@member" Size="Size.Small" Style="width: 24px; height: 24px;" />
-                                    <div style="flex: 1; min-width: 0;">
-                                        <div class="d-flex align-center gap-1">
-                                            <MudText Typo="Typo.body2" Class="text-truncate" Style="line-height: 1.2;">@member.FullName</MudText>
-                                            @if (isCreator)
-                                            {
-                                                <MudIcon Icon="@Icons.Material.Filled.Star" Size="Size.Small"
-                                                    Style="font-size: 12px; color: #fbbf24;" Title="@Loc["Group Owner"]" />
-                                            }
-                                        </div>
-                                        @if (!string.IsNullOrEmpty(member.Position))
-                                        {
-                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="line-height: 1; display: block;">@member.Position</MudText>
-                                        }
-                                    </div>
-                                    @if (CanEditChannelInfo() && !IsPublicChannel && Channel?.ChannelType != ChatChannelType.Project && !isCreator && Channel?.ParticipantIds.Contains(member.Id) == true)
-                                    {
-                                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
-                                            OnClick="@(() => RemoveMember(member.Id))"
-                                            Style="opacity: 0.4;" Class="pa-0" />
-                                    }
-                                </div>
+                                <MudSwitch T="bool" Value="@Channel.IsAnnouncementOnly" ValueChanged="UpdateAnnouncementToggleAsync" Color="Color.Primary" Disabled="@lockAnnouncement" Class="ma-0" />
                             }
                         </div>
-                    </div>
-                </MudPaper>
-            }
-
-            @* ──────── Pinned Messages ──────── *@
-            @if (_pinnedMessages.Any())
-            {
-                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                    <div class="d-flex align-center my-1 ml-3">
-                        <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Class="mr-2" />
-                        <MudText Typo="Typo.subtitle2">@Loc["Pinned Messages"] (@_pinnedMessages.Count)</MudText>
-                    </div>
-                    <MudDivider />
-                    <div class="px-2 py-2 d-flex flex-column gap-1">
-                        @foreach (var msg in _pinnedMessages)
+                        @if (lockAnnouncement)
                         {
-                            var sender = Employees.FirstOrDefault(e => e.Id == msg.SenderId);
-                            var senderName = sender?.FullName ?? Loc["Unknown"].Value;
-                            var timeStr = msg.SentAt.ToLocalTime().ToString("MMM d, yyyy");
-                            var content = string.IsNullOrEmpty(msg.Content)
-                            ? Loc["[Attachment]"].Value
-                            : (msg.IsEncrypted && DecryptedContents != null && DecryptedContents.TryGetValue(msg.Id, out var dec) ? dec : msg.Content);
-                            content = System.Text.RegularExpressions.Regex.Replace(content, @"!\[gif\]\([^)]+\)|\[gif\]", Loc["Sent a GIF"].Value, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                            content = content.Length > 100 ? content.Substring(0, 97) + "..." : content;
+                            <div class="px-3 pb-2">
+                                <MudText Typo="Typo.caption" Color="Color.Info">@Loc["Public channels must remain announcement-only per server policy."]</MudText>
+                            </div>
+                        }
+                        <MudDivider />
+                        @if (Channel.IsAnnouncementOnly)
+                        {
+                            <div class="px-3 py-2 d-flex flex-column gap-2">
+                                @if (CanEditChannelInfo())
+                                {
+                                    <MudText Color="Color.Info" Typo="Typo.caption" Class="mb-1">@string.Format(Loc["Only specific users/{0} can post."].Value, AppLabels.Teams.ToLower())</MudText>
+                                    
+                                    <div class="d-flex align-center justify-space-between mb-n1">
+                                        <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["Allowed"] @(AppLabels.Teams)</MudText>
+                                        <MudIconButton Icon="@Icons.Material.Filled.GroupAdd" Size="Size.Small" OnClick="@(() => _showAddPostTeam = !_showAddPostTeam)" Color="@(_showAddPostTeam ? Color.Primary : Color.Default)" Class="pa-1" />
+                                    </div>
+                                    @if (_showAddPostTeam)
+                                    {
+                                        <TeamAutocomplete Margin="Margin.Dense" Label="@(string.Format(Loc["Add {0}..."].Value, AppLabels.Team.ToLower()))"
+                                            ExcludedIds="@Channel.AllowedPostTeamIds" ValueChanged="AddPostTeamAsync" ResetOnSelect="true" Class="ma-0" />
+                                    }
+                                    <div class="d-flex flex-wrap gap-1">
+                                        @foreach(var teamId in Channel.AllowedPostTeamIds ?? new())
+                                        {
+                                            var team = Db.Teams.GetById(teamId);
+                                            if (team != null)
+                                            {
+                                                <TeamChip Team="@team" OnClose="@(() => RemovePostTeamAsync(teamId))" Color="Color.Secondary" Size="Size.Small" />
+                                            }
+                                        }
+                                    </div>
 
-                            <MudPaper Elevation="0" Class="pa-2"
-                                Style="background: var(--mud-palette-background-grey); border-radius: 6px; cursor: pointer;"
-                            @onclick="@(() => OnPinnedMessageClicked.InvokeAsync(msg.Id))">
-                                <div class="d-flex align-center gap-1 mb-1">
-                                    <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" Color="Color.Warning"
-                                        Style="font-size: 12px;" />
-                                    <MudText Typo="Typo.caption" Style="font-weight: 600;">@senderName</MudText>
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@timeStr</MudText>
-                                </div>
-                                <MudText Typo="Typo.body2" Color="Color.Secondary" Style="line-height: 1.2;">@content</MudText>
-                            </MudPaper>
+                                    <div class="d-flex align-center justify-space-between mb-n1 mt-1">
+                                        <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["Allowed Users"]</MudText>
+                                        <MudIconButton Icon="@Icons.Material.Filled.PersonAdd" Size="Size.Small" OnClick="@(() => _showAddPostUser = !_showAddPostUser)" Color="@(_showAddPostUser ? Color.Primary : Color.Default)" Class="pa-1" />
+                                    </div>
+                                    @if (_showAddPostUser)
+                                    {
+                                        <EmployeeAutocomplete Margin="Margin.Dense" Label="@Loc["Add user..."]" Employees="@Employees"
+                                            ExcludedIds="@Channel.AllowedPostUserIds" ValueChanged="AddPostUserAsync" ResetOnSelect="true" Class="ma-0" />
+                                    }
+                                    <div class="d-flex flex-wrap gap-1">
+                                        @foreach (var userId in Channel.AllowedPostUserIds ?? new())
+                                        {
+                                            var user = Employees.FirstOrDefault(u => u.Id == userId) ?? Db.Employees.GetById(userId);
+                                            if (user != null)
+                                            {
+                                                if (user.IsSystem || !PrivacyService.CanDiscoverUser(_currentUserObj, user))
+                                                {
+                                                    continue;
+                                                }
+                                                <EmployeeChip Employee="@user" OnClose="@(() => RemovePostUserAsync(userId))" Size="Size.Small" />
+                                            }
+                                            else
+                                            {
+                                                <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small" OnClose="@(() => RemovePostUserAsync(userId))">
+                                                    @Loc["Deleted User"].Value
+                                                </MudChip>
+                                            }
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.body2">@Loc["Only authorized users can post."]</MudText>
+                                }
+                            </div>
+                        }
+                    </MudPaper>
+                }
+
+                @* ──────── Audio Bitrate ──────── *@
+                @if (HasVoiceConfig)
+                {
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                        <div class="d-flex align-center my-1 ml-3">
+                            <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Size="Size.Small" Class="mr-2" />
+                            <MudText Typo="Typo.subtitle2">@Loc["Voice Channel"]</MudText>
+                        </div>
+                        <MudDivider />
+                        <div class="px-3 py-2">
+                            @if (CanEditChannelInfo())
+                            {
+                                <MudSelect Margin="Margin.Dense" T="int" Label="@Loc["Audio Bitrate"]" Value="@(Channel?.AudioBitrateKbps ?? 96)" ValueChanged="UpdateAudioBitrateAsync"
+                                    AnchorOrigin="Origin.BottomLeft" Variant="Variant.Outlined" Class="ma-0">
+                                    <MudSelectItem Value="64">@Loc["64 kbps (Low)"]</MudSelectItem>
+                                    <MudSelectItem Value="96">@Loc["96 kbps (Standard)"]</MudSelectItem>
+                                    <MudSelectItem Value="128">@Loc["128 kbps (High)"]</MudSelectItem>
+                                    <MudSelectItem Value="256">@Loc["256 kbps (Very High)"]</MudSelectItem>
+                                    <MudSelectItem Value="384">@Loc["384 kbps (Extreme)"]</MudSelectItem>
+                                </MudSelect>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.overline" Color="Color.Secondary" Style="line-height: 1.2;">@Loc["Audio Bitrate"]</MudText>
+                                <MudText Typo="Typo.body2">@(Channel?.AudioBitrateKbps ?? 96) @Loc["kbps"]</MudText>
+                            }
+                        </div>
+                    </MudPaper>
+                }
+
+                @* ──────── Encryption ──────── *@
+                @if (HasEncryptionConfig)
+                {
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                        <div class="d-flex align-center my-1 ml-3">
+                            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Class="mr-2" />
+                            <MudText Typo="Typo.subtitle2">@Loc["Channel Encryption"]</MudText>
+                        </div>
+                        <MudDivider />
+                        <div class="px-3 py-2">
+                            @if (Channel!.IsEncrypted)
+                            {
+                                <MudAlert Severity="Severity.Info" Dense="true" Icon="@Icons.Material.Filled.Lock" Class="ma-0 pa-2">
+                                    @Loc["Encrypted channel."]
+                                </MudAlert>
+                                @if (CanEncryptChannel)
+                                {
+                                    <div class="d-flex justify-end mt-2">
+                                        <MudButton StartIcon="@Icons.Material.Filled.SyncLock" 
+                                                   Color="Color.Default" 
+                                                   Variant="Variant.Text" 
+                                                   Size="Size.Small" 
+                                                   OnClick="SyncMediaEncryptionAsync" 
+                                                   Style="font-size: 0.75rem; text-transform: none;">
+                                            @Loc["Sync Media Encryption"]
+                                        </MudButton>
+                                    </div>
+                                }
+                            }
+                            else if (CanEncryptChannel)
+                            {
+                                <MudText Color="Color.Error" Typo="Typo.caption" Class="mb-2 d-block">@Loc["Not E2E encryption. Protects against db leaks."]</MudText>
+                                <MudButton StartIcon="@Icons.Material.Filled.Lock" 
+                                           Color="Color.Success" 
+                                           Variant="Variant.Filled" 
+                                           Size="Size.Small" 
+                                           FullWidth="true" 
+                                           OnClick="ConfirmEncryptionAsync">
+                                    @Loc["Enable Encryption"]
+                                </MudButton>
+                            }
+                        </div>
+                    </MudPaper>
+                }
+
+                @* ──────── Access Control ──────── *@
+                @if (HasAccessControlConfig)
+                {
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
+                        <div class="d-flex align-center justify-space-between my-1 ml-3 mr-1">
+                            <div class="d-flex align-center">
+                                <MudIcon Icon="@Icons.Material.Filled.Security" Size="Size.Small" Class="mr-2" />
+                                <MudText Typo="Typo.subtitle2">@Loc["Access Control"]</MudText>
+                            </div>
+                        </div>
+                        <MudDivider />
+                        <div class="px-3 py-2">
+                            @if (Channel!.IsDefaultGeneral)
+                            {
+                                <MudAlert Severity="Severity.Info" Dense="true" Class="ma-0 pa-2">
+                                    @Loc["Public — Default organization channel (access cannot be restricted)."]
+                                </MudAlert>
+                            }
+                            else if (!CanEditChannelInfo())
+                            {
+                                if (IsPublicChannel)
+                                {
+                                    <div class="d-flex align-center gap-2">
+                                        <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" Color="Color.Primary" />
+                                        <MudText Typo="Typo.body2">@Loc["Public (Everyone)"]</MudText>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="d-flex align-center gap-2">
+                                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Color="Color.Warning" />
+                                        <MudText Typo="Typo.body2">@string.Format(Loc["Restricted ({0} {1}, {2} members)"].Value, Channel.AllowedTeamIds.Count, AppLabels.Teams.ToLower(), Channel.ParticipantIds.Count)</MudText>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <MudSelect Margin="Margin.Dense" T="string" Label="@Loc["Access Type"]" Value="@CurrentAccessType" ValueChanged="OnAccessTypeChanged"
+                                           AnchorOrigin="Origin.BottomLeft" Variant="Variant.Outlined" Class="ma-0 mb-3">
+                                    <MudSelectItem Value="@("Public")">@Loc["Public (Everyone)"]</MudSelectItem>
+                                    <MudSelectItem Value="@("Restricted")">@string.Format(Loc["Restricted (Specific {0}/People)"].Value, AppLabels.Teams)</MudSelectItem>
+                                </MudSelect>
+
+                                @if (!IsPublicChannel)
+                                {
+                                    @* Allowed Teams *@
+                                    <div class="mb-3">
+                                        <div class="d-flex align-center justify-space-between mb-1">
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600; text-transform: uppercase;">@Loc["Allowed"] @(AppLabels.Teams) (@Channel.AllowedTeamIds.Count)</MudText>
+                                        </div>
+                                        <TeamAutocomplete Label="@(string.Format(Loc["Add {0}..."].Value, AppLabels.Team.ToLower()))"
+                                                          ExcludedIds="@Channel.AllowedTeamIds" ValueChanged="AddTeam"
+                                                          ResetOnSelect="true" Margin="Margin.Dense" ShowProgressIndicator="true" Class="mb-2 ma-0" />
+                                        <div class="d-flex flex-wrap gap-1">
+                                            @foreach (var teamId in Channel.AllowedTeamIds)
+                                            {
+                                                var team = Db.Teams.GetById(teamId);
+                                                if (team != null)
+                                                {
+                                                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined"
+                                                             OnClose="@(() => RemoveTeam(teamId))">
+                                                        @team.Name
+                                                    </MudChip>
+                                                }
+                                            }
+                                        </div>
+                                    </div>
+
+                                    @* Allowed Members *@
+                                    <div>
+                                        <div class="d-flex align-center justify-space-between mb-1">
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 600;">@Loc["ALLOWED MEMBERS"] (@Channel.ParticipantIds.Count)</MudText>
+                                        </div>
+                                        <EmployeeAutocomplete Label="@Loc["Add member..."]" Employees="@Employees"
+                                                              ExcludedIds="@Channel.ParticipantIds" ValueChanged="AddMember"
+                                                              ResetOnSelect="true" Margin="Margin.Dense" ShowProgressIndicator="true" Class="mb-2 ma-0" />
+                                        <div class="d-flex flex-wrap gap-1">
+                                            @foreach (var memberId in Channel.ParticipantIds)
+                                            {
+                                                var emp = Employees.FirstOrDefault(e => e.Id == memberId);
+                                                if (emp != null && PrivacyService.CanDiscoverUser(_currentUserObj, emp))
+                                                {
+                                                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined"
+                                                             OnClose="@(() => RemoveMember(memberId))">
+                                                        @emp.FullName
+                                                    </MudChip>
+                                                }
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    </MudPaper>
+                }
+
+                @* ──────── Shared Channel Admin Actions ──────── *@
+                @if (CanArchiveChannel || CanDeleteChannel)
+                {
+                    <div class="d-flex flex-column mt-1">
+                        @if (CanArchiveChannel)
+                        {
+                            <MudButton StartIcon="@Icons.Material.Filled.Archive"
+                                       Color="Color.Warning"
+                                       Variant="Variant.Text"
+                                       FullWidth="true"
+                                       Size="Size.Small"
+                                       Disabled="@IsChannelLocked"
+                                       OnClick="ArchiveChannel"
+                                       Style="justify-content: flex-start;">
+                                @Loc["Archive Channel"]
+                            </MudButton>
+                        }
+                        @if (CanDeleteChannel)
+                        {
+                            <MudButton StartIcon="@Icons.Material.Filled.Delete"
+                                       Color="Color.Error"
+                                       Variant="Variant.Text"
+                                       FullWidth="true"
+                                       Size="Size.Small"
+                                       Disabled="@IsChannelLocked"
+                                       OnClick="DeleteChannelAsync"
+                                       Style="justify-content: flex-start;">
+                                @Loc["Delete Channel"]
+                            </MudButton>
                         }
                     </div>
-                </MudPaper>
+                }
             }
 
-            @* ──────── Action Buttons ──────── *@
-            @if ((IsGroupChannel && IsCurrentParticipant) || IsAdminOrCreator || CanDeleteChannel)
+            @* ──────── Personal Leave Group Action ──────── *@
+            @if (IsGroupChannel && IsCurrentParticipant)
             {
-                <div class="d-flex flex-column mt-2">
-                    @if (IsGroupChannel && IsCurrentParticipant)
-                    {
-                        <MudButton StartIcon="@Icons.Material.Filled.ExitToApp"
-                                   Color="Color.Error"
-                                   Variant="Variant.Text"
-                                   FullWidth="true"
-                                   Size="Size.Small"
-                                   Disabled="@IsChannelLocked"
-                                   OnClick="LeaveGroup"
-                                   Style="justify-content: flex-start;">
-                            @Loc["Leave Group"]
-                        </MudButton>
-                    }
-                    @if (IsAdminOrCreator && Channel?.ChannelType != ChatChannelType.Direct && Channel?.IsArchived == false)
-                    {
-                        <MudButton StartIcon="@Icons.Material.Filled.Archive"
-                                   Color="Color.Warning"
-                                   Variant="Variant.Text"
-                                   FullWidth="true"
-                                   Size="Size.Small"
-                                   Disabled="@IsChannelLocked"
-                                   OnClick="ArchiveChannel"
-                                   Style="justify-content: flex-start;">
-                            @Loc["Archive Channel"]
-                        </MudButton>
-                    }
-                    @if (CanDeleteChannel)
-                    {
-                        <MudButton StartIcon="@Icons.Material.Filled.Delete"
-                                   Color="Color.Error"
-                                   Variant="Variant.Text"
-                                   FullWidth="true"
-                                   Size="Size.Small"
-                                   Disabled="@IsChannelLocked"
-                                   OnClick="DeleteChannelAsync"
-                                   Style="justify-content: flex-start;">
-                            @Loc["Delete Channel"]
-                        </MudButton>
-                    }
+                @if (HasChannelConfiguration)
+                {
+                    <MudDivider Class="my-1 flex-shrink-0" />
+                }
+                <div class="d-flex flex-column">
+                    <MudButton StartIcon="@Icons.Material.Filled.ExitToApp"
+                               Color="Color.Error"
+                               Variant="Variant.Text"
+                               FullWidth="true"
+                               Size="Size.Small"
+                               Disabled="@IsChannelLocked"
+                               OnClick="LeaveGroup"
+                               Style="justify-content: flex-start;">
+                        @Loc["Leave Group"]
+                    </MudButton>
                 </div>
             }
         </div>
@@ -669,7 +738,10 @@
     [Parameter] public EventCallback OnArchiveChannel { get; set; }
     [Parameter] public EventCallback OnDeleteChannel { get; set; }
     [Parameter] public EventCallback<string> OnRemoveMember { get; set; }
+    [Parameter] public string? NotificationLevel { get; set; }
+    [Parameter] public EventCallback<string> OnNotificationLevelChanged { get; set; }
 
+    private string _currentNotificationLevel = ChatNotificationLevel.All;
     private List<Employee> _members = [];
     private List<ChatMessage> _pinnedMessages = [];
     private List<ChatCategory> _allCategories = [];
@@ -710,11 +782,41 @@
                                            Channel?.ChannelType == ChatChannelType.Group ||
                                            Channel?.ChannelType == ChatChannelType.Team;
     private bool IsOwner => IsTeamChannel ? IsCurrentUserTeamLeader() : (!string.IsNullOrEmpty(CurrentUserId) && Channel?.CreatedById == CurrentUserId);
-    private Employee? _currentUserObj => Employees.FirstOrDefault(e => e.Id == CurrentUserId);
+    private Employee? _currentUserObj => Employees.FirstOrDefault(e => e.Id == CurrentUserId)
+        ?? (!string.IsNullOrEmpty(CurrentUserId) ? Db.Employees.GetById(CurrentUserId) : null);
     private bool IsAdminOrCreator => !IsChannelLocked && ChatAuth.CanUserManageChannel(Channel, _currentUserObj, ScopedKeystore.IsUnlocked);
     private bool CanDeleteChannel => !IsChannelLocked && ChatAuth.CanUserDeleteChannel(Channel, _currentUserObj, ScopedKeystore.IsUnlocked);
     private bool CanManageCategories => _currentUserObj is { IsActive: true, IsSuspended: false, IsBanned: false } u &&
-                                        (u.HasPermission(AppPermissions.Chat.CreateChannels) || u.IsAdmin);
+                                        u.HasPermission(AppPermissions.Chat.Use) &&
+                                        (u.HasPermission(AppPermissions.Chat.EditAllPublicChannels) || u.IsAdmin);
+
+    private bool CanEncryptChannel =>
+        !IsChannelLocked &&
+        Channel is { IsArchived: false } &&
+        (CanEditChannelInfo() ||
+         (Channel.ChannelType == ChatChannelType.Direct &&
+          Channel.CreatedById == CurrentUserId &&
+          _currentUserObj is { IsActive: true, IsSuspended: false, IsBanned: false } cu &&
+          cu.HasPermission(AppPermissions.Chat.Use)));
+
+    private bool HasChannelDetails =>
+        _pinnedMessages.Any() || IsTeamChannel || !PrivacyService.ShouldHideMemberList(Channel, _currentUserObj);
+
+    private bool HasAnnouncementConfig =>
+        Channel != null && Channel.SupportsAnnouncements && (CanEditChannelInfo() || Channel.IsAnnouncementOnly);
+
+    private bool HasVoiceConfig => Channel?.IsVoiceChannel == true;
+
+    private bool HasEncryptionConfig => Channel != null && (Channel.IsEncrypted || CanEncryptChannel);
+
+    private bool HasAccessControlConfig =>
+        Channel != null && Channel.ChannelType != ChatChannelType.Direct && Channel.ChannelType != ChatChannelType.Project;
+
+    private bool CanArchiveChannel =>
+        IsAdminOrCreator && Channel?.ChannelType != ChatChannelType.Direct && Channel?.IsArchived == false;
+
+    private bool HasChannelConfiguration =>
+        HasAnnouncementConfig || HasVoiceConfig || HasEncryptionConfig || HasAccessControlConfig || CanArchiveChannel || CanDeleteChannel;
 
     private bool CanEditChannelInfo()
     {
@@ -759,12 +861,58 @@
         LoadTeams();
         LoadMembers();
         LoadPinnedMessages();
+
+        if (!string.IsNullOrEmpty(NotificationLevel))
+        {
+            _currentNotificationLevel = NotificationLevel;
+        }
+        else if (Channel != null && !string.IsNullOrEmpty(CurrentUserId))
+        {
+            _currentNotificationLevel = Db.ChatReadStates.GetNotificationLevel(
+                CurrentUserId, Channel.Id, Channel.ChannelType.ToString(), Channel.IsVoiceChannel);
+        }
         
         if (Channel != null && Channel.AllowedPostTeamIds == null) Channel.AllowedPostTeamIds = new();
         if (Channel != null && Channel.AllowedPostUserIds == null) Channel.AllowedPostUserIds = new();
         if (Channel != null && Channel.AllowedTeamIds == null) Channel.AllowedTeamIds = new();
         if (Channel != null && Channel.ParticipantIds == null) Channel.ParticipantIds = new();
     }
+
+    private async Task SetNotificationLevelAsync(string level)
+    {
+        if (Channel == null || string.IsNullOrEmpty(CurrentUserId)) return;
+        _currentNotificationLevel = level;
+        if (OnNotificationLevelChanged.HasDelegate)
+        {
+            await OnNotificationLevelChanged.InvokeAsync(level);
+        }
+        else
+        {
+            Db.ChatReadStates.SetNotificationLevel(CurrentUserId, Channel.Id, level);
+        }
+    }
+
+    private RenderFragment RenderNotificationOption(string level, string icon, Color activeColor, string title, string subtitle) => __builder =>
+    {
+        bool isSelected = string.Equals(_currentNotificationLevel, level, StringComparison.OrdinalIgnoreCase);
+        <div role="radio"
+             tabindex="0"
+             aria-checked="@(isSelected ? "true" : "false")"
+             data-notification-level="@level"
+             class="channel-notification-option d-flex align-center gap-2 @(isSelected ? "is-selected" : "")"
+             @onclick="@(() => SetNotificationLevelAsync(level))"
+             @onkeydown="@(async e => { if (e.Key is "Enter" or " ") await SetNotificationLevelAsync(level); })">
+            <MudIcon Icon="@icon" Size="Size.Small" Color="@(isSelected ? activeColor : Color.Default)" Class="flex-shrink-0" />
+            <div class="flex-grow-1" style="min-width: 0;">
+                <MudText Typo="Typo.body2" Style="@(isSelected ? "font-weight: 600;" : "")">@title</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block;">@subtitle</MudText>
+            </div>
+            @if (isSelected)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="@activeColor" Class="flex-shrink-0" />
+            }
+        </div>
+    };
 
     // ──────── Access Control ────────
 
@@ -783,9 +931,16 @@
 
             if (result != true) return;
 
-            Channel.AllowedTeamIds.Clear();
-            Channel.ParticipantIds.Clear();
-            ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
+            var working = Channel.Clone();
+            working.AllowedTeamIds.Clear();
+            working.ParticipantIds.Clear();
+            var updateResult = ChatService.UpdateChannel(working, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
+            if (!updateResult.IsSuccess)
+            {
+                Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
+                return;
+            }
+            SyncChannelFromStore(working);
             await OnChannelUpdated.InvokeAsync();
             LoadMembers();
             LoadTeams();
@@ -796,17 +951,24 @@
         {
             if (!IsPublicChannel) return;
 
+            var working = Channel.Clone();
             // When switching to restricted, initialize with current user and/or creator so it's not empty (which would mean public)
-            if (!string.IsNullOrEmpty(CurrentUserId) && !Channel.ParticipantIds.Contains(CurrentUserId))
+            if (!string.IsNullOrEmpty(CurrentUserId) && !working.ParticipantIds.Contains(CurrentUserId))
             {
-                Channel.ParticipantIds.Add(CurrentUserId);
+                working.ParticipantIds.Add(CurrentUserId);
             }
-            if (!string.IsNullOrEmpty(Channel.CreatedById) && !Channel.ParticipantIds.Contains(Channel.CreatedById))
+            if (!string.IsNullOrEmpty(working.CreatedById) && !working.ParticipantIds.Contains(working.CreatedById))
             {
-                Channel.ParticipantIds.Add(Channel.CreatedById);
+                working.ParticipantIds.Add(working.CreatedById);
             }
 
-            ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
+            var updateResult = ChatService.UpdateChannel(working, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
+            if (!updateResult.IsSuccess)
+            {
+                Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
+                return;
+            }
+            SyncChannelFromStore(working);
             await OnChannelUpdated.InvokeAsync();
             LoadMembers();
             LoadTeams();
@@ -815,11 +977,31 @@
         }
     }
 
+    private void SyncChannelFromStore(ChatChannel fallback)
+    {
+        if (Channel == null) return;
+        var latest = Db.ChatChannels.GetById(Channel.Id) ?? fallback;
+        Channel.ParticipantIds = [.. (latest.ParticipantIds ?? [])];
+        Channel.AllowedTeamIds = [.. (latest.AllowedTeamIds ?? [])];
+        Channel.AllowedPostUserIds = [.. (latest.AllowedPostUserIds ?? [])];
+        Channel.AllowedPostTeamIds = [.. (latest.AllowedPostTeamIds ?? [])];
+        Channel.EncryptedChannelKeys = latest.EncryptedChannelKeys != null
+            ? new Dictionary<string, string>(latest.EncryptedChannelKeys)
+            : [];
+        Channel.CurrentKeyEpoch = latest.CurrentKeyEpoch;
+        Channel.EncryptedEpochKeys = latest.EncryptedEpochKeys != null
+            ? latest.EncryptedEpochKeys.ToDictionary(k => k.Key, v => new Dictionary<string, string>(v.Value))
+            : [];
+        Channel.CreatedById = latest.CreatedById;
+    }
+
     // ──────── Category Management ────────
 
     private async Task OpenManageCategories()
     {
-        var dialog = await DialogService.ShowAsync<ManageCategoriesDialog>(Loc["Manage Categories"].Value);
+        if (!CanManageCategories || IsChannelLocked || string.IsNullOrEmpty(CurrentUserId)) return;
+        var parameters = new DialogParameters { ["CurrentUserId"] = CurrentUserId };
+        var dialog = await DialogService.ShowAsync<ManageCategoriesDialog>(Loc["Manage Categories"].Value, parameters);
         await dialog.Result;
         _allCategories = Db.ChatCategories.GetAll().Where(c => !c.IsSystem).OrderBy(c => c.DisplayOrder).ToList();
         StateHasChanged();
@@ -899,6 +1081,9 @@
     {
         if (Channel == null || string.IsNullOrEmpty(userId) || !CanManageAnnouncements) return;
 
+        var target = Db.Employees.GetById(userId);
+        if (target != null && !PrivacyService.CanDiscoverUser(_currentUserObj, target)) return;
+
         Channel.AllowedPostUserIds.Remove(userId);
         ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         await OnChannelUpdated.InvokeAsync();
@@ -970,35 +1155,27 @@
     {
         if (employee == null || Channel == null || !CanEditChannelInfo() || IsChannelLocked) return;
 
-        bool added = false;
-        lock (Channel)
+        var working = Channel.Clone();
+        if (!working.ParticipantIds.Contains(employee.Id))
         {
-            if (!Channel.ParticipantIds.Contains(employee.Id))
-            {
-                var updated = new List<string>(Channel.ParticipantIds) { employee.Id };
-                Channel.ParticipantIds = updated;
-                added = true;
-            }
-        }
-
-        if (added)
-        {
-            var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
+            working.ParticipantIds.Add(employee.Id);
+            var updateResult = ChatService.UpdateChannel(working, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
             if (!updateResult.IsSuccess)
             {
                 Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
                 return;
             }
+            SyncChannelFromStore(working);
 
             if (Channel.IsEncrypted && ScopedKeystore.IsUnlocked && !string.IsNullOrEmpty(CurrentUserId))
             {
                 var privKey = ScopedKeystore.GetPrivateKey();
-                if (privKey != null && Channel.EncryptedChannelKeys.TryGetValue(CurrentUserId, out var cipherKey))
+                if (privKey != null && Channel.TryGetEncryptedKeyForEpoch(Channel.CurrentKeyEpoch, CurrentUserId, out var cipherKey))
                 {
                     try
                     {
                         var chKey = Crypto.DecryptRsa(cipherKey, privKey);
-                        _ = ChatSecurityService.ShareKeyOpportunisticallyAsync(Channel.Id, chKey);
+                        _ = ChatSecurityService.ShareKeyOpportunisticallyAsync(Channel.Id, chKey, Channel.CurrentKeyEpoch, CurrentUserId);
                     }
                     catch { }
                 }
@@ -1023,23 +1200,16 @@
             return;
         }
 
-        lock (Channel)
-        {
-            var updated = new List<string>(Channel.ParticipantIds);
-            updated.Remove(memberId);
-            Channel.ParticipantIds = updated;
-            if (Channel.IsEncrypted)
-            {
-                Channel.EncryptedChannelKeys.Remove(memberId);
-            }
-        }
+        var working = Channel.Clone();
+        working.ParticipantIds.Remove(memberId);
 
-        var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
+        var updateResult = ChatService.UpdateChannel(working, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         if (!updateResult.IsSuccess)
         {
             Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
             return;
         }
+        SyncChannelFromStore(working);
 
         FileTokens.InvalidateUserEncryptedTokens(memberId);
 
@@ -1063,13 +1233,7 @@
         }
 
         FileTokens.InvalidateUserEncryptedTokens(CurrentUserId);
-        var refreshed = Db.ChatChannels.GetById(Channel.Id);
-        if (refreshed != null)
-        {
-            Channel.ParticipantIds = refreshed.ParticipantIds;
-            Channel.EncryptedChannelKeys = refreshed.EncryptedChannelKeys;
-            Channel.CreatedById = refreshed.CreatedById;
-        }
+        SyncChannelFromStore(Channel);
 
         Snackbar.Add(Loc["You left the group"].Value, Severity.Info);
         await OnLeaveGroup.InvokeAsync();
@@ -1111,25 +1275,27 @@
     {
         if (team == null || Channel == null || !CanEditChannelInfo() || IsChannelLocked) return;
 
-        if (!Channel.AllowedTeamIds.Contains(team.Id))
+        var working = Channel.Clone();
+        if (!working.AllowedTeamIds.Contains(team.Id))
         {
-            Channel.AllowedTeamIds.Add(team.Id);
-            var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
+            working.AllowedTeamIds.Add(team.Id);
+            var updateResult = ChatService.UpdateChannel(working, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
             if (!updateResult.IsSuccess)
             {
                 Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
                 return;
             }
+            SyncChannelFromStore(working);
 
             if (Channel.IsEncrypted && ScopedKeystore.IsUnlocked && !string.IsNullOrEmpty(CurrentUserId))
             {
                 var privKey = ScopedKeystore.GetPrivateKey();
-                if (privKey != null && Channel.EncryptedChannelKeys.TryGetValue(CurrentUserId, out var cipherKey))
+                if (privKey != null && Channel.TryGetEncryptedKeyForEpoch(Channel.CurrentKeyEpoch, CurrentUserId, out var cipherKey))
                 {
                     try
                     {
                         var chKey = Crypto.DecryptRsa(cipherKey, privKey);
-                        _ = ChatSecurityService.ShareKeyOpportunisticallyAsync(Channel.Id, chKey);
+                        _ = ChatSecurityService.ShareKeyOpportunisticallyAsync(Channel.Id, chKey, Channel.CurrentKeyEpoch, CurrentUserId);
                     }
                     catch { }
                 }
@@ -1155,13 +1321,15 @@
             return;
         }
 
-        Channel.AllowedTeamIds.Remove(teamId);
-        var updateResult = ChatService.UpdateChannel(Channel, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
+        var working = Channel.Clone();
+        working.AllowedTeamIds.Remove(teamId);
+        var updateResult = ChatService.UpdateChannel(working, CurrentUserId ?? string.Empty, ScopedKeystore.IsUnlocked);
         if (!updateResult.IsSuccess)
         {
             Snackbar.Add(updateResult.ErrorMessage ?? Loc["Failed to update channel"].Value, Severity.Error);
             return;
         }
+        SyncChannelFromStore(working);
 
         await OnChannelUpdated.InvokeAsync();
         LoadTeams();
@@ -1188,7 +1356,7 @@
 
     private async Task ConfirmEncryptionAsync()
     {
-        if (Channel == null || !IsAdminOrCreator) return;
+        if (Channel == null || !CanEncryptChannel) return;
 
         if (_currentUserObj?.HasVaultPassword != true)
         {
@@ -1223,7 +1391,7 @@
 
     private async Task ConvertChannelToEncryptedAsync()
     {
-        if (Channel == null || string.IsNullOrEmpty(CurrentUserId) || !IsAdminOrCreator) return;
+        if (Channel == null || string.IsNullOrEmpty(CurrentUserId) || !CanEncryptChannel) return;
 
         try
         {
@@ -1243,7 +1411,7 @@
 
     private async Task SyncMediaEncryptionAsync()
     {
-        if (Channel == null || string.IsNullOrEmpty(CurrentUserId) || !IsAdminOrCreator) return;
+        if (Channel == null || string.IsNullOrEmpty(CurrentUserId) || !CanEncryptChannel) return;
 
         if (_currentUserObj?.HasVaultPassword != true)
         {
@@ -1302,14 +1470,21 @@
             }
 
             case ChatChannelType.Project:
-                // Project channel: show participants if any, otherwise show all employees
+                // Project channel: show participants if any, otherwise show active employees with project access
+                var proj = !string.IsNullOrEmpty(Channel.LinkedEntityId)
+                    ? Db.Projects.GetById(Channel.LinkedEntityId)
+                    : null;
                 if (Channel.ParticipantIds.Any())
                 {
-                    _members = Employees.Where(e => Channel.ParticipantIds.Contains(e.Id)).ToList();
+                    _members = Employees.Where(e =>
+                        Channel.ParticipantIds.Contains(e.Id) &&
+                        (proj == null || ProjectAccessHelper.CanAccess(e, proj, Db.Teams))).ToList();
                 }
                 else
                 {
-                    _members = Employees.Where(e => e.IsActive).ToList();
+                    _members = proj != null
+                        ? Employees.Where(e => e.IsActive && ProjectAccessHelper.CanAccess(e, proj, Db.Teams)).ToList()
+                        : [];
                 }
                 break;
 
@@ -1374,26 +1549,19 @@
         _pinnedMessages = _pinnedMessages.OrderByDescending(m => m.SentAt).ToList();
     }
 
-    private string GetChannelIcon()
-    {
-        if (!string.IsNullOrEmpty(Channel?.Icon))
-            return Channel.Icon;
-
-        return Channel?.ChannelType switch
-        {
-            ChatChannelType.General => Icons.Material.Filled.Public,
-            ChatChannelType.Project => Icons.Material.Filled.Folder,
-            ChatChannelType.Team => Icons.Material.Filled.Groups,
-            ChatChannelType.Direct => Icons.Material.Filled.Person,
-            ChatChannelType.Group => Icons.Material.Filled.Group,
-            _ => Icons.Material.Filled.Tag
-        };
-    }
+    private string GetChannelIcon() => ChatUiHelper.GetChannelIcon(Channel);
 
     private string GetCreatorName()
     {
         if (string.IsNullOrEmpty(Channel?.CreatedById)) return Loc["System"].Value;
-        var creator = Employees.FirstOrDefault(e => e.Id == Channel.CreatedById);
-        return creator?.FullName ?? Loc["Unknown"].Value;
+        var creator = Employees.FirstOrDefault(e => e.Id == Channel.CreatedById) ?? Db.Employees.GetById(Channel.CreatedById);
+        if (creator == null) return Loc["Unknown"].Value;
+        if (creator.IsSystem) return Loc["System"].Value;
+        if (PrivacyService.ShouldHideMemberList(Channel, _currentUserObj) ||
+            !PrivacyService.CanDiscoverUser(_currentUserObj, creator))
+        {
+            return AppLabels.Employee;
+        }
+        return creator.FullName;
     }
 }

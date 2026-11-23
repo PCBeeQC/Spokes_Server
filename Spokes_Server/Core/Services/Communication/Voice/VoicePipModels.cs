@@ -17,9 +17,32 @@ public sealed class VoicePipParticipantDto
     [JsonPropertyName("initials")]
     public string Initials { get; set; } = string.Empty;
 
+    [JsonPropertyName("profileColor")]
+    public string ProfileColor { get; set; } = "#673ab7";
+
     [JsonPropertyName("isMuted")]
     public bool IsMuted { get; set; }
 }
+
+public sealed record VoicePipPresentationState(
+    int ParticipantCount,
+    string? FocusedParticipantId,
+    string? StickySpeakerId,
+    string? DisplayParticipantId,
+    bool CanUseGrid,
+    bool IsGridMode,
+    bool HasPrimaryVideo,
+    string PrimaryTargetId,
+    string PrimaryVideoSource,
+    bool UseFaceTimeSelfCorner,
+    bool HasFilmstrip,
+    string ModeClass);
+
+public sealed record VoiceStagePresentationState(
+    int VisualParticipantCount,
+    bool IsFaceTimeLayout,
+    string? FocusedParticipantId,
+    int ActiveVideoCount);
 
 public sealed class VoicePipMetadataPayload
 {
@@ -38,6 +61,9 @@ public sealed class VoicePipMetadataPayload
     [JsonPropertyName("localUserId")]
     public string LocalUserId { get; set; } = string.Empty;
 
+    [JsonPropertyName("isNativePlatform")]
+    public bool IsNativePlatform { get; set; }
+
     [JsonPropertyName("isMuted")]
     public bool IsMuted { get; set; }
 
@@ -49,6 +75,21 @@ public sealed class VoicePipMetadataPayload
 
     [JsonPropertyName("focusedParticipantId")]
     public string FocusedParticipantId { get; set; } = string.Empty;
+
+    [JsonPropertyName("layoutMode")]
+    public string LayoutMode { get; set; } = "focus";
+
+    [JsonPropertyName("modeClass")]
+    public string ModeClass { get; set; } = "mode-avatar";
+
+    [JsonPropertyName("displaySpeakerId")]
+    public string DisplaySpeakerId { get; set; } = string.Empty;
+
+    [JsonPropertyName("primaryVideoParticipantId")]
+    public string PrimaryVideoParticipantId { get; set; } = string.Empty;
+
+    [JsonPropertyName("primaryVideoSource")]
+    public string PrimaryVideoSource { get; set; } = string.Empty;
 
     [JsonPropertyName("participants")]
     public List<VoicePipParticipantDto> Participants { get; set; } = [];

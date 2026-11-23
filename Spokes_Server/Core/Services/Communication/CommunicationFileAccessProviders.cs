@@ -4,6 +4,7 @@ using System;
 using System.Linq;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Communication;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Communication.Chat;
@@ -12,19 +13,16 @@ using Spokes_Server.Core.Services.Storage;
 
 public class ChatFileAccessProvider : IFileAccessProvider
 {
-    private readonly IChatChannelAccessService _chatService;
+    private readonly IChatAuthorizationService _chatAuth;
     private readonly ChatChannelRepository? _channels;
-    private readonly IChatAuthorizationService? _chatAuth;
     public string Category => "chat";
 
     public ChatFileAccessProvider(
-        IChatChannelAccessService chatService,
-        ChatChannelRepository? channels = null,
-        IChatAuthorizationService? chatAuth = null)
+        IChatAuthorizationService chatAuth,
+        ChatChannelRepository? channels = null)
     {
-        _chatService = chatService;
+        _chatAuth = chatAuth ?? throw new ArgumentNullException(nameof(chatAuth));
         _channels = channels;
-        _chatAuth = chatAuth;
     }
 
     public bool CanAccess(Employee user, string contextId)
@@ -34,24 +32,30 @@ public class ChatFileAccessProvider : IFileAccessProvider
             return false;
         }
 
-        if (_chatAuth != null)
+        if (!FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Chat.Use))
         {
-            var channel = _channels?.GetById(contextId);
-            if (channel != null)
-            {
-                return _chatAuth.CanUserAccessChannel(channel, user);
-            }
-
-            return _chatAuth.CanUserAccessChannel(contextId, user.Id);
+            return false;
         }
 
-        var userChannels = _chatService.GetChannelsForUser(user.Id);
-        return userChannels.Any(c => c.Id == contextId);
+        var channel = _channels?.GetById(contextId);
+        if (channel != null && channel.IsArchived && !FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Chat.ViewArchive))
+        {
+            return false;
+        }
+
+        return channel != null
+            ? _chatAuth.CanUserAccessChannel(channel, user)
+            : _chatAuth.CanUserAccessChannel(contextId, user.Id);
     }
 
     public bool CanUpload(Employee user, string contextId)
     {
         if (!FileAccessPermissionHelper.IsWritableUser(user) || string.IsNullOrEmpty(contextId))
+        {
+            return false;
+        }
+
+        if (!user.HasPermission(AppPermissions.Chat.Use))
         {
             return false;
         }
@@ -62,45 +66,39 @@ public class ChatFileAccessProvider : IFileAccessProvider
         }
 
         var channel = _channels?.GetById(contextId)
-            ?? _chatService.GetChannelsForUser(user.Id).FirstOrDefault(c => c.Id == contextId);
+            ?? _chatAuth.GetChannelsForUser(user.Id).FirstOrDefault(c => c.Id == contextId);
 
         if (channel == null || channel.IsArchived)
         {
             return false;
         }
 
-        if (_chatAuth != null)
-        {
-            return _chatAuth.CanUserPostToChannel(channel, user);
-        }
-
-        if (channel.IsAnnouncementOnly)
-        {
-            return user.IsAdmin
-                || (channel.AllowedPostUserIds != null && channel.AllowedPostUserIds.Contains(user.Id))
-                || (!string.IsNullOrEmpty(user.TeamId) && channel.AllowedPostTeamIds != null && channel.AllowedPostTeamIds.Contains(user.TeamId))
-                || (channel.ChannelType == ChatChannelType.Group && channel.CreatedById == user.Id);
-        }
-
-        return true;
+        return _chatAuth.CanUserPostToChannel(channel, user);
     }
 }
 
 public class AlbumFileAccessProvider : IFileAccessProvider
 {
     private readonly AlbumRepository _albums;
-    private readonly IChatChannelAccessService _chatAccess;
+    private readonly IChatAuthorizationService _chatAuth;
+    private readonly ChatChannelRepository? _channels;
     public string Category => "albums";
 
-    public AlbumFileAccessProvider(AlbumRepository albums, IChatChannelAccessService chatAccess)
+    public AlbumFileAccessProvider(
+        AlbumRepository albums,
+        IChatAuthorizationService chatAuth,
+        ChatChannelRepository? channels = null)
     {
         _albums = albums;
-        _chatAccess = chatAccess;
+        _chatAuth = chatAuth ?? throw new ArgumentNullException(nameof(chatAuth));
+        _channels = channels;
     }
 
     public bool CanAccess(Employee user, string contextId)
     {
         if (!FileAccessPermissionHelper.IsReadableUser(user) || string.IsNullOrEmpty(contextId)) return false;
+
+        if (!FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Albums.View)) return false;
 
         var album = _albums.GetById(contextId);
         if (album == null) return false;
@@ -108,11 +106,31 @@ public class AlbumFileAccessProvider : IFileAccessProvider
         if (album.OwnerId == user.Id || album.ContributorUserIds.Contains(user.Id))
             return true;
 
+        if (!FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Chat.Use))
+            return false;
+
         foreach (var channelId in album.SharedWithChannelIds)
         {
-            var channelUsers = _chatAccess.GetUsersForChannel(channelId);
-            if (channelUsers.Contains(user.Id))
+            if (_channels != null)
+            {
+                var channel = _channels.GetById(channelId);
+                if (channel == null)
+                {
+                    continue;
+                }
+
+                if (channel.IsArchived && !FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Chat.ViewArchive))
+                {
+                    continue;
+                }
+
+                if (_chatAuth.CanUserAccessChannel(channel, user))
+                    return true;
+            }
+            else if (_chatAuth.CanUserAccessChannel(channelId, user.Id))
+            {
                 return true;
+            }
         }
 
         return false;
@@ -121,6 +139,8 @@ public class AlbumFileAccessProvider : IFileAccessProvider
     public bool CanUpload(Employee user, string contextId)
     {
         if (!FileAccessPermissionHelper.IsWritableUser(user) || string.IsNullOrEmpty(contextId)) return false;
+
+        if (!user.HasPermission(AppPermissions.Albums.View)) return false;
 
         var album = _albums.GetById(contextId);
         if (album == null) return false;
@@ -131,14 +151,16 @@ public class AlbumFileAccessProvider : IFileAccessProvider
 
 public class EmailFileAccessProvider : IFileAccessProvider
 {
-    private readonly IEmailInboxService? _emailInboxService;
-    private readonly EmailAccountRepository? _accounts;
+    private readonly IEmailInboxService _emailInboxService;
+    private readonly CompanyProfileRepository? _companyProfile;
     public string Category => "email";
 
-    public EmailFileAccessProvider(IEmailInboxService? emailInboxService = null, EmailAccountRepository? accounts = null)
+    public EmailFileAccessProvider(
+        IEmailInboxService emailInboxService,
+        CompanyProfileRepository? companyProfile = null)
     {
-        _emailInboxService = emailInboxService;
-        _accounts = accounts;
+        _emailInboxService = emailInboxService ?? throw new ArgumentNullException(nameof(emailInboxService));
+        _companyProfile = companyProfile;
     }
 
     public bool CanAccess(Employee user, string contextId)
@@ -175,25 +197,18 @@ public class EmailFileAccessProvider : IFileAccessProvider
                 || FileAccessPermissionHelper.HasAssignedPermission(user, AppPermissions.Purchases.ApproveBills);
         }
 
+        if (string.Equals(_companyProfile?.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         // All non-bill-inbox email attachment reads require explicit "accountId:messageId" message-level scoping
         if (string.IsNullOrWhiteSpace(messageId))
         {
             return false;
         }
 
-        if (_emailInboxService != null)
-        {
-            return _emailInboxService.CanUserAccessEmailMessage(user, accountId, messageId);
-        }
-
-        var account = _accounts?.GetById(accountId);
-        if (account != null && !account.IsServerManaged)
-        {
-            return string.Equals(account.OwnerEmployeeId, user.Id, StringComparison.OrdinalIgnoreCase)
-                || account.CanUserAccess(user.Id);
-        }
-
-        return user.IsAdmin || user.Id.Equals(accountId, StringComparison.OrdinalIgnoreCase);
+        return _emailInboxService.CanUserAccessEmailMessage(user, accountId, messageId);
     }
 
     public bool CanUpload(Employee user, string contextId) => false;

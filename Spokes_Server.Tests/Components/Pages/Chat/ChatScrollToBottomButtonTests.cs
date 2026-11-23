@@ -31,27 +31,6 @@ public class ChatScrollToBottomButtonTests : BunitContext
         base.Dispose(disposing);
     }
 
-    private static string ReadChatCss()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current != null)
-        {
-            var candidate = Path.Combine(current.FullName, "Spokes_Server", "wwwroot", "css", "chat.css");
-            if (File.Exists(candidate))
-            {
-                return File.ReadAllText(candidate);
-            }
-            var candidateDirect = Path.Combine(current.FullName, "wwwroot", "css", "chat.css");
-            if (File.Exists(candidateDirect))
-            {
-                return File.ReadAllText(candidateDirect);
-            }
-            current = current.Parent;
-        }
-
-        throw new FileNotFoundException("Could not locate Spokes_Server/wwwroot/css/chat.css from test base directory.");
-    }
-
     [Fact]
     public void HiddenState_OmitsVisibleClass_DisablesFocus_AndHasNoInlinePointerEventsOverride()
     {
@@ -113,27 +92,5 @@ public class ChatScrollToBottomButtonTests : BunitContext
         Assert.DoesNotContain("visible", cut.Find(".scroll-to-bottom-wrapper").ClassList);
         Assert.Equal("true", cut.Find(".scroll-to-bottom-wrapper").GetAttribute("aria-hidden"));
         Assert.Equal("-1", cut.Find(".scroll-to-bottom-wrapper button").GetAttribute("tabindex"));
-    }
-
-    [Fact]
-    public void ChatCss_EnforcesPointerEventsAndVisibilityIsolation_WhenHiddenVsVisible()
-    {
-        var css = ReadChatCss();
-
-        var anchorMatch = Regex.Match(css, @"\.scroll-to-bottom-anchor\s*\{(?<body>[^}]*)\}", RegexOptions.Singleline);
-        Assert.True(anchorMatch.Success, "Expected .scroll-to-bottom-anchor rule in chat.css.");
-        Assert.Matches(@"pointer-events\s*:\s*none\s*;", anchorMatch.Groups["body"].Value);
-
-        var hiddenMatch = Regex.Match(css, @"\.scroll-to-bottom-wrapper\s*\{(?<body>[^}]*)\}", RegexOptions.Singleline);
-        Assert.True(hiddenMatch.Success, "Expected .scroll-to-bottom-wrapper rule in chat.css.");
-        Assert.Matches(@"pointer-events\s*:\s*none\s*;", hiddenMatch.Groups["body"].Value);
-        Assert.Matches(@"visibility\s*:\s*hidden\s*;", hiddenMatch.Groups["body"].Value);
-        Assert.Matches(@"opacity\s*:\s*0\s*;", hiddenMatch.Groups["body"].Value);
-
-        var visibleMatch = Regex.Match(css, @"\.scroll-to-bottom-wrapper\.visible\s*\{(?<body>[^}]*)\}", RegexOptions.Singleline);
-        Assert.True(visibleMatch.Success, "Expected .scroll-to-bottom-wrapper.visible rule in chat.css.");
-        Assert.Matches(@"pointer-events\s*:\s*auto\s*;", visibleMatch.Groups["body"].Value);
-        Assert.Matches(@"visibility\s*:\s*visible\s*;", visibleMatch.Groups["body"].Value);
-        Assert.Matches(@"opacity\s*:\s*1\s*;", visibleMatch.Groups["body"].Value);
     }
 }

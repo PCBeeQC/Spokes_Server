@@ -13,9 +13,9 @@
 
 <MudDialog DefaultFocus="DefaultFocus.None" Class="@($"calendar-dialog-cat-{_selectedCategoryId}")" Style="width: 100%; max-width: 600px;">
     <TitleContent>
-        <div class="d-flex align-center justify-space-between w-100 pr-2">
-            <div class="d-flex align-center gap-2">
-                <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Color="Color.Primary" />
+        <div class="d-flex align-center justify-space-between flex-wrap gap-2 mud-width-full">
+            <div class="d-flex align-center gap-2" style="min-width: 0;">
+                <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Color="Color.Primary" Class="flex-shrink-0" />
                 <MudText Typo="Typo.h6">
                     @if (IsNew)
                     {
@@ -36,7 +36,14 @@
             }
             @if (!string.IsNullOrEmpty(effCat.DisplayName))
             {
-                <MudChip T="string" Color="@effCat.Color" Size="Size.Small" Variant="Variant.Filled">@effCat.DisplayName</MudChip>
+                <MudChip T="string"
+                         Color="@effCat.Color"
+                         Size="Size.Small"
+                         Variant="Variant.Filled"
+                         Class="ma-0"
+                         Style="max-width: 100%; min-width: 0; overflow: hidden;">
+                    <span style="display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="@effCat.DisplayName">@effCat.DisplayName</span>
+                </MudChip>
             }
         </div>
     </TitleContent>
@@ -58,8 +65,15 @@
                             if (creator != null)
                             {
                                 <div class="d-flex align-center gap-1 flex-shrink-0">
-                                    <EmployeeAvatar Employee="@creator" Size="Size.Small" FontSize="0.625rem" ShowPresence="false" />
+                                    <EmployeeAvatar Employee="@creator" Size="Size.Small" ShowPresence="false" />
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">@string.Format(Loc["Created by {0}"].Value, creator.FullName)</MudText>
+                                </div>
+                            }
+                            else if (Db.Employees.GetById(_workingEvent.EmployeeId) != null)
+                            {
+                                <div class="d-flex align-center gap-1 flex-shrink-0">
+                                    <EmployeeAvatar Employee="@null" Size="Size.Small" ShowPresence="false" />
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@string.Format(Loc["Created by {0}"].Value, AppLabels.Employee)</MudText>
                                 </div>
                             }
                         }
@@ -226,6 +240,10 @@
                                         {
                                             <EmployeeChip Employee="@emp" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" />
                                         }
+                                        else if (Db.Employees.GetById(attId) != null)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">@AppLabels.Employee</MudChip>
+                                        }
                                     }
                                 </div>
                             </div>
@@ -268,7 +286,7 @@
                                     <MudText Typo="Typo.subtitle2">@Loc["Event Reminders"]</MudText>
                                     <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" Class="ma-0">@Loc["Shared with others"]</MudChip>
                                 </div>
-                                @if (IsEventCreator && !_isEditingSharedReminders)
+                                @if (_canEdit && IsEventCreator && !_isEditingSharedReminders)
                                 {
                                     <MudButton StartIcon="@(_workingEvent.Reminders.Count == 0 ? Icons.Material.Filled.Add : Icons.Material.Filled.Edit)"
                                                Size="Size.Small"
@@ -324,7 +342,7 @@
                                     </div>
                                 }
 
-                                @if (!IsEventCreator)
+                                @if (CanParticipateInReminders && !IsEventCreator)
                                 {
                                     <div class="pt-1">
                                         <MudSwitch T="bool"
@@ -349,7 +367,7 @@
                                     <MudText Typo="Typo.subtitle2">@Loc["My Reminders"]</MudText>
                                     <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary" Class="ma-0">@Loc["Only for you"]</MudChip>
                                 </div>
-                                @if (!_isEditingPersonalReminders)
+                                @if (CanParticipateInReminders && !_isEditingPersonalReminders)
                                 {
                                     <MudButton StartIcon="@(GetPersonalRemindersForCurrentUser().Count == 0 ? Icons.Material.Filled.Add : Icons.Material.Filled.Edit)"
                                                Size="Size.Small"
@@ -408,18 +426,21 @@
                             }
                         </div>
 
-                        <MudDivider />
+                        @if (CanParticipateInReminders)
+                        {
+                            <MudDivider />
 
-                        <!-- Master Mute -->
-                        <div class="d-flex align-center justify-end">
-                            <MudButton StartIcon="@(IsCurrentUserMuted() ? Icons.Material.Filled.Notifications : Icons.Material.Filled.NotificationsOff)"
-                                       Size="Size.Small"
-                                       Variant="Variant.Text"
-                                       Color="@(IsCurrentUserMuted() ? Color.Primary : Color.Default)"
-                                       OnClick="ToggleMuteCurrentUser">
-                                @(IsCurrentUserMuted() ? Loc["Unmute My Notifications"].Value : Loc["Mute All My Notifications"].Value)
-                            </MudButton>
-                        </div>
+                            <!-- Master Mute -->
+                            <div class="d-flex align-center justify-end">
+                                <MudButton StartIcon="@(IsCurrentUserMuted() ? Icons.Material.Filled.Notifications : Icons.Material.Filled.NotificationsOff)"
+                                           Size="Size.Small"
+                                           Variant="Variant.Text"
+                                           Color="@(IsCurrentUserMuted() ? Color.Primary : Color.Default)"
+                                           OnClick="ToggleMuteCurrentUser">
+                                    @(IsCurrentUserMuted() ? Loc["Unmute My Notifications"].Value : Loc["Mute All My Notifications"].Value)
+                                </MudButton>
+                            </div>
+                        }
                     </div>
                 </MudPaper>
             }
@@ -445,7 +466,7 @@
                             if (creator != null)
                             {
                                 <div class="d-flex align-center gap-1 flex-shrink-0">
-                                    <EmployeeAvatar Employee="@creator" Size="Size.Small" FontSize="0.625rem" ShowPresence="false" />
+                                    <EmployeeAvatar Employee="@creator" Size="Size.Small" ShowPresence="false" />
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">@string.Format(Loc["Created by {0}"].Value, creator.FullName)</MudText>
                                 </div>
                             }
@@ -496,7 +517,7 @@
                                                    title="@Loc["Manage Categories"]" />
                                 </div>
                             </MudItem>
-                            @if (!IsFriendEdition)
+                            @if (!IsFriendEdition && (_currentUser?.IsEffectiveAdmin == true || _currentUser?.HasPermission(AppPermissions.Projects.View) == true))
                             {
                                 <MudItem xs="12" sm="6">
                                     <MudAutocomplete T="Project"
@@ -887,7 +908,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _currentUser = await UserService.GetEmployeeAsync();
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
 
         if (Event == null)
         {
@@ -915,23 +936,42 @@
         // Mode logic
         _viewMode = !IsNew;
 
-        _canEdit = IsNew || (_currentUser != null && (Event.EmployeeId == _currentUser.Id || _currentUser.HasPermission(AppPermissions.Admin.ManageSettings) || _currentUser.HasPermission(AppPermissions.Admin.ManageUsers)));
+        var canView = _currentUser != null && (IsNew
+            ? (CalendarService.CanCreateOrParticipateInCalendar(_currentUser) || CalendarService.HasCalendarAdminOverride(_currentUser))
+            : CalendarService.CanUserViewEvent(Event, _currentUser));
 
-        if (_currentUser?.IsSuspended == true)
+        if (!canView)
+        {
+            _canEdit = false;
+            _viewMode = true;
+            Snackbar.Add(Loc["You do not have permission to access this calendar event."].Value, Severity.Warning);
+            MudDialog?.Cancel();
+            return;
+        }
+
+        _canEdit = _currentUser != null && (IsNew
+            ? (CalendarService.CanCreateOrParticipateInCalendar(_currentUser) || CalendarService.HasCalendarAdminOverride(_currentUser))
+            : CalendarService.CanUserEditEvent(Event, _currentUser));
+
+        if (!_canEdit)
         {
             _viewMode = true;
-            _canEdit = false;
         }
 
         // Load data
-        _allEmployees = Db.Employees.GetAll().Where(e => e.IsActive).OrderBy(e => e.FullName).ToList();
+        _allEmployees = _currentUser != null
+            ? PrivacyService.FilterDiscoverableEmployees(_currentUser, Db.Employees.GetActiveEmployees()).OrderBy(e => e.FullName).ToList()
+            : [];
         _canCreateCompanyWideEvents = PrivacyService.CanCreateCompanyWideEvents(_currentUser);
         _teams = PrivacyService.FilterDiscoverableTeams(_currentUser, Db.Teams.GetAll()).OrderBy(t => t.Name).ToList();
         var serverProfile = Db.CompanyProfile.Get();
         _categories = _currentUser != null
             ? _currentUser.EnsureCalendarCategories(serverProfile)
             : CalendarCategoryDefaults.CloneList(serverProfile?.CalendarCategories);
-        _projects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.Name).ToList();
+        _projects = Db.Projects.GetAll()
+            .Where(p => p.IsActive && UserService.CanViewProject(_currentUser, p))
+            .OrderBy(p => p.Name)
+            .ToList();
 
         if (!string.IsNullOrEmpty(_workingEvent.ProjectId))
         {
@@ -1022,7 +1062,19 @@
     private void OnProjectSelected(Project? project)
     {
         _selectedProject = project;
-        _workingEvent.ProjectId = project?.Id ?? string.Empty;
+        if (project != null)
+        {
+            _workingEvent.ProjectId = project.Id;
+        }
+        else if (!IsNew && !string.IsNullOrEmpty(Event.ProjectId) && _projects.All(p => p.Id != Event.ProjectId))
+        {
+            // Preserve existing restricted project reference that this editor cannot view
+            _workingEvent.ProjectId = Event.ProjectId;
+        }
+        else
+        {
+            _workingEvent.ProjectId = string.Empty;
+        }
     }
 
     private Task<IEnumerable<Project>> SearchProjects(string value, CancellationToken ct)
@@ -1038,7 +1090,16 @@
         return Task.FromResult(results);
     }
 
-    private Employee? GetEmployee(string id) => _allEmployees.FirstOrDefault(e => e.Id == id) ?? Db.Employees.GetById(id);
+    private Employee? GetEmployee(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        var cached = _allEmployees.FirstOrDefault(e => e.Id == id);
+        if (cached != null) return cached;
+        if (_currentUser == null) return null;
+        if (string.Equals(id, _currentUser.Id, StringComparison.Ordinal)) return _currentUser;
+        var emp = Db.Employees.GetById(id);
+        return emp != null && !emp.IsSystem && PrivacyService.CanDiscoverUser(_currentUser, emp) ? emp : null;
+    }
 
     private Color GetCategoryColor(string? categoryId)
     {
@@ -1135,6 +1196,7 @@
 
     private async Task OpenCategoryManagerDialog()
     {
+        if (!TryAuthorizeLiveEdit(out _)) return;
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
         var dialog = await DialogService.ShowAsync<CalendarCategoryManagerDialog>("", options);
         var result = await dialog.Result;
@@ -1176,7 +1238,7 @@
         if (_workingEvent.IsAllDay)
         {
             var days = (int)Math.Ceiling((end.Date - start.Date).TotalDays) + 1;
-            return days <= 1 ? Loc["All day"].Value : string.Format(Loc["{0} days (All day)"].Value, days);
+            return days <= 1 ? Loc["All Day"].Value : string.Format(Loc["{0} days (All day)"].Value, days);
         }
 
         var span = end - start;
@@ -1214,10 +1276,60 @@
         MudDialog?.StateHasChanged();
     }
 
+    private bool TryAuthorizeLiveEdit(out Employee? liveUser)
+    {
+        liveUser = _currentUser != null ? Db.Employees.GetById(_currentUser.Id) : null;
+        if (liveUser == null)
+        {
+            _canEdit = false;
+            _viewMode = true;
+            Snackbar.Add(Loc["You do not have permission to modify this calendar event."].Value, Severity.Warning);
+            return false;
+        }
+
+        var authorized = IsNew
+            ? (CalendarService.CanCreateOrParticipateInCalendar(liveUser) || CalendarService.HasCalendarAdminOverride(liveUser))
+            : CalendarService.CanUserEditEvent(Event, liveUser);
+        if (!authorized)
+        {
+            _canEdit = false;
+            _viewMode = true;
+            Snackbar.Add(Loc["You do not have permission to modify this calendar event."].Value, Severity.Warning);
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryAuthorizeLiveParticipation(out Employee? liveUser)
+    {
+        liveUser = _currentUser != null ? Db.Employees.GetById(_currentUser.Id) : null;
+        if (liveUser == null
+            || (!CalendarService.CanCreateOrParticipateInCalendar(liveUser) && !CalendarService.HasCalendarAdminOverride(liveUser))
+            || (!IsNew && Event != null && !CalendarService.CanUserViewEvent(Event, liveUser)))
+        {
+            Snackbar.Add(Loc["You do not have permission to update reminders for this event."].Value, Severity.Warning);
+            return false;
+        }
+
+        return true;
+    }
+
     private void Submit()
     {
-        if (!_canEdit) return;
+        if (!_canEdit || !TryAuthorizeLiveEdit(out var liveUser)) return;
         if (string.IsNullOrWhiteSpace(_workingEvent.Title)) return;
+
+        if (!string.IsNullOrEmpty(_workingEvent.ProjectId) &&
+            (IsNew || !string.Equals(_workingEvent.ProjectId, Event.ProjectId, StringComparison.Ordinal)))
+        {
+            var selectedProj = Db.Projects.GetById(_workingEvent.ProjectId);
+            if (selectedProj == null || !UserService.CanViewProject(liveUser, selectedProj))
+            {
+                Snackbar.Add(Loc["You do not have access to the selected project."].Value, Severity.Error);
+                return;
+            }
+        }
 
         if (string.IsNullOrEmpty(_workingEvent.EmployeeId) && _currentUser != null)
         {
@@ -1280,7 +1392,7 @@
 
     private async Task Delete()
     {
-        if (!_canEdit) return;
+        if (!_canEdit || !TryAuthorizeLiveEdit(out _)) return;
         var isOtherUserEvent = IsAdminOverride;
         var creatorName = GetCreatorName();
         var confirmTitle = isOtherUserEvent ? Loc["Delete Event (Admin Override)?"].Value : Loc["Delete Event?"].Value;
@@ -1294,11 +1406,14 @@
             yesText: isOtherUserEvent ? Loc["Delete Event"].Value : Loc["Delete"].Value,
             cancelText: Loc["Cancel"].Value);
 
-        if (confirmed == true)
+        if (confirmed == true && TryAuthorizeLiveEdit(out _))
         {
             MudDialog.Close(DialogResult.Ok((CalendarEvent?)null));
         }
     }
+
+    private bool CanParticipateInReminders => _currentUser != null &&
+        (CalendarService.CanCreateOrParticipateInCalendar(_currentUser) || CalendarService.HasCalendarAdminOverride(_currentUser));
 
     private bool IsEventCreator => _currentUser != null &&
         (!string.IsNullOrEmpty(_workingEvent.EmployeeId)
@@ -1345,16 +1460,25 @@
 
     private void ToggleReceiveSharedReminders(bool value)
     {
-        if (_currentUser == null) return;
-        var pref = EnsureUserPreference(_currentUser.Id);
+        if (!TryAuthorizeLiveParticipation(out var liveUser)) return;
+        var pref = EnsureUserPreference(liveUser!.Id);
         pref.ReceiveEventReminders = value;
         if (!IsNew && !string.IsNullOrEmpty(_workingEvent.Id))
         {
-            CalendarService.UpdateUserEventNotificationPreference(_workingEvent.Id, _currentUser.Id, receiveEventReminders: value);
+            var result = CalendarService.UpdateUserEventNotificationPreference(_workingEvent.Id, liveUser.Id, receiveEventReminders: value);
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.ErrorMessage ?? Loc["You do not have permission to update reminders for this event."].Value, Severity.Warning);
+                return;
+            }
         }
-        else if (_canEdit)
+        else if (TryAuthorizeLiveEdit(out _))
         {
-            CalendarService.SaveEvent(_workingEvent);
+            if (!TrySaveWorkingEvent(liveUser.Id)) return;
+        }
+        else
+        {
+            return;
         }
         if (Event != null)
         {
@@ -1366,16 +1490,25 @@
 
     private void ToggleMuteCurrentUser()
     {
-        if (_currentUser == null) return;
-        var pref = EnsureUserPreference(_currentUser.Id);
+        if (!TryAuthorizeLiveParticipation(out var liveUser)) return;
+        var pref = EnsureUserPreference(liveUser!.Id);
         pref.IsMuted = !pref.IsMuted;
         if (!IsNew && !string.IsNullOrEmpty(_workingEvent.Id))
         {
-            CalendarService.UpdateUserEventNotificationPreference(_workingEvent.Id, _currentUser.Id, isMuted: pref.IsMuted);
+            var result = CalendarService.UpdateUserEventNotificationPreference(_workingEvent.Id, liveUser.Id, isMuted: pref.IsMuted);
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.ErrorMessage ?? Loc["You do not have permission to update reminders for this event."].Value, Severity.Warning);
+                return;
+            }
         }
-        else if (_canEdit)
+        else if (TryAuthorizeLiveEdit(out _))
         {
-            CalendarService.SaveEvent(_workingEvent);
+            if (!TrySaveWorkingEvent(liveUser.Id)) return;
+        }
+        else
+        {
+            return;
         }
         if (Event != null)
         {
@@ -1387,6 +1520,7 @@
 
     private void StartEditingPersonalReminders()
     {
+        if (!TryAuthorizeLiveParticipation(out _)) return;
         _isEditingPersonalReminders = true;
         var personal = GetPersonalRemindersForCurrentUser();
         _editingPersonalReminders = personal.ConvertAll(r => r.Clone());
@@ -1405,16 +1539,25 @@
 
     private void SaveEditingPersonalReminders()
     {
-        if (_currentUser == null) return;
-        var pref = EnsureUserPreference(_currentUser.Id);
+        if (!TryAuthorizeLiveParticipation(out var liveUser)) return;
+        var pref = EnsureUserPreference(liveUser!.Id);
         pref.PersonalReminders = _editingPersonalReminders.ConvertAll(r => r.Clone());
         if (!IsNew && !string.IsNullOrEmpty(_workingEvent.Id))
         {
-            CalendarService.UpdateUserEventNotificationPreference(_workingEvent.Id, _currentUser.Id, personalReminders: pref.PersonalReminders);
+            var result = CalendarService.UpdateUserEventNotificationPreference(_workingEvent.Id, liveUser.Id, personalReminders: pref.PersonalReminders);
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.ErrorMessage ?? Loc["You do not have permission to update reminders for this event."].Value, Severity.Warning);
+                return;
+            }
         }
-        else if (_canEdit)
+        else if (TryAuthorizeLiveEdit(out _))
         {
-            CalendarService.SaveEvent(_workingEvent);
+            if (!TrySaveWorkingEvent(liveUser.Id)) return;
+        }
+        else
+        {
+            return;
         }
         if (Event != null)
         {
@@ -1439,6 +1582,7 @@
 
     private void StartEditingSharedReminders()
     {
+        if (!_canEdit || !TryAuthorizeLiveEdit(out _)) return;
         _isEditingSharedReminders = true;
         _editingSharedReminders = (_workingEvent.Reminders ?? []).ConvertAll(r => r.Clone());
         if (_editingSharedReminders.Count == 0)
@@ -1456,9 +1600,9 @@
 
     private void SaveEditingSharedReminders()
     {
-        if (!_canEdit) return;
+        if (!_canEdit || !TryAuthorizeLiveEdit(out var liveUser)) return;
         _workingEvent.Reminders = _editingSharedReminders.ConvertAll(r => r.Clone());
-        CalendarService.SaveEvent(_workingEvent);
+        if (!TrySaveWorkingEvent(liveUser!.Id)) return;
         if (Event != null)
         {
             Event.Reminders = _workingEvent.Reminders;
@@ -1466,6 +1610,22 @@
         _isEditingSharedReminders = false;
         Snackbar.Add(Loc["Shared event reminders updated"].Value, Severity.Success);
         MudDialog?.StateHasChanged();
+    }
+
+    private bool TrySaveWorkingEvent(string actingUserId)
+    {
+        try
+        {
+            CalendarService.SaveEvent(_workingEvent, actingUserId);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            _canEdit = false;
+            _viewMode = true;
+            Snackbar.Add(Loc["You do not have permission to modify this calendar event."].Value, Severity.Warning);
+            return false;
+        }
     }
 
     private void AddEditingSharedReminder()

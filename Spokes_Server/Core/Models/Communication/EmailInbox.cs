@@ -88,14 +88,8 @@ public class EmailInbox : IDataEntity
         }
     }
 
-    public bool CanUserAccess(string employeeId, IEnumerable<string>? userTeamIds = null)
-    {
-        if (string.IsNullOrWhiteSpace(employeeId)) return false;
-        if (!IsServerManaged && string.Equals(OwnerEmployeeId, employeeId, StringComparison.OrdinalIgnoreCase)) return true;
-        if (AllowedUserIds != null && AllowedUserIds.Any(u => string.Equals(u, employeeId, StringComparison.OrdinalIgnoreCase))) return true;
-        if (userTeamIds != null && AllowedTeamIds != null && AllowedTeamIds.Intersect(userTeamIds, StringComparer.OrdinalIgnoreCase).Any()) return true;
-        return false;
-    }
+    public bool CanUserAccess(string employeeId, IEnumerable<string>? userTeamIds = null) =>
+        EmailAccessHelper.CanUserAccess(IsServerManaged, OwnerEmployeeId, AllowedUserIds, AllowedTeamIds, employeeId, userTeamIds);
 
     public bool MatchesAddresses(IEnumerable<string>? messageReceivingAddresses)
     {

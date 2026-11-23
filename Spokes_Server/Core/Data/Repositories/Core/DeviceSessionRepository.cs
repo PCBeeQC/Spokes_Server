@@ -70,14 +70,21 @@ public class DeviceSessionRepository : JsonRepository<DeviceSession>
     /// <summary>
     /// Clear all push-related fields from a session (used when unsubscribing or cleaning dead endpoints).
     /// </summary>
-    public void ClearPushFields(DeviceSession session)
+    public void ClearPushFields(DeviceSession session, bool explicitlyDisabled = false)
     {
+        if (session.IsCapacitorApp)
+        {
+            session.IsCapacitor = true;
+            session.DeviceType = Spokes_Server.Core.Models.Core.DeviceType.Mobile;
+        }
+
         session.PushEndpoint = null;
         session.PushP256dh = string.Empty;
         session.PushAuth = string.Empty;
         session.PushPublicKey = string.Empty;
         session.PushSubscriptionType = PushSubscriptionType.WebPush;
         session.PushEnabled = false;
+        session.PushExplicitlyDisabled = explicitlyDisabled;
         session.PushSubscribedAt = null;
         session.PushUserAgent = string.Empty;
         Save(session);

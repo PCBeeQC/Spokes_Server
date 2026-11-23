@@ -1,9 +1,11 @@
 @using Spokes_Server.Components.Dialogs
 @using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Models.Communication
 @using Spokes_Server.Core.Services.Communication.Email
 @inject IDialogService DialogService
 @inject IEmailFolderService FolderService
+@inject UserService UserService
 @inject ISnackbar Snackbar
 @inject IStringLocalizer<AppResources> Loc
 
@@ -47,7 +49,7 @@
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="text-truncate">@Loc["Mailbox Folders"]</MudText>
                 </div>
                 <div class="d-flex align-center gap-1">
-                    @if (!string.IsNullOrEmpty(AccountId))
+                    @if (EffectiveCanManageFolders && !string.IsNullOrEmpty(AccountId))
                     {
                         <MudTooltip Text="@Loc["New Folder"]">
                             <MudIconButton Icon="@Icons.Material.Filled.CreateNewFolder"
@@ -102,31 +104,34 @@
                                 <MudText Typo="Typo.body2" Class="flex-grow-1 text-truncate">@treeItem.Text</MudText>
                                 @if (treeItem.Value is { } f)
                                 {
-                                    <div class="folder-actions" @onclick:stopPropagation="true">
-                                        <MudMenu Icon="@Icons.Material.Filled.MoreVert"
-                                                 Size="Size.Small"
-                                                 Dense="true"
-                                                 AnchorOrigin="Origin.BottomRight"
-                                                 TransformOrigin="Origin.TopRight"
-                                                 ListClass="pa-0">
-                                            <MudMenuItem Icon="@Icons.Material.Filled.CreateNewFolder"
-                                                         OnClick="@(() => CreateSubfolder(f))">
-                                                @Loc["New Subfolder"]
-                                            </MudMenuItem>
-                                            @if (!f.IsInbox && !f.IsSent && !f.IsTrash && !f.IsDrafts && !f.IsArchive && !f.IsJunk)
-                                            {
-                                                <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline"
-                                                             OnClick="@(() => RenameFolder(f))">
-                                                    @Loc["Rename"]
+                                    @if (EffectiveCanManageFolders)
+                                    {
+                                        <div class="folder-actions" @onclick:stopPropagation="true">
+                                            <MudMenu Icon="@Icons.Material.Filled.MoreVert"
+                                                     Size="Size.Small"
+                                                     Dense="true"
+                                                     AnchorOrigin="Origin.BottomRight"
+                                                     TransformOrigin="Origin.TopRight"
+                                                     ListClass="pa-0">
+                                                <MudMenuItem Icon="@Icons.Material.Filled.CreateNewFolder"
+                                                             OnClick="@(() => CreateSubfolder(f))">
+                                                    @Loc["New Subfolder"]
                                                 </MudMenuItem>
-                                                <MudMenuItem Icon="@Icons.Material.Filled.Delete"
-                                                             IconColor="Color.Error"
-                                                             OnClick="@(() => DeleteFolder(f))">
-                                                    @Loc["Delete"]
-                                                </MudMenuItem>
-                                            }
-                                        </MudMenu>
-                                    </div>
+                                                @if (!f.IsInbox && !f.IsSent && !f.IsTrash && !f.IsDrafts && !f.IsArchive && !f.IsJunk)
+                                                {
+                                                    <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline"
+                                                                 OnClick="@(() => RenameFolder(f))">
+                                                        @Loc["Rename"]
+                                                    </MudMenuItem>
+                                                    <MudMenuItem Icon="@Icons.Material.Filled.Delete"
+                                                                 IconColor="Color.Error"
+                                                                 OnClick="@(() => DeleteFolder(f))">
+                                                        @Loc["Delete"]
+                                                    </MudMenuItem>
+                                                }
+                                            </MudMenu>
+                                        </div>
+                                    }
                                     @if (f.UnreadCount > 0 && !f.IsDrafts)
                                     {
                                         <NotificationBadge Count="@f.UnreadCount" Class="ml-1" />
@@ -153,13 +158,22 @@
     [Parameter] public EmailFolder? SelectedFolder { get; set; }
     [Parameter] public string? SelectedNodeKey { get; set; }
     [Parameter] public bool ShowLabelButton { get; set; }
+    [Parameter] public bool CanManageFolders { get; set; } = true;
     [Parameter] public Origin AnchorOrigin { get; set; } = Origin.TopRight;
     [Parameter] public Origin TransformOrigin { get; set; } = Origin.TopLeft;
     [Parameter] public EventCallback<EmailFolder> OnSelectFolder { get; set; }
     [Parameter] public EventCallback OnFoldersChanged { get; set; }
 
     private bool _isOpen;
+    private bool _canMutateFolders;
     private string _folderSearchText = string.Empty;
+    private bool EffectiveCanManageFolders => CanManageFolders && _canMutateFolders;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        _canMutateFolders = emp is { IsActiveUnsuspended: true } && emp.HasPermission(AppPermissions.Email.Use);
+    }
 
     private void ToggleFlyout()
     {
@@ -240,16 +254,31 @@
         folder.IsJunk ? Icons.Material.Filled.Report :
         Icons.Material.Filled.Folder;
 
+    private async Task<Employee?> ResolveFolderMutationCallerAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        _canMutateFolders = emp is { IsActiveUnsuspended: true } && emp.HasPermission(AppPermissions.Email.Use);
+        if (!EffectiveCanManageFolders)
+        {
+            StateHasChanged();
+            return null;
+        }
+        return emp;
+    }
+
     private async Task CreateRootFolder()
     {
         if (string.IsNullOrEmpty(AccountId)) return;
+        if (await ResolveFolderMutationCallerAsync() == null) return;
         var parameters = new DialogParameters { ["SubmitText"] = Loc["Create"].Value };
         var dialog = await DialogService.ShowAsync<FolderManageDialog>(Loc["New Folder"], parameters);
         var result = await dialog.Result;
 
         if (result is { Canceled: false, Data: string name })
         {
-            var createResult = await FolderService.CreateFolderAsync(AccountId, "", name);
+            var caller = await ResolveFolderMutationCallerAsync();
+            if (caller == null) return;
+            var createResult = await FolderService.CreateFolderAsync(AccountId, "", name, caller.Id);
             if (createResult.IsSuccess && createResult.Value != null)
             {
                 Snackbar.Add(string.Format(Loc["Folder '{0}' created."].Value, name), Severity.Success);
@@ -265,13 +294,16 @@
     private async Task CreateSubfolder(EmailFolder? parentFolder)
     {
         if (parentFolder == null) return;
+        if (await ResolveFolderMutationCallerAsync() == null) return;
         var parameters = new DialogParameters { ["SubmitText"] = Loc["Create"].Value };
         var dialog = await DialogService.ShowAsync<FolderManageDialog>(string.Format(Loc["New subfolder in {0}"].Value, parentFolder.Name), parameters);
         var result = await dialog.Result;
 
         if (result is { Canceled: false, Data: string name })
         {
-            var createResult = await FolderService.CreateFolderAsync(parentFolder.AccountId, parentFolder.Path, name);
+            var caller = await ResolveFolderMutationCallerAsync();
+            if (caller == null) return;
+            var createResult = await FolderService.CreateFolderAsync(parentFolder.AccountId, parentFolder.Path, name, caller.Id);
             if (createResult.IsSuccess && createResult.Value != null)
             {
                 Snackbar.Add(string.Format(Loc["Folder '{0}' created."].Value, name), Severity.Success);
@@ -287,13 +319,16 @@
     private async Task RenameFolder(EmailFolder? folder)
     {
         if (folder == null) return;
+        if (await ResolveFolderMutationCallerAsync() == null) return;
         var parameters = new DialogParameters { ["CurrentFolderName"] = folder.Name, ["SubmitText"] = Loc["Rename"].Value };
         var dialog = await DialogService.ShowAsync<FolderManageDialog>(string.Format(Loc["Rename {0}"].Value, folder.Name), parameters);
         var result = await dialog.Result;
 
         if (result is { Canceled: false, Data: string name } && name != folder.Name)
         {
-            var renameResult = await FolderService.RenameFolderAsync(folder.AccountId, folder.Path, name);
+            var caller = await ResolveFolderMutationCallerAsync();
+            if (caller == null) return;
+            var renameResult = await FolderService.RenameFolderAsync(folder.AccountId, folder.Path, name, caller.Id);
             if (renameResult.IsSuccess)
             {
                 Snackbar.Add(string.Format(Loc["Folder renamed to '{0}'."].Value, name), Severity.Success);
@@ -309,6 +344,7 @@
     private async Task DeleteFolder(EmailFolder? folder)
     {
         if (folder == null) return;
+        if (await ResolveFolderMutationCallerAsync() == null) return;
         bool? result = await DialogService.ShowMessageBoxAsync(
             Loc["Delete Folder"],
             string.Format(Loc["Are you sure you want to delete '{0}' and all its contents? This cannot be undone."].Value, folder.Name),
@@ -316,7 +352,9 @@
 
         if (result == true)
         {
-            var deleteResult = await FolderService.DeleteFolderAsync(folder.AccountId, folder.Path);
+            var caller = await ResolveFolderMutationCallerAsync();
+            if (caller == null) return;
+            var deleteResult = await FolderService.DeleteFolderAsync(folder.AccountId, folder.Path, caller.Id);
             if (deleteResult.IsSuccess)
             {
                 Snackbar.Add(Loc["Folder deleted."], Severity.Success);

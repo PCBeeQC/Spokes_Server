@@ -2,6 +2,7 @@ namespace Spokes_Server.Core.Models.Core;
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text.Json.Serialization;
 using Spokes_Server.Core.Configuration;
 using Spokes_Server.Core.Data;
@@ -54,6 +55,7 @@ public class CompanyProfile : IDataEntity
     // Document Numbering accessors (delegated to DocumentNumberingConfig)
     public string QuotePrefix { get => DocumentNumbering.QuotePrefix; set => DocumentNumbering.QuotePrefix = value; }
     public string InvoicePrefix { get => DocumentNumbering.InvoicePrefix; set => DocumentNumbering.InvoicePrefix = value; }
+    public string ReportPrefix { get => DocumentNumbering.ReportPrefix; set => DocumentNumbering.ReportPrefix = value; }
 
     // Contact accessors (delegated to ContactConfig)
     public string AddressStreet { get => Contact.AddressStreet; set => Contact.AddressStreet = value; }
@@ -127,24 +129,141 @@ public class CompanyProfile : IDataEntity
 
     public CompanyProfile()
     {
-        if (ProjectStatuses == null || !ProjectStatuses.Any())
+        ProjectStatuses =
+        [
+            new ProjectStatusConfig { Id = "draft", Name = ProjectStatus.Draft, Color = "Default", IsSystemDefault = false },
+            new ProjectStatusConfig { Id = "quoted", Name = ProjectStatus.Quoted, Color = "Info", IsSystemDefault = false },
+            new ProjectStatusConfig { Id = "production", Name = ProjectStatus.InProduction, Color = "Primary", IsSystemDefault = false },
+            new ProjectStatusConfig { Id = "waiting_payment", Name = ProjectStatus.WaitingForPayment, Color = "Warning", IsSystemDefault = false },
+            new ProjectStatusConfig { Id = "discovery", Name = ProjectStatus.Discovery, Color = "Secondary", IsSystemDefault = false },
+            new ProjectStatusConfig { Id = "on_hold", Name = ProjectStatus.OnHold, Color = "Error", IsSystemDefault = false },
+            new ProjectStatusConfig { Id = "completed", Name = ProjectStatus.Completed, Color = "Success", IsSystemDefault = false },
+            new ProjectStatusConfig { Id = "archived", Name = ProjectStatus.Archived, Color = "Dark", IsSystemDefault = false }
+        ];
+
+        CalendarCategories = CalendarCategoryDefaults.GetSystemDefaults();
+    }
+
+    /// <summary>
+    /// Extracts a normalized domain name (e.g. "acme.com") from a website URL or bare hostname.
+    /// Returns null for localhost, IP addresses, or invalid inputs.
+    /// </summary>
+    public static string? ExtractDomainFromUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        var trimmed = url.Trim();
+        if (!trimmed.Contains("://", StringComparison.Ordinal))
         {
-            ProjectStatuses =
-            [
-                new ProjectStatusConfig { Id = "draft", Name = ProjectStatus.Draft, Color = "Default", IsSystemDefault = false },
-                new ProjectStatusConfig { Id = "quoted", Name = ProjectStatus.Quoted, Color = "Info", IsSystemDefault = false },
-                new ProjectStatusConfig { Id = "production", Name = ProjectStatus.InProduction, Color = "Primary", IsSystemDefault = false },
-                new ProjectStatusConfig { Id = "waiting_payment", Name = ProjectStatus.WaitingForPayment, Color = "Warning", IsSystemDefault = false },
-                new ProjectStatusConfig { Id = "discovery", Name = ProjectStatus.Discovery, Color = "Secondary", IsSystemDefault = false },
-                new ProjectStatusConfig { Id = "on_hold", Name = ProjectStatus.OnHold, Color = "Error", IsSystemDefault = false },
-                new ProjectStatusConfig { Id = "completed", Name = ProjectStatus.Completed, Color = "Success", IsSystemDefault = false },
-                new ProjectStatusConfig { Id = "archived", Name = ProjectStatus.Archived, Color = "Dark", IsSystemDefault = false }
-            ];
+            trimmed = "https://" + trimmed;
         }
 
-        if (CalendarCategories == null || !CalendarCategories.Any())
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) || string.IsNullOrWhiteSpace(uri.Host))
         {
-            CalendarCategories = CalendarCategoryDefaults.GetSystemDefaults();
+            return null;
         }
+
+        var host = uri.Host.Trim().TrimEnd('.').ToLowerInvariant();
+        if (host.StartsWith("www.", StringComparison.Ordinal) && host.Length > 4)
+        {
+            host = host[4..];
+        }
+
+        if (!host.Contains('.') ||
+            string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+            IPAddress.TryParse(host, out _))
+        {
+            return null;
+        }
+
+        return host;
+    }
+
+    /// <summary>
+    /// Extracts a normalized domain name (e.g. "acme.com") from an email address or "@domain" string.
+    /// </summary>
+    public static string? ExtractDomainFromEmail(string? emailOrDomain)
+    {
+        if (string.IsNullOrWhiteSpace(emailOrDomain)) return null;
+        var trimmed = emailOrDomain.Trim();
+        var atIndex = trimmed.LastIndexOf('@');
+        var domain = (atIndex >= 0 ? trimmed[(atIndex + 1)..] : trimmed).Trim().TrimEnd('.').ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(domain) || !domain.Contains('.') || domain.Contains(' '))
+        {
+            return null;
+        }
+
+        return domain;
+    }
+
+    /// <summary>
+    /// Returns all distinct custom (non-public) domains configured for this organization across Website,
+    /// Email server presets, and Bill Inbox settings.
+    /// </summary>
+    public IReadOnlyList<string> GetInternalDomains(string? additionalEmailOrDomain = null)
+    {
+        var domains = new List<string>();
+
+        void TryAddDomain(string? candidate)
+        {
+            if (string.IsNullOrWhiteSpace(candidate)) return;
+            if (EmailProviderPresets.IsPublicMailboxDomain(candidate)) return;
+            if (!domains.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+            {
+                domains.Add(candidate);
+            }
+        }
+
+        TryAddDomain(ExtractDomainFromUrl(Website));
+
+        if (EmailSettings?.IncomingServers != null)
+        {
+            foreach (var server in EmailSettings.IncomingServers)
+            {
+                TryAddDomain(ExtractDomainFromEmail(server.Domain));
+            }
+        }
+
+        if (EmailSettings?.SendingServers != null)
+        {
+            foreach (var server in EmailSettings.SendingServers)
+            {
+                TryAddDomain(ExtractDomainFromEmail(server.Domain));
+            }
+        }
+
+        TryAddDomain(ExtractDomainFromEmail(Accounting?.BillInbox?.EmailAddress));
+        TryAddDomain(ExtractDomainFromEmail(additionalEmailOrDomain));
+
+        return domains;
+    }
+
+    /// <summary>
+    /// Returns true if the candidate domain matches one of the organization's configured custom domains.
+    /// </summary>
+    public bool IsInternalDomain(string? candidateDomain, string? additionalEmailOrDomain = null)
+    {
+        var normalized = ExtractDomainFromEmail(candidateDomain);
+        if (string.IsNullOrWhiteSpace(normalized)) return false;
+
+        foreach (var internalDomain in GetInternalDomains(additionalEmailOrDomain))
+        {
+            if (string.Equals(normalized, internalDomain, StringComparison.OrdinalIgnoreCase) ||
+                normalized.EndsWith("." + internalDomain, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns the primary custom domain configured on this profile (e.g. from Website or Email settings),
+    /// or the specified fallback (defaults to "example.com") when unconfigured.
+    /// </summary>
+    public string GetPrimaryDomainOrDefault(string fallback = "example.com")
+    {
+        var internalDomains = GetInternalDomains();
+        return internalDomains.Count > 0 ? internalDomains[0] : fallback;
     }
 }

@@ -1,12 +1,9 @@
 @page "/access-denied"
 @using Spokes_Server.Components.Layout
 @using Microsoft.AspNetCore.Authorization
-@using Microsoft.Extensions.Localization
-@using Spokes_Server.Resources
 @layout LoginLayout
 @attribute [AllowAnonymous]
 @inject NavigationManager Nav
-@inject IStringLocalizer<AppResources> Loc
 
 <PageTitle>@Loc["Access Denied"]</PageTitle>
 

@@ -51,6 +51,31 @@ public class ServerBootCoordinatorTests : TestDataTestBase
     }
 
     [Fact]
+    public async Task InitializeSpokesServerAsync_WhenMasterPasswordUnsetEvenWithLegacyPublicChannelMasterPassword_ThrowsFatalConfigurationException()
+    {
+        Environment.SetEnvironmentVariable("SPOKES_MASTER_PASSWORD", null);
+
+        var services = new ServiceCollection();
+        var mockConfig = new Mock<IConfiguration>();
+        mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns((string?)null);
+        services.AddSingleton<IConfiguration>(mockConfig.Object);
+
+        services.AddLogging(builder => builder.AddConsole());
+        services.AddSingleton<EncryptionService>();
+        services.AddSpokesDatabase();
+        services.AddSingleton<ICryptoService, CryptoService>();
+
+        using var sp = services.BuildServiceProvider();
+        var db = sp.GetRequiredService<Database>();
+        var profile = db.CompanyProfile.GetOrCreate();
+        profile.PublicChannelMasterPassword = "LegacyChannelMasterPassword123!";
+        db.CompanyProfile.Save(profile);
+
+        await Assert.ThrowsAsync<FatalConfigurationException>(() => sp.InitializeSpokesServerAsync());
+    }
+
+    [Fact]
     public async Task InitializeSpokesServerAsync_WhenMasterPasswordConfigured_InitializesSuccessfully()
     {
         Environment.SetEnvironmentVariable("SPOKES_MASTER_PASSWORD", null);

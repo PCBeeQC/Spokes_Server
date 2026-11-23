@@ -1,0 +1,399 @@
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.Common
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Core.Services.HR
+@using Spokes_Server.Core.Services.Security
+@inject IPayrollCalculationEngine PayrollEngine
+@inject IFinancialAccountService FinancialAccountService
+@inject Database Db
+@inject UserService UserService
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudDialog>
+    <DialogContent>
+        @if (!_isInitialized)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+        }
+        else if (!_canReadPayroll)
+        {
+            <MudAlert Severity="Severity.Warning">@BizLoc["You do not have permission to view payroll data."]</MudAlert>
+        }
+        else
+        {
+        @if (_isUnsavedPreview)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                @BizLoc["Preview only — this pay run has not been saved yet. Review or adjust hours below, then click Save Draft or Approve & Post, or click Discard to close without saving."]
+            </MudAlert>
+        }
+
+        <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-3">
+            <div>
+                <MudText Typo="Typo.h6">@(string.IsNullOrWhiteSpace(PayRun.RunNumber) ? BizLoc["Draft Preview"].Value : PayRun.RunNumber) (@PayRun.PeriodStart.ToString("yyyy-MM-dd") → @PayRun.PeriodEnd.ToString("yyyy-MM-dd"))</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @BizLoc["Pay Date:"] @PayRun.PayDate.ToString("yyyy-MM-dd") · @BizLoc["Status:"] <b>@( _isUnsavedPreview ? BizLoc["Unsaved Preview"].Value : PayRun.Status )</b>
+                    @if (CanTrackPayments)
+                    {
+                        <span> · <b>@($"{PayRun.PaidStubsCount}/{PayRun.Stubs.Count}")</b> @BizLoc["Paid"].Value.ToLower()</span>
+                    }
+                </MudText>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                <MudChip T="string" Color="Color.Default" Size="Size.Small">
+                    @BizLoc["Gross:"] @PayRun.TotalGrossPay.ToString("C2")
+                </MudChip>
+                <MudChip T="string" Color="Color.Warning" Size="Size.Small">
+                    @BizLoc["Deductions:"] @PayRun.TotalEmployeeDeductions.ToString("C2")
+                </MudChip>
+                <MudChip T="string" Color="Color.Info" Size="Size.Small">
+                    @BizLoc["Employer Burden:"] @PayRun.TotalEmployerContributions.ToString("C2")
+                </MudChip>
+                <MudChip T="string" Color="Color.Success" Size="Size.Small">
+                    <b>@BizLoc["Net Pay:"] @PayRun.TotalNetPay.ToString("C2")</b>
+                </MudChip>
+            </div>
+        </div>
+
+        <MudTabs Elevation="0" Outlined="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pt-3">
+            <MudTabPanel Text="@BizLoc["Pay Stubs & Breakdown"]" Icon="@Icons.Material.Filled.Payments">
+                @if (CanTrackPayments && PayRun.Stubs.Count > 0)
+                {
+                    <MudPaper Class="pa-2 mb-3 d-flex align-center justify-space-between flex-wrap gap-2" Elevation="0" Outlined="true">
+                        <div class="d-flex align-center flex-wrap gap-2">
+                            <MudChip T="string" Size="Size.Small" Color="@(PayRun.AreAllStubsPaid ? Color.Success : Color.Info)">
+                                @($"{PayRun.PaidStubsCount} / {PayRun.Stubs.Count} {BizLoc["employees paid"].Value}")
+                            </MudChip>
+                            <div style="width: 150px; flex-shrink: 0;">
+                                <MudDatePicker @bind-Date="_paymentDate" Label="@BizLoc["Date Paid"]" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            </div>
+                            <div style="min-width: 220px;">
+                                <FinancialAccountSelect @bind-Value="_paymentAccountGlCode"
+                                                        Label="@BizLoc["Paid From"]"
+                                                        Variant="Variant.Outlined"
+                                                        Margin="Margin.Dense" />
+                            </div>
+                            <MudTextField @bind-Value="_paymentRef" Label="@BizLoc["Ref (e.g. EFT / Cheque)"]" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width: 180px;" />
+                        </div>
+                        <div class="d-flex align-center flex-wrap gap-2">
+                            @if (_selectedStubs.Count > 0)
+                            {
+                                <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.CheckCircle" OnClick="@(() => MarkSelectedStubsPaid(true))">
+                                    @string.Format(BizLoc["Mark {0} Selected Paid"].Value, _selectedStubs.Count)
+                                </MudButton>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small" StartIcon="@Icons.Material.Filled.Undo" OnClick="@(() => MarkSelectedStubsPaid(false))">
+                                    @string.Format(BizLoc["Mark {0} Unpaid"].Value, _selectedStubs.Count)
+                                </MudButton>
+                            }
+                            @if (!PayRun.AreAllStubsPaid)
+                            {
+                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.DoneAll" OnClick="MarkAllStubsPaid">
+                                    @BizLoc["Mark All Paid"]
+                                </MudButton>
+                            }
+                        </div>
+                    </MudPaper>
+                }
+
+                <MudTable Items="@PayRun.Stubs" MultiSelection="@CanTrackPayments" @bind-SelectedItems="_selectedStubs" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh>@BizLoc["Employee"]</MudTh>
+                        <MudTh Style="text-align: right; width: 110px;">@BizLoc["Reg. Hours"]</MudTh>
+                        <MudTh Style="text-align: right; width: 110px;">@BizLoc["Vac. Hours"]</MudTh>
+                        <MudTh Style="text-align: right; width: 120px;">@BizLoc["Bonus / Comm."]</MudTh>
+                        <MudTh Style="text-align: right;">@BizLoc["Gross Pay"]</MudTh>
+                        <MudTh Style="text-align: right;">@BizLoc["Income Tax"]</MudTh>
+                        <MudTh Style="text-align: right;">@BizLoc["Employee DAS"]</MudTh>
+                        <MudTh Style="text-align: right;">@BizLoc["Employer Burden"]</MudTh>
+                        <MudTh Style="text-align: right;">@BizLoc["Net Pay"]</MudTh>
+                        @if (CanTrackPayments)
+                        {
+                            <MudTh Style="text-align: right; min-width: 150px;">@BizLoc["Payment Confirmation"]</MudTh>
+                        }
+                    </HeaderContent>
+                    <RowTemplate Context="stub">
+                        <MudTd>
+                            <MudText Typo="Typo.body2"><b>@stub.EmployeeName</b></MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @string.Join(" · ", stub.StatutoryContributions.Select(c => $"{c.Code}: {c.EmployeeAmount:C2} (ER {c.EmployerAmount:C2})"))
+                            </MudText>
+                        </MudTd>
+                        <MudTd Style="text-align: right;">
+                            @if (_canEditPayroll && PayRun.Status == PayRunStatus.Draft)
+                            {
+                                <MudNumericField T="decimal" @bind-Value="stub.RegularHours" Variant="Variant.Outlined" Margin="Margin.Dense" Format="N1" Min="0" Step="0.5m" />
+                            }
+                            else
+                            {
+                                <span>@stub.RegularHours.ToString("N1") h</span>
+                            }
+                        </MudTd>
+                        <MudTd Style="text-align: right;">
+                            @if (_canEditPayroll && PayRun.Status == PayRunStatus.Draft)
+                            {
+                                <MudNumericField T="decimal" @bind-Value="stub.VacationHoursTaken" Variant="Variant.Outlined" Margin="Margin.Dense" Format="N1" Min="0" Step="0.5m" />
+                            }
+                            else
+                            {
+                                <span>@stub.VacationHoursTaken.ToString("N1") h</span>
+                            }
+                        </MudTd>
+                        <MudTd Style="text-align: right;">
+                            @if (_canEditPayroll && PayRun.Status == PayRunStatus.Draft)
+                            {
+                                <MudNumericField T="decimal" @bind-Value="stub.BonusOrCommission" Variant="Variant.Outlined" Margin="Margin.Dense" Format="N2" Min="0" />
+                            }
+                            else
+                            {
+                                <span>@stub.BonusOrCommission.ToString("C2")</span>
+                            }
+                        </MudTd>
+                        <MudTd Style="text-align: right; font-weight: 600;">@stub.GrossPay.ToString("C2")</MudTd>
+                        <MudTd Style="text-align: right;">@stub.TotalIncomeTaxWithheld.ToString("C2")</MudTd>
+                        <MudTd Style="text-align: right;">@stub.TotalStatutoryEmployeeDeductions.ToString("C2")</MudTd>
+                        <MudTd Style="text-align: right;">@stub.TotalEmployerContributions.ToString("C2")</MudTd>
+                        <MudTd Style="text-align: right; font-weight: 700; color: var(--mud-palette-success);">@stub.NetPay.ToString("C2")</MudTd>
+                        @if (CanTrackPayments)
+                        {
+                            <MudTd Style="text-align: right; white-space: nowrap;">
+                                @if (stub.IsPaid)
+                                {
+                                    <div class="d-flex align-center justify-end gap-1">
+                                        <div style="text-align: right;">
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Icon="@Icons.Material.Filled.CheckCircle">@BizLoc["Paid"]</MudChip>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display: block;">
+                                                @(stub.DatePaid?.ToString("yyyy-MM-dd") ?? "")@(!string.IsNullOrWhiteSpace(stub.PaymentReference) ? $" · {stub.PaymentReference}" : "")
+                                            </MudText>
+                                        </div>
+                                        <MudIconButton Icon="@Icons.Material.Filled.Undo" Size="Size.Small" Color="Color.Default" title="@BizLoc["Mark Unpaid"]" OnClick="@(() => ToggleSingleStubPaid(stub, false))" />
+                                    </div>
+                                }
+                                else
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.Payments" OnClick="@(() => ToggleSingleStubPaid(stub, true))">
+                                        @BizLoc["Mark Paid"]
+                                    </MudButton>
+                                }
+                            </MudTd>
+                        }
+                    </RowTemplate>
+                </MudTable>
+            </MudTabPanel>
+            <MudTabPanel Text="@($"{BizLoc["Audit History"].Value} ({PayRun.History?.Count ?? 0})")" Icon="@Icons.Material.Filled.History">
+                <DocumentHistoryTab Entries="@PayRun.History" />
+            </MudTabPanel>
+        </MudTabs>
+        }
+    </DialogContent>
+    <DialogActions>
+        @if (_canEditPayroll && !_isUnsavedPreview)
+        {
+            <MudButton Color="Color.Error" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Delete" OnClick="DeletePayRun">@Loc["Delete"]</MudButton>
+            <MudSpacer />
+        }
+        <MudButton OnClick="Close">@(_isUnsavedPreview ? BizLoc["Discard"].Value : Loc["Close"].Value)</MudButton>
+        @if (_canEditPayroll && PayRun.Status == PayRunStatus.Draft)
+        {
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Calculate" OnClick="RecalculateAndSave">
+                @(_isUnsavedPreview ? BizLoc["Save Draft"].Value : BizLoc["Recalculate Taxes & Save Draft"].Value)
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.CheckCircle" OnClick="ApproveAndPost">
+                @BizLoc["Approve & Post to General Ledger"]
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public PayRun PayRun { get; set; } = new();
+    [Parameter] public bool IsNewPreview { get; set; }
+
+    private Employee? _currentUser;
+    private bool _isInitialized;
+    private bool _canReadPayroll;
+    private bool _canEditPayroll;
+    private bool _isUnsavedPreview;
+    private bool _wasModified;
+    private HashSet<PayStub> _selectedStubs = [];
+    private DateTime? _paymentDate = DateTime.Today;
+    private string _paymentRef = string.Empty;
+    private string? _paymentAccountGlCode;
+
+    private bool CanTrackPayments =>
+        _canEditPayroll &&
+        (string.Equals(PayRun.Status, PayRunStatus.Finalized, StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(PayRun.Status, PayRunStatus.Paid, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync();
+        _canReadPayroll = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: true);
+        _canEditPayroll = _currentUser != null && _currentUser.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false);
+        _isUnsavedPreview = IsNewPreview;
+        _paymentDate = PayRun.DatePaid ?? PayRun.PayDate;
+        _paymentAccountGlCode = !string.IsNullOrWhiteSpace(PayRun.PaymentBankGlCode)
+            ? PayRun.PaymentBankGlCode
+            : FinancialAccountService.ResolveDefaultGlCodeForMethod(null);
+        _isInitialized = true;
+    }
+
+    private async Task<Employee?> RequirePayrollEditorAsync(string action)
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        if (actor == null || !actor.HasEffectivePermission(AppPermissions.Hr.ManageSalaries, allowSuspended: false))
+        {
+            Snackbar.Add($"Missing required permission to {action}.", Severity.Error);
+            return null;
+        }
+        return actor;
+    }
+
+    private Task ToggleSingleStubPaid(PayStub stub, bool isPaid)
+    {
+        return ApplyStubPaymentUpdate([stub.Id], isPaid);
+    }
+
+    private async Task MarkSelectedStubsPaid(bool isPaid)
+    {
+        var ids = _selectedStubs.Select(s => s.Id).ToList();
+        if (ids.Count == 0) return;
+        await ApplyStubPaymentUpdate(ids, isPaid);
+        _selectedStubs.Clear();
+    }
+
+    private async Task MarkAllStubsPaid()
+    {
+        var ids = PayRun.Stubs.Where(s => !s.IsPaid).Select(s => s.Id).ToList();
+        if (ids.Count == 0) return;
+        await ApplyStubPaymentUpdate(ids, true);
+        _selectedStubs.Clear();
+    }
+
+    private async Task ApplyStubPaymentUpdate(IEnumerable<string> stubIds, bool isPaid)
+    {
+        var actor = await RequirePayrollEditorAsync("update pay stub payment statuses");
+        if (actor == null) return;
+
+        try
+        {
+            PayrollEngine.SetPayStubsPaymentStatus(
+                PayRun,
+                stubIds,
+                isPaid,
+                _paymentDate ?? DateTime.Today,
+                _paymentRef,
+                !string.IsNullOrWhiteSpace(_paymentAccountGlCode) ? _paymentAccountGlCode : FinancialAccountService.ResolveDefaultGlCodeForMethod(null),
+                actor: actor);
+            _wasModified = true;
+            Snackbar.Add(
+                isPaid ? BizLoc["Employee payment status updated."].Value : BizLoc["Marked selected employee payment(s) as unpaid."].Value,
+                Severity.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task DeletePayRun()
+    {
+        var actor = await RequirePayrollEditorAsync("delete pay runs");
+        if (actor == null) return;
+
+        var message = PayRun.Status == PayRunStatus.Draft
+            ? string.Format(BizLoc["Delete draft pay run {0}?"].Value, PayRun.RunNumber)
+            : string.Format(BizLoc["Delete pay run {0}? Any unlocked General Ledger entries for this pay run will be removed."].Value, PayRun.RunNumber);
+
+        var confirm = await DialogService.ShowMessageBoxAsync(
+            Loc["Delete"].Value,
+            message,
+            yesText: Loc["Delete"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        if (confirm != true) return;
+
+        try
+        {
+            PayrollEngine.DeletePayRun(PayRun.Id, actor: actor);
+            Snackbar.Add(BizLoc["Pay run deleted."].Value, Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task RecalculateAndSave()
+    {
+        var actor = await RequirePayrollEditorAsync("save pay runs");
+        if (actor == null) return;
+
+        try
+        {
+            var oldGross = PayRun.TotalGrossPay;
+            var oldNet = PayRun.TotalNetPay;
+            PayrollEngine.RecalculatePayRun(PayRun, actor: actor);
+            if (!_isUnsavedPreview)
+            {
+                var diffs = new List<string>();
+                DocumentHistoryHelper.AddCurrencyDiffIfChanged(diffs, "Gross Pay", oldGross, PayRun.TotalGrossPay);
+                DocumentHistoryHelper.AddCurrencyDiffIfChanged(diffs, "Net Pay", oldNet, PayRun.TotalNetPay);
+                if (diffs.Count > 0)
+                {
+                    DocumentHistoryHelper.RecordFieldEdits(PayRun, diffs);
+                }
+            }
+            PayrollEngine.SavePayRun(PayRun, actor: actor);
+            _isUnsavedPreview = false;
+            _wasModified = true;
+            Snackbar.Add(BizLoc["Pay stubs recalculated and draft saved."].Value, Severity.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task ApproveAndPost()
+    {
+        var actor = await RequirePayrollEditorAsync("finalize pay runs");
+        if (actor == null) return;
+
+        try
+        {
+            PayrollEngine.RecalculatePayRun(PayRun, actor: actor);
+            var posted = PayrollEngine.FinalizePayRun(PayRun, actor: actor);
+            _isUnsavedPreview = false;
+            _wasModified = true;
+            Snackbar.Add(BizLoc["Pay run approved and posted to the General Ledger."].Value, Severity.Success);
+            MudDialog.Close(DialogResult.Ok(posted));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private void Close()
+    {
+        if (_isUnsavedPreview)
+        {
+            MudDialog.Cancel();
+        }
+        else if (_wasModified)
+        {
+            MudDialog.Close(DialogResult.Ok(PayRun));
+        }
+        else
+        {
+            MudDialog.Cancel();
+        }
+    }
+}

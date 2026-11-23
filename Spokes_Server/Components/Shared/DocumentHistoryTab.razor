@@ -1,0 +1,83 @@
+@using Spokes_Server.Core.Models.Common
+
+@if (Entries == null || Entries.Count == 0)
+{
+    <MudPaper Class="pa-6 d-flex flex-column align-center justify-center" Elevation="0" Outlined="true">
+        <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Large" Color="Color.Secondary" Class="mb-2" />
+        <MudText Typo="Typo.body1" Color="Color.Secondary">@BizLoc["No lifecycle history recorded yet."]</MudText>
+    </MudPaper>
+}
+else
+{
+    <MudTable Items="@(Entries.OrderByDescending(e => e.Timestamp))" Dense="true" Hover="true" Outlined="true" Elevation="0">
+        <HeaderContent>
+            <MudTh Style="width: 170px;">@BizLoc["Date & Time"]</MudTh>
+            <MudTh Style="width: 180px;">@BizLoc["Changed By"]</MudTh>
+            <MudTh Style="width: 240px;">@BizLoc["Transition / Action"]</MudTh>
+            <MudTh>@BizLoc["Details & Reason"]</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="@BizLoc["Date & Time"]">
+                <MudText Typo="Typo.body2">@context.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudText>
+            </MudTd>
+            <MudTd DataLabel="@BizLoc["Changed By"]">
+                <div class="d-flex align-center gap-1">
+                    <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Color="Color.Secondary" />
+                    <MudText Typo="Typo.body2">@context.ChangedBy</MudText>
+                </div>
+            </MudTd>
+            <MudTd DataLabel="@BizLoc["Transition / Action"]">
+                @if (!string.IsNullOrWhiteSpace(context.OldStatus) && !string.IsNullOrWhiteSpace(context.NewStatus) && context.OldStatus != context.NewStatus)
+                {
+                    <div class="d-flex align-center gap-1 flex-wrap">
+                        <StatusChip Status="@context.OldStatus" />
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Small" Color="Color.Secondary" />
+                        <StatusChip Status="@context.NewStatus" />
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(context.NewStatus))
+                {
+                    <div class="d-flex align-center gap-2">
+                        <StatusChip Status="@context.NewStatus" />
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">(@GetActionLabel(context.Action))</MudText>
+                    </div>
+                }
+                else
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">@GetActionLabel(context.Action)</MudChip>
+                }
+            </MudTd>
+            <MudTd DataLabel="@BizLoc["Details & Reason"]">
+                @if (!string.IsNullOrWhiteSpace(context.Summary))
+                {
+                    <MudText Typo="Typo.body2">@context.Summary</MudText>
+                }
+                @if (!string.IsNullOrWhiteSpace(context.Reason))
+                {
+                    <MudPaper Class="pa-2 mt-1" Elevation="0" Outlined="true" Style="background-color: var(--mud-palette-background-grey); border-left: 3px solid var(--mud-palette-warning);">
+                        <MudText Typo="Typo.caption" Style="font-weight: 600;">@BizLoc["Reason / Note:"]</MudText>
+                        <MudText Typo="Typo.body2" Style="white-space: pre-wrap;">@context.Reason</MudText>
+                    </MudPaper>
+                }
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<DocumentHistoryEntry>? Entries { get; set; }
+
+    private string GetActionLabel(string action) => action switch
+    {
+        DocumentHistoryActions.Created => BizLoc["Created"].Value,
+        DocumentHistoryActions.StatusChanged => BizLoc["Status Changed"].Value,
+        DocumentHistoryActions.StatusReverted => BizLoc["Status Reverted"].Value,
+        DocumentHistoryActions.EditedInFinal => BizLoc["Edited in Final"].Value,
+        DocumentHistoryActions.Edited => BizLoc["Edited"].Value,
+        DocumentHistoryActions.PaymentRecorded => BizLoc["Payment Recorded"].Value,
+        DocumentHistoryActions.PaymentUpdated => BizLoc["Payment Updated"].Value,
+        DocumentHistoryActions.PaymentDeleted => BizLoc["Payment Deleted"].Value,
+        DocumentHistoryActions.RemittanceRecorded => BizLoc["Remittance Recorded"].Value,
+        _ => action
+    };
+}

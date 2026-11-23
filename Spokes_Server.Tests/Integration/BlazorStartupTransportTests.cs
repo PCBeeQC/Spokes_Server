@@ -93,23 +93,35 @@ public class BlazorStartupTransportTests : IClassFixture<SpokesTestWebApplicatio
         Assert.True(mudCssIdx > prewarmIdx, "Expected prewarmBlazorSocket() to appear in <head> before MudBlazor CSS.");
         Assert.True(blazorJsIdx > prewarmIdx, "Expected prewarmBlazorSocket() to appear before _framework/blazor.web.js.");
 
-        // 2. Custom WebSocket constructor, skipNegotiation, circuitHandlers, and partitioned lazy script loaders
-        Assert.Contains("window.SpokesBlazorWebSocket", html);
-        Assert.Contains("const useDirectWebSocket = Boolean(window.WebSocket) && sessionStorage.getItem('spokes_force_negotiate') !== '1';", html);
-        Assert.Contains("skipNegotiation: true", html);
-        Assert.Contains("WebSocket: window.SpokesBlazorWebSocket", html);
-        Assert.Contains("handleInitialDirectWsFailure", html);
-        Assert.Contains("spokes_force_negotiate", html);
-        Assert.Contains("circuitHandlers: [", html);
-        Assert.Contains("onCircuitOpened()", html);
-        Assert.Contains("window.ensureUploadScriptsLoaded", html);
-        Assert.Contains("window.ensureVoiceScriptsLoaded", html);
-        Assert.Contains("window.ensureRichTextScriptsLoaded", html);
-        Assert.Contains("window.ensureCropperScriptsLoaded", html);
-        Assert.Contains("window.ensureCastScriptsLoaded", html);
-        Assert.Contains("window.scheduleIdleDeferredScripts", html);
+        // 2. App.razor emits compact inline __spokesBootConfig + fingerprinted external spokes-boot.js (never 120KB inline JS)
+        Assert.Contains("window.__spokesBootConfig =", html);
+        var bootScriptMatch = Regex.Match(html, @"<script\s+src=""([^""]*js/spokes-boot[^""]*\.js)""");
+        Assert.True(bootScriptMatch.Success, "Expected fingerprinted spokes-boot.js <script> tag in App.razor HTML.");
+        var bootScriptRes = await client.GetAsync("/" + bootScriptMatch.Groups[1].Value.TrimStart('/'));
+        Assert.Equal(HttpStatusCode.OK, bootScriptRes.StatusCode);
+        Assert.Contains("javascript", bootScriptRes.Content.Headers.ContentType?.MediaType ?? "", StringComparison.OrdinalIgnoreCase);
+        var bootScript = await bootScriptRes.Content.ReadAsStringAsync();
 
-        // 3. Validate syntax of all rendered inline <script> blocks when Node.js is available
+        // 3. Custom WebSocket constructor, skipNegotiation, circuitHandlers, and partitioned lazy script loaders live in spokes-boot.js
+        Assert.Contains("window.SpokesBlazorWebSocket", bootScript);
+        Assert.Contains("window.__abortPendingBlazorSocket", bootScript);
+        Assert.Contains("FailedToNegotiateWithServerError", bootScript);
+        Assert.Contains("spokes:blazor-connected", bootScript);
+        Assert.Contains("const useDirectWebSocket = Boolean(window.WebSocket) && sessionStorage.getItem('spokes_force_negotiate') !== '1';", bootScript);
+        Assert.Contains("skipNegotiation: true", bootScript);
+        Assert.Contains("WebSocket: window.SpokesBlazorWebSocket", bootScript);
+        Assert.Contains("handleInitialDirectWsFailure", bootScript);
+        Assert.Contains("spokes_force_negotiate", bootScript);
+        Assert.Contains("circuitHandlers: [", bootScript);
+        Assert.Contains("onCircuitOpened()", bootScript);
+        Assert.Contains("window.ensureUploadScriptsLoaded", bootScript);
+        Assert.Contains("window.ensureVoiceScriptsLoaded", bootScript);
+        Assert.Contains("window.ensureRichTextScriptsLoaded", bootScript);
+        Assert.Contains("window.ensureCropperScriptsLoaded", bootScript);
+        Assert.Contains("window.ensureCastScriptsLoaded", bootScript);
+        Assert.Contains("window.scheduleIdleDeferredScripts", bootScript);
+
+        // 4. Validate syntax of all rendered inline <script> blocks when Node.js is available
         ValidateInlineScriptsSyntaxIfNodeAvailable(html);
     }
 
@@ -129,14 +141,14 @@ public class BlazorStartupTransportTests : IClassFixture<SpokesTestWebApplicatio
         var unauthMobileLoginHtml = await unauthMobileLogin.Content.ReadAsStringAsync();
         Assert.DoesNotContain("function prewarmBlazorSocket()", unauthMobileLoginHtml);
 
-        // 2. Static /mobile-login-success route must NOT pre-warm /_blazor even if a valid session cookie is present
+        // 2. Static /mobile-login?no_auto=1 route must NOT pre-warm /_blazor even if a valid session cookie is present
         var (sessionCookie, _) = await BootstrapAuthenticatedSessionAsync();
-        var mobileLoginSuccessReq = new HttpRequestMessage(HttpMethod.Get, "/mobile-login-success");
-        mobileLoginSuccessReq.Headers.Add("Cookie", $"Spokes_Session_v3={sessionCookie}");
-        var mobileLoginSuccessRes = await client.SendAsync(mobileLoginSuccessReq);
-        Assert.Equal(HttpStatusCode.OK, mobileLoginSuccessRes.StatusCode);
-        var mobileLoginSuccessHtml = await mobileLoginSuccessRes.Content.ReadAsStringAsync();
-        Assert.DoesNotContain("function prewarmBlazorSocket()", mobileLoginSuccessHtml);
+        var authMobileLoginReq = new HttpRequestMessage(HttpMethod.Get, "/mobile-login?no_auto=1");
+        authMobileLoginReq.Headers.Add("Cookie", $"Spokes_Session_v3={sessionCookie}");
+        var authMobileLoginRes = await client.SendAsync(authMobileLoginReq);
+        Assert.Equal(HttpStatusCode.OK, authMobileLoginRes.StatusCode);
+        var authMobileLoginHtml = await authMobileLoginRes.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("function prewarmBlazorSocket()", authMobileLoginHtml);
     }
 
     [Fact]
@@ -250,14 +262,20 @@ public class BlazorStartupTransportTests : IClassFixture<SpokesTestWebApplicatio
                 Assert.True(assetRes.Headers.TryGetValues("X-Content-Type-Options", out var noSniffVals) && string.Join(",", noSniffVals).Contains("nosniff"));
             }
 
-            var fingerprintedUploadMatch = Regex.Match(setupHtml, @"loadScriptOnce\('([^']*js/upload[^']*\.js)'\)");
-            Assert.True(fingerprintedUploadMatch.Success, "Expected fingerprinted upload.js path in ensureUploadScriptsLoaded.");
+            var fingerprintedBootMatch = Regex.Match(setupHtml, @"<script\s+src=""([^""]*js/spokes-boot[^""]*\.js)""");
+            Assert.True(fingerprintedBootMatch.Success, "Expected fingerprinted spokes-boot.js script tag during setup.");
+            var fingerprintedBootRes = await client.GetAsync("/" + fingerprintedBootMatch.Groups[1].Value.TrimStart('/'));
+            Assert.Equal(HttpStatusCode.OK, fingerprintedBootRes.StatusCode);
+            Assert.Contains("javascript", fingerprintedBootRes.Content.Headers.ContentType?.MediaType ?? "", StringComparison.OrdinalIgnoreCase);
+
+            var fingerprintedUploadMatch = Regex.Match(setupHtml, @"""upload"":""([^""]*js/upload[^""]*\.js)""");
+            Assert.True(fingerprintedUploadMatch.Success, "Expected fingerprinted upload.js path in window.__spokesBootConfig.");
             var fingerprintedUploadRes = await client.GetAsync("/" + fingerprintedUploadMatch.Groups[1].Value.TrimStart('/'));
             Assert.Equal(HttpStatusCode.OK, fingerprintedUploadRes.StatusCode);
             Assert.Contains("javascript", fingerprintedUploadRes.Content.Headers.ContentType?.MediaType ?? "", StringComparison.OrdinalIgnoreCase);
 
-            var fingerprintedQuillMatch = Regex.Match(setupHtml, @"loadScriptOnce\('([^']*lib/quill/quill[^']*\.js)'\)");
-            Assert.True(fingerprintedQuillMatch.Success, "Expected fingerprinted quill.js path in ensureRichTextScriptsLoaded.");
+            var fingerprintedQuillMatch = Regex.Match(setupHtml, @"""quillJs"":""([^""]*lib/quill/quill[^""]*\.js)""");
+            Assert.True(fingerprintedQuillMatch.Success, "Expected fingerprinted quill.js path in window.__spokesBootConfig.");
             var fingerprintedQuillRes = await client.GetAsync("/" + fingerprintedQuillMatch.Groups[1].Value.TrimStart('/'));
             Assert.Equal(HttpStatusCode.OK, fingerprintedQuillRes.StatusCode);
             Assert.Contains("javascript", fingerprintedQuillRes.Content.Headers.ContentType?.MediaType ?? "", StringComparison.OrdinalIgnoreCase);
@@ -320,6 +338,302 @@ public class BlazorStartupTransportTests : IClassFixture<SpokesTestWebApplicatio
             var cfg = db.SystemConfigs.Get();
             cfg.IsSetupComplete = originalIsSetupComplete;
             db.SystemConfigs.Save(cfg);
+        }
+    }
+
+    [Fact]
+    public async Task ReconnectHangGuard_AbortsOrphanedWebSocketAndNeverTriggersBlazorErrorUi()
+    {
+        var (sessionCookie, _) = await BootstrapAuthenticatedSessionAsync();
+        var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var request = new HttpRequestMessage(HttpMethod.Get, "/");
+        request.Headers.Add("Cookie", $"Spokes_Session_v3={sessionCookie}");
+        var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var html = await response.Content.ReadAsStringAsync();
+
+        string? inlineBootConfig = null;
+        foreach (Match m in Regex.Matches(html, @"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", RegexOptions.Singleline | RegexOptions.IgnoreCase))
+        {
+            if (m.Groups[1].Value.Contains("window.__spokesBootConfig =", StringComparison.Ordinal))
+            {
+                inlineBootConfig = m.Groups[1].Value;
+                break;
+            }
+        }
+        Assert.False(string.IsNullOrEmpty(inlineBootConfig), "Expected inline __spokesBootConfig <script> block in App.razor HTML.");
+
+        var bootScriptMatch = Regex.Match(html, @"<script\s+src=""([^""]*js/spokes-boot[^""]*\.js)""");
+        Assert.True(bootScriptMatch.Success, "Expected fingerprinted spokes-boot.js <script> tag in App.razor HTML.");
+        var bootScriptRes = await client.GetAsync("/" + bootScriptMatch.Groups[1].Value.TrimStart('/'));
+        Assert.Equal(HttpStatusCode.OK, bootScriptRes.StatusCode);
+        var bootScriptBody = await bootScriptRes.Content.ReadAsStringAsync();
+        Assert.Contains("window.spokesResume =", bootScriptBody);
+        var mainAppScript = inlineBootConfig + "\n" + bootScriptBody;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "spokes_reconnect_guard_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tempDir, "app_inline.js"), mainAppScript!, Encoding.UTF8);
+
+            var runnerMjs = """
+                import assert from 'node:assert/strict';
+                import fs from 'node:fs';
+                import vm from 'node:vm';
+
+                const appScript = fs.readFileSync('./app_inline.js', 'utf8')
+                    .replace('const RECONNECT_HANG_GUARD_MS = 4000;', 'const RECONNECT_HANG_GUARD_MS = 60;')
+                    .replace('const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];', 'const RETRY_DELAYS_MS = [30, 60, 100];');
+
+                const createdSockets = [];
+                class FakeWebSocket {
+                    constructor(url) {
+                        this.url = url;
+                        this.readyState = 0; // CONNECTING
+                        this.onopen = null;
+                        this.onmessage = null;
+                        this.onerror = null;
+                        this.onclose = null;
+                        this._listeners = { open: [], close: [], error: [], message: [] };
+                        this.closedByCaller = false;
+                        createdSockets.push(this);
+                    }
+                    addEventListener(type, fn) {
+                        if (this._listeners[type]) this._listeners[type].push(fn);
+                    }
+                    removeEventListener(type, fn) {
+                        if (this._listeners[type]) {
+                            this._listeners[type] = this._listeners[type].filter(f => f !== fn);
+                        }
+                    }
+                    close() {
+                        this.closedByCaller = true;
+                        this.readyState = 3; // CLOSED
+                    }
+                }
+                FakeWebSocket.CONNECTING = 0;
+                FakeWebSocket.OPEN = 1;
+                FakeWebSocket.CLOSING = 2;
+                FakeWebSocket.CLOSED = 3;
+
+                const blazorErrorUi = { style: { display: 'none' } };
+                const splashEl = { style: { display: 'none' } };
+                const elements = new Map([
+                    ['blazor-error-ui', blazorErrorUi],
+                    ['startup-splash', splashEl]
+                ]);
+
+                let blazorStartConfig = null;
+                let activeCircuitConnection = null;
+                let reconnectAttemptIndex = 0;
+
+                const windowObj = {
+                    location: { protocol: 'https:', host: 'spokes.elnuage.ca', origin: 'https://spokes.elnuage.ca', href: 'https://spokes.elnuage.ca/chat', pathname: '/chat', search: '', reload() {}, replace() {} },
+                    navigator: { onLine: true, userAgent: 'Mozilla/5.0 Electron' },
+                    document: {
+                        visibilityState: 'visible',
+                        cookie: '',
+                        documentElement: { appendChild() {} },
+                        head: { appendChild() {} },
+                        body: { children: [], appendChild() {} },
+                        createElement() { return { style: {} }; },
+                        addEventListener() {},
+                        getElementById(id) { return elements.get(id) || null; },
+                        querySelector(sel) { return sel === '#blazor-error-ui' ? blazorErrorUi : null; },
+                        querySelectorAll() { return []; }
+                    },
+                    sessionStorage: {
+                        _map: new Map(),
+                        getItem(k) { return this._map.has(k) ? this._map.get(k) : null; },
+                        setItem(k, v) { this._map.set(k, String(v)); },
+                        removeItem(k) { this._map.delete(k); }
+                    },
+                    localStorage: {
+                        getItem() { return null; },
+                        setItem() {},
+                        removeItem() {}
+                    },
+                    performance: { timeOrigin: Date.now(), getEntriesByType() { return []; } },
+                    WebSocket: FakeWebSocket,
+                    MutationObserver: class { observe() {} disconnect() {} },
+                    AbortController,
+                    CustomEvent: class CustomEvent { constructor(type) { this.type = type; } },
+                    Event: class Event { constructor(type) { this.type = type; } },
+                    Response: class Response { constructor(body, init) { this._body = body; this.status = init?.status || 200; this.ok = this.status >= 200 && this.status < 300; } },
+                    Request: class Request { constructor(url) { this.url = url; } },
+                    fetch: async (url) => ({
+                        ok: true,
+                        status: 200,
+                        headers: { get(h) { return h.toLowerCase() === 'content-type' ? 'application/json' : null; } },
+                        async json() { return {}; }
+                    }),
+                    addEventListener() {},
+                    dispatchEvent() {},
+                    checkIsCapacitorNative() { return false; },
+                    requestAnimationFrame(cb) { setTimeout(cb, 0); },
+                    setTimeout,
+                    clearTimeout,
+                    console,
+                    Date,
+                    Promise,
+                    URL,
+                    JSON,
+                    Math,
+                    ArrayBuffer,
+                    String,
+                    Number,
+                    Boolean,
+                    Error
+                };
+                windowObj.window = windowObj;
+                windowObj.self = windowObj;
+
+                // Emulate .NET 9/10 blazor.web.js CircuitManager.startConnection() + CircuitManager.reconnect()
+                windowObj.Blazor = {
+                    start(config) {
+                        blazorStartConfig = config;
+                        return Promise.resolve();
+                    },
+                    addEventListener() {},
+                    async reconnect() {
+                        const attemptNo = ++reconnectAttemptIndex;
+                        let wsCtor = windowObj.WebSocket;
+                        const builder = {
+                            withUrl(url, opts) {
+                                if (opts && opts.WebSocket) wsCtor = opts.WebSocket;
+                                return this;
+                            },
+                            withServerTimeout() { return this; },
+                            withKeepAliveInterval() { return this; },
+                            configureLogging() { return this; },
+                            build() {
+                                const conn = {
+                                    state: 'Disconnected',
+                                    async start() {
+                                        const ws = new wsCtor('wss://spokes.elnuage.ca/_blazor');
+                                        await new Promise((resolve, reject) => {
+                                            ws.onopen = () => {
+                                                conn.state = 'Connected';
+                                                resolve();
+                                            };
+                                            ws.onclose = (ev) => {
+                                                conn.state = 'Disconnected';
+                                                reject(new Error(`WebSocket closed with status code: ${ev?.code || 1006} (${ev?.reason || 'no reason given'}).`));
+                                            };
+                                            // Attempt #1 hangs past RECONNECT_HANG_GUARD_MS (60ms); Attempt #2 opens in 10ms
+                                            if (attemptNo >= 2) {
+                                                setTimeout(() => {
+                                                    if (ws.onopen) ws.onopen({ type: 'open' });
+                                                }, 10);
+                                            }
+                                        });
+                                    },
+                                    async stop() {
+                                        if (this.state === 'Connected') {
+                                            this.state = 'Disconnected';
+                                            blazorStartConfig.circuit.reconnectionHandler.onConnectionDown({}, new Error('Stopped by unhandledError'));
+                                        }
+                                    }
+                                };
+                                return conn;
+                            }
+                        };
+
+                        blazorStartConfig.circuit.configureSignalR(builder);
+                        const n = builder.build();
+                        try {
+                            await n.start();
+                        } catch (e) {
+                            // Exact blazor.web.js CircuitManager.startConnection() catch block:
+                            if (activeCircuitConnection) {
+                                await activeCircuitConnection.stop();
+                            }
+                            if (e.errorType === 'FailedToNegotiateWithServerError') {
+                                throw e;
+                            }
+                            // $o() in blazor.web.js:
+                            blazorErrorUi.style.display = 'block';
+                            return false;
+                        }
+                        activeCircuitConnection = n;
+                        blazorStartConfig.circuit.reconnectionHandler.onConnectionUp();
+                        return true;
+                    }
+                };
+
+                vm.createContext(windowObj);
+                vm.runInContext(appScript, windowObj);
+                await new Promise(r => setTimeout(r, 20));
+                assert.ok(blazorStartConfig, 'Expected Blazor.start() to be called by runStartup()');
+
+                // Mark initial circuit opened
+                blazorStartConfig.circuit.circuitHandlers[0].onCircuitOpened();
+                assert.equal(windowObj._blazorCircuitEverOpened, true);
+
+                // Trigger connection drop (like Drop #7 in the user's voice call)
+                blazorStartConfig.circuit.reconnectionHandler.onConnectionDown({}, new Error('WebSocket closed with status code: 1006'));
+
+                // Wait for Attempt #1 to time out at ~60ms, abort Socket #1, and Attempt #2 to succeed after the 30ms retry delay
+                await new Promise(r => setTimeout(r, 220));
+
+                assert.equal(reconnectAttemptIndex, 2, 'Expected Attempt #1 to time out and Attempt #2 to succeed');
+                assert.equal(createdSockets.length, 2, 'Expected 2 WebSocket instances across the 2 attempts');
+                const socket1 = createdSockets[0];
+                assert.equal(socket1.closedByCaller, true, 'Socket #1 from timed-out Attempt #1 must be explicitly closed by __abortPendingBlazorSocket');
+                assert.equal(socket1.onclose, null, 'Socket #1 onclose handler must be detached on timeout');
+
+                // Simulate the network/proxy finally delivering a late 1006 close on Socket #1 AFTER Attempt #2 has already connected
+                if (typeof socket1.onclose === 'function') {
+                    socket1.onclose({ code: 1006, reason: 'late proxy close', wasClean: false });
+                }
+                await new Promise(r => setTimeout(r, 30));
+
+                assert.equal(blazorErrorUi.style.display, 'none', '#blazor-error-ui must NEVER be shown when a reconnect attempt times out or fails with 1006');
+                assert.equal(activeCircuitConnection.state, 'Connected', 'Attempt #2 connection must remain Connected and not be torn down by Attempt #1');
+                assert.equal(windowObj._blazorDisconnected, false, 'Circuit must remain connected');
+
+                // Verify that on Spokes Desktop (isDesktop === true), a background ServerView (_spokesHostViewActive === false)
+                // reconnects its Blazor circuit immediately when a 1006 drop occurs so the circuit never expires after 3 minutes.
+                windowObj.SpokesBridge = { isDesktop: true };
+                windowObj._spokesHostViewActive = false;
+                blazorStartConfig.circuit.reconnectionHandler.onConnectionDown({}, new Error('WebSocket closed with status code: 1006'));
+                await new Promise(r => setTimeout(r, 40));
+                assert.equal(reconnectAttemptIndex, 3, 'Background Desktop ServerView must reconnect immediately on 1006 drop');
+                assert.equal(windowObj._blazorDisconnected, false, 'Background Desktop ServerView circuit must be restored');
+                assert.equal(splashEl.style.display, 'none', 'Background Desktop ServerView must not display splash overlay');
+
+                console.log('RECONNECT_HANG_GUARD_TEST_OK');
+                """;
+
+            await File.WriteAllTextAsync(Path.Combine(tempDir, "runner.mjs"), runnerMjs, Encoding.UTF8);
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "node",
+                Arguments = "runner.mjs",
+                WorkingDirectory = tempDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var proc = Process.Start(psi)!;
+            string stdout = await proc.StandardOutput.ReadToEndAsync();
+            string stderr = await proc.StandardError.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+
+            Assert.True(proc.ExitCode == 0, $"Node reconnect hang guard test failed (exit {proc.ExitCode}):\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+            Assert.Contains("RECONNECT_HANG_GUARD_TEST_OK", stdout);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
         }
     }
 

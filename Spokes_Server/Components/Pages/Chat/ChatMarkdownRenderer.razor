@@ -10,10 +10,14 @@
 <div class="chat-markdown">
     @((MarkupString)_cachedHtml)
 </div>
+@{
+    _shouldRender = false;
+}
 
 @code {
     [Parameter] public string Content { get; set; } = "";
-    [Parameter] public string? FullContent { get; set; }
+    [Parameter] public ChatTextRef? FullContentRef { get; set; }
+    [Parameter] public string? MessageId { get; set; }
     [Parameter] public string? CurrentUserId { get; set; }
     [Parameter] public string? ChannelId { get; set; }
     [Parameter] public string? SessionId { get; set; }
@@ -22,17 +26,32 @@
     [Parameter]
     public string? ChannelKey { get; set; }
 
+    /// <summary>
+    /// Maximum character length of truncated code block content inlined directly into the DOM's
+    /// data-raw-code attribute. Larger collapsed blocks are fetched on demand on Copy click so
+    /// multi-hundred-KB pasted logs never bloat SignalR RenderBatches on channel open.
+    /// </summary>
+    public const int MaxInlineRawCodeChars = 8192;
+
     private string _cachedHtml = "";
     private string _lastContent = "";
+    private string? _lastFullContent;
+    private string? _lastMessageId;
     private bool _lastIsEdited;
     private string? _lastChannelKey;
     private string? _lastChannelId;
     private string? _lastSessionId;
+    private bool _shouldRender = true;
+
+    protected override bool ShouldRender() => _shouldRender;
 
     protected override void OnParametersSet()
     {
+        var fullContent = FullContentRef?.Value;
         // Re-render markdown only if the content, edit status, or channel/session signing context changes
         if (_lastContent != Content ||
+            _lastFullContent != fullContent ||
+            _lastMessageId != MessageId ||
             _lastIsEdited != IsEdited ||
             _lastChannelKey != ChannelKey ||
             _lastChannelId != ChannelId ||
@@ -40,10 +59,13 @@
         {
             _cachedHtml = RenderMarkdown(Content);
             _lastContent = Content;
+            _lastFullContent = fullContent;
+            _lastMessageId = MessageId;
             _lastIsEdited = IsEdited;
             _lastChannelKey = ChannelKey;
             _lastChannelId = ChannelId;
             _lastSessionId = SessionId;
+            _shouldRender = true;
         }
     }
 
@@ -152,7 +174,9 @@
     }
 
     // Matches [code]...[/code] and [code=language]...[/code]
-    private static readonly Regex CodeBlockRegex = new(@"\[code(?:=([^\]]+))?\](.*?)\[/code\]", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+    public static readonly Regex CodeBlockRegex = new(@"\[code(?:=([^\]]+))?\](.*?)\[/code\]", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+    private static readonly Regex PreBlockRegex = new(@"<pre>(.*?)</pre>", RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex SpokesMarkerRegex = new(@"SPOKES_MARKER_([a-zA-Z0-9]+)", RegexOptions.Compiled);
 
     private string RenderMarkdown(string content)
     {
@@ -161,146 +185,181 @@
 
         try
         {
-            Dictionary<string, string> codeMap = [];
-            int matchIndex = 0;
-            MatchCollection? fullMatches = null;
-            if (!string.IsNullOrEmpty(FullContent))
+            Dictionary<string, (string Code, int BlockIndex)>? codeMap = null;
+            var processed = content;
+
+            if (processed.Contains("[code", StringComparison.OrdinalIgnoreCase))
             {
-                fullMatches = CodeBlockRegex.Matches(FullContent);
+                codeMap = [];
+                int matchIndex = 0;
+                MatchCollection? fullMatches = null;
+                var fullContent = FullContentRef?.Value;
+                if (!string.IsNullOrEmpty(fullContent))
+                {
+                    fullMatches = CodeBlockRegex.Matches(fullContent);
+                }
+
+                // Replace [code]...[/code] with robust 10-backtick Markdown fences
+                processed = CodeBlockRegex.Replace(processed, match =>
+                {
+                    var language = match.Groups[1].Success && !string.IsNullOrWhiteSpace(match.Groups[1].Value) ? match.Groups[1].Value : "csharp";
+                    var displayedCode = match.Groups[2].Value;
+                    int currentBlockIndex = matchIndex;
+                    var fullCode = (fullMatches != null && currentBlockIndex < fullMatches.Count)
+                        ? fullMatches[currentBlockIndex].Groups[2].Value
+                        : displayedCode;
+                    matchIndex++;
+
+                    // Only store raw code in codeMap when the displayed code was truncated relative to FullContent
+                    if (!string.Equals(fullCode, displayedCode, StringComparison.Ordinal))
+                    {
+                        var hashBytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(fullCode));
+                        var id = Convert.ToHexString(hashBytes).ToLowerInvariant();
+                        codeMap[id] = (fullCode, currentBlockIndex);
+                        return $"\n``````````{language}\nSPOKES_MARKER_{id}\n{displayedCode}\n``````````\n";
+                    }
+
+                    return $"\n``````````{language}\n{displayedCode}\n``````````\n";
+                });
             }
 
-            // Replace [code]...[/code] with robust 10-backtick Markdown fences
-            var processed = CodeBlockRegex.Replace(content, match =>
-            {
-                var language = match.Groups[1].Success && !string.IsNullOrWhiteSpace(match.Groups[1].Value) ? match.Groups[1].Value : "csharp";
-                
-                // Extract full code content if available, otherwise use truncated content
-                var codeContent = (fullMatches != null && matchIndex < fullMatches.Count) 
-                    ? fullMatches[matchIndex].Groups[2].Value 
-                    : match.Groups[2].Value;
-                matchIndex++;
-
-                // Use a deterministic hash based on the code content so the cache can hit
-                using var md5 = System.Security.Cryptography.MD5.Create();
-                var hashBytes = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(codeContent));
-                var id = Convert.ToHexString(hashBytes).ToLowerInvariant();
-                
-                codeMap[id] = codeContent;
-
-                // Add a newline before and after to ensure it is treated as a block.
-                // Insert a unique marker so we can inject the raw code into the copy button later.
-                return $"\n``````````{language}\nSPOKES_MARKER_{id}\n{match.Groups[2].Value}\n``````````\n";
-            });
-
             // Replace @[Name] mention tokens with styled spans
-            processed = MentionRegex.Replace(processed, match =>
+            if (processed.Contains("@[", StringComparison.Ordinal))
             {
-                var displayName = match.Groups[1].Value;
-                // Look up the employee by display name to check if it's the current user
-                var employee = Employees.FirstOrDefault(e =>
-    e.FullName.Equals(displayName, StringComparison.OrdinalIgnoreCase));
-                var isSelf = employee != null && employee.Id == CurrentUserId;
+                processed = MentionRegex.Replace(processed, match =>
+                {
+                    var displayName = match.Groups[1].Value;
+                    var employee = Employees.FirstOrDefault(e =>
+                        e.FullName.Equals(displayName, StringComparison.OrdinalIgnoreCase));
+                    var isSelf = employee != null && employee.Id == CurrentUserId;
+                    var isTeam = employee == null;
 
-                // Check if it's a team mention (no matching employee)
-                var isTeam = employee == null;
-
-                string cssClass;
-                if (isSelf) cssClass = "mention mention-self";
-                else if (isTeam) cssClass = "mention mention-team";
-                else cssClass = "mention";
-
-                return $"<span class=\"{cssClass}\">@{System.Net.WebUtility.HtmlEncode(displayName)}</span>";
-            });
+                    string cssClass = isSelf ? "mention mention-self" : (isTeam ? "mention mention-team" : "mention");
+                    return $"<span class=\"{cssClass}\">@{System.Net.WebUtility.HtmlEncode(displayName)}</span>";
+                });
+            }
 
             // Replace @everyone with highlighted span
-            processed = EveryoneMentionRegex.Replace(processed,
-            "<span class=\"mention mention-special\">@everyone</span>");
+            if (processed.Contains("@everyone", StringComparison.Ordinal))
+            {
+                processed = EveryoneMentionRegex.Replace(processed,
+                    "<span class=\"mention mention-special\">@everyone</span>");
+            }
 
             // Replace #[Title](type:Id) with styled pill
-            processed = EntityTagRegex.Replace(processed, match =>
+            if (processed.Contains("#[", StringComparison.Ordinal))
             {
-                var title = System.Net.WebUtility.HtmlEncode(match.Groups[1].Value);
-                var type = match.Groups[2].Value.ToLowerInvariant();
-                
-                if (type == "album" || type == "event" || type == "poll")
+                processed = EntityTagRegex.Replace(processed, match =>
                 {
-                    return string.Empty;
-                }
-                
-                string icon = type switch
-                {
-                    "project" => "📁",
-                    "quote" => "📄",
-                    "invoice" => "🧾",
-                    _ => "📎"
-                };
+                    var title = System.Net.WebUtility.HtmlEncode(match.Groups[1].Value);
+                    var type = match.Groups[2].Value.ToLowerInvariant();
+                    
+                    if (type == "album" || type == "event" || type == "poll")
+                    {
+                        return string.Empty;
+                    }
+                    
+                    string icon = type switch
+                    {
+                        "project" => "📁",
+                        "quote" => "📄",
+                        "invoice" => "🧾",
+                        _ => "📎"
+                    };
 
-                return $"<span class=\"mention\" style=\"background-color: color-mix(in srgb, var(--mud-palette-info) 15%, transparent); color: var(--mud-palette-info);\">{icon} {title}</span>";
-            });
+                    return $"<span class=\"mention\" style=\"background-color: color-mix(in srgb, var(--mud-palette-info) 15%, transparent); color: var(--mud-palette-info);\">{icon} {title}</span>";
+                });
+            }
 
             var html = MarkdownSanitizer.RenderSanitizedHtml(processed);
 
             // Apply GIF Aspect Ratio Skeletons and Klipy Watermarks
-            html = ImgRegex.Replace(html, match =>
+            if (html.Contains("<img", StringComparison.OrdinalIgnoreCase))
             {
-                var beforeSrc = match.Groups[1].Value;
-                var rawUrl = match.Groups[2].Value;
-                var afterSrc = match.Groups[3].Value;
-
-                rawUrl = TrySignChatFileUrl(
-                    rawUrl,
-                    ChannelId,
-                    CurrentUserId,
-                    SessionId ?? CircuitContext?.SessionId,
-                    ChannelKey,
-                    FileTokens);
-
-                bool isKlipy = rawUrl.Contains("klipy.com", StringComparison.OrdinalIgnoreCase) || rawUrl.Contains("klipy.co", StringComparison.OrdinalIgnoreCase);
-                string watermarkHtml = isKlipy ? @"<img src=""/Klipy/KLIPY Light with logo.svg"" class=""klipy-watermark"" style=""position: absolute; bottom: 8px; left: 8px; width: 60px; height: auto; opacity: 0.9; pointer-events: none; border-radius: 0; margin: 0; padding: 0; box-shadow: none;"" alt=""Klipy Watermark"" />" : "";
-
-                var fragmentMatch = Regex.Match(rawUrl, @"#ar=([0-9.]+)");
-                if (fragmentMatch.Success)
+                html = ImgRegex.Replace(html, match =>
                 {
-                    var arStr = fragmentMatch.Groups[1].Value;
-                    var cleanUrl = rawUrl.Replace(fragmentMatch.Value, "");
-                    return $@"<span class=""gif-container"" style=""position: relative; display: inline-block; width: 100%; max-width: 350px; aspect-ratio: {arStr}; background-color: var(--mud-palette-background-grey); border-radius: 8px; overflow: hidden;""><img{beforeSrc}src=""{cleanUrl}""{afterSrc} style=""position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.3s ease-in-out;"" onload=""this.style.opacity='1'; this.parentElement.style.backgroundColor='transparent';"">{watermarkHtml}</span>";
-                }
-                else if (isKlipy)
-                {
-                    // Fallback for legacy klipy GIFs without aspect ratio
-                    return $@"<span class=""klipy-gif-container"" style=""position: relative; display: inline-block; width: fit-content;""><img{beforeSrc}src=""{rawUrl}""{afterSrc}>{watermarkHtml}</span>";
-                }
+                    var beforeSrc = match.Groups[1].Value;
+                    var rawUrl = match.Groups[2].Value;
+                    var afterSrc = match.Groups[3].Value;
 
-                return $@"<img{beforeSrc}src=""{rawUrl}""{afterSrc}>";
-            });
+                    var signedUrl = TrySignChatFileUrl(
+                        rawUrl,
+                        ChannelId,
+                        CurrentUserId,
+                        SessionId ?? CircuitContext?.SessionId,
+                        ChannelKey,
+                        FileTokens);
 
-            // Wrap <pre> blocks with a modern container and a Copy button
-            html = Regex.Replace(html, @"<pre>(.*?)</pre>", match =>
-            {
-                var preContent = match.Groups[1].Value;
-                var markerMatch = Regex.Match(preContent, @"SPOKES_MARKER_([a-zA-Z0-9]+)");
-                string rawCode = "";
-                if (markerMatch.Success)
-                {
-                    var id = markerMatch.Groups[1].Value;
-                    if (codeMap.TryGetValue(id, out var mappedCode))
+                    bool isSignedSameOriginChatFile = !string.Equals(signedUrl, rawUrl, StringComparison.Ordinal)
+                        || (signedUrl.StartsWith("/spokesapi/files/chat/", StringComparison.Ordinal) && signedUrl.Contains("t=", StringComparison.Ordinal));
+                    rawUrl = signedUrl;
+
+                    bool isKlipy = rawUrl.Contains("klipy.com", StringComparison.OrdinalIgnoreCase) || rawUrl.Contains("klipy.co", StringComparison.OrdinalIgnoreCase);
+                    string watermarkHtml = isKlipy ? @"<img src=""/Klipy/KLIPY Light with logo.svg"" class=""klipy-watermark"" alt=""Klipy Watermark"" />" : "";
+
+                    var fragmentMatch = Regex.Match(rawUrl, @"#ar=([0-9.]+)");
+                    if (fragmentMatch.Success)
                     {
-                        rawCode = mappedCode;
+                        var arStr = fragmentMatch.Groups[1].Value;
+                        var cleanUrl = rawUrl.Replace(fragmentMatch.Value, "");
+                        if (isSignedSameOriginChatFile)
+                        {
+                            var encAttr = !string.IsNullOrEmpty(ChannelKey) ? @" data-media-encrypted=""true""" : "";
+                            return $@"<span class=""gif-container"" style=""aspect-ratio: {arStr};""><img{beforeSrc}data-media-src=""{cleanUrl}"" data-media-priority=""chat""{encAttr}{afterSrc} onload=""this.style.opacity='1'; this.parentElement.style.backgroundColor='transparent';"">{watermarkHtml}</span>";
+                        }
+                        return $@"<span class=""gif-container"" style=""aspect-ratio: {arStr};""><img{beforeSrc}src=""{cleanUrl}""{afterSrc} onload=""this.style.opacity='1'; this.parentElement.style.backgroundColor='transparent';"">{watermarkHtml}</span>";
                     }
-                    // Remove the marker and any optional trailing ColorCode span/newline so it's invisible
-                    preContent = Regex.Replace(preContent, $@"<span[^>]*>SPOKES_MARKER_{id}</span>\r?\n?", "");
-                    preContent = Regex.Replace(preContent, $@"SPOKES_MARKER_{id}\r?\n?", "");
-                }
+                    else if (isKlipy)
+                    {
+                        // Fallback for legacy klipy GIFs without aspect ratio
+                        return $@"<span class=""klipy-gif-container""><img{beforeSrc}src=""{rawUrl}""{afterSrc}>{watermarkHtml}</span>";
+                    }
 
-                var encodedData = System.Net.WebUtility.HtmlEncode(rawCode);
-                
-                var copyLabel = Loc["Copy"].Value;
-                var copiedLabel = Loc["Copied"].Value;
-                return $@"<div class=""code-block-wrapper"">
-                <button class=""copy-code-btn"" onclick=""var code = this.getAttribute('data-raw-code'); if(!code) {{ var target = this.parentElement.querySelector('code') || this.parentElement.querySelector('pre'); code = target ? target.textContent : ''; }} if (window.spokesCopyText) {{ window.spokesCopyText(code); }} else {{ navigator.clipboard.writeText(code); }} var originalText = this.innerHTML; this.innerHTML = '<svg style=\'width:14px;height:14px;margin-right:4px;fill:currentColor;\' viewBox=\'0 0 24 24\'><path d=\'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z\'/></svg>{copiedLabel}'; setTimeout(() => this.innerHTML = originalText, 2000);"" data-raw-code=""{encodedData}"">
-                    <svg style=""width:14px;height:14px;margin-right:4px;fill:currentColor;"" viewBox=""0 0 24 24""><path d=""M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z""/></svg>{copyLabel}
-                </button><pre>{preContent}</pre></div>";
-            }, RegexOptions.Singleline);
+                    if (isSignedSameOriginChatFile)
+                    {
+                        var encAttr = !string.IsNullOrEmpty(ChannelKey) ? @" data-media-encrypted=""true""" : "";
+                        return $@"<img{beforeSrc}data-media-src=""{rawUrl}"" data-media-priority=""chat""{encAttr}{afterSrc}>";
+                    }
+
+                    return $@"<img{beforeSrc}src=""{rawUrl}""{afterSrc}>";
+                });
+            }
+
+            // Wrap <pre> blocks with a modern container and a declarative Copy button
+            // (click handling is delegated globally by window.spokesCopyCodeButton in spokesbridge.js).
+            if (html.Contains("<pre>", StringComparison.Ordinal))
+            {
+                var copyLabel = System.Net.WebUtility.HtmlEncode(Loc["Copy"].Value);
+                var copiedLabel = System.Net.WebUtility.HtmlEncode(Loc["Copied"].Value);
+                html = PreBlockRegex.Replace(html, match =>
+                {
+                    var preContent = match.Groups[1].Value;
+                    string rawCodeAttr = "";
+                    if (codeMap is { Count: > 0 } && preContent.Contains("SPOKES_MARKER_", StringComparison.Ordinal))
+                    {
+                        var markerMatch = SpokesMarkerRegex.Match(preContent);
+                        if (markerMatch.Success)
+                        {
+                            var id = markerMatch.Groups[1].Value;
+                            if (codeMap.TryGetValue(id, out var mappedEntry) && !string.IsNullOrEmpty(mappedEntry.Code))
+                            {
+                                if (mappedEntry.Code.Length <= MaxInlineRawCodeChars)
+                                {
+                                    rawCodeAttr = $@" data-raw-code=""{System.Net.WebUtility.HtmlEncode(mappedEntry.Code)}""";
+                                }
+                                else if (!string.IsNullOrEmpty(MessageId))
+                                {
+                                    rawCodeAttr = $@" data-copy-msg-id=""{System.Net.WebUtility.HtmlEncode(MessageId)}"" data-copy-code-idx=""{mappedEntry.BlockIndex}""";
+                                }
+                            }
+                            preContent = Regex.Replace(preContent, $@"<span[^>]*>SPOKES_MARKER_{id}</span>\r?\n?", "");
+                            preContent = Regex.Replace(preContent, $@"SPOKES_MARKER_{id}\r?\n?", "");
+                        }
+                    }
+
+                    return $@"<div class=""code-block-wrapper""><button type=""button"" class=""copy-code-btn"" data-copied-label=""{copiedLabel}""{rawCodeAttr}><svg class=""copy-code-icon"" viewBox=""0 0 24 24"" aria-hidden=""true""><use href=""#spokes-icon-copy"" /></svg>{copyLabel}</button><pre>{preContent}</pre></div>";
+                });
+            }
 
             if (IsEdited)
             {

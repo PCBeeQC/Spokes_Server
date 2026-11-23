@@ -51,6 +51,7 @@ public class PushControllerTests : TestDataTestBase
     {
         _mockConfig = new Mock<IConfiguration>();
         _mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        _mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
         _writer = new DiskPersistenceService(mockLogger.Object);
@@ -60,14 +61,13 @@ public class PushControllerTests : TestDataTestBase
         _companyRepo = new CompanyProfileRepository(_writer, _mockConfig.Object);
         _openIdRepo = new OpenIdAccountRepository(_writer, _mockConfig.Object);
 
-        var mockPresenceState = new Mock<PresenceStateService>(new ChatStateService());
+        var mockPresenceState = new Mock<PresenceStateService>(new VoiceStateService());
         var mockWebPushLogger = new Mock<ILogger<WebPushService>>();
         var mockHttpClientFactory = new Mock<IHttpClientFactory>();
         var systemConfigRepo = new SystemConfigRepository(_writer, _mockConfig.Object);
         _serverConfigRepo = new ServerConfigRepository(_writer, _mockConfig.Object);
         _licenseValidation = new LicenseValidationService(
-            new Mock<ILogger<LicenseValidationService>>().Object,
-            new VersionMetadata("2026.8.102"));
+            new Mock<ILogger<LicenseValidationService>>().Object);
         var services = new ServiceCollection();
         services.AddDataProtection().UseEphemeralDataProtectionProvider();
         var sp = services.BuildServiceProvider();
@@ -81,7 +81,6 @@ public class PushControllerTests : TestDataTestBase
             mockPresenceState.Object,
             new NotificationQueueService(new Mock<ILogger<NotificationQueueService>>().Object, _writer, _mockConfig.Object, _companyRepo),
             mockWebPushLogger.Object,
-            _mockConfig.Object,
             mockHttpClientFactory.Object,
             new Mock<ISystemLogService>().Object,
             _licenseValidation,
@@ -105,6 +104,12 @@ public class PushControllerTests : TestDataTestBase
                 HttpContext = new DefaultHttpContext()
             }
         };
+    }
+
+    private static string CreateValidRsaPublicKeyBase64()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        return Convert.ToBase64String(rsa.ExportSubjectPublicKeyInfo());
     }
 
     private void SetUser(string sub)
@@ -190,7 +195,6 @@ public class PushControllerTests : TestDataTestBase
         return new NotificationRoutingService(
             commContext.Object,
             hrContext.Object,
-            projectsContext.Object,
             coreContext.Object,
             _webPushService,
             new NotificationQueueService(new Mock<ILogger<NotificationQueueService>>().Object, _writer, _mockConfig.Object, _companyRepo),
@@ -199,29 +203,6 @@ public class PushControllerTests : TestDataTestBase
             _dataProtection,
             mockChatAccess.Object,
             logger: new Mock<ILogger<NotificationRoutingService>>().Object);
-    }
-
-    // ==========================================
-    // GetVapidPublicKey Tests
-    // ==========================================
-
-    [Fact]
-    public void GetVapidPublicKey_ReturnsBadRequest_WhenNotConfigured()
-    {
-        var result = _controller.GetVapidPublicKey();
-        var badRequestResult = Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Contains("Push notifications not configured", badRequestResult.Value?.ToString());
-    }
-
-    [Fact]
-    public void GetVapidPublicKey_ReturnsKey_WhenConfigured()
-    {
-        var profile = new CompanyProfile { VapidPublicKey = "key123", VapidPrivateKey = "priv123" };
-        _companyRepo.Save(profile);
-
-        var result = _controller.GetVapidPublicKey();
-        var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Contains("key123", okResult.Value?.ToString());
     }
 
     // ==========================================
@@ -432,7 +413,8 @@ public class PushControllerTests : TestDataTestBase
             Endpoint = "https://relay.spokes.com/api/push/send",
             SubscriptionType = PushSubscriptionType.NativeRelay,
             DeviceType = "iOS",
-            DeviceId = "native_dev_1"
+            DeviceId = "native_dev_1",
+            PublicKey = CreateValidRsaPublicKeyBase64()
         };
 
         var result = _controller.Subscribe(req);
@@ -568,55 +550,6 @@ public class PushControllerTests : TestDataTestBase
         var value = okResult.Value?.ToString();
         Assert.Contains("isConfigured", value);
         Assert.Contains("nativePush", value);
-    }
-
-    // ==========================================
-    // GetDevices Tests
-    // ==========================================
-
-    [Fact]
-    public void GetDevices_ReturnsUnauthorized_WhenNotAuthenticated()
-    {
-        _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity());
-        var result = _controller.GetDevices();
-        var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
-        var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
-        Assert.False(payload.IsSuccess);
-    }
-
-    [Fact]
-    public void GetDevices_ReturnsActiveDevicesForCurrentUser()
-    {
-        _empRepo.Save(new Employee { Id = "emp1" });
-        _empRepo.Save(new Employee { Id = "emp2" });
-        _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
-        _sessionRepo.Save(new DeviceSession { Id = "d1", EmployeeId = "emp1", DeviceName = "Laptop", DeviceType = DeviceType.Desktop, PushEndpoint = "ep1", PushEnabled = true });
-        _sessionRepo.Save(new DeviceSession { Id = "d2", EmployeeId = "emp1", DeviceName = "Phone", DeviceType = DeviceType.Mobile, PushEnabled = false });
-        _sessionRepo.Save(new DeviceSession { Id = "d3", EmployeeId = "emp2", DeviceName = "Other Phone" });
-        SetUser("sub1");
-
-        var result = _controller.GetDevices();
-        var okResult = Assert.IsType<OkObjectResult>(result);
-        var list = Assert.IsAssignableFrom<IEnumerable>(okResult.Value);
-        var items = list.Cast<object>().ToList();
-        Assert.Equal(2, items.Count);
-    }
-
-    [Fact]
-    public void GetDevices_ExcludesRevokedOrExpiredSessions()
-    {
-        _empRepo.Save(new Employee { Id = "emp1" });
-        _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
-        _sessionRepo.Save(new DeviceSession { Id = "d_active", EmployeeId = "emp1" });
-        _sessionRepo.Save(new DeviceSession { Id = "d_revoked", EmployeeId = "emp1", RevokedAt = DateTime.UtcNow });
-        _sessionRepo.Save(new DeviceSession { Id = "d_expired", EmployeeId = "emp1", ExpiresAt = DateTime.UtcNow.AddDays(-1) });
-        SetUser("sub1");
-
-        var result = _controller.GetDevices();
-        var okResult = Assert.IsType<OkObjectResult>(result);
-        var list = Assert.IsAssignableFrom<IEnumerable>(okResult.Value);
-        var items = list.Cast<object>().ToList();
-        Assert.Single(items);
     }
 
     // ==========================================
@@ -818,7 +751,7 @@ public class PushControllerTests : TestDataTestBase
 
         var result = await controller.SendDeviceTestNotification("dev1");
         var ok = Assert.IsType<OkObjectResult>(result);
-        Assert.Contains("Test notification sent (Encrypted Text)", ok.Value?.ToString());
+        Assert.Contains("Test notification sent (Content-Free Wakeup - Re-enable Push to Encrypt)", ok.Value?.ToString());
     }
 
     [Fact]
@@ -897,32 +830,6 @@ public class PushControllerTests : TestDataTestBase
     }
 
     // ==========================================
-    // SendTestNotification Tests
-    // ==========================================
-
-    [Fact]
-    public async Task SendTestNotification_ReturnsUnauthorized_WhenNotAuthenticated()
-    {
-        _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity());
-        var result = await _controller.SendTestNotification();
-        var unauthorized = Assert.IsType<UnauthorizedObjectResult>(result);
-        var payload = Assert.IsType<SpokesResult>(unauthorized.Value);
-        Assert.False(payload.IsSuccess);
-    }
-
-    [Fact]
-    public async Task SendTestNotification_ReturnsOk()
-    {
-        _empRepo.Save(new Employee { Id = "emp1" });
-        _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
-        SetUser("sub1");
-
-        var result = await _controller.SendTestNotification();
-        var okResult = Assert.IsType<OkObjectResult>(result);
-        Assert.Contains("Test notification sent", okResult.Value?.ToString());
-    }
-
-    // ==========================================
     // GetUnreadCount Tests
     // ==========================================
 
@@ -970,47 +877,6 @@ public class PushControllerTests : TestDataTestBase
     }
 
     [Fact]
-    public void PushController_ConstructorInjectedServices_WorkWithoutActionParameters()
-    {
-        var mockLog = new Mock<ISystemLogService>();
-        var routingService = CreateNotificationRoutingService();
-
-        var controller = new PushController(
-            _sessionRepo,
-            _empRepo,
-            _webPushService,
-            _userService,
-            licenseEligibility: new PushLicenseEligibilityService(_companyRepo, _serverConfigRepo, _licenseValidation),
-            logger: null,
-            dataProtection: _dataProtection,
-            systemLog: mockLog.Object,
-            routingService: routingService)
-        {
-            ControllerContext = new ControllerContext
-            {
-                HttpContext = new DefaultHttpContext()
-            }
-        };
-
-        _empRepo.Save(new Employee { Id = "emp_ci", PushNotificationsEnabled = true });
-        _openIdRepo.Save(new OpenIdAccount { Sub = "sub_ci", LinkedEmployeeId = "emp_ci" });
-
-        var user = new ClaimsPrincipal(new ClaimsIdentity(new Claim[] {
-            new Claim("sub", "sub_ci")
-        }, "mock"));
-        controller.ControllerContext.HttpContext.User = user;
-
-        // GetStatus without action parameters
-        var statusResult = controller.GetStatus();
-        var okStatus = Assert.IsType<OkObjectResult>(statusResult);
-        Assert.Contains("isConfigured", okStatus.Value?.ToString());
-
-        // GetUnreadCount without action parameters
-        var unreadResult = controller.GetUnreadCount();
-        Assert.IsType<OkObjectResult>(unreadResult);
-    }
-
-    [Fact]
     public void PushController_WithPushLicenseEligibilityService_EvaluatesNativeRelayLicenseWithoutActionParameters()
     {
         var mockEligibility = new Mock<IPushLicenseEligibilityService>();
@@ -1046,7 +912,8 @@ public class PushControllerTests : TestDataTestBase
         {
             Endpoint = "https://relay.spokes.com/send",
             SubscriptionType = PushSubscriptionType.NativeRelay,
-            DeviceId = "dev_elig"
+            DeviceId = "dev_elig",
+            PublicKey = CreateValidRsaPublicKeyBase64()
         };
 
         var subscribeResult = controller.Subscribe(req);
@@ -1069,12 +936,13 @@ public class PushControllerTests : TestDataTestBase
         _empRepo.Save(new Employee { Id = "emp_key_preserve" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "sub_key_preserve", LinkedEmployeeId = "emp_key_preserve" });
 
+        var existingKey = CreateValidRsaPublicKeyBase64();
         var session = new DeviceSession
         {
             Id = "sess_key_preserve",
             EmployeeId = "emp_key_preserve",
             DeviceId = "dev_key_preserve",
-            PushPublicKey = "EXISTING_RSA_PUBLIC_KEY"
+            PushPublicKey = existingKey
         };
         _sessionRepo.Save(session);
 
@@ -1101,7 +969,7 @@ public class PushControllerTests : TestDataTestBase
 
         var updatedSession = _sessionRepo.GetById("sess_key_preserve");
         Assert.NotNull(updatedSession);
-        Assert.Equal("EXISTING_RSA_PUBLIC_KEY", updatedSession.PushPublicKey);
+        Assert.Equal(existingKey, updatedSession.PushPublicKey);
     }
 
     [Fact]
@@ -1200,7 +1068,8 @@ public class PushControllerTests : TestDataTestBase
             SubscriptionType = PushSubscriptionType.NativeRelay,
             DeviceId = "dev_desk",
             DeviceType = DeviceType.Desktop,
-            DeviceName = "Windows Desktop App"
+            DeviceName = "Windows Desktop App",
+            PublicKey = CreateValidRsaPublicKeyBase64()
         };
 
         var result = controller.Subscribe(req);
@@ -1297,12 +1166,13 @@ public class PushControllerTests : TestDataTestBase
             HttpContext = new DefaultHttpContext { User = user }
         };
 
+        var validPublicKey = CreateValidRsaPublicKeyBase64();
         var req = new SubscribeRequest
         {
             Endpoint = "https://relay.spokes.com/send-bind",
             SubscriptionType = PushSubscriptionType.NativeRelay,
             DeviceId = "android_stable_hw_999",
-            PublicKey = "NEW_RSA_PUBLIC_KEY"
+            PublicKey = validPublicKey
         };
 
         var result = _controller.Subscribe(req);
@@ -1311,7 +1181,7 @@ public class PushControllerTests : TestDataTestBase
         var updated = _sessionRepo.GetById("sess_bind");
         Assert.NotNull(updated);
         Assert.Equal("android_stable_hw_999", updated.DeviceId);
-        Assert.Equal("NEW_RSA_PUBLIC_KEY", updated.PushPublicKey);
+        Assert.Equal(validPublicKey, updated.PushPublicKey);
     }
 
     [Fact]
@@ -1359,5 +1229,126 @@ public class PushControllerTests : TestDataTestBase
         Assert.Equal(PushSubscriptionType.WebPush, updated.PushSubscriptionType);
         Assert.True(updated.PushEnabled);
     }
-}
 
+    [Fact]
+    public void Unsubscribe_MarksPushExplicitlyDisabled_AndPreservesCapacitorMobileIdentity()
+    {
+        _empRepo.Save(new Employee { Id = "emp_mob" });
+        _openIdRepo.Save(new OpenIdAccount { Sub = "sub_mob", LinkedEmployeeId = "emp_mob" });
+
+        var session = new DeviceSession
+        {
+            Id = "sess_mob",
+            EmployeeId = "emp_mob",
+            DeviceId = "android_hw_1",
+            DeviceType = DeviceType.Desktop, // Previously misclassified before push
+            IsCapacitor = false,
+            PushEndpoint = "fcm_shared_token_abc",
+            PushSubscriptionType = PushSubscriptionType.NativeRelay,
+            PushUserAgent = "Mozilla/5.0 (Linux; Android 14) Capacitor",
+            PushEnabled = true
+        };
+        _sessionRepo.Save(session);
+        SetUserWithSession("sub_mob", "sess_mob");
+
+        var result = _controller.Unsubscribe(new UnsubscribeRequest { Endpoint = "fcm_shared_token_abc" });
+        Assert.IsType<OkObjectResult>(result);
+
+        var updated = _sessionRepo.GetById("sess_mob");
+        Assert.NotNull(updated);
+        Assert.Null(updated.PushEndpoint);
+        Assert.False(updated.PushEnabled);
+        Assert.True(updated.PushExplicitlyDisabled);
+        Assert.True(updated.IsCapacitor);
+        Assert.True(updated.IsCapacitorApp);
+        Assert.Equal(DeviceType.Mobile, updated.DeviceType);
+    }
+
+    [Fact]
+    public void Unsubscribe_WithoutEndpoint_ClearsCallerSessionBySessionId_AndMarksExplicitlyDisabled()
+    {
+        _empRepo.Save(new Employee { Id = "emp_noep" });
+        _openIdRepo.Save(new OpenIdAccount { Sub = "sub_noep", LinkedEmployeeId = "emp_noep" });
+
+        var session = new DeviceSession
+        {
+            Id = "sess_noep",
+            EmployeeId = "emp_noep",
+            PushEndpoint = "fcm_token_xyz",
+            PushSubscriptionType = PushSubscriptionType.NativeRelay,
+            PushEnabled = true
+        };
+        _sessionRepo.Save(session);
+        SetUserWithSession("sub_noep", "sess_noep");
+
+        var result = _controller.Unsubscribe(new UnsubscribeRequest { Endpoint = "" });
+        Assert.IsType<OkObjectResult>(result);
+
+        var updated = _sessionRepo.GetById("sess_noep");
+        Assert.NotNull(updated);
+        Assert.Null(updated.PushEndpoint);
+        Assert.False(updated.PushEnabled);
+        Assert.True(updated.PushExplicitlyDisabled);
+    }
+
+    [Fact]
+    public void Subscribe_ResetsPushExplicitlyDisabledToFalse()
+    {
+        _empRepo.Save(new Employee { Id = "emp_resub" });
+        _openIdRepo.Save(new OpenIdAccount { Sub = "sub_resub", LinkedEmployeeId = "emp_resub" });
+
+        var session = new DeviceSession
+        {
+            Id = "sess_resub",
+            EmployeeId = "emp_resub",
+            PushExplicitlyDisabled = true
+        };
+        _sessionRepo.Save(session);
+        SetUserWithSession("sub_resub", "sess_resub");
+
+        var req = new SubscribeRequest
+        {
+            Endpoint = "fcm_token_resub",
+            SubscriptionType = PushSubscriptionType.NativeRelay,
+            PublicKey = CreateValidRsaPublicKeyBase64()
+        };
+
+        var result = _controller.Subscribe(req);
+        Assert.IsType<OkObjectResult>(result);
+
+        var updated = _sessionRepo.GetById("sess_resub");
+        Assert.NotNull(updated);
+        Assert.True(updated.PushEnabled);
+        Assert.False(updated.PushExplicitlyDisabled);
+    }
+
+    [Fact]
+    public void UpdateDevice_TogglingIsEnabled_UpdatesPushExplicitlyDisabled()
+    {
+        _empRepo.Save(new Employee { Id = "emp_toggle" });
+        _openIdRepo.Save(new OpenIdAccount { Sub = "sub_toggle", LinkedEmployeeId = "emp_toggle" });
+
+        var session = new DeviceSession
+        {
+            Id = "sess_toggle",
+            EmployeeId = "emp_toggle",
+            PushEndpoint = "fcm_token_toggle",
+            PushEnabled = true,
+            PushExplicitlyDisabled = false
+        };
+        _sessionRepo.Save(session);
+        SetUserWithSession("sub_toggle", "sess_toggle");
+
+        var disableRes = _controller.UpdateDevice("sess_toggle", new UpdateDeviceRequest { IsEnabled = false });
+        Assert.IsType<OkObjectResult>(disableRes);
+        var afterDisable = _sessionRepo.GetById("sess_toggle");
+        Assert.False(afterDisable!.PushEnabled);
+        Assert.True(afterDisable.PushExplicitlyDisabled);
+
+        var enableRes = _controller.UpdateDevice("sess_toggle", new UpdateDeviceRequest { IsEnabled = true });
+        Assert.IsType<OkObjectResult>(enableRes);
+        var afterEnable = _sessionRepo.GetById("sess_toggle");
+        Assert.True(afterEnable!.PushEnabled);
+        Assert.False(afterEnable.PushExplicitlyDisabled);
+    }
+}

@@ -9,8 +9,10 @@ using System.Xml;
 using System.Xml.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Data.Repositories.Core;
+using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Services.Security;
 
 namespace Spokes_Server.Core.Services.Maintenance.Destinations;
@@ -28,11 +30,12 @@ public class WebDavBackupProvider : IBackupDestinationProvider
         CompanyProfileRepository profiles,
         IHttpClientFactory httpClientFactory,
         ILogger<WebDavBackupProvider>? logger = null,
-        EncryptionService? encryptionService = null)
+        EncryptionService? encryptionService = null,
+        IConfiguration? configuration = null)
     {
         _profiles = profiles;
         _httpClientFactory = httpClientFactory;
-        _encryptionService = encryptionService ?? profiles?.EncryptionService ?? new EncryptionService();
+        _encryptionService = BackupDestinationPruneHelper.ResolveEncryptionService(encryptionService, profiles, configuration);
         _logger = logger;
     }
 
@@ -98,9 +101,7 @@ public class WebDavBackupProvider : IBackupDestinationProvider
     }
 
     private string ResolveCredential(string? value) =>
-        string.IsNullOrEmpty(value)
-            ? string.Empty
-            : (_encryptionService.TryDecrypt(value, out var decrypted) ? decrypted : value);
+        BackupDestinationPruneHelper.ResolveCredential(_encryptionService, value);
 
     private (HttpClient client, Uri baseUri) CreateClient()
     {
@@ -148,7 +149,12 @@ public class WebDavBackupProvider : IBackupDestinationProvider
             progress?.Report(new BackupUploadProgress(0, fileInfo.Length, 0));
 
             await using var fileStream = new FileStream(localBackupPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
-            await using var reportingStream = new ProgressReportingStream(fileStream, fileInfo.Length, progress);
+            long totalBytes = fileInfo.Length;
+            await using var reportingStream = new ProgressStream(fileStream, totalBytes, bytes =>
+            {
+                double pct = totalBytes > 0 ? (double)bytes / totalBytes * 100.0 : 0.0;
+                progress?.Report(new BackupUploadProgress(bytes, totalBytes, Math.Min(100.0, pct)));
+            });
             using var content = new StreamContent(reportingStream, 81920);
             content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
@@ -172,54 +178,6 @@ public class WebDavBackupProvider : IBackupDestinationProvider
         }
     }
 
-    private sealed class ProgressReportingStream : Stream
-    {
-        private readonly Stream _inner;
-        private readonly long _totalBytes;
-        private readonly IProgress<BackupUploadProgress>? _progress;
-        private long _bytesRead;
-
-        public ProgressReportingStream(Stream inner, long totalBytes, IProgress<BackupUploadProgress>? progress)
-        {
-            _inner = inner;
-            _totalBytes = totalBytes;
-            _progress = progress;
-        }
-
-        public override bool CanRead => _inner.CanRead;
-        public override bool CanSeek => _inner.CanSeek;
-        public override bool CanWrite => false;
-        public override long Length => _inner.Length;
-        public override long Position { get => _inner.Position; set => _inner.Position = value; }
-        public override void Flush() => _inner.Flush();
-        public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
-        public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-        public override int Read(byte[] buffer, int offset, int count)
-        {
-            int read = _inner.Read(buffer, offset, count);
-            if (read > 0)
-            {
-                _bytesRead += read;
-                double pct = _totalBytes > 0 ? (double)_bytesRead / _totalBytes * 100.0 : 0.0;
-                _progress?.Report(new BackupUploadProgress(_bytesRead, _totalBytes, Math.Min(100.0, pct)));
-            }
-            return read;
-        }
-
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            int read = await _inner.ReadAsync(buffer, cancellationToken);
-            if (read > 0)
-            {
-                _bytesRead += read;
-                double pct = _totalBytes > 0 ? (double)_bytesRead / _totalBytes * 100.0 : 0.0;
-                _progress?.Report(new BackupUploadProgress(_bytesRead, _totalBytes, Math.Min(100.0, pct)));
-            }
-            return read;
-        }
-    }
 
     public async Task<List<RemoteBackupItem>> ListBackupsAsync(CancellationToken cancellationToken = default)
     {
@@ -348,26 +306,8 @@ public class WebDavBackupProvider : IBackupDestinationProvider
         }
     }
 
-    public async Task PruneBackupsAsync(int retentionCount, CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var backups = await ListBackupsAsync(cancellationToken);
-            var scheduled = backups.Where(b => !b.FileName.Contains("_Manual_", StringComparison.OrdinalIgnoreCase)).ToList();
-
-            if (scheduled.Count > retentionCount)
-            {
-                foreach (var old in scheduled.Skip(retentionCount))
-                {
-                    await DeleteBackupAsync(old.Id, cancellationToken);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "[WebDavBackup] Pruning failed");
-        }
-    }
+    public Task PruneBackupsAsync(int retentionCount, CancellationToken cancellationToken = default) =>
+        BackupDestinationPruneHelper.PruneScheduledBackupsAsync(this, retentionCount, _logger, "WebDavBackup", cancellationToken);
 
     public async Task<TestConnectionResult> TestConnectionAsync(CancellationToken cancellationToken = default)
     {

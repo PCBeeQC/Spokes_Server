@@ -1,6 +1,6 @@
 @page "/planning/timesheet-approvals"
 @attribute [Authorize(Policy = AppPermissions.Timesheets.ViewReport)]
-<PageTitle>Timesheet Approvals</PageTitle>
+<PageTitle>@($"{AppLabels.Team} Timesheets")</PageTitle>
 @using Microsoft.AspNetCore.Authorization
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.HR
@@ -8,97 +8,438 @@
 @using System.Globalization
 @inject Database Db
 @inject HRService HRService
+@inject OvertimeService OvertimeService
 @inject UserService UserService
+@inject AppLabelService AppLabels
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 
-<MudContainer MaxWidth="MaxWidth.Large" Class="mt-6">
-    <MudText Typo="Typo.h4" Class="mb-4">Timesheet Approvals</MudText>
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-6 mb-12">
+    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4 flex-wrap gap-2">
+        <div>
+            <MudText Typo="Typo.h4" Style="font-weight: 700;">@($"{AppLabels.Team} Timesheets")</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                View, edit, bulk-adjust, and approve @(AppLabels.Employee.ToLowerInvariant()) timesheets across weeks.
+            </MudText>
+        </div>
+        @if (_employeeRows.Any(r => r.CanManage))
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.EditNote" Href="/planning/timesheet-bulk-edit">
+                Bulk Edit Timesheets
+            </MudButton>
+        }
+    </MudStack>
 
     @if (_loading)
     {
         <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
     }
-    else if (!_pendingTimesheets.Any())
-    {
-        <MudPaper Elevation="0" Outlined="true" Class="pa-8 text-center rounded-lg">
-            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Large" Color="Color.Success" Class="mb-4" />
-            <MudText Typo="Typo.h6" Color="Color.Success">All caught up!</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">No timesheets are pending approval.</MudText>
-        </MudPaper>
-    }
     else
     {
-        <MudPaper Elevation="0" Outlined="true" Class="rounded-lg">
-            <MudTable Items="@_pendingTimesheets" Dense="true" Hover="true" Striped="true" FixedHeader="true">
-                <HeaderContent>
-                    <MudTh>Employee</MudTh>
-                    <MudTh>Week</MudTh>
-                    <MudTh>Date Range</MudTh>
-                    <MudTh Style="text-align: right;">Total Hours</MudTh>
-                    <MudTh>Submitted</MudTh>
-                    <MudTh Style="text-align: center;">Actions</MudTh>
-                </HeaderContent>
-                <RowTemplate>
-                    <MudTd DataLabel="Employee">
-                        <MudLink Href="@($"timesheet/{context.EmployeeId}")" Typo="Typo.body2">
-                            @GetEmployeeDisplayName(context)
-                        </MudLink>
-                    </MudTd>
-                    <MudTd DataLabel="Week">
-                        <MudText Typo="Typo.body2">Week @context.WeekNumber, @context.Year</MudText>
-                    </MudTd>
-                    <MudTd DataLabel="Date Range">
-                        <MudText Typo="Typo.body2">@GetWeekDateRange(context)</MudText>
-                    </MudTd>
-                    <MudTd DataLabel="Total Hours" Style="text-align: right;">
-                        <MudText Typo="Typo.body2" Style="font-weight: 600;">@FormatHours(context.TotalHours)</MudText>
-                    </MudTd>
-                    <MudTd DataLabel="Submitted">
-                        <MudText Typo="Typo.body2" Color="Color.Secondary">@(context.SubmittedAt?.ToLocalTime().ToString("MMM dd, HH:mm") ?? "")</MudText>
-                    </MudTd>
-                    <MudTd DataLabel="Actions" Style="text-align: center;">
-                        <MudButtonGroup OverrideStyles="false">
-                            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
-                                StartIcon="@Icons.Material.Filled.Check" OnClick="@(() => ApproveTimesheet(context))">
-                                Approve
+        <MudTabs @bind-ActivePanelIndex="_activeTabIndex" Elevation="0" Outlined="true" Border="true" Rounded="true" ApplyEffectsToContainer="true" TabPanelsClass="pa-4">
+            <MudTabPanel Text="@($"{AppLabels.Employee} Timesheets")" Icon="@Icons.Material.Filled.Groups">
+                <MudPaper Elevation="0" Outlined="true" Class="pa-4 mb-4 rounded-lg">
+                    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="flex-wrap gap-4">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevWeek" Variant="Variant.Outlined" Size="Size.Small" title="Previous Week" />
+                            <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small" StartIcon="@Icons.Material.Filled.CalendarMonth" Class="px-3" OnClick="OpenWeekPickerAsync">
+                                Week @_selectedWeek, @_selectedYear &bull; @GetWeekRangeText(_selectedYear, _selectedWeek)
                             </MudButton>
-                            <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
-                                StartIcon="@Icons.Material.Filled.Close" OnClick="@(() => RejectTimesheet(context))">
-                                Reject
-                            </MudButton>
-                        </MudButtonGroup>
-                    </MudTd>
-                </RowTemplate>
-            </MudTable>
-        </MudPaper>
+                            <div style="width: 0; height: 0; overflow: hidden; position: absolute;">
+                                <MudDatePicker @ref="_weekDatePicker"
+                                               Date="@GetWeekMonday(_selectedYear, _selectedWeek)"
+                                               DateChanged="OnJumpToDate"
+                                               PickerVariant="PickerVariant.Dialog"
+                                               ShowWeekNumbers="true"
+                                               FirstDayOfWeek="DayOfWeek.Monday"
+                                               Color="Color.Primary" />
+                            </div>
+                            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextWeek" Variant="Variant.Outlined" Size="Size.Small" title="Next Week" />
+                            @if (!IsCurrentWeekSelected)
+                            {
+                                <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Today" OnClick="JumpToCurrentWeek">
+                                    Current Week
+                                </MudButton>
+                            }
+                        </MudStack>
+
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="flex-wrap">
+                            @if (_accessibleTeams.Count > 1)
+                            {
+                                <MudSelect T="string" Value="_selectedTeamId" ValueChanged="OnTeamFilterChanged" Label="@AppLabels.Team" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true" Style="min-width: 180px;">
+                                    <MudSelectItem T="string" Value="@("")">All @AppLabels.Teams</MudSelectItem>
+                                    @foreach (var team in _accessibleTeams)
+                                    {
+                                        <MudSelectItem T="string" Value="@team.Id">@team.Name</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            }
+                            <MudTextField @bind-Value="_employeeSearch" Placeholder="@($"Search {AppLabels.Employees.ToLowerInvariant()}...")" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" Clearable="true" Style="min-width: 240px;" />
+                        </MudStack>
+                    </MudStack>
+                </MudPaper>
+
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg">
+                    <MudTable Items="@FilteredEmployeeRows" Dense="true" Hover="true" Striped="true" Elevation="0" Outlined="true">
+                        <HeaderContent>
+                            <MudTh><MudTableSortLabel SortBy="new Func<EmployeeWeekRow, object>(x => x.Employee.FullName)">@AppLabels.Employee</MudTableSortLabel></MudTh>
+                            <MudTh><MudTableSortLabel SortBy="new Func<EmployeeWeekRow, object>(x => x.TeamName)">@AppLabels.Team</MudTableSortLabel></MudTh>
+                            <MudTh Style="text-align: right;"><MudTableSortLabel SortBy="new Func<EmployeeWeekRow, object>(x => x.WorkedHours)">Week Hours</MudTableSortLabel></MudTh>
+                            <MudTh Style="text-align: center;"><MudTableSortLabel SortBy="new Func<EmployeeWeekRow, object>(x => x.StatusSortOrder)">Status</MudTableSortLabel></MudTh>
+                            @if (_enableHourBank)
+                            {
+                                <MudTh Style="text-align: right;"><MudTableSortLabel SortBy="new Func<EmployeeWeekRow, object>(x => x.HourBank)">Hour Bank</MudTableSortLabel></MudTh>
+                            }
+                            <MudTh Style="text-align: right;">Actions</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="@AppLabels.Employee">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                    <EmployeeAvatar Employee="@context.Employee" Size="Size.Small" ShowPresence="false" />
+                                    <div>
+                                        <MudLink Href="@($"timesheet/{context.Employee.Id}?year={_selectedYear}&week={_selectedWeek}")" Typo="Typo.body2" Style="font-weight: 600;">
+                                            @context.Employee.FullName
+                                        </MudLink>
+                                        @if (!string.IsNullOrWhiteSpace(context.Employee.Position))
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">@context.Employee.Position</MudText>
+                                        }
+                                    </div>
+                                </MudStack>
+                            </MudTd>
+                            <MudTd DataLabel="@AppLabels.Team">
+                                @if (!string.IsNullOrWhiteSpace(context.TeamName))
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Default">@context.TeamName</MudChip>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">&mdash;</MudText>
+                                }
+                            </MudTd>
+                            <MudTd DataLabel="Week Hours" Style="text-align: right;">
+                                <MudText Typo="Typo.body2" Style="font-weight: 600;" Color="@GetHoursColor(context.WorkedHours, context.ExpectedHours)">
+                                    @FormatHours(context.WorkedHours) <span style="opacity: 0.65; font-weight: 400;">/ @FormatHours(context.ExpectedHours)</span>
+                                </MudText>
+                            </MudTd>
+                            <MudTd DataLabel="Status" Style="text-align: center;">
+                                @if (context.HasActivity)
+                                {
+                                    <StatusChip Status="@context.StatusLabel" />
+                                }
+                                else
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">No Entries</MudChip>
+                                }
+                            </MudTd>
+                            @if (_enableHourBank)
+                            {
+                                <MudTd DataLabel="Hour Bank" Style="text-align: right;">
+                                    <MudText Typo="Typo.body2" Color="@(context.HourBank >= 0 ? Color.Success : Color.Warning)" Style="font-weight: 600;">
+                                        @(context.HourBank >= 0 ? "+" : "")@FormatHours(context.HourBank)
+                                    </MudText>
+                                </MudTd>
+                            }
+                            <MudTd DataLabel="Actions" Style="text-align: right;">
+                                <MudStack Row="true" Justify="Justify.FlexEnd" AlignItems="AlignItems.Center" Spacing="1">
+                                    @if (context.Timesheet?.Status == TimesheetStatus.Submitted && context.CanManage)
+                                    {
+                                        <MudTooltip Text="Approve Week">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => ApproveTimesheet(context.Timesheet))" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="Reject Week">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Error" Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => RejectTimesheet(context.Timesheet))" />
+                                        </MudTooltip>
+                                    }
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.CalendarViewWeek" OnClick="@(() => OpenEmployeeWeek(context.Employee.Id))">
+                                        Open Week
+                                    </MudButton>
+                                    @if (context.CanManage)
+                                    {
+                                        <MudTooltip Text="View all historical entries & bulk edit">
+                                            <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.EditNote" OnClick="@(() => OpenEmployeeBulkEdit(context.Employee.Id))">
+                                                Bulk Edit
+                                            </MudButton>
+                                        </MudTooltip>
+                                    }
+                                </MudStack>
+                            </MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="pa-4 text-center">No matching @(AppLabels.Employees.ToLowerInvariant()) found.</MudText>
+                        </NoRecordsContent>
+                    </MudTable>
+                </MudPaper>
+            </MudTabPanel>
+
+            <MudTabPanel Text="Pending Approvals" Icon="@Icons.Material.Filled.FactCheck" BadgeData="@(_pendingTimesheets.Count > 0 ? _pendingTimesheets.Count : null)" BadgeColor="Color.Warning">
+                @if (!_pendingTimesheets.Any())
+                {
+                    <MudPaper Elevation="0" Outlined="true" Class="pa-8 text-center rounded-lg">
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Large" Color="Color.Success" Class="mb-4" />
+                        <MudText Typo="Typo.h6" Color="Color.Success">All caught up!</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">No timesheets are pending approval.</MudText>
+                    </MudPaper>
+                }
+                else
+                {
+                    <MudPaper Elevation="0" Outlined="true" Class="rounded-lg">
+                        <MudTable Elevation="0" Outlined="true" Items="@_pendingTimesheets" Dense="true" Hover="true" Striped="true" FixedHeader="true">
+                            <HeaderContent>
+                                <MudTh>@AppLabels.Employee</MudTh>
+                                <MudTh>Week</MudTh>
+                                <MudTh>Date Range</MudTh>
+                                <MudTh Style="text-align: right;">Total Hours</MudTh>
+                                <MudTh>Submitted</MudTh>
+                                <MudTh Style="text-align: center;">Actions</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd DataLabel="@AppLabels.Employee">
+                                    <MudLink Href="@($"timesheet/{context.EmployeeId}?year={context.Year}&week={context.WeekNumber}")" Typo="Typo.body2" Style="font-weight: 600;">
+                                        @GetEmployeeDisplayName(context)
+                                    </MudLink>
+                                </MudTd>
+                                <MudTd DataLabel="Week">
+                                    <MudText Typo="Typo.body2">Week @context.WeekNumber, @context.Year</MudText>
+                                </MudTd>
+                                <MudTd DataLabel="Date Range">
+                                    <MudText Typo="Typo.body2">@GetWeekDateRange(context)</MudText>
+                                </MudTd>
+                                <MudTd DataLabel="Total Hours" Style="text-align: right;">
+                                    <MudText Typo="Typo.body2" Style="font-weight: 600;">@FormatHours(context.TotalHours)</MudText>
+                                </MudTd>
+                                <MudTd DataLabel="Submitted">
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">@(context.SubmittedAt?.ToLocalTime().ToString("MMM dd, HH:mm") ?? "")</MudText>
+                                </MudTd>
+                                <MudTd DataLabel="Actions" Style="text-align: center;">
+                                    <MudButtonGroup OverrideStyles="false">
+                                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                            StartIcon="@Icons.Material.Filled.OpenInNew" Href="@($"timesheet/{context.EmployeeId}?year={context.Year}&week={context.WeekNumber}")">
+                                            Review
+                                        </MudButton>
+                                        @if (CanManageTimesheet(context))
+                                        {
+                                            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                                StartIcon="@Icons.Material.Filled.Check" OnClick="@(() => ApproveTimesheet(context))">
+                                                Approve
+                                            </MudButton>
+                                            <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                                StartIcon="@Icons.Material.Filled.Close" OnClick="@(() => RejectTimesheet(context))">
+                                                Reject
+                                            </MudButton>
+                                        }
+                                    </MudButtonGroup>
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    </MudPaper>
+                }
+            </MudTabPanel>
+        </MudTabs>
     }
 </MudContainer>
 
 @code {
+    [SupplyParameterFromQuery(Name = "tab")] public string? QueryTab { get; set; }
+    [SupplyParameterFromQuery(Name = "year")] public int? QueryYear { get; set; }
+    [SupplyParameterFromQuery(Name = "week")] public int? QueryWeek { get; set; }
+
     private bool _loading = true;
+    private int _activeTabIndex = 0;
     private Employee? _currentUser;
     private List<Timesheet> _pendingTimesheets = [];
+    private List<Employee> _accessibleEmployees = [];
+    private List<Team> _accessibleTeams = [];
+    private List<EmployeeWeekRow> _employeeRows = [];
+    private Dictionary<string, decimal> _hourBanks = new(StringComparer.OrdinalIgnoreCase);
+
+    private int _selectedYear;
+    private int _selectedWeek;
+    private MudDatePicker? _weekDatePicker;
+    private string _selectedTeamId = "";
+    private string _employeeSearch = "";
+    private bool _enableHourBank;
+
+    private bool IsCurrentWeekSelected =>
+        _selectedYear == ISOWeek.GetYear(DateTime.Today) &&
+        _selectedWeek == ISOWeek.GetWeekOfYear(DateTime.Today);
+
+    private IEnumerable<EmployeeWeekRow> FilteredEmployeeRows => _employeeRows
+        .Where(r => string.IsNullOrEmpty(_selectedTeamId) || string.Equals(r.Employee.TeamId, _selectedTeamId, StringComparison.OrdinalIgnoreCase))
+        .Where(r => string.IsNullOrWhiteSpace(_employeeSearch) ||
+                    r.Employee.FullName.Contains(_employeeSearch, StringComparison.OrdinalIgnoreCase) ||
+                    (r.Employee.Position?.Contains(_employeeSearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (r.TeamName?.Contains(_employeeSearch, StringComparison.OrdinalIgnoreCase) ?? false));
 
     protected override async Task OnInitializedAsync()
     {
-        _currentUser = await UserService.GetEmployeeAsync();
-        if (_currentUser == null)
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        if (_currentUser == null || !_currentUser.HasEffectivePermission(AppPermissions.Timesheets.ViewReport, allowSuspended: true))
         {
             Nav.NavigateTo("/", true);
             return;
         }
 
+        _selectedYear = QueryYear is > 2000 and < 2100 ? QueryYear.Value : ISOWeek.GetYear(DateTime.Today);
+        var maxWeeks = ISOWeek.GetWeeksInYear(_selectedYear);
+        _selectedWeek = QueryWeek is >= 1 && QueryWeek.Value <= maxWeeks ? QueryWeek.Value : ISOWeek.GetWeekOfYear(DateTime.Today);
+
+        if (string.Equals(QueryTab, "pending", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(QueryTab, "approvals", StringComparison.OrdinalIgnoreCase))
+        {
+            _activeTabIndex = 1;
+        }
+
+        var hrConfig = Db.CompanyProfile.GetHRSettings();
+        _enableHourBank = hrConfig.EnableHourBank;
+
+        LoadAccessibleEmployees();
         LoadPendingTimesheets();
+        RefreshEmployeeRows();
         _loading = false;
+    }
+
+    private void LoadAccessibleEmployees()
+    {
+        if (_currentUser == null) return;
+
+        var allActive = Db.Employees.GetAll()
+            .Where(e => e.IsActive && !e.IsBanned && !e.IsSystem)
+            .OrderBy(e => e.FullName)
+            .ToList();
+        var allTeams = Db.Teams.GetAll();
+
+        if (_currentUser.IsAdmin)
+        {
+            _accessibleEmployees = allActive;
+        }
+        else
+        {
+            var managedIds = HRService.GetManagedEmployeeIds(_currentUser, includeSelf: true);
+            _accessibleEmployees = allActive.Where(e => managedIds.Contains(e.Id)).ToList();
+        }
+
+        var teamIds = _accessibleEmployees
+            .Where(e => !string.IsNullOrEmpty(e.TeamId))
+            .Select(e => e.TeamId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _accessibleTeams = allTeams.Where(t => teamIds.Contains(t.Id)).OrderBy(t => t.Name).ToList();
+
+        _hourBanks.Clear();
+        if (_enableHourBank)
+        {
+            foreach (var emp in _accessibleEmployees)
+            {
+                _hourBanks[emp.Id] = OvertimeService.CalculateHourBank(emp.Id).HourBank;
+            }
+        }
+    }
+
+    private void RefreshEmployeeRows()
+    {
+        if (_currentUser == null) return;
+
+        var teamsById = Db.Teams.GetAll().ToDictionary(t => t.Id, t => t.Name, StringComparer.OrdinalIgnoreCase);
+        var weekSheets = Db.Timesheets.GetAll()
+            .Where(t => t.Year == _selectedYear && t.WeekNumber == _selectedWeek)
+            .ToDictionary(t => t.EmployeeId, t => t, StringComparer.OrdinalIgnoreCase);
+
+        var rows = new List<EmployeeWeekRow>(_accessibleEmployees.Count);
+        foreach (var emp in _accessibleEmployees)
+        {
+            weekSheets.TryGetValue(emp.Id, out var sheet);
+            var overtime = OvertimeService.CalculateWeeklyOvertime(emp.Id, _selectedYear, _selectedWeek);
+            var hasActivity = sheet != null && (sheet.Entries.Count > 0 || !string.Equals(sheet.Status, TimesheetStatus.Draft, StringComparison.OrdinalIgnoreCase));
+            var statusLabel = hasActivity ? sheet!.Status : "No Entries";
+
+            rows.Add(new EmployeeWeekRow
+            {
+                Employee = emp,
+                TeamName = !string.IsNullOrEmpty(emp.TeamId) && teamsById.TryGetValue(emp.TeamId, out var tName) ? tName : "",
+                Timesheet = sheet,
+                WorkedHours = overtime.WorkedHours,
+                ExpectedHours = overtime.ExpectedHours,
+                HasActivity = hasActivity,
+                StatusLabel = statusLabel,
+                StatusSortOrder = GetStatusSortOrder(statusLabel),
+                HourBank = _hourBanks.GetValueOrDefault(emp.Id, 0m),
+                CanManage = HRService.CanOverrideTimesheetLock(_currentUser, emp.Id)
+            });
+        }
+
+        _employeeRows = rows;
+    }
+
+    private static int GetStatusSortOrder(string status) => status switch
+    {
+        TimesheetStatus.Submitted => 0,
+        TimesheetStatus.Rejected => 1,
+        TimesheetStatus.Draft => 2,
+        TimesheetStatus.Approved => 3,
+        _ => 4
+    };
+
+    private static Color GetHoursColor(decimal worked, decimal expected)
+    {
+        if (worked <= 0) return Color.Default;
+        if (expected > 0 && worked >= expected) return Color.Success;
+        return Color.Primary;
+    }
+
+    private void PrevWeek()
+    {
+        var date = GetWeekMonday(_selectedYear, _selectedWeek).AddDays(-7);
+        _selectedYear = ISOWeek.GetYear(date);
+        _selectedWeek = ISOWeek.GetWeekOfYear(date);
+        RefreshEmployeeRows();
+    }
+
+    private void NextWeek()
+    {
+        var date = GetWeekMonday(_selectedYear, _selectedWeek).AddDays(7);
+        _selectedYear = ISOWeek.GetYear(date);
+        _selectedWeek = ISOWeek.GetWeekOfYear(date);
+        RefreshEmployeeRows();
+    }
+
+    private void JumpToCurrentWeek()
+    {
+        _selectedYear = ISOWeek.GetYear(DateTime.Today);
+        _selectedWeek = ISOWeek.GetWeekOfYear(DateTime.Today);
+        RefreshEmployeeRows();
+    }
+
+    private Task OpenWeekPickerAsync() => _weekDatePicker?.OpenAsync() ?? Task.CompletedTask;
+
+    private void OnJumpToDate(DateTime? selectedDate)
+    {
+        if (!selectedDate.HasValue) return;
+        _selectedYear = ISOWeek.GetYear(selectedDate.Value);
+        _selectedWeek = ISOWeek.GetWeekOfYear(selectedDate.Value);
+        RefreshEmployeeRows();
+    }
+
+    private void OnTeamFilterChanged(string teamId)
+    {
+        _selectedTeamId = teamId;
+    }
+
+    private void OpenEmployeeWeek(string employeeId)
+    {
+        Nav.NavigateTo($"/timesheet/{employeeId}?year={_selectedYear}&week={_selectedWeek}");
+    }
+
+    private void OpenEmployeeBulkEdit(string employeeId)
+    {
+        Nav.NavigateTo($"/planning/timesheet-bulk-edit/{Uri.EscapeDataString(employeeId)}");
     }
 
     private void LoadPendingTimesheets()
     {
         var allTimesheets = Db.Timesheets.GetAll();
 
-        if (_currentUser!.IsAdmin || !IsTeamLeader(_currentUser))
+        if (_currentUser!.IsAdmin)
         {
             _pendingTimesheets = allTimesheets
                 .Where(t => t.Status == TimesheetStatus.Submitted)
@@ -116,8 +457,6 @@
         }
     }
 
-    private bool IsTeamLeader(Employee emp) => Db.Teams.GetAll().Any(t => t.LeaderId == emp.Id);
-
     private string GetEmployeeDisplayName(Timesheet ts)
     {
         if (!string.IsNullOrWhiteSpace(ts.EmployeeName))
@@ -126,14 +465,36 @@
         return emp?.FullName ?? ts.EmployeeId;
     }
 
-    private void ApproveTimesheet(Timesheet timesheet)
+    private bool CanManageTimesheet(Timesheet ts) =>
+        _currentUser is { IsActiveUnsuspended: true } &&
+        _currentUser.HasPermission(AppPermissions.Timesheets.ViewReport) &&
+        HRService.CanOverrideTimesheetLock(_currentUser, ts.EmployeeId);
+
+    private async Task ApproveTimesheet(Timesheet timesheet)
     {
-        if (_currentUser == null) return;
+        var liveUser = await UserService.GetEmployeeAsync(allowSuspended: false);
+        _currentUser = liveUser;
+        if (_currentUser == null || !CanManageTimesheet(timesheet))
+        {
+            Snackbar.Add("Your account is currently suspended or you do not have permission to approve this timesheet.", Severity.Error);
+            _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+            if (_currentUser == null)
+            {
+                Nav.NavigateTo("/", true);
+                return;
+            }
+            LoadPendingTimesheets();
+            RefreshEmployeeRows();
+            StateHasChanged();
+            return;
+        }
+
         var result = HRService.ApproveTimesheet(timesheet.Id, _currentUser.Id);
         if (result.IsSuccess)
         {
             Snackbar.Add($"Approved timesheet for {GetEmployeeDisplayName(timesheet)} (Week {timesheet.WeekNumber})", Severity.Success);
             LoadPendingTimesheets();
+            RefreshEmployeeRows();
             StateHasChanged();
         }
         else
@@ -144,12 +505,26 @@
 
     private async Task RejectTimesheet(Timesheet timesheet)
     {
-        if (_currentUser == null) return;
+        var liveBefore = await UserService.GetEmployeeAsync(allowSuspended: false);
+        _currentUser = liveBefore;
+        if (_currentUser == null || !CanManageTimesheet(timesheet))
+        {
+            Snackbar.Add("Your account is currently suspended or you do not have permission to reject this timesheet.", Severity.Error);
+            _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+            if (_currentUser == null)
+            {
+                Nav.NavigateTo("/", true);
+                return;
+            }
+            LoadPendingTimesheets();
+            RefreshEmployeeRows();
+            StateHasChanged();
+            return;
+        }
 
         var parameters = new DialogParameters<NoteEditDialog>
         {
-            { x => x.Note, "" },
-            { x => x.Title, "Rejection Reason" }
+            { x => x.Note, "" }
         };
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
         var dialog = await DialogService.ShowAsync<NoteEditDialog>("Rejection Reason", parameters, options);
@@ -157,11 +532,29 @@
 
         if (dialogResult is { Canceled: false, Data: string rejectionNote })
         {
+            var liveAfter = await UserService.GetEmployeeAsync(allowSuspended: false);
+            _currentUser = liveAfter;
+            if (_currentUser == null || !CanManageTimesheet(timesheet))
+            {
+                Snackbar.Add("Your account is currently suspended or you do not have permission to reject this timesheet.", Severity.Error);
+                _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+                if (_currentUser == null)
+                {
+                    Nav.NavigateTo("/", true);
+                    return;
+                }
+                LoadPendingTimesheets();
+                RefreshEmployeeRows();
+                StateHasChanged();
+                return;
+            }
+
             var result = HRService.RejectTimesheet(timesheet.Id, _currentUser.Id, rejectionNote);
             if (result.IsSuccess)
             {
                 Snackbar.Add($"Rejected timesheet for {GetEmployeeDisplayName(timesheet)}", Severity.Warning);
                 LoadPendingTimesheets();
+                RefreshEmployeeRows();
                 StateHasChanged();
             }
             else
@@ -171,19 +564,40 @@
         }
     }
 
-    private static string GetWeekDateRange(Timesheet ts)
+    private static DateTime GetWeekMonday(int year, int week)
     {
         try
         {
-            var weekMonday = ISOWeek.ToDateTime(ts.Year, ts.WeekNumber, DayOfWeek.Monday);
-            return $"{weekMonday:MMM dd} - {weekMonday.AddDays(6):MMM dd, yyyy}";
+            return ISOWeek.ToDateTime(year, week, DayOfWeek.Monday);
         }
         catch
         {
-            return "";
+            return ISOWeek.ToDateTime(DateTime.Today.Year, ISOWeek.GetWeekOfYear(DateTime.Today), DayOfWeek.Monday);
         }
     }
 
+    private static string GetWeekRangeText(int year, int week)
+    {
+        var monday = GetWeekMonday(year, week);
+        return $"{monday:MMM dd} - {monday.AddDays(6):MMM dd, yyyy}";
+    }
+
+    private static string GetWeekDateRange(Timesheet ts) => GetWeekRangeText(ts.Year, ts.WeekNumber);
+
     private static string FormatHours(decimal hours) =>
         hours == 0 ? "0:00" : TimesheetFormatHelper.FormatHours(hours);
+
+    private sealed class EmployeeWeekRow
+    {
+        public required Employee Employee { get; init; }
+        public string TeamName { get; init; } = "";
+        public Timesheet? Timesheet { get; init; }
+        public decimal WorkedHours { get; init; }
+        public decimal ExpectedHours { get; init; }
+        public bool HasActivity { get; init; }
+        public string StatusLabel { get; init; } = "";
+        public int StatusSortOrder { get; init; }
+        public decimal HourBank { get; init; }
+        public bool CanManage { get; init; }
+    }
 }

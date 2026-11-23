@@ -1,11 +1,11 @@
-@using Spokes_Server.Components.Shared
 @using Spokes_Server.Core.Configuration
-@using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Services.Communication.Email
 @using Spokes_Server.Core.Services.Identity
 @using Spokes_Server.Core.Services.Security
 @inject Database Db
 @inject EncryptionService EncryptionService
 @inject UserService UserService
+@inject AppLabelService AppLabels
 @inject ISnackbar Snackbar
 
 <MudDialog>
@@ -27,28 +27,13 @@
                 }
             </MudSelect>
 
-            @if (SelectedIncomingPreset != null && !string.IsNullOrWhiteSpace(SelectedIncomingPreset.InstructionsText))
-            {
-                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                    <div class="d-flex flex-column gap-1">
-                        <span>@Loc[SelectedIncomingPreset.InstructionsText]</span>
-                        @if (!string.IsNullOrWhiteSpace(SelectedIncomingPreset.HelpUrl))
-                        {
-                            <div>
-                                <MudLink Href="@SelectedIncomingPreset.HelpUrl" Target="_blank" Typo="Typo.caption" Style="font-weight: 600;">
-                                    @(!string.IsNullOrWhiteSpace(SelectedIncomingPreset.HelpLinkLabel) ? Loc[SelectedIncomingPreset.HelpLinkLabel].Value : SelectedIncomingPreset.HelpUrl)
-                                </MudLink>
-                            </div>
-                        }
-                    </div>
-                </MudAlert>
-            }
+            <EmailProviderInstructionsAlert Preset="@SelectedIncomingPreset" />
 
             <MudGrid Spacing="2">
                 <MudItem xs="12" sm="6">
                     <MudTextField @bind-Value="Server.Name"
                                   Label="@Loc["Incoming Server Label"]"
-                                  Placeholder="e.g. Company IMAP or Gmail"
+                                  Placeholder="@string.Format(Loc["e.g. {0} IMAP or Gmail"].Value, AppLabels.Company)"
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
                                   Required="true" />
@@ -57,7 +42,7 @@
                     <MudTextField Value="@Server.Domain"
                                   ValueChanged="@((string val) => OnServerDomainChanged(val))"
                                   Label="@Loc["Email Domain"]"
-                                  Placeholder="poly-robotics.com"
+                                  Placeholder="@_domainPlaceholder"
                                   Adornment="Adornment.Start"
                                   AdornmentText="@("@")"
                                   Variant="Variant.Outlined"
@@ -121,140 +106,22 @@
                 @if (_selectedOutgoingOption == CreateNewOutgoingOption)
                 {
                     <MudPaper Elevation="0" Outlined="true" Class="pa-4 mt-3 rounded-lg" Style="background-color: var(--mud-palette-background-grey);">
-                        <MudSelect T="string"
-                                   Value="@_selectedInlineOutgoingPresetId"
-                                   ValueChanged="OnInlineOutgoingPresetSelected"
-                                   Label="@Loc["Outgoing Provider Preset"]"
-                                   Variant="Variant.Outlined"
-                                   Margin="Margin.Dense"
-                                   Class="mb-2">
-                            <MudSelectItem Value="@EmailProviderPresets.CustomPresetId">
-                                @Loc["Custom SMTP Server"]
-                            </MudSelectItem>
-                            @foreach (var preset in EmailProviderPresets.OutgoingProviders)
-                            {
-                                <MudSelectItem Value="@preset.Id">@preset.Name (@preset.SmtpHost)</MudSelectItem>
-                            }
-                        </MudSelect>
-
-                        @if (SelectedInlineOutgoingPreset != null &&
-                             SelectedInlineOutgoingPreset.Id != SelectedIncomingPreset?.Id &&
-                             !string.IsNullOrWhiteSpace(SelectedInlineOutgoingPreset.InstructionsText))
-                        {
-                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                                <div class="d-flex flex-column gap-1">
-                                    <span>@Loc[SelectedInlineOutgoingPreset.InstructionsText]</span>
-                                    @if (!string.IsNullOrWhiteSpace(SelectedInlineOutgoingPreset.HelpUrl))
-                                    {
-                                        <div>
-                                            <MudLink Href="@SelectedInlineOutgoingPreset.HelpUrl" Target="_blank" Typo="Typo.caption" Style="font-weight: 600;">
-                                                @(!string.IsNullOrWhiteSpace(SelectedInlineOutgoingPreset.HelpLinkLabel) ? Loc[SelectedInlineOutgoingPreset.HelpLinkLabel].Value : SelectedInlineOutgoingPreset.HelpUrl)
-                                            </MudLink>
-                                        </div>
-                                    }
-                                </div>
-                            </MudAlert>
-                        }
-
-                        <MudGrid Spacing="2">
-                            <MudItem xs="12" sm="6">
-                                <MudTextField @bind-Value="_inlineOutgoingServer.Name"
-                                              Label="@Loc["Outgoing Server Label"]"
-                                              Placeholder="e.g. Company SMTP or Resend"
-                                              Variant="Variant.Outlined"
-                                              Margin="Margin.Dense"
-                                              Required="true" />
-                            </MudItem>
-                            <MudItem xs="12" sm="6">
-                                <MudTextField @bind-Value="_inlineOutgoingServer.Domain"
-                                              Label="@Loc["Sending Domain"]"
-                                              Placeholder="poly-robotics.com"
-                                              Adornment="Adornment.Start"
-                                              AdornmentText="@("@")"
-                                              Variant="Variant.Outlined"
-                                              Margin="Margin.Dense" />
-                            </MudItem>
-
-                            @if (_selectedInlineOutgoingPresetId == EmailProviderPresets.CustomPresetId)
-                            {
-                                <MudItem xs="12" sm="6">
-                                    <MudTextField @bind-Value="_inlineOutgoingServer.Host"
-                                                  Label="@Loc["SMTP Host"]"
-                                                  Placeholder="smtp.example.com"
-                                                  Variant="Variant.Outlined"
-                                                  Margin="Margin.Dense"
-                                                  Required="true" />
-                                </MudItem>
-                                <MudItem xs="6" sm="3">
-                                    <MudNumericField @bind-Value="_inlineOutgoingServer.Port"
-                                                     Label="@Loc["SMTP Port"]"
-                                                     Variant="Variant.Outlined"
-                                                     Margin="Margin.Dense" />
-                                </MudItem>
-                                <MudItem xs="6" sm="3" Class="d-flex align-center">
-                                    <MudSwitch @bind-Value="_inlineOutgoingServer.UseSsl"
-                                               Color="Color.Primary"
-                                               Label="@Loc["SSL / TLS"]" />
-                                </MudItem>
-                            }
-                        </MudGrid>
-
-                        @if (_selectedInlineOutgoingPresetId == EmailProviderPresets.CustomPresetId)
-                        {
-                            <MudSwitch @bind-Value="_inlineOutgoingServer.UseSharedCredentials"
-                                       Color="Color.Primary"
-                                       Class="mt-2"
-                                       Label="@Loc["Use shared relay credentials (API key) instead of each mailbox's own login"]" />
-                        }
-
-                        @if (_inlineOutgoingServer.UseSharedCredentials)
-                        {
-                            <MudGrid Spacing="2" Class="mt-1">
-                                @if (_selectedInlineOutgoingPresetId == EmailProviderPresets.CustomPresetId ||
-                                     (SelectedInlineOutgoingPreset?.RequiresCustomSmtpUsername ?? false))
-                                {
-                                    <MudItem xs="12" sm="5">
-                                        <MudTextField @bind-Value="_inlineOutgoingServer.SharedUsername"
-                                                      Label="@Loc["SMTP Username"]"
-                                                      Placeholder="postmaster@yourdomain.com"
-                                                      Variant="Variant.Outlined"
-                                                      Margin="Margin.Dense"
-                                                      Required="true" />
-                                    </MudItem>
-                                }
-                                <MudItem xs="12" sm="@((_selectedInlineOutgoingPresetId == EmailProviderPresets.CustomPresetId || (SelectedInlineOutgoingPreset?.RequiresCustomSmtpUsername ?? false)) ? 7 : 12)">
-                                    <MudTextField @bind-Value="_inlineSharedPassword"
-                                                  Label="@(SelectedInlineOutgoingPreset != null ? Loc[SelectedInlineOutgoingPreset.CredentialLabel].Value : Loc["API Key / SMTP Password"].Value)"
-                                                  Placeholder="@(SelectedInlineOutgoingPreset?.CredentialPlaceholder ?? string.Empty)"
-                                                  InputType="InputType.Password"
-                                                  Variant="Variant.Outlined"
-                                                  Margin="Margin.Dense"
-                                                  HelperText="@Loc["Encrypted with server master password before storage"]" />
-                                </MudItem>
-                            </MudGrid>
-                        }
+                        <EmailOutgoingServerFields Server="_inlineOutgoingServer"
+                                                   @bind-SelectedPresetId="_selectedInlineOutgoingPresetId"
+                                                   @bind-PlainSharedPassword="_inlineSharedPassword"
+                                                   DomainPlaceholder="@_domainPlaceholder"
+                                                   FallbackDomain="@Server.Domain"
+                                                   SuppressInstructionsForPresetId="@SelectedIncomingPreset?.Id"
+                                                   IsInline="true" />
                     </MudPaper>
                 }
             </div>
 
             @if (AllowSharing)
             {
-                <MudDivider />
-                <div>
-                    <MudSwitch @bind-Value="Server.IsSharedWithAllUsers"
-                               Color="Color.Primary"
-                               Label="@Loc["Available to all users who are permitted to connect Real Inboxes"]" />
-
-                    @if (!Server.IsSharedWithAllUsers)
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
-                            @Loc["Restrict which users and groups can select this Incoming Server."]
-                        </MudText>
-                        <UserGroupPicker Target="UserGroupPickerTarget.Both"
-                                         SelectedUserIdsList="Server.AllowedUserIds"
-                                         SelectedGroupIdsList="Server.AllowedTeamIds" />
-                    }
-                </div>
+                <EmailServerSharingSection Server="Server"
+                                           SwitchLabel="@Loc["Available to all users who are permitted to connect Real Inboxes"]"
+                                           RestrictionCaption="@Loc["Restrict which users and groups can select this Incoming Server."]" />
             }
         </MudStack>
     </DialogContent>
@@ -269,7 +136,6 @@
 
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public IncomingServerConfig Server { get; set; } = new();
-    [Parameter] public List<SendingServerConfig>? AvailableOutgoingServers { get; set; }
     [Parameter] public bool AllowSharing { get; set; } = true;
     [Parameter] public bool IsNew { get; set; }
 
@@ -277,8 +143,9 @@
     private string _selectedIncomingPresetId = EmailProviderPresets.CustomPresetId;
     private string _selectedOutgoingOption = CreateNewOutgoingOption;
     private string _selectedInlineOutgoingPresetId = EmailProviderPresets.CustomPresetId;
-    private SendingServerConfig _inlineOutgoingServer = new() { Port = 587, UseSsl = true };
+    private SendingServerConfig _inlineOutgoingServer = new() { Port = EmailServerConfigValidator.DefaultSmtpPort, UseSsl = true };
     private string _inlineSharedPassword = string.Empty;
+    private string _domainPlaceholder = "example.com";
 
     private EmailProviderPreset? SelectedIncomingPreset =>
         EmailProviderPresets.GetById(_selectedIncomingPresetId);
@@ -290,13 +157,13 @@
     {
         get
         {
-            var normalizedDomain = Server.Domain?.Trim().TrimStart('@');
+            var normalizedDomain = EmailServerConfigValidator.NormalizeDomain(Server.Domain);
             return _existingOutgoingServers.Where(s =>
             {
                 if (!IsNew && !string.IsNullOrWhiteSpace(Server.DefaultOutgoingServerId) && s.Id == Server.DefaultOutgoingServerId)
                     return true;
 
-                var sDomain = s.Domain?.Trim().TrimStart('@');
+                var sDomain = EmailServerConfigValidator.NormalizeDomain(s.Domain);
                 if (!string.IsNullOrWhiteSpace(normalizedDomain))
                 {
                     if (!string.IsNullOrWhiteSpace(sDomain))
@@ -311,31 +178,20 @@
         }
     }
 
-    /// <summary>
-    /// Populated when the user configures a new Outgoing Server inline inside this dialog.
-    /// </summary>
-    public SendingServerConfig? CreatedOutgoingServer { get; private set; }
-
     protected override void OnInitialized()
     {
+        var profile = Db.CompanyProfile.Get();
+        _domainPlaceholder = profile.GetPrimaryDomainOrDefault("example.com");
+
         if (Server.Port <= 0)
         {
-            Server.Port = 993;
+            Server.Port = EmailServerConfigValidator.DefaultImapPort;
         }
 
-        _existingOutgoingServers = AvailableOutgoingServers
-            ?? Db.CompanyProfile.GetEmailSettings().SendingServers
-            ?? [];
+        _existingOutgoingServers = profile.EmailSettings?.SendingServers ?? [];
 
         var matchedPreset = EmailProviderPresets.DetectByImapHost(Server.Host);
-        if (matchedPreset != null)
-        {
-            _selectedIncomingPresetId = matchedPreset.Id;
-        }
-        else
-        {
-            _selectedIncomingPresetId = EmailProviderPresets.CustomPresetId;
-        }
+        _selectedIncomingPresetId = matchedPreset?.Id ?? EmailProviderPresets.CustomPresetId;
 
         if (!string.IsNullOrWhiteSpace(Server.DefaultOutgoingServerId) &&
             _existingOutgoingServers.Any(s => s.Id == Server.DefaultOutgoingServerId))
@@ -350,14 +206,14 @@
 
     private void ResolveBestOutgoingOption()
     {
-        var normalizedDomain = Server.Domain?.Trim().TrimStart('@');
+        var normalizedDomain = EmailServerConfigValidator.NormalizeDomain(Server.Domain);
         SendingServerConfig? matched = null;
 
         if (!string.IsNullOrWhiteSpace(normalizedDomain))
         {
             matched = _existingOutgoingServers.FirstOrDefault(s =>
                 !string.IsNullOrWhiteSpace(s.Domain) &&
-                string.Equals(s.Domain.Trim().TrimStart('@'), normalizedDomain, StringComparison.OrdinalIgnoreCase));
+                string.Equals(EmailServerConfigValidator.NormalizeDomain(s.Domain), normalizedDomain, StringComparison.OrdinalIgnoreCase));
         }
 
         if (matched == null && SelectedIncomingPreset != null)
@@ -374,15 +230,18 @@
         else
         {
             _selectedOutgoingOption = CreateNewOutgoingOption;
-            if (SelectedIncomingPreset != null)
-            {
-                OnInlineOutgoingPresetSelected(SelectedIncomingPreset.Id);
-            }
-            else
-            {
-                OnInlineOutgoingPresetSelected(EmailProviderPresets.CustomPresetId);
-            }
+            ApplyInlineOutgoingPreset(SelectedIncomingPreset?.Id ?? EmailProviderPresets.CustomPresetId);
         }
+    }
+
+    private void ApplyInlineOutgoingPreset(string presetId)
+    {
+        _selectedInlineOutgoingPresetId = EmailServerConfigValidator.ApplyOutgoingPreset(
+            _inlineOutgoingServer,
+            _selectedInlineOutgoingPresetId,
+            presetId,
+            isInline: true,
+            fallbackDomain: Server.Domain);
     }
 
     private void OnIncomingPresetSelected(string presetId)
@@ -402,17 +261,14 @@
                 Server.Domain = preset.DefaultDomain;
             }
         }
-        else
+        else if (previousPreset != null)
         {
-            if (previousPreset != null)
-            {
-                if (string.Equals(Server.Name, previousPreset.Name, StringComparison.OrdinalIgnoreCase))
-                    Server.Name = string.Empty;
-                if (string.Equals(Server.Host, previousPreset.ImapHost, StringComparison.OrdinalIgnoreCase))
-                    Server.Host = string.Empty;
-                if (string.Equals(Server.Domain, previousPreset.DefaultDomain, StringComparison.OrdinalIgnoreCase))
-                    Server.Domain = string.Empty;
-            }
+            if (string.Equals(Server.Name, previousPreset.Name, StringComparison.OrdinalIgnoreCase))
+                Server.Name = string.Empty;
+            if (string.Equals(Server.Host, previousPreset.ImapHost, StringComparison.OrdinalIgnoreCase))
+                Server.Host = string.Empty;
+            if (string.Equals(Server.Domain, previousPreset.DefaultDomain, StringComparison.OrdinalIgnoreCase))
+                Server.Domain = string.Empty;
         }
 
         ResolveBestOutgoingOption();
@@ -420,7 +276,7 @@
 
     private void OnServerDomainChanged(string domain)
     {
-        Server.Domain = domain?.Trim().TrimStart('@').ToLowerInvariant() ?? string.Empty;
+        Server.Domain = EmailServerConfigValidator.NormalizeDomain(domain);
         ResolveBestOutgoingOption();
         if (_selectedOutgoingOption == CreateNewOutgoingOption)
         {
@@ -436,30 +292,7 @@
             _inlineOutgoingServer.Domain = Server.Domain;
             if (SelectedIncomingPreset != null && string.IsNullOrWhiteSpace(_inlineOutgoingServer.Host))
             {
-                OnInlineOutgoingPresetSelected(SelectedIncomingPreset.Id);
-            }
-        }
-    }
-
-    private void OnInlineOutgoingPresetSelected(string presetId)
-    {
-        _selectedInlineOutgoingPresetId = presetId ?? EmailProviderPresets.CustomPresetId;
-        var preset = SelectedInlineOutgoingPreset;
-        if (preset != null)
-        {
-            _inlineOutgoingServer.Name = preset.Scope == EmailPresetScope.MailboxProvider ? $"{preset.Name} SMTP" : preset.Name;
-            _inlineOutgoingServer.Host = preset.SmtpHost;
-            _inlineOutgoingServer.Port = preset.SmtpPort;
-            _inlineOutgoingServer.UseSsl = preset.SmtpSsl;
-            _inlineOutgoingServer.UseSharedCredentials = preset.UseSharedCredentials;
-            _inlineOutgoingServer.SharedUsername = preset.DefaultSharedUsername;
-            if (!string.IsNullOrWhiteSpace(Server.Domain))
-            {
-                _inlineOutgoingServer.Domain = Server.Domain;
-            }
-            else if (!string.IsNullOrWhiteSpace(preset.DefaultDomain))
-            {
-                _inlineOutgoingServer.Domain = preset.DefaultDomain;
+                ApplyInlineOutgoingPreset(SelectedIncomingPreset.Id);
             }
         }
     }
@@ -473,47 +306,24 @@
         }
 
         var currentUser = await UserService.GetEmployeeAsync();
-        if (currentUser == null || !currentUser.IsActive || currentUser.IsBanned || currentUser.IsSuspended)
-        {
-            Snackbar.Add(Loc["You do not have permission to manage email servers."].Value, Severity.Error);
-            return;
-        }
-
         var profile = Db.CompanyProfile.GetOrCreate();
         profile.EmailSettings ??= new EmailServerSettings();
-        bool isAdmin = currentUser.IsAdmin || currentUser.HasPermission(AppPermissions.Admin.ManageSettings);
-        bool canManageServers = isAdmin || profile.EmailSettings.AllowUsersToManageServers;
-        if (!canManageServers)
+
+        var (isAllowed, isAdmin) = EmailServerConfigValidator.AuthorizeServerManagement(currentUser, profile.EmailSettings);
+        if (!isAllowed)
         {
             Snackbar.Add(Loc["You do not have permission to manage email servers."].Value, Severity.Error);
             return;
         }
 
-        if (!isAdmin)
+        var incomingSecurityError = await EmailServerConfigValidator.ValidateTransportSecurityAsync(Server, isAdmin);
+        if (incomingSecurityError != EmailServerValidationError.None)
         {
-            if (!Server.UseSsl)
-            {
-                Snackbar.Add(Loc["SSL / TLS is required for custom mail servers."].Value, Severity.Error);
-                return;
-            }
-
-            try
-            {
-                await Spokes_Server.Core.Security.SafeExternalHttpHandler.AssertSafeExternalHostAsync(Server.Host);
-            }
-            catch
-            {
-                Snackbar.Add(MailTransportSecurityHelper.SanitizedConnectionErrorMessage, Severity.Error);
-                return;
-            }
+            Snackbar.Add(EmailServerConfigValidator.FormatValidationError(incomingSecurityError, Loc), Severity.Error);
+            return;
         }
 
-        Server.Domain = Server.Domain?.Trim().TrimStart('@').ToLowerInvariant() ?? string.Empty;
-
-        if (string.IsNullOrWhiteSpace(Server.Name))
-        {
-            Server.Name = !string.IsNullOrWhiteSpace(Server.Domain) ? Server.Domain : Server.Host;
-        }
+        EmailServerConfigValidator.NormalizeAndApplyDefaults(Server);
 
         if (_selectedOutgoingOption == CreateNewOutgoingOption)
         {
@@ -523,48 +333,23 @@
                 return;
             }
 
-            if (!isAdmin)
+            var outgoingSecurityError = await EmailServerConfigValidator.ValidateTransportSecurityAsync(_inlineOutgoingServer, isAdmin);
+            if (outgoingSecurityError != EmailServerValidationError.None)
             {
-                if (!_inlineOutgoingServer.UseSsl)
-                {
-                    Snackbar.Add(Loc["SSL / TLS is required for custom mail servers."].Value, Severity.Error);
-                    return;
-                }
-
-                try
-                {
-                    await Spokes_Server.Core.Security.SafeExternalHttpHandler.AssertSafeExternalHostAsync(_inlineOutgoingServer.Host);
-                }
-                catch
-                {
-                    Snackbar.Add(MailTransportSecurityHelper.SanitizedConnectionErrorMessage, Severity.Error);
-                    return;
-                }
+                Snackbar.Add(EmailServerConfigValidator.FormatValidationError(outgoingSecurityError, Loc), Severity.Error);
+                return;
             }
 
-            _inlineOutgoingServer.Domain = !string.IsNullOrWhiteSpace(_inlineOutgoingServer.Domain)
-                ? _inlineOutgoingServer.Domain.Trim().TrimStart('@').ToLowerInvariant()
-                : Server.Domain;
+            EmailServerConfigValidator.NormalizeAndApplyDefaults(_inlineOutgoingServer, fallbackDomain: Server.Domain);
 
-            if (string.IsNullOrWhiteSpace(_inlineOutgoingServer.Name))
+            var credError = EmailServerConfigValidator.ApplySharedCredentials(
+                _inlineOutgoingServer,
+                _inlineSharedPassword,
+                SelectedInlineOutgoingPreset,
+                EncryptionService);
+            if (credError != EmailServerValidationError.None)
             {
-                _inlineOutgoingServer.Name = !string.IsNullOrWhiteSpace(_inlineOutgoingServer.Domain)
-                    ? _inlineOutgoingServer.Domain
-                    : _inlineOutgoingServer.Host;
-            }
-
-            if (!string.IsNullOrWhiteSpace(_inlineSharedPassword))
-            {
-                if (SelectedInlineOutgoingPreset?.MirrorPasswordToUsername == true)
-                {
-                    _inlineOutgoingServer.SharedUsername = _inlineSharedPassword.Trim();
-                }
-                _inlineOutgoingServer.EncryptedSharedPassword = EncryptionService.Encrypt(_inlineSharedPassword.Trim());
-            }
-
-            if (_inlineOutgoingServer.UseSharedCredentials && string.IsNullOrEmpty(_inlineOutgoingServer.EncryptedSharedPassword))
-            {
-                Snackbar.Add(Loc["API Key / SMTP password is required for shared relay credentials."].Value, Severity.Warning);
+                Snackbar.Add(EmailServerConfigValidator.FormatValidationError(credError, Loc, isInlineOutgoing: true), Severity.Warning);
                 return;
             }
 
@@ -586,7 +371,6 @@
             }
             Db.CompanyProfile.Save(profile);
 
-            CreatedOutgoingServer = _inlineOutgoingServer;
             Server.DefaultOutgoingServerId = _inlineOutgoingServer.Id;
         }
         else

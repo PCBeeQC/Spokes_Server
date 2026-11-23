@@ -3,6 +3,8 @@
 @implements IDisposable
 <PageTitle>My Expenses</PageTitle>
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Projects
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -57,7 +59,7 @@
                                 <MudText Typo="Typo.h4" Class="mt-6 mb-2" Align="Align.Center">@report.TotalAmount.ToString("C")</MudText>
                             </MudCardContent>
                             <MudCardActions Class="px-4 pb-4 pt-0 d-flex justify-space-between align-center">
-                                @if (report.Status == ExpenseReportStatus.Draft)
+                                @if (report.Status == ExpenseReportStatus.Draft && CanCreateReport)
                                 {
                                     <div>
                                         <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="@(() => DeleteReport(report))">Delete</MudButton>
@@ -140,6 +142,7 @@
 @code {
     private List<ExpenseReport> MyReports = [];
     private List<CommissionItem> MyCommissions = [];
+    private Employee? _currentEmployee;
     private string EmployeeId = "";
     private string EmployeeName = "";
     private bool CanCreateReport;
@@ -155,12 +158,13 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var emp = await UserService.GetEmployeeAsync();
+        var emp = await UserService.GetEmployeeAsync(allowSuspended: true);
         if (emp != null)
         {
+            _currentEmployee = emp;
             EmployeeId = emp.Id;
             EmployeeName = emp.FullName;
-            CanCreateReport = true;
+            CanCreateReport = emp.IsActiveUnsuspended && emp.HasPermission(AppPermissions.Finance.AccessExpenses);
             Refresh();
         }
     }
@@ -186,10 +190,13 @@
         {
             var p = Db.Projects.GetById(record.ProjectId);
             var percentage = p?.Commissions.FirstOrDefault(c => c.EmployeeId == EmployeeId || c.Name == EmployeeName)?.Percentage ?? 0;
+            bool canSeeProjectName = p == null || ProjectAccessHelper.CanAccessProjectForContribution(_currentEmployee, p, Db.Teams, allowSuspended: true);
 
             MyCommissions.Add(new CommissionItem
             {
-                ProjectName = p?.DisplayName ?? "Unknown Project",
+                ProjectName = p == null
+                    ? "Unknown Project"
+                    : (canSeeProjectName ? p.DisplayName : "Restricted Project"),
                 Percentage = percentage,
                 Amount = record.CommissionAmount,
                 Status = record.Status,
@@ -198,14 +205,29 @@
         }
     }
 
+    private async Task<Employee?> AuthorizeExpenseMutationAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp is not { IsActiveUnsuspended: true } || !emp.HasPermission(AppPermissions.Finance.AccessExpenses))
+        {
+            CanCreateReport = false;
+            Snackbar.Add("Your account is read-only or lacks permission to modify expense reports.", Severity.Error);
+            return null;
+        }
+
+        CanCreateReport = true;
+        return emp;
+    }
+
     private async Task CreateReport()
     {
-        if (!CanCreateReport) return;
+        var emp = await AuthorizeExpenseMutationAsync();
+        if (emp == null) return;
 
         var newReport = new ExpenseReport
             {
-                EmployeeId = EmployeeId,
-                EmployeeName = EmployeeName
+                EmployeeId = emp.Id,
+                EmployeeName = emp.FullName
             };
 
         // Save immediately to generate ID and Number
@@ -217,6 +239,9 @@
 
     private async Task EditReport(ExpenseReport report)
     {
+        var emp = await AuthorizeExpenseMutationAsync();
+        if (emp == null || !string.Equals(report.EmployeeId, emp.Id, StringComparison.Ordinal)) return;
+
         var parameters = new DialogParameters { ["Report"] = report, ["IsReadOnly"] = false };
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
 
@@ -225,6 +250,8 @@
 
         if (result is { Canceled: false })
         {
+            var liveEmp = await AuthorizeExpenseMutationAsync();
+            if (liveEmp == null || !string.Equals(report.EmployeeId, liveEmp.Id, StringComparison.Ordinal)) return;
             Db.ExpenseReports.Save(report);
             Refresh();
             Snackbar.Add("Report Saved", Severity.Success);
@@ -238,8 +265,11 @@
         await DialogService.ShowAsync<ExpenseReportDialog>("View Report", parameters, options);
     }
 
-    private void SubmitReport(ExpenseReport report)
+    private async Task SubmitReport(ExpenseReport report)
     {
+        var emp = await AuthorizeExpenseMutationAsync();
+        if (emp == null || !string.Equals(report.EmployeeId, emp.Id, StringComparison.Ordinal)) return;
+
         // Simple submit
         report.DateSubmitted = DateTime.Now;
         Db.ExpenseReports.Save(report);
@@ -249,6 +279,9 @@
 
     private async Task DeleteReport(ExpenseReport report)
     {
+        var emp = await AuthorizeExpenseMutationAsync();
+        if (emp == null || !string.Equals(report.EmployeeId, emp.Id, StringComparison.Ordinal)) return;
+
         var result = await DialogService.ShowMessageBoxAsync(
         "Delete Report",
         $"Are you sure you want to delete report #{report.ReportNumber}?",
@@ -256,6 +289,8 @@
 
         if (result == true)
         {
+            var liveEmp = await AuthorizeExpenseMutationAsync();
+            if (liveEmp == null || !string.Equals(report.EmployeeId, liveEmp.Id, StringComparison.Ordinal)) return;
             Db.ExpenseReports.Delete(report.Id);
             Refresh();
             Snackbar.Add("Report Deleted", Severity.Success);

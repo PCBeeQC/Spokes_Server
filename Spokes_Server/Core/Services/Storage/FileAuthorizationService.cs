@@ -27,6 +27,8 @@ public interface IFileAuthorizationService
     FileKeyResolutionResult ResolveUploadKey(FileUploadKeyRequest request);
     FileKeyResolutionResult ResolveUploadKey(string category, string contextId, Employee user, string? tokenEncryptionKey = null, bool isThumbnail = false, HttpContext? httpContext = null);
     FileKeyResolutionResult ResolveDownloadKey(string category, string contextId, Employee user, string? tokenEncryptionKey = null, HttpContext? httpContext = null);
+    FileKeyResolutionResult ResolveDownloadKey(string category, string contextId, Employee user, string? tokenEncryptionKey, HttpContext? httpContext, string? fileName)
+        => ResolveDownloadKey(category, contextId, user, tokenEncryptionKey, httpContext);
 
     bool CanAccess(string category, string contextId, Employee user);
     bool CanUpload(string category, string contextId, Employee user);
@@ -108,6 +110,22 @@ public class FileAuthorizationService : IFileAuthorizationService
         if (resolver != null)
         {
             return resolver.ResolveDownloadKey(contextId, user, tokenEncryptionKey, httpContext);
+        }
+
+        return FileKeyResolutionResult.NotEncrypted();
+    }
+
+    public FileKeyResolutionResult ResolveDownloadKey(string category, string contextId, Employee user, string? tokenEncryptionKey, HttpContext? httpContext, string? fileName)
+    {
+        if (string.IsNullOrEmpty(fileName))
+        {
+            return ResolveDownloadKey(category, contextId, user, tokenEncryptionKey, httpContext);
+        }
+
+        var resolver = _keyResolvers.FirstOrDefault(r => r.Category.Equals(category, StringComparison.OrdinalIgnoreCase));
+        if (resolver != null)
+        {
+            return resolver.ResolveDownloadKey(contextId, user, tokenEncryptionKey, httpContext, fileName);
         }
 
         return FileKeyResolutionResult.NotEncrypted();

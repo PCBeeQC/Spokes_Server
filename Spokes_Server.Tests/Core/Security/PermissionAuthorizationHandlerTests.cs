@@ -3,13 +3,17 @@ namespace Spokes_Server.Tests.Core.Security;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Constants;
+using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Security;
+using Spokes_Server.Core.Services.Security;
 using Spokes_Server.Tests.Helpers;
 
 public class PermissionAuthorizationHandlerTests
@@ -22,6 +26,7 @@ public class PermissionAuthorizationHandlerTests
     {
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns("Data");
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         _mockEmployeeRepo = new Mock<EmployeeRepository>(null!, mockConfig.Object);
         _db = TestDatabaseFactory.Create(null, _mockEmployeeRepo.Object);
@@ -37,14 +42,6 @@ public class PermissionAuthorizationHandlerTests
             : new ClaimsIdentity();
         var principal = new ClaimsPrincipal(identity);
         return new AuthorizationHandlerContext(new[] { requirement }, principal, null);
-    }
-
-    [Fact]
-    public void PermissionRequirement_Constructor_SetsPermissionProperty()
-    {
-        var requirement = new PermissionRequirement("Projects.View");
-
-        Assert.Equal("Projects.View", requirement.Permission);
     }
 
     #region Fail-closed when EmployeeId claim is missing or whitespace
@@ -126,70 +123,87 @@ public class PermissionAuthorizationHandlerTests
 
     #endregion
 
-    #region Scoped claim evaluation when EmployeeId claim is system-renderer
+    #region Fail-closed rejection of system-renderer and DocumentExport RenderScope confinement
 
     [Fact]
-    public async Task HandleRequirementAsync_SystemRenderer_UserHasRoleAdmin_Succeeds()
+    public async Task HandleRequirementAsync_SystemRenderer_NeverSucceedsEvenWithAdminAndPermissionClaims()
     {
-        var requirement = new PermissionRequirement(AppPermissions.Projects.View);
         var claims = new[]
         {
             new Claim("EmployeeId", "system-renderer"),
-            new Claim(ClaimTypes.Role, "Admin")
+            new Claim(ClaimTypes.Role, "Admin"),
+            new Claim("Permission", AppPermissions.Projects.View),
+            new Claim("Spokes_InternalRenderer", "true"),
+            new Claim("RenderScope", "DocumentExport")
         };
-        var context = CreateContext(requirement, claims);
 
-        await _handler.HandleAsync(context);
+        var viewCtx = CreateContext(new PermissionRequirement(AppPermissions.Projects.View), claims);
+        await _handler.HandleAsync(viewCtx);
+        Assert.False(viewCtx.HasSucceeded);
 
-        Assert.True(context.HasSucceeded);
+        var adminCtx = CreateContext(new PermissionRequirement(AppPermissions.Admin.RoleName), claims);
+        await _handler.HandleAsync(adminCtx);
+        Assert.False(adminCtx.HasSucceeded);
     }
 
     [Fact]
-    public async Task HandleRequirementAsync_SystemRenderer_UserHasMatchingPermissionClaim_Succeeds()
+    public async Task HandleRequirementAsync_DocumentExportScope_EnforcesLiveEmployeeAndReadOnlyExportAllowlist()
     {
-        var requirement = new PermissionRequirement(AppPermissions.Projects.View);
-        var claims = new[]
+        var admin = new Employee
         {
-            new Claim("EmployeeId", "system-renderer"),
-            new Claim("Permission", AppPermissions.Projects.View)
+            Id = "emp-export-admin",
+            IsAdmin = true,
+            IsActive = true
         };
-        var context = CreateContext(requirement, claims);
+        _mockEmployeeRepo.Setup(r => r.GetById(admin.Id)).Returns(admin);
 
-        await _handler.HandleAsync(context);
-
-        Assert.True(context.HasSucceeded);
-    }
-
-    [Fact]
-    public async Task HandleRequirementAsync_SystemRenderer_UserLacksRoleAndMatchingClaim_DoesNotSucceed()
-    {
-        var requirement = new PermissionRequirement(AppPermissions.Projects.View);
-        var claims = new[]
+        var poManager = new Employee
         {
-            new Claim("EmployeeId", "system-renderer"),
-            new Claim("Permission", AppPermissions.Chat.Use)
+            Id = "emp-export-po",
+            IsActive = true,
+            Permissions = [AppPermissions.Purchases.ManagePOs]
         };
-        var context = CreateContext(requirement, claims);
+        _mockEmployeeRepo.Setup(r => r.GetById(poManager.Id)).Returns(poManager);
 
-        await _handler.HandleAsync(context);
+        Claim[] AdminExportClaims() =>
+        [
+            new Claim("EmployeeId", admin.Id),
+            new Claim("Spokes_InternalRenderer", "true"),
+            new Claim("RenderScope", "DocumentExport")
+        ];
 
-        Assert.False(context.HasSucceeded);
-    }
+        // Read-only export permissions succeed for authorized live employee
+        var allowedViewCtx = CreateContext(new PermissionRequirement(AppPermissions.Projects.View), AdminExportClaims());
+        await _handler.HandleAsync(allowedViewCtx);
+        Assert.True(allowedViewCtx.HasSucceeded);
 
-    [Fact]
-    public async Task HandleRequirementAsync_SystemRenderer_AdminRequirementWithoutAdminRole_DoesNotSucceed()
-    {
-        var requirement = new PermissionRequirement(AppPermissions.Admin.RoleName);
-        var claims = new[]
-        {
-            new Claim("EmployeeId", "system-renderer"),
-            new Claim("Permission", AppPermissions.Projects.View)
-        };
-        var context = CreateContext(requirement, claims);
+        // Mutating, manage, email, and Admin policies are rejected under DocumentExport even for an Admin employee
+        var blockedAdminCtx = CreateContext(new PermissionRequirement(AppPermissions.Admin.RoleName), AdminExportClaims());
+        await _handler.HandleAsync(blockedAdminCtx);
+        Assert.False(blockedAdminCtx.HasSucceeded);
 
-        await _handler.HandleAsync(context);
+        var blockedEditCtx = CreateContext(new PermissionRequirement(AppPermissions.Projects.Edit), AdminExportClaims());
+        await _handler.HandleAsync(blockedEditCtx);
+        Assert.False(blockedEditCtx.HasSucceeded);
 
-        Assert.False(context.HasSucceeded);
+        var blockedManagePoCtx = CreateContext(new PermissionRequirement(AppPermissions.Purchases.ManagePOs), AdminExportClaims());
+        await _handler.HandleAsync(blockedManagePoCtx);
+        Assert.False(blockedManagePoCtx.HasSucceeded);
+
+        // PO manager can render ViewPOs under DocumentExport without ManagePOs succeeding
+        Claim[] poClaims =
+        [
+            new Claim("EmployeeId", poManager.Id),
+            new Claim("Spokes_InternalRenderer", "true"),
+            new Claim("RenderScope", "DocumentExport")
+        ];
+        var allowedPoViewCtx = CreateContext(new PermissionRequirement(AppPermissions.Purchases.ViewPOs), poClaims);
+        await _handler.HandleAsync(allowedPoViewCtx);
+        Assert.True(allowedPoViewCtx.HasSucceeded);
+
+        var deniedProjectCtx = CreateContext(new PermissionRequirement(AppPermissions.Projects.View), poClaims);
+        await _handler.HandleAsync(deniedProjectCtx);
+        Assert.False(deniedProjectCtx.HasSucceeded);
     }
 
     #endregion
@@ -264,59 +278,19 @@ public class PermissionAuthorizationHandlerTests
         Assert.False(context.HasSucceeded);
     }
 
-    [Fact]
-    public async Task HandleRequirementAsync_AdminRequirement_EmployeeIsSuspended_DoesNotSucceed()
+    [Theory]
+    [InlineData("emp-admin-suspended", true, true, false)]
+    [InlineData("emp-admin-banned", true, false, true)]
+    [InlineData("emp-admin-inactive", false, false, false)]
+    public async Task HandleRequirementAsync_AdminRequirement_DisallowedEmployeeStatus_DoesNotSucceed(string employeeId, bool isActive, bool isSuspended, bool isBanned)
     {
-        const string employeeId = "emp-admin-suspended";
         var employee = new Employee
         {
             Id = employeeId,
             IsAdmin = true,
-            IsActive = true,
-            IsSuspended = true
-        };
-        _mockEmployeeRepo.Setup(r => r.GetById(employeeId)).Returns(employee);
-
-        var requirement = new PermissionRequirement(AppPermissions.Admin.RoleName);
-        var claims = new[] { new Claim("EmployeeId", employeeId) };
-        var context = CreateContext(requirement, claims);
-
-        await _handler.HandleAsync(context);
-
-        Assert.False(context.HasSucceeded);
-    }
-
-    [Fact]
-    public async Task HandleRequirementAsync_AdminRequirement_EmployeeIsBanned_DoesNotSucceed()
-    {
-        const string employeeId = "emp-admin-banned";
-        var employee = new Employee
-        {
-            Id = employeeId,
-            IsAdmin = true,
-            IsActive = true,
-            IsBanned = true
-        };
-        _mockEmployeeRepo.Setup(r => r.GetById(employeeId)).Returns(employee);
-
-        var requirement = new PermissionRequirement(AppPermissions.Admin.RoleName);
-        var claims = new[] { new Claim("EmployeeId", employeeId) };
-        var context = CreateContext(requirement, claims);
-
-        await _handler.HandleAsync(context);
-
-        Assert.False(context.HasSucceeded);
-    }
-
-    [Fact]
-    public async Task HandleRequirementAsync_AdminRequirement_EmployeeIsInactive_DoesNotSucceed()
-    {
-        const string employeeId = "emp-admin-inactive";
-        var employee = new Employee
-        {
-            Id = employeeId,
-            IsAdmin = true,
-            IsActive = false
+            IsActive = isActive,
+            IsSuspended = isSuspended,
+            IsBanned = isBanned
         };
         _mockEmployeeRepo.Setup(r => r.GetById(employeeId)).Returns(employee);
 
@@ -452,16 +426,18 @@ public class PermissionAuthorizationHandlerTests
         Assert.True(context.HasSucceeded);
     }
 
-    [Fact]
-    public async Task HandleRequirementAsync_ViewPOs_EmployeeHasManageBills_DoesNotSucceed()
+    [Theory]
+    [InlineData("emp-bill-mgr", AppPermissions.Purchases.ManageBills)]
+    [InlineData("emp-bill-viewer", AppPermissions.Purchases.ViewBills)]
+    [InlineData("emp-bill-approver", AppPermissions.Purchases.ApproveBills)]
+    public async Task HandleRequirementAsync_ViewPOs_EmployeeHasOnlyBillsPermission_DoesNotSucceed(string employeeId, string permission)
     {
-        const string employeeId = "emp-bill-mgr";
         var employee = new Employee
         {
             Id = employeeId,
             IsAdmin = false,
             IsActive = true,
-            Permissions = new List<string> { AppPermissions.Purchases.ManageBills }
+            Permissions = new List<string> { permission }
         };
         _mockEmployeeRepo.Setup(r => r.GetById(employeeId)).Returns(employee);
 
@@ -474,104 +450,43 @@ public class PermissionAuthorizationHandlerTests
         Assert.False(context.HasSucceeded);
     }
 
-    [Fact]
-    public async Task HandleRequirementAsync_ViewPOs_EmployeeHasViewBills_DoesNotSucceed()
+    [Theory]
+    [InlineData(null, AppPermissions.Purchases.ViewBills)]
+    [InlineData(null, AppPermissions.Purchases.ApproveBills)]
+    [InlineData("system-renderer", AppPermissions.Purchases.ViewBills)]
+    [InlineData("system-renderer", AppPermissions.Purchases.ManagePOs)]
+    public async Task HandleRequirementAsync_ViewPOs_MissingOrSystemRendererEmployeeId_DoesNotSucceed(string? employeeId, string permissionClaim)
     {
-        const string employeeId = "emp-bill-viewer";
+        var requirement = new PermissionRequirement(AppPermissions.Purchases.ViewPOs);
+        var claims = employeeId == null
+            ? new[] { new Claim("Permission", permissionClaim) }
+            : new[] { new Claim("EmployeeId", employeeId), new Claim("Permission", permissionClaim) };
+        var context = CreateContext(requirement, claims);
+
+        await _handler.HandleAsync(context);
+
+        Assert.False(context.HasSucceeded);
+    }
+
+    [Fact]
+    public async Task HandleRequirementAsync_ViewPOs_DelegatedDocumentExport_UserHasManagePOsInRepo_Succeeds()
+    {
+        const string employeeId = "emp-render-po-mgr";
         var employee = new Employee
         {
             Id = employeeId,
-            IsAdmin = false,
             IsActive = true,
-            Permissions = new List<string> { AppPermissions.Purchases.ViewBills }
+            IsAdmin = false,
+            Permissions = new List<string> { AppPermissions.Purchases.ManagePOs }
         };
         _mockEmployeeRepo.Setup(r => r.GetById(employeeId)).Returns(employee);
 
         var requirement = new PermissionRequirement(AppPermissions.Purchases.ViewPOs);
-        var claims = new[] { new Claim("EmployeeId", employeeId) };
-        var context = CreateContext(requirement, claims);
-
-        await _handler.HandleAsync(context);
-
-        Assert.False(context.HasSucceeded);
-    }
-
-    [Fact]
-    public async Task HandleRequirementAsync_ViewPOs_EmployeeHasApproveBills_DoesNotSucceed()
-    {
-        const string employeeId = "emp-bill-approver";
-        var employee = new Employee
-        {
-            Id = employeeId,
-            IsAdmin = false,
-            IsActive = true,
-            Permissions = new List<string> { AppPermissions.Purchases.ApproveBills }
-        };
-        _mockEmployeeRepo.Setup(r => r.GetById(employeeId)).Returns(employee);
-
-        var requirement = new PermissionRequirement(AppPermissions.Purchases.ViewPOs);
-        var claims = new[] { new Claim("EmployeeId", employeeId) };
-        var context = CreateContext(requirement, claims);
-
-        await _handler.HandleAsync(context);
-
-        Assert.False(context.HasSucceeded);
-    }
-
-    [Fact]
-    public async Task HandleRequirementAsync_ViewPOs_MissingEmployeeId_UserHasViewBillsClaim_DoesNotSucceed()
-    {
-        var requirement = new PermissionRequirement(AppPermissions.Purchases.ViewPOs);
         var claims = new[]
         {
-            new Claim("Permission", AppPermissions.Purchases.ViewBills)
-        };
-        var context = CreateContext(requirement, claims);
-
-        await _handler.HandleAsync(context);
-
-        Assert.False(context.HasSucceeded);
-    }
-
-    [Fact]
-    public async Task HandleRequirementAsync_ViewPOs_MissingEmployeeId_UserHasApproveBillsClaim_DoesNotSucceed()
-    {
-        var requirement = new PermissionRequirement(AppPermissions.Purchases.ViewPOs);
-        var claims = new[]
-        {
-            new Claim("Permission", AppPermissions.Purchases.ApproveBills)
-        };
-        var context = CreateContext(requirement, claims);
-
-        await _handler.HandleAsync(context);
-
-        Assert.False(context.HasSucceeded);
-    }
-
-    [Fact]
-    public async Task HandleRequirementAsync_ViewPOs_SystemRenderer_UserHasViewBillsClaim_DoesNotSucceed()
-    {
-        var requirement = new PermissionRequirement(AppPermissions.Purchases.ViewPOs);
-        var claims = new[]
-        {
-            new Claim("EmployeeId", "system-renderer"),
-            new Claim("Permission", AppPermissions.Purchases.ViewBills)
-        };
-        var context = CreateContext(requirement, claims);
-
-        await _handler.HandleAsync(context);
-
-        Assert.False(context.HasSucceeded);
-    }
-
-    [Fact]
-    public async Task HandleRequirementAsync_ViewPOs_SystemRenderer_UserHasManagePOsClaim_Succeeds()
-    {
-        var requirement = new PermissionRequirement(AppPermissions.Purchases.ViewPOs);
-        var claims = new[]
-        {
-            new Claim("EmployeeId", "system-renderer"),
-            new Claim("Permission", AppPermissions.Purchases.ManagePOs)
+            new Claim("EmployeeId", employeeId),
+            new Claim("Spokes_InternalRenderer", "true"),
+            new Claim("RenderScope", Spokes_Server.Core.Middleware.RenderTokenMiddleware.DocumentExportScope)
         };
         var context = CreateContext(requirement, claims);
 
@@ -599,6 +514,7 @@ public class PermissionAuthorizationHandlerTests
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns("Data");
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         var mockTeamRepo = new Mock<TeamRepository>(null!, mockConfig.Object);
         mockTeamRepo.Setup(r => r.GetAll()).Returns(new List<Team>
         {
@@ -634,6 +550,7 @@ public class PermissionAuthorizationHandlerTests
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns("Data");
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         var mockTeamRepo = new Mock<TeamRepository>(null!, mockConfig.Object);
         mockTeamRepo.Setup(r => r.GetAll()).Returns(new List<Team>
         {
@@ -742,7 +659,8 @@ public class PermissionAuthorizationHandlerTests
             Id = employeeId,
             IsActive = true,
             IsSuspended = true,
-            PermissionGroup = group
+            PermissionGroupIds = [group.Id],
+            PermissionGroups = [group]
         };
         _mockEmployeeRepo.Setup(r => r.GetById(employeeId)).Returns(employee);
         var claims = new[] { new Claim("EmployeeId", employeeId) };
@@ -815,6 +733,74 @@ public class PermissionAuthorizationHandlerTests
         var projectsCtx = CreateContext(new PermissionRequirement(AppPermissions.Projects.View), claims);
         await _handler.HandleAsync(projectsCtx);
         Assert.False(projectsCtx.HasSucceeded);
+    }
+
+    [Fact]
+    public async Task HandleRequirementAsync_WithSessionService_RequiresActiveUnrevokedUnexpiredDeviceSession()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"Spokes_PermSess_{Guid.NewGuid()}");
+        Directory.CreateDirectory(tempDir);
+        using var persistence = new DiskPersistenceService(Mock.Of<ILogger<DiskPersistenceService>>());
+        try
+        {
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = tempDir , ["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!"})
+                .Build();
+            var sessionRepo = new DeviceSessionRepository(persistence, config);
+            var empRepo = new EmployeeRepository(persistence, config);
+            var sessionService = new SessionService(sessionRepo, empRepo);
+            var handler = new PermissionAuthorizationHandler(empRepo, sessionService: sessionService);
+
+            const string empId = "emp-sess-admin";
+            empRepo.Save(new Employee { Id = empId, IsAdmin = true, IsActive = true });
+
+            var activeSession = new DeviceSession
+            {
+                Id = "sess-active-1",
+                EmployeeId = empId,
+                ExpiresAt = DateTime.UtcNow.AddDays(1)
+            };
+            sessionRepo.Save(activeSession);
+
+            var activeClaims = new[]
+            {
+                new Claim("EmployeeId", empId),
+                new Claim("SessionId", activeSession.Id)
+            };
+            var okCtx = CreateContext(new PermissionRequirement(AppPermissions.Projects.View), activeClaims);
+            await handler.HandleAsync(okCtx);
+            Assert.True(okCtx.HasSucceeded);
+
+            // Revoke the session -> existing principal must now fail authorization
+            activeSession.RevokedAt = DateTime.UtcNow;
+            sessionRepo.Save(activeSession);
+
+            var revokedCtx = CreateContext(new PermissionRequirement(AppPermissions.Projects.View), activeClaims);
+            await handler.HandleAsync(revokedCtx);
+            Assert.False(revokedCtx.HasSucceeded);
+
+            // Expired session must also fail authorization
+            var expiredSession = new DeviceSession
+            {
+                Id = "sess-expired-1",
+                EmployeeId = empId,
+                ExpiresAt = DateTime.UtcNow.AddMinutes(-5)
+            };
+            sessionRepo.Save(expiredSession);
+
+            var expiredClaims = new[]
+            {
+                new Claim("EmployeeId", empId),
+                new Claim("SessionId", expiredSession.Id)
+            };
+            var expiredCtx = CreateContext(new PermissionRequirement(AppPermissions.Projects.View), expiredClaims);
+            await handler.HandleAsync(expiredCtx);
+            Assert.False(expiredCtx.HasSucceeded);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
     }
 
     #endregion

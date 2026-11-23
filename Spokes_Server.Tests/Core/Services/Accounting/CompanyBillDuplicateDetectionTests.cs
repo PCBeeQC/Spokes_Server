@@ -12,6 +12,7 @@ using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Communication;
+using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Accounting;
 using Spokes_Server.Core.Services.Accounting.InvoiceExtraction;
 using Spokes_Server.Core.Services.Communication.Email;
@@ -22,6 +23,15 @@ using Xunit;
 
 public class CompanyBillDuplicateDetectionTests : TestDataTestBase
 {
+    private static readonly Employee AdminActor = new()
+    {
+        Id = "admin-test",
+        FirstName = "Admin",
+        LastName = "Test",
+        IsAdmin = true,
+        IsActive = true
+    };
+
     private readonly ServiceProvider _serviceProvider;
     private readonly Database _db;
     private readonly Mock<IFileService> _mockFileService;
@@ -33,6 +43,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var services = new ServiceCollection();
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
         services.AddLogging(b => b.AddConsole());
         services.AddSingleton<EncryptionService>();
@@ -89,7 +100,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
             InvoiceDate = DateTime.Today.AddDays(-5)
         };
 
-        var match = _inboxService.FindExistingBill(extracted, null, "Robot Parts Co", "Invoice INV-99882");
+        var match = _inboxService.FindExistingBillMatch(extracted, null, "Robot Parts Co", "Invoice INV-99882")?.Bill;
 
         Assert.NotNull(match);
         Assert.Equal(manualBill.Id, match.Id);
@@ -120,7 +131,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
             InvoiceDate = DateTime.Today.AddDays(-2)
         };
 
-        var match = _inboxService.FindExistingBill(extracted, null, "DigiKey");
+        var match = _inboxService.FindExistingBillMatch(extracted, null, "DigiKey")?.Bill;
 
         Assert.NotNull(match);
         Assert.Equal(manualBill.Id, match.Id);
@@ -152,7 +163,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
             InvoiceDate = DateTime.Today.AddDays(-10)
         };
 
-        var match = _inboxService.FindExistingBill(extracted, null, "Hydro-Québec");
+        var match = _inboxService.FindExistingBillMatch(extracted, null, "Hydro-Québec")?.Bill;
 
         Assert.NotNull(match);
         Assert.Equal(manualBill.Id, match.Id);
@@ -174,11 +185,11 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         _db.Bills.Save(manualBill);
 
         // Extraction was empty (e.g. non-OCR scanned image)
-        var match = _inboxService.FindExistingBill(
+        var match = _inboxService.FindExistingBillMatch(
             null,
             null,
             "McMaster-Carr",
-            emailSubject: "Your order MC-88123 has shipped with invoice");
+            emailSubject: "Your order MC-88123 has shipped with invoice")?.Bill;
 
         Assert.NotNull(match);
         Assert.Equal(manualBill.Id, match.Id);
@@ -204,7 +215,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
             TotalAmount = 50.00m
         };
 
-        var match = _inboxService.FindExistingBill(extracted, null, "Acme Supplies");
+        var match = _inboxService.FindExistingBillMatch(extracted, null, "Acme Supplies")?.Bill;
 
         Assert.Null(match);
     }
@@ -233,7 +244,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         };
         _db.EmailMessages.Save(email);
 
-        _inboxService.AttachAttachmentToExistingBill(email.Id, manualBill.Id, "user-42");
+        _inboxService.AttachAttachmentToExistingBill(email.Id, manualBill.Id, "user-42", actor: AdminActor);
 
         var updatedBill = _db.Bills.GetById(manualBill.Id);
         var updatedEmail = _db.EmailMessages.GetById(email.Id);
@@ -265,7 +276,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         };
         _db.EmailMessages.Save(email);
 
-        var draft = await _inboxService.CreateDraftAnywayAsync(email.Id, "user-42");
+        var draft = await _inboxService.CreateDraftAnywayAsync(email.Id, actor: AdminActor);
 
         Assert.NotNull(draft);
         Assert.Equal(CompanyBillInboxConstants.BillingStatus.AutoDrafted, email.BillingStatus);
@@ -278,7 +289,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
     }
 
     [Fact]
-    public void FindExistingBill_ConflictingInvoiceNumbers_HighConfidenceNull_PossibleDuplicateFlagged()
+    public void FindExistingBill_ConflictingInvoiceNumbers_BothPassesNull_AdvisoryWarningOnDraftCard()
     {
         // Existing bill: INV-04, $300.00, today
         var existingBill = new Bill
@@ -306,49 +317,196 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
             extracted, null, "Apex Robotics", duplicateWindowDays: 20, includePossibleAmountFallback: false);
         Assert.Null(strictMatch);
 
-        // Pass 2 (assistive possible-duplicate fallback): flags same supplier + same amount as a possible duplicate for user review
+        // Pass 2 (fallback): conflicting explicit invoice numbers cannot be matched as duplicates
         var possibleMatch = _inboxService.FindExistingBillMatch(
             extracted, null, "Apex Robotics", duplicateWindowDays: 20, includePossibleAmountFallback: true);
-        Assert.NotNull(possibleMatch);
-        Assert.Equal(existingBill.Id, possibleMatch.Bill.Id);
-        Assert.Equal(ExistingBillMatchMethod.SupplierAndAmountPossibleDuplicate, possibleMatch.Method);
-        Assert.True(possibleMatch.IsPossibleDuplicate);
+        Assert.Null(possibleMatch);
+
+        // When drafted, GetSameSupplierSameAmountBills surfaces existing bill for advisory warning on draft card
+        var draft = new Bill
+        {
+            Id = Guid.NewGuid().ToString(),
+            SupplierName = "Apex Robotics",
+            InvoiceNumber = "INV-05",
+            Amount = 300.00m,
+            Date = DateTime.Today,
+            Status = BillStatus.AwaitingApproval
+        };
+        var sameAmtBills = _inboxService.GetSameSupplierSameAmountBills(draft);
+        Assert.Single(sameAmtBills);
+        Assert.Equal(existingBill.Id, sameAmtBills[0].Id);
     }
 
     [Fact]
-    public void FindExistingBill_BeyondDateWindow_HighConfidenceNull_PossibleDuplicateFlagged()
+    public void FindExistingBill_BeyondDateWindow_BothPassesNull_RecognizedAsPeriodicCadence()
     {
-        // Existing bill: monthly subscription from 45 days ago without invoice #
+        // Existing bill: monthly subscription from 45 days ago with distinct invoice #
         var previousBill = new Bill
         {
             Id = Guid.NewGuid().ToString(),
             SupplierName = "Cloud Services",
+            InvoiceNumber = "SUB-2026-09",
             Amount = 199.00m,
             Date = DateTime.Today.AddDays(-45),
             Status = BillStatus.Paid
         };
         _db.Bills.Save(previousBill);
 
-        // Incoming bill: new month bill, same amount, but today (window is 20 days)
+        // Incoming bill: new month bill, same amount, but today (window is 20 days) and distinct invoice #
         var extracted = new ExtractedInvoiceData
         {
             SupplierName = "Cloud Services",
+            InvoiceNumber = "SUB-2026-10",
             TotalAmount = 199.00m,
             InvoiceDate = DateTime.Today
         };
 
-        // Pass 1 (high-confidence date-window match): beyond 20 days returns null
+        // Pass 1 (high-confidence date-window match): beyond 20 days and distinct invoice numbers returns null
         var strictMatch = _inboxService.FindExistingBillMatch(
             extracted, null, "Cloud Services", duplicateWindowDays: 20, includePossibleAmountFallback: false);
         Assert.Null(strictMatch);
 
-        // Pass 2 (assistive possible-duplicate fallback): flags same supplier + same amount as a possible duplicate
+        // Pass 2 (fallback): conflicting explicit invoice numbers cannot be matched as duplicates
         var possibleMatch = _inboxService.FindExistingBillMatch(
             extracted, null, "Cloud Services", duplicateWindowDays: 20, includePossibleAmountFallback: true);
-        Assert.NotNull(possibleMatch);
-        Assert.Equal(previousBill.Id, possibleMatch.Bill.Id);
-        Assert.Equal(ExistingBillMatchMethod.SupplierAndAmountPossibleDuplicate, possibleMatch.Method);
-        Assert.True(possibleMatch.IsPossibleDuplicate);
+        Assert.Null(possibleMatch);
+
+        // Advisory check on draft card surfaces the prior bill
+        var draft = new Bill
+        {
+            Id = Guid.NewGuid().ToString(),
+            SupplierName = "Cloud Services",
+            InvoiceNumber = "SUB-2026-10",
+            Amount = 199.00m,
+            Date = DateTime.Today,
+            Status = BillStatus.AwaitingApproval
+        };
+        var sameAmtBills = _inboxService.GetSameSupplierSameAmountBills(draft);
+        Assert.Single(sameAmtBills);
+        Assert.Equal(previousBill.Id, sameAmtBills[0].Id);
+    }
+
+    [Fact]
+    public void FindExistingBill_AutoEntryMonthlyCadence_DistinctInvoiceNumbersAndDate_NotFlaggedAsDuplicate()
+    {
+        // Existing October bill: AutoEntry, INV-411476-1661502, $37.00, dated 2026-10-06, Paid
+        var octoberBill = new Bill
+        {
+            Id = Guid.NewGuid().ToString(),
+            SupplierName = "Ocrex Limited t/a AutoEntry",
+            InvoiceNumber = "INV-411476-1661502",
+            Amount = 37.00m,
+            Date = new DateTime(2026, 10, 6),
+            DueDate = new DateTime(2026, 10, 6),
+            Status = BillStatus.Paid,
+            DatePaid = new DateTime(2026, 10, 6)
+        };
+        _db.Bills.Save(octoberBill);
+
+        // Incoming November bill: AutoEntry, INV-411476-1682453, $37.00, dated 2026-11-06 (31 days apart)
+        var novemberExtraction = new ExtractedInvoiceData
+        {
+            SupplierName = "AutoEntry Notifications",
+            InvoiceNumber = "INV-411476-1682453",
+            TotalAmount = 37.00m,
+            InvoiceDate = new DateTime(2026, 11, 6),
+            DueDate = new DateTime(2026, 11, 6),
+            Currency = "CAD"
+        };
+
+        var matchStrict = _inboxService.FindExistingBillMatch(
+            novemberExtraction, null, "Ocrex Limited t/a AutoEntry", duplicateWindowDays: 20, includePossibleAmountFallback: false);
+        Assert.Null(matchStrict);
+
+        var matchFallback = _inboxService.FindExistingBillMatch(
+            novemberExtraction, null, "Ocrex Limited t/a AutoEntry", duplicateWindowDays: 20, includePossibleAmountFallback: true);
+        Assert.Null(matchFallback);
+    }
+
+    [Fact]
+    public async Task ProcessEmail_AutoEntryRecurringSubscription_AutoDraftsBill_DoesNotSuppressOrMarkDuplicate()
+    {
+        // Existing October bill recorded as paid
+        var octoberBill = new Bill
+        {
+            Id = Guid.NewGuid().ToString(),
+            SupplierName = "Ocrex Limited t/a AutoEntry",
+            InvoiceNumber = "INV-411476-1661502",
+            Amount = 37.00m,
+            Date = new DateTime(2026, 10, 6),
+            DueDate = new DateTime(2026, 10, 6),
+            Status = BillStatus.Paid,
+            DatePaid = new DateTime(2026, 10, 6)
+        };
+        _db.Bills.Save(octoberBill);
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid().ToString(),
+            ContactInfo = new Spokes_Server.Core.Models.Core.PartyContactInfo
+            {
+                BusinessName = "Ocrex Limited t/a AutoEntry",
+                ContactPersonEmail = "notifications@autoentry.com"
+            }
+        };
+        _db.Suppliers.Save(supplier);
+
+        static string BuildCiiXml(string invoiceNo, string dateStr, string total, string subTotal, string tax) => $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<rsm:CrossIndustryInvoice xmlns:rsm=""urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100""
+                          xmlns:ram=""urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100""
+                          xmlns:udt=""urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100"">
+    <rsm:ExchangedDocument>
+        <ram:ID>{invoiceNo}</ram:ID>
+        <ram:TypeCode>380</ram:TypeCode>
+        <ram:IssueDateTime>
+            <udt:DateTimeString format=""102"">{dateStr}</udt:DateTimeString>
+        </ram:IssueDateTime>
+    </rsm:ExchangedDocument>
+    <rsm:SupplyChainTradeTransaction>
+        <ram:ApplicableHeaderTradeAgreement>
+            <ram:SellerTradeParty>
+                <ram:Name>Ocrex Limited t/a AutoEntry</ram:Name>
+            </ram:SellerTradeParty>
+        </ram:ApplicableHeaderTradeAgreement>
+        <ram:ApplicableHeaderTradeSettlement>
+            <ram:InvoiceCurrencyCode>CAD</ram:InvoiceCurrencyCode>
+            <ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+                <ram:TaxBasisTotalAmount>{subTotal}</ram:TaxBasisTotalAmount>
+                <ram:TaxTotalAmount>{tax}</ram:TaxTotalAmount>
+                <ram:GrandTotalAmount>{total}</ram:GrandTotalAmount>
+            </ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+        </ram:ApplicableHeaderTradeSettlement>
+    </rsm:SupplyChainTradeTransaction>
+</rsm:CrossIndustryInvoice>";
+
+        var mime = new MimeMessage();
+        mime.From.Add(new MailboxAddress("AutoEntry Notifications", "notifications@autoentry.com"));
+        mime.Subject = "Your AutoEntry Invoice INV-411476-1682453";
+
+        var bodyBuilder = new BodyBuilder { TextBody = "Invoice for $37.00 CAD attached." };
+        bodyBuilder.Attachments.Add("AutoEntry-Facture-1682453.xml", System.Text.Encoding.UTF8.GetBytes(BuildCiiXml("INV-411476-1682453", "20261106", "37.00", "32.18", "4.82")), new ContentType("application", "xml"));
+        mime.Body = bodyBuilder.ToMessageBody();
+
+        _mockFileService.Setup(f => f.UploadStreamAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<string>(), null, null))
+            .ReturnsAsync((string ctx, string _, Stream _, string fn, string? _, string? _) => $"/spokesapi/files/bills/{ctx}/{fn}");
+
+        var email = await _inboxService.ProcessMimeMessageAsync(mime);
+
+        // Verification: email is AutoDrafted, NOT DuplicateDetected!
+        Assert.Equal(CompanyBillInboxConstants.BillingStatus.AutoDrafted, email.BillingStatus);
+        Assert.NotEmpty(email.LinkedBillIds);
+
+        var createdDrafts = _db.Bills.GetAll().Where(b => b.SourceEmailId == email.Id).ToList();
+        Assert.Single(createdDrafts);
+        var singleDraft = createdDrafts[0];
+        Assert.Equal(37.00m, singleDraft.Amount);
+        Assert.Equal("INV-411476-1682453", singleDraft.InvoiceNumber);
+        Assert.Equal(BillStatus.AwaitingApproval, singleDraft.Status);
+
+        // Existing October bill remains completely untouched and paid
+        var reloadedOct = _db.Bills.GetById(octoberBill.Id);
+        Assert.NotNull(reloadedOct);
+        Assert.Equal(BillStatus.Paid, reloadedOct.Status);
     }
 
     [Fact]
@@ -376,7 +534,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         _db.EmailMessages.Save(email);
 
         // Final invoice was $1,050.25 (discrepancy resolved by reviewer)
-        _inboxService.UpdateExistingBillAmount(email.Id, existingBill.Id, 1050.25m, "reviewer-1");
+        _inboxService.UpdateExistingBillAmount(email.Id, existingBill.Id, 1050.25m, "reviewer-1", actor: AdminActor);
 
         var updatedBill = _db.Bills.GetById(existingBill.Id);
         var updatedEmail = _db.EmailMessages.GetById(email.Id);
@@ -409,7 +567,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
             .ReturnsAsync("/spokesapi/files/bills/upload/Uploaded_Invoice.pdf");
 
         using var testStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("%PDF-1.4 dummy invoice content"));
-        var draft = await _inboxService.UploadAttachmentToEmailAsync(email.Id, testStream, "Uploaded_Invoice.pdf", "user-123");
+        var draft = await _inboxService.UploadAttachmentToEmailAsync(email.Id, testStream, "Uploaded_Invoice.pdf", "user-123", actor: AdminActor);
 
         Assert.NotNull(draft);
         Assert.Equal("Uploaded_Invoice.pdf", draft.AttachmentName);
@@ -462,11 +620,33 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
     }
 
     [Fact]
+    public async Task ProcessMimeMessageAsync_CustomerIncomingPaymentAfterLongPreamble_ClassifiesAsReceiptWithoutDraft()
+    {
+        // Ensures full email body (beyond the 100-char snippet) is classified as Payment Receipt rather than an expense/unprocessed
+        var mime = new MimeMessage();
+        mime.From.Add(new MailboxAddress("Interac", "notify@payments.interac.ca"));
+        mime.Subject = "Notice for your business account";
+        mime.Body = new TextPart("plain")
+        {
+            Text = "Bonjour / Hello Poly-Robotics, thank you for using our automated banking notification service today. " +
+                   "Client ABC Manufacturing has sent you an Interac e-Transfer of $1,450.00 which has been automatically deposited into your account."
+        };
+
+        var countBefore = _db.Bills.GetAll().Count;
+        var email = await _inboxService.ProcessMimeMessageAsync(mime);
+
+        Assert.NotNull(email);
+        Assert.Equal(CompanyBillInboxConstants.BillingStatus.Receipt, email.BillingStatus);
+        Assert.Null(email.LinkedBillId);
+        Assert.Equal(countBefore, _db.Bills.GetAll().Count);
+    }
+
+    [Fact]
     public async Task ProcessMimeMessageAsync_IgnoredDomain_ClassifiesAsDismissed()
     {
         var settings = _inboxService.GetSettings();
         settings.IgnoredSenderDomains.Add("spammer-promo.com");
-        _inboxService.SaveSettings(settings);
+        _inboxService.SaveSettings(settings, actor: AdminActor);
 
         var mime = new MimeMessage();
         mime.From.Add(new MailboxAddress("Marketing Team", "news@spammer-promo.com"));
@@ -496,7 +676,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var settings = _inboxService.GetSettings();
         settings.AutoMatchRecurringExpenses = true;
         settings.AllowDraftWithoutPdfForRecurring = true;
-        _inboxService.SaveSettings(settings);
+        _inboxService.SaveSettings(settings, actor: AdminActor);
 
         // 2. Incoming portal email with amount in body
         var mime = new MimeMessage();
@@ -521,7 +701,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
     {
         var settings = _inboxService.GetSettings();
         settings.IgnoredSenderDomains = ["spammer-promo.com"];
-        _inboxService.SaveSettings(settings);
+        _inboxService.SaveSettings(settings, actor: AdminActor);
 
         var mime = new MimeMessage();
         mime.From.Add(new MailboxAddress("Marketing Team", "news@spammer-promo.com"));
@@ -581,7 +761,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var settings = _inboxService.GetSettings();
         settings.AutoMatchRecurringExpenses = true;
         settings.AllowDraftWithoutPdfForRecurring = true;
-        _inboxService.SaveSettings(settings);
+        _inboxService.SaveSettings(settings, actor: AdminActor);
 
         // 2. Create an initial draft bill linked to the email
         var initialDraftBill = new Bill
@@ -611,7 +791,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         _db.EmailMessages.Save(email);
 
         // 3. Reprocess
-        var result = await _inboxService.ReprocessEmailAsync(email.Id, "test-user", forceEvenIfApproved: false);
+        var result = await _inboxService.ReprocessEmailAsync(email.Id, "test-user", forceEvenIfApproved: false, actor: AdminActor);
 
         // 4. Assert
         Assert.True(result.Success);
@@ -668,7 +848,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         _db.EmailMessages.Save(email);
 
         // 2. Reprocess without force
-        var result = await _inboxService.ReprocessEmailAsync(email.Id, "test-user", forceEvenIfApproved: false);
+        var result = await _inboxService.ReprocessEmailAsync(email.Id, "test-user", forceEvenIfApproved: false, actor: AdminActor);
 
         // 3. Assert confirmation required
         Assert.False(result.Success);
@@ -696,7 +876,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var settings = _inboxService.GetSettings();
         settings.AutoMatchRecurringExpenses = true;
         settings.AllowDraftWithoutPdfForRecurring = true;
-        _inboxService.SaveSettings(settings);
+        _inboxService.SaveSettings(settings, actor: AdminActor);
 
         var approvedBill = new Bill
         {
@@ -725,7 +905,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         _db.EmailMessages.Save(email);
 
         // Reprocess with forceEvenIfApproved = true
-        var result = await _inboxService.ReprocessEmailAsync(email.Id, "test-user", forceEvenIfApproved: true);
+        var result = await _inboxService.ReprocessEmailAsync(email.Id, "test-user", forceEvenIfApproved: true, actor: AdminActor);
 
         Assert.True(result.Success);
         Assert.False(result.RequiresConfirmation);
@@ -754,7 +934,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         _db.EmailMessages.Save(email);
 
         // Create sample .eml file in the mock cache directory
-        var mimeDir = Path.Combine(_testDataPath, CompanyBillInboxConstants.SystemEmployeeId, "Email", "Mime");
+        var mimeDir = Path.Combine(_testDataPath, CompanyBillInboxConstants.SystemEmployeeId, "Mime");
         Directory.CreateDirectory(mimeDir);
         var mimeFile = Path.Combine(mimeDir, $"{email.Id}.eml");
 
@@ -915,7 +1095,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         };
         _db.EmailMessages.Save(email);
 
-        _inboxService.ApproveBillFromEmail(email.Id, existingPaidBill.Id, "user-123");
+        _inboxService.ApproveBillFromEmail(email.Id, existingPaidBill.Id, "user-123", actor: AdminActor);
 
         var reloaded = _db.Bills.GetById(existingPaidBill.Id);
         Assert.NotNull(reloaded);
@@ -984,7 +1164,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         _db.EmailMessages.Save(unprocessedEmail);
 
         // Run Scan
-        var scanResult = await _inboxService.ScanForDuplicateBillsAsync();
+        var scanResult = await _inboxService.ScanForDuplicateBillsAsync(actor: AdminActor);
 
         Assert.Equal(2, scanResult.ScannedEmailsCount);
         Assert.Equal(2, scanResult.DuplicatesFoundCount);
@@ -1026,7 +1206,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         };
         _db.EmailMessages.Save(email);
 
-        var result = await _inboxService.ReprocessEmailAsync(email.Id, "user-123");
+        var result = await _inboxService.ReprocessEmailAsync(email.Id, "user-123", actor: AdminActor);
 
         Assert.True(result.Success);
         Assert.Equal(CompanyBillInboxConstants.BillingStatus.Statement, result.FinalStatus);
@@ -1133,7 +1313,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         };
         _db.EmailMessages.Save(email);
 
-        _inboxService.ReopenBillForFailedPayment(email.Id, bill.Id, "user-456");
+        _inboxService.ReopenBillForFailedPayment(email.Id, bill.Id, "user-456", actor: AdminActor);
 
         var updatedBill = _db.Bills.GetById(bill.Id);
         Assert.NotNull(updatedBill);
@@ -1156,7 +1336,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         settings.StatementKeywords.Clear();
         settings.ReceiptKeywords.Clear();
         settings.CreditNoteKeywords.Clear();
-        _inboxService.SaveSettings(settings);
+        _inboxService.SaveSettings(settings, actor: AdminActor);
 
         // 1. German Kontoauszug (Statement of Account)
         var stmtMime = new MimeMessage();
@@ -1390,10 +1570,10 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         var dupSummary114 = email.DecisionLog.DuplicateMatches.First(m => m.ExistingBillId == existingBill114.Id);
         var overriddenDraft = await _inboxService.CreateDraftAnywayAsync(
             email.Id,
-            "user-1",
             replaceDuplicateBillId: existingBill114.Id,
             specificAttachmentPath: dupSummary114.AttachmentPath,
-            specificAttachmentName: dupSummary114.AttachmentFileName);
+            specificAttachmentName: dupSummary114.AttachmentFileName,
+            actor: AdminActor);
 
         Assert.NotNull(overriddenDraft);
         Assert.Equal(114.06m, overriddenDraft.Amount);
@@ -1478,7 +1658,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         };
         _db.EmailMessages.Save(email);
 
-        var result = await _inboxService.ReprocessEmailAsync(email.Id, "user-123");
+        var result = await _inboxService.ReprocessEmailAsync(email.Id, "user-123", actor: AdminActor);
 
         Assert.True(result.Success);
         // Auto-drafted bill created by this email was cleaned up during re-evaluation

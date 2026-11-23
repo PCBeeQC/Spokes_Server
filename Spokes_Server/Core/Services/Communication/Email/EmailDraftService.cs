@@ -8,7 +8,9 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using MimeKit;
 using MimeKit.Text;
+using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Communication;
+using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.Communication;
 
@@ -23,6 +25,7 @@ public class EmailDraftService : IEmailDraftService
     private readonly IEmailCacheMaintenanceService _cacheMaintenance;
     private readonly ILogger<EmailDraftService>? _logger;
     private readonly EmployeeRepository? _employees;
+    private readonly CompanyProfileRepository? _companyProfile;
 
     public EmailDraftService(
         EmailFolderRepository emailFolders,
@@ -31,7 +34,8 @@ public class EmailDraftService : IEmailDraftService
         EmailAccountRepository? accounts = null,
         EmailSendingIdentityRepository? identities = null,
         ILogger<EmailDraftService>? logger = null,
-        EmployeeRepository? employees = null)
+        EmployeeRepository? employees = null,
+        CompanyProfileRepository? companyProfile = null)
     {
         _emailFolders = emailFolders;
         _emailMessages = emailMessages;
@@ -40,10 +44,16 @@ public class EmailDraftService : IEmailDraftService
         _identities = identities;
         _logger = logger;
         _employees = employees;
+        _companyProfile = companyProfile;
     }
 
-    private void ValidateActiveNonSuspendedEmployee(string? employeeId)
+    private void ValidateActiveNonSuspendedEmployee(string? employeeId, string? accountId = null)
     {
+        if (string.Equals(_companyProfile?.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException("Email drafts are unavailable in Family edition.");
+        }
+
         if (_employees == null) return;
 
         if (string.IsNullOrWhiteSpace(employeeId))
@@ -56,33 +66,33 @@ public class EmailDraftService : IEmailDraftService
         {
             throw new UnauthorizedAccessException("Suspended or unauthorized users cannot create, modify, or delete email drafts.");
         }
-    }
 
-    private void EnsureDraftCreatorOwnership(EmailMessage draft, string? employeeId)
-    {
-        if (!string.IsNullOrWhiteSpace(draft.CreatedByEmployeeId))
+        if (string.Equals(accountId, CompanyBillInboxConstants.SystemEmployeeId, StringComparison.OrdinalIgnoreCase))
         {
-            if (string.IsNullOrWhiteSpace(employeeId) ||
-                !string.Equals(draft.CreatedByEmployeeId, employeeId, StringComparison.OrdinalIgnoreCase))
+            bool canBill = employee.IsAdmin ||
+                           employee.HasPermission(AppPermissions.Finance.AccessAccounting) ||
+                           employee.HasPermission(AppPermissions.Purchases.ManageBills);
+            if (!canBill)
             {
-                throw new UnauthorizedAccessException("You cannot modify or delete another user's draft.");
+                throw new UnauthorizedAccessException("Accounting or ManageBills permission is required to draft from the Company Bill Inbox.");
             }
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(employeeId))
+        if (!employee.HasPermission(AppPermissions.Email.Use))
         {
-            var account = _accounts?.GetById(draft.AccountId);
-            bool isLegacyPersonalOwner = account != null
-                ? (!account.IsServerManaged &&
-                   !string.IsNullOrWhiteSpace(account.OwnerEmployeeId) &&
-                   string.Equals(account.OwnerEmployeeId, employeeId, StringComparison.OrdinalIgnoreCase))
-                : string.Equals(draft.AccountId, employeeId, StringComparison.OrdinalIgnoreCase);
+            throw new UnauthorizedAccessException("Email.Use permission is required for email draft operations.");
+        }
+    }
 
-            if (!isLegacyPersonalOwner)
-            {
-                throw new UnauthorizedAccessException("You cannot modify or delete another user's draft.");
-            }
+    private void EnsureDraftCreatorOwnership(EmailMessage draft, string? employeeId)
+    {
+        if (string.IsNullOrWhiteSpace(employeeId) && string.IsNullOrWhiteSpace(draft.CreatedByEmployeeId))
+            return;
+
+        if (!EmailInboxService.CanEmployeeAccessLocalDraft(draft, employeeId ?? string.Empty, _accounts?.GetById(draft.AccountId), draft.AccountId))
+        {
+            throw new UnauthorizedAccessException("You cannot modify or delete another user's draft.");
         }
     }
 
@@ -93,7 +103,7 @@ public class EmailDraftService : IEmailDraftService
         var accountId = request.AccountId;
         if (string.IsNullOrWhiteSpace(accountId)) return "";
 
-        ValidateActiveNonSuspendedEmployee(request.EmployeeId);
+        ValidateActiveNonSuspendedEmployee(request.EmployeeId, accountId);
 
         var to = request.To ?? string.Empty;
         var subject = request.Subject ?? string.Empty;
@@ -266,13 +276,6 @@ public class EmailDraftService : IEmailDraftService
         return draft.Id;
     }
 
-    public Task RemoveDraftAttachmentAsync(
-        string accountId,
-        string draftId,
-        string attachmentId,
-        CancellationToken cancellationToken = default) =>
-        RemoveDraftAttachmentAsync(accountId, draftId, attachmentId, employeeId: null, cancellationToken);
-
     public async Task RemoveDraftAttachmentAsync(
         string accountId,
         string draftId,
@@ -280,9 +283,14 @@ public class EmailDraftService : IEmailDraftService
         string? employeeId,
         CancellationToken cancellationToken = default)
     {
+        if (string.Equals(_companyProfile?.Get()?.Edition, "Family", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException("Email drafts are unavailable in Family edition.");
+        }
+
         if (!string.IsNullOrWhiteSpace(employeeId) || _employees != null)
         {
-            ValidateActiveNonSuspendedEmployee(employeeId);
+            ValidateActiveNonSuspendedEmployee(employeeId, accountId);
         }
 
         var draft = _emailMessages.GetById(accountId, draftId);
@@ -329,7 +337,7 @@ public class EmailDraftService : IEmailDraftService
         if (string.IsNullOrWhiteSpace(accountId) || string.IsNullOrWhiteSpace(draftId))
             return;
 
-        ValidateActiveNonSuspendedEmployee(employeeId);
+        ValidateActiveNonSuspendedEmployee(employeeId, accountId);
 
         var draft = _emailMessages.GetById(accountId, draftId) ?? _emailMessages.GetById(draftId);
         if (draft == null || !string.Equals(draft.AccountId, accountId, StringComparison.OrdinalIgnoreCase))

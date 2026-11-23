@@ -3,14 +3,11 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net.Http;
-using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using Spokes_Server.Core.Configuration;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Services.Licensing;
 
@@ -19,20 +16,20 @@ namespace Spokes_Server.Core.Services.Communication.Chat;
 public class GifSearchService : IGifSearchService
 {
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly SpokesOptions _options;
+    private readonly SpokesRelayClient _relayClient;
     private readonly CompanyProfileRepository _profileRepo;
     private readonly ServerConfigRepository _serverConfigs;
     private readonly ILogger<GifSearchService> _logger;
 
     public GifSearchService(
         IHttpClientFactory httpClientFactory,
-        IOptions<SpokesOptions> options,
+        SpokesRelayClient relayClient,
         CompanyProfileRepository profileRepo,
         ServerConfigRepository serverConfigs,
         ILogger<GifSearchService> logger)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
-        _options = options?.Value ?? new SpokesOptions();
+        _relayClient = relayClient ?? throw new ArgumentNullException(nameof(relayClient));
         _profileRepo = profileRepo ?? throw new ArgumentNullException(nameof(profileRepo));
         _serverConfigs = serverConfigs ?? throw new ArgumentNullException(nameof(serverConfigs));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -77,15 +74,15 @@ public class GifSearchService : IGifSearchService
         var effectiveOffset = append ? offset : 0;
         var cleanQuery = Regex.Replace(query.Trim(), @"\s+", " ");
         var escapedQuery = Uri.EscapeDataString(cleanQuery);
-        var httpClient = _httpClientFactory.CreateClient();
-        httpClient.Timeout = TimeSpan.FromSeconds(15);
-
         try
         {
             if (isDefaultProvider)
             {
-                return await SearchViaRelayAsync(httpClient, cleanQuery, effectiveOffset, cancellationToken);
+                return await SearchViaRelayAsync(cleanQuery, effectiveOffset, cancellationToken);
             }
+
+            var httpClient = _httpClientFactory.CreateClient();
+            httpClient.Timeout = TimeSpan.FromSeconds(15);
 
             if (provider == "Klipy")
             {
@@ -140,7 +137,6 @@ public class GifSearchService : IGifSearchService
     }
 
     private async Task<GifSearchResult> SearchViaRelayAsync(
-        HttpClient httpClient,
         string query,
         int offset,
         CancellationToken cancellationToken)
@@ -160,18 +156,8 @@ public class GifSearchService : IGifSearchService
             LicensePayload = profile?.LicensePayload
         };
 
-        var relayUrl = !string.IsNullOrEmpty(_options.GifRelayUrl)
-            ? _options.GifRelayUrl
-            : Constants.SpokesConstants.GifRelayUrl;
-
-        using var requestMessage = new HttpRequestMessage(HttpMethod.Post, relayUrl);
-        if (!string.IsNullOrEmpty(_options.PushRelayKey))
-        {
-            requestMessage.Headers.Add("X-Relay-Key", _options.PushRelayKey);
-        }
-        requestMessage.Content = JsonContent.Create(relayPayload);
-
-        using var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+        var relayUrl = _relayClient.ResolveGifRelayUrl();
+        using var response = await _relayClient.PostJsonAsync(relayUrl, relayPayload, cancellationToken, TimeSpan.FromSeconds(15));
         if (!response.IsSuccessStatusCode)
         {
             if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
@@ -191,8 +177,7 @@ public class GifSearchService : IGifSearchService
             };
         }
 
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        return ParseKlipyJson(json, offset);
+        return ParseKlipyJson(response.RawBody, offset);
     }
 
     public static GifSearchResult ParseKlipyJson(string json, int currentOffset)
@@ -221,28 +206,8 @@ public class GifSearchService : IGifSearchService
                               ?? files?["preview"]?["url"]?.ToString()
                               ?? gifUrl;
 
-                double? aspectRatio = null;
                 var targetObj = files?["preview"]?["gif"] ?? files?["preview"] ?? files?["hd"]?["gif"] ?? res;
-                if (targetObj != null)
-                {
-                    var wStr = targetObj["width"]?.ToString();
-                    var hStr = targetObj["height"]?.ToString();
-                    if (double.TryParse(wStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var w) &&
-                        double.TryParse(hStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var h) && h > 0)
-                    {
-                        aspectRatio = w / h;
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(gifUrl) && !items.Any(g => g.Url == gifUrl))
-                {
-                    items.Add(new GifItem
-                    {
-                        Url = gifUrl,
-                        PreviewUrl = previewUrl ?? gifUrl,
-                        AspectRatio = aspectRatio
-                    });
-                }
+                TryAddGifItem(items, gifUrl, previewUrl, targetObj?["width"], targetObj?["height"]);
             }
         }
 
@@ -268,29 +233,8 @@ public class GifSearchService : IGifSearchService
                 var media = res?["media_formats"];
                 var gifUrl = media?["gif"]?["url"]?.ToString();
                 var tinyUrl = media?["tinygif"]?["url"]?.ToString();
-
-                double? aspectRatio = null;
                 var dims = media?["tinygif"]?["dims"] as JsonArray ?? media?["gif"]?["dims"] as JsonArray;
-                if (dims != null && dims.Count >= 2)
-                {
-                    var wStr = dims[0]?.ToString();
-                    var hStr = dims[1]?.ToString();
-                    if (double.TryParse(wStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var w) &&
-                        double.TryParse(hStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var h) && h > 0)
-                    {
-                        aspectRatio = w / h;
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(gifUrl) && !items.Any(g => g.Url == gifUrl))
-                {
-                    items.Add(new GifItem
-                    {
-                        Url = gifUrl,
-                        PreviewUrl = tinyUrl ?? gifUrl,
-                        AspectRatio = aspectRatio
-                    });
-                }
+                TryAddGifItem(items, gifUrl, tinyUrl, dims is { Count: >= 2 } ? dims[0] : null, dims is { Count: >= 2 } ? dims[1] : null);
             }
         }
 
@@ -318,29 +262,8 @@ public class GifSearchService : IGifSearchService
                 var images = res?["images"];
                 var gifUrl = images?["original"]?["url"]?.ToString();
                 var previewUrl = images?["fixed_height_small"]?["url"]?.ToString();
-
-                double? aspectRatio = null;
                 var targetImg = images?["fixed_height_small"] ?? images?["original"];
-                if (targetImg != null)
-                {
-                    var wStr = targetImg["width"]?.ToString();
-                    var hStr = targetImg["height"]?.ToString();
-                    if (double.TryParse(wStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var w) &&
-                        double.TryParse(hStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var h) && h > 0)
-                    {
-                        aspectRatio = w / h;
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(gifUrl) && !items.Any(g => g.Url == gifUrl))
-                {
-                    items.Add(new GifItem
-                    {
-                        Url = gifUrl,
-                        PreviewUrl = previewUrl ?? gifUrl,
-                        AspectRatio = aspectRatio
-                    });
-                }
+                TryAddGifItem(items, gifUrl, previewUrl, targetImg?["width"], targetImg?["height"]);
             }
         }
 
@@ -350,5 +273,25 @@ public class GifSearchService : IGifSearchService
             HasMore = hasMore,
             NewOffset = currentOffset + count
         };
+    }
+
+    private static void TryAddGifItem(List<GifItem> items, string? gifUrl, string? previewUrl, JsonNode? widthNode, JsonNode? heightNode)
+    {
+        if (string.IsNullOrEmpty(gifUrl) || items.Any(g => g.Url == gifUrl))
+            return;
+
+        double? aspectRatio = null;
+        if (double.TryParse(widthNode?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var w) &&
+            double.TryParse(heightNode?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var h) && h > 0)
+        {
+            aspectRatio = w / h;
+        }
+
+        items.Add(new GifItem
+        {
+            Url = gifUrl,
+            PreviewUrl = previewUrl ?? gifUrl,
+            AspectRatio = aspectRatio
+        });
     }
 }

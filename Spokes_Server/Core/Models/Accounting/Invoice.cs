@@ -1,10 +1,15 @@
 namespace Spokes_Server.Core.Models.Accounting;
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Serialization;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Extensions;
+using Spokes_Server.Core.Models.Common;
 using Spokes_Server.Core.Services.Accounting;
 
-public class Invoice : IDataEntity
+public class Invoice : IDataEntity, IHasDocumentHistory, IHasAssociatedFiles
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -24,38 +29,20 @@ public class Invoice : IDataEntity
     public string Status { get; set; } = InvoiceStatus.Draft; // Draft, Final, Paid, Void
     public string PdfPath { get; set; } = string.Empty;
 
-    // NEW: Template Override
+    // Template Override
     public string? TemplateId { get; set; }
     public bool HideCostAndMarkup { get; set; }
     public string Note { get; set; } = string.Empty; // Description/Memo
     public string PaymentTerms { get; set; } = string.Empty;
 
-    // Accounting / Sage Export Tracking
-    public bool IsExported => ExportedToSageAt.HasValue;
-    public DateTime? ExportedToSageAt { get; set; }
-    public string? SageBatchId { get; set; }
+    // Chart of Accounts & Multi-Currency
     public string? GlAccountCode { get; set; }
-    public string? SageItemCode { get; set; }
+    public string Currency { get; set; } = "CAD";
+    public decimal ExchangeRate { get; set; } = 1.0m;
+    public List<DocumentTaxLine> TaxComponents { get; set; } = [];
 
     // The Line Items
     public List<InvoiceLine> LineItems { get; set; } = [];
-
-    // Backward compatibility for legacy JSON files and existing call sites
-    [JsonPropertyName("Lines")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<InvoiceLine>? LegacyLines
-    {
-        get => null;
-        set { if (value != null && LineItems.Count == 0) LineItems = value; }
-    }
-
-    [Obsolete("Prefer LineItems for consistency across accounting models.")]
-    [JsonIgnore]
-    public List<InvoiceLine> Lines
-    {
-        get => LineItems;
-        set => LineItems = value;
-    }
 
     // TRACKING: Which original source items does this invoice cover?
     // We use this to calculate "Unbilled" items later.
@@ -65,41 +52,84 @@ public class Invoice : IDataEntity
 
     // Financials
     public decimal TaxRate { get; set; } = FinancialCalculationEngine.QuebecCombinedTaxRate;
-    public decimal SubTotal => LineItems.Sum(l => l.Total);
+    public decimal SubTotal => FinancialCalculationEngine.RoundCurrency(LineItems.Sum(l => l.Total));
     public decimal TotalCost => LineItems.Sum(l => l.Quantity * l.OriginalUnitCost);
     public decimal GrossMargin => SubTotal - TotalCost;
-    public decimal TaxAmount => SubTotal * TaxRate;
-    public decimal TpsAmount => FinancialCalculationEngine.CalculateFromSubTotal(SubTotal, TaxRate).TpsAmount;
-    public decimal TvqAmount => FinancialCalculationEngine.CalculateFromSubTotal(SubTotal, TaxRate).TvqAmount;
+    public decimal TaxAmount => FinancialCalculationEngine.CalculateTax(SubTotal, TaxRate);
+    public decimal TpsAmount => TaxComponents.FirstOrDefault(t =>
+        string.Equals(t.Code, "TPS", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(t.Code, "GST", StringComparison.OrdinalIgnoreCase))?.Amount
+        ?? FinancialCalculationEngine.CalculateFromSubTotal(SubTotal, TaxRate).TpsAmount;
+    public decimal TvqAmount => TaxComponents.FirstOrDefault(t =>
+        string.Equals(t.Code, "TVQ", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(t.Code, "QST", StringComparison.OrdinalIgnoreCase))?.Amount
+        ?? FinancialCalculationEngine.CalculateFromSubTotal(SubTotal, TaxRate).TvqAmount;
     public decimal GrandTotal => SubTotal + TaxAmount;
 
-    // Payment Tracking
+    // Payment & Write-Off Tracking
     public List<PaymentRecord> Payments { get; set; } = [];
-    
+    public List<BalanceWriteOff> WriteOffs { get; set; } = [];
+
     [JsonIgnore]
     public decimal AmountPaid => Payments.Sum(p => p.Amount);
-    
-    public decimal BalanceDue => GrandTotal - AmountPaid;
+
+    [JsonIgnore]
+    public decimal AmountWrittenOff => WriteOffs.Sum(w => w.Amount);
+
+    [JsonIgnore]
+    public bool HasWriteOffs => WriteOffs.Count > 0;
+
+    public decimal BalanceDue => Math.Round(GrandTotal - AmountPaid - AmountWrittenOff, 2, MidpointRounding.AwayFromZero);
     public DateTime? DatePaid { get; set; }
 
-    [JsonPropertyName("AmountPaid")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public decimal? MigratedAmountPaid
+    /// <summary>True when imported as a pre-cutover open receivable during accounting migration.</summary>
+    public bool IsOpeningBalance { get; set; }
+    /// <summary>Links this opening-balance invoice to its AccountingMigrationBatch for rollback.</summary>
+    public string? MigrationBatchId { get; set; }
+
+    public List<DocumentHistoryEntry> History { get; set; } = [];
+
+    public IEnumerable<string> GetAssociatedFilePaths()
     {
-        get => null;
-        set
+        if (!string.IsNullOrWhiteSpace(PdfPath)) yield return PdfPath;
+    }
+
+    /// <summary>
+    /// Creates an independent draft copy of this invoice with regenerated identity and line IDs
+    /// and cleared billing, payment, and PDF references so it never aliases the original source items.
+    /// </summary>
+    public Invoice DuplicateAsDraft(string newInvoiceNumber, string? changedBy = null)
+    {
+        var copy = this.DeepClone();
+
+        copy.Id = Guid.NewGuid().ToString();
+        copy.InvoiceNumber = newInvoiceNumber;
+        copy.Date = DateTime.Today;
+        copy.DueDate = DateTime.Today.AddDays(30);
+        copy.Status = InvoiceStatus.Draft;
+        copy.PdfPath = string.Empty;
+        copy.Note = string.IsNullOrWhiteSpace(Note) ? $"Duplicated from #{InvoiceNumber}" : $"{Note} (Copy)";
+        copy.Payments = [];
+        copy.WriteOffs = [];
+        copy.DatePaid = null;
+        copy.IsOpeningBalance = false;
+        copy.MigrationBatchId = null;
+        copy.BilledTimeEntryIds = [];
+        copy.BilledPoItemIds = [];
+        copy.BilledExpenseItemIds = [];
+
+        foreach (var line in copy.LineItems)
         {
-            if (value.HasValue && value.Value > 0 && Payments.Count == 0)
-            {
-                Payments.Add(new PaymentRecord
-                {
-                    Amount = value.Value,
-                    Date = DatePaid ?? Date,
-                    Method = "Legacy",
-                    Notes = "Migrated from legacy AmountPaid"
-                });
-            }
+            line.Id = Guid.NewGuid().ToString();
+            line.SourceId = null;
+            line.SourceType = null;
+            line.IsCreditUsed = false;
         }
+
+        copy.History = [];
+        DocumentHistoryHelper.RecordCreated(copy, changedBy, $"Created (Duplicated from #{InvoiceNumber})");
+
+        return copy;
     }
 }
 
@@ -120,7 +150,7 @@ public class InvoiceLine
     public string? Note { get; set; } = string.Empty;
     public decimal Quantity { get; set; }
     public decimal UnitPrice { get; set; }
-    public decimal Total => Quantity * UnitPrice;
+    public decimal Total => FinancialCalculationEngine.RoundCurrency(Quantity * UnitPrice);
 
     // NEW FIELDS FOR CREDIT LOGIC
     public bool IsPrepayment { get; set; } // Adds to credit balance when paid
@@ -135,5 +165,4 @@ public class InvoiceLine
     public decimal OriginalUnitCost { get; set; } = 0;
     public decimal MarkupPercentage { get; set; } = 0; // e.g. 0.15 for 15%
     public string? GlAccountCode { get; set; }
-    public string? SageItemCode { get; set; }
 }

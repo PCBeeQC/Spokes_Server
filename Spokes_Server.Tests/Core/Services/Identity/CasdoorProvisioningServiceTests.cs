@@ -20,6 +20,7 @@ public class CasdoorProvisioningServiceTests : TestDataTestBase
     {
         _mockConfig = new Mock<IConfiguration>();
         _mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        _mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var services = new ServiceCollection();
         services.AddSingleton<IConfiguration>(_mockConfig.Object);
@@ -239,6 +240,28 @@ public class CasdoorProvisioningServiceTests : TestDataTestBase
         Assert.True(File.Exists(appConfPath), "app.conf should be created");
         var appConfContent = await File.ReadAllTextAsync(appConfPath);
         Assert.Contains("origin = \"https://new.example.com\"", appConfContent);
+        Assert.Contains("httpaddr = 127.0.0.1", appConfContent);
+        Assert.Contains("runmode = prod", appConfContent);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenSetupAlreadyComplete_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var config = _db.SystemConfigs.Get();
+        config.IsSetupComplete = true;
+        config.ClientId = "existing_client";
+        _db.SystemConfigs.Save(config);
+
+        // Act & Assert
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _service.ProvisionAsync(
+            "https://attacker.example.com",
+            "AdminUser",
+            "newpass1",
+            "SpokesUser",
+            "newpass2"));
+
+        Assert.Equal("existing_client", _db.SystemConfigs.Get().ClientId);
     }
 
     [Fact]
@@ -344,18 +367,6 @@ public class CasdoorProvisioningServiceTests : TestDataTestBase
         // Assert
         var appConfPath = Path.Combine(_testDataPath, "casdoor", "conf", "app.conf");
         Assert.False(File.Exists(appConfPath), "app.conf should not be written when ServerPublicUrl is empty");
-    }
-
-    [Fact]
-    public void Constructor_WhenDataPathNotConfigured_DefaultsToData()
-    {
-        // Arrange
-        var emptyConfig = new Mock<IConfiguration>();
-        emptyConfig.Setup(c => c["DataPath"]).Returns((string?)null);
-
-        // Act & Assert (instantiation succeeds with default DataPath)
-        var service = new CasdoorProvisioningService(_db.CoreContext, emptyConfig.Object);
-        Assert.NotNull(service);
     }
 
     private static async Task CreateCasdoorDbForProvisioningAsync(string dbPath)

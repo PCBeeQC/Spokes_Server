@@ -14,13 +14,15 @@ public sealed class PublishedServerAudioTrack : IDisposable
     public string TrackName { get; }
     public AudioSource AudioSource { get; }
     public LocalAudioTrack AudioTrack { get; }
+    public string PublicationSid { get; }
     private bool _disposed;
 
-    public PublishedServerAudioTrack(string trackName, AudioSource audioSource, LocalAudioTrack audioTrack)
+    public PublishedServerAudioTrack(string trackName, AudioSource audioSource, LocalAudioTrack audioTrack, string? publicationSid = null)
     {
         TrackName = trackName;
         AudioSource = audioSource;
         AudioTrack = audioTrack;
+        PublicationSid = !string.IsNullOrWhiteSpace(publicationSid) ? publicationSid : (audioTrack?.Sid ?? string.Empty);
     }
 
     public void Dispose()

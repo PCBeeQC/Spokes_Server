@@ -1,6 +1,7 @@
 namespace Spokes_Server.Tests.Services.Voice;
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Spokes_Server.Core.Services.Communication.Voice.Dsp;
 
@@ -16,6 +17,8 @@ public static class AcousticRoomSimulator
     public const int SampleRate = AcousticRoomProcessor.SampleRate;
     public const int FrameSamples10Ms = AcousticRoomProcessor.FrameSamples10Ms;
 
+    private static readonly ConcurrentDictionary<(double F0, double Amp, int Silence, bool Pauses), short[]> SpeechCache = new();
+
     /// <summary>
     /// Generates a realistic multi-syllable synthetic speech signal with vocal formants, harmonic structure,
     /// and natural inter-phrase pauses.
@@ -27,8 +30,21 @@ public static class AcousticRoomSimulator
         int startSilenceSamples = 0,
         bool includeSyllablePauses = false)
     {
+        var key = (fundamentalHz, amplitude, startSilenceSamples, includeSyllablePauses);
+        if (SpeechCache.TryGetValue(key, out var existing) && existing.Length >= totalSamples)
+        {
+            return existing.AsSpan(0, totalSamples).ToArray();
+        }
+
         var buffer = new short[totalSamples];
-        for (int i = 0; i < totalSamples; i++)
+        int copyStart = 0;
+        if (existing != null && existing.Length > 0)
+        {
+            existing.AsSpan().CopyTo(buffer);
+            copyStart = existing.Length;
+        }
+
+        for (int i = copyStart; i < totalSamples; i++)
         {
             int tIdx = i - startSilenceSamples;
             if (tIdx < 0)
@@ -54,15 +70,18 @@ public static class AcousticRoomSimulator
 
             // Rich vocal formant harmonics (F0, 2*F0, 3*F0, 4.5*F0) within 200-3400Hz band
             double f0 = fundamentalHz * (1.0 + 0.03 * Math.Sin(2.0 * Math.PI * 2.1 * t));
-            double wave = 0.52 * Math.Sin(2.0 * Math.PI * f0 * t)
-                        + 0.26 * Math.Sin(2.0 * Math.PI * (f0 * 2.0) * t + 0.3)
-                        + 0.14 * Math.Sin(2.0 * Math.PI * (f0 * 3.0) * t + 0.7)
-                        + 0.08 * Math.Sin(2.0 * Math.PI * (f0 * 4.5) * t + 1.2);
+            double phase = 2.0 * Math.PI * f0 * t;
+            double wave = 0.52 * Math.Sin(phase)
+                        + 0.26 * Math.Sin(phase * 2.0 + 0.3)
+                        + 0.14 * Math.Sin(phase * 3.0 + 0.7)
+                        + 0.08 * Math.Sin(phase * 4.5 + 1.2);
 
             double sample = amplitude * env * wave;
             buffer[i] = (short)Math.Clamp(Math.Round(sample), short.MinValue, short.MaxValue);
         }
-        return buffer;
+
+        SpeechCache.AddOrUpdate(key, buffer, (_, prev) => prev.Length >= buffer.Length ? prev : buffer);
+        return buffer.AsSpan(0, totalSamples).ToArray();
     }
 
     /// <summary>

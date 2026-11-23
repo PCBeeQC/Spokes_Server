@@ -1,0 +1,104 @@
+@* Canonical lazy-mounted icon menu primitive (AGENTS.md §2E & §3).
+   Avoids MudMenu's idle <MudOverlay>, <MudPopover>, and <MudKeyInterceptor> mounts while closed,
+   eliminating mudPointerEventsNone.cancelListener and mudPopover/mudKeyInterceptor JS chatter on
+   hot surfaces (ChatHeader, ChatSidebar, PollMentionCard, MainLayout) while preserving MudBlazor
+   CSS classes (.mud-menu, .mud-menu-icon-button-activator, .mud-popover-open, .mud-menu-item). *@
+
+<div class="mud-menu p-rel @Class" style="@Style">
+    <MudIconButton Icon="@Icon"
+                   Color="@Color"
+                   Size="@Size"
+                   Disabled="@Disabled"
+                   Class="@($"mud-menu-icon-button-activator {ButtonClass}".Trim())"
+                   title="@Title"
+                   aria-label="@(string.IsNullOrEmpty(AriaLabel) ? Title : AriaLabel)"
+                   aria-haspopup="menu"
+                   aria-expanded="@(_isOpen ? "true" : "false")"
+                   OnClick="ToggleOpen" />
+    @if (_isOpen)
+    {
+        <MudOverlay Visible="true"
+                    OnClick="Close"
+                    AutoClose="true"
+                    LockScroll="false"
+                    Style="background: transparent;"
+                    ZIndex="@(ZIndex - 1)"
+                    data-spokes-back-dismiss="menu" />
+        <MudPopover Open="true"
+                    AnchorOrigin="@AnchorOrigin"
+                    TransformOrigin="@TransformOrigin"
+                    OverflowBehavior="OverflowBehavior.FlipAlways"
+                    Paper="true"
+                    Elevation="8"
+                    Style="@($"min-width: {MinWidth}; z-index: {ZIndex};")">
+            <MudList T="string" Dense="@Dense" Class="py-1">
+                @ChildContent?.Invoke(Close)
+            </MudList>
+        </MudPopover>
+    }
+</div>
+@{
+    _lastFingerprint = ComputeFingerprint();
+}
+
+@code {
+    [Parameter, EditorRequired] public string Icon { get; set; } = string.Empty;
+    [Parameter] public Color Color { get; set; } = Color.Default;
+    [Parameter] public Size Size { get; set; } = Size.Medium;
+    [Parameter] public bool Dense { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string Class { get; set; } = string.Empty;
+    [Parameter] public string ButtonClass { get; set; } = string.Empty;
+    [Parameter] public string Style { get; set; } = string.Empty;
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? AriaLabel { get; set; }
+    [Parameter] public Origin AnchorOrigin { get; set; } = Origin.BottomRight;
+    [Parameter] public Origin TransformOrigin { get; set; } = Origin.TopRight;
+    [Parameter] public string MinWidth { get; set; } = "170px";
+    [Parameter] public int ZIndex { get; set; } = 1400;
+    [Parameter] public int ContentVersion { get; set; }
+    [Parameter] public RenderFragment<Action>? ChildContent { get; set; }
+
+    private bool _isOpen;
+    private int _lastFingerprint;
+    private bool _hasRenderedOnce;
+
+    private int ComputeFingerprint() => HashCode.Combine(
+        Icon,
+        Color,
+        Size,
+        Dense,
+        Disabled,
+        Class,
+        HashCode.Combine(ButtonClass, Style, Title, AriaLabel, AnchorOrigin, TransformOrigin, _isOpen, ContentVersion));
+
+    protected override bool ShouldRender()
+    {
+        if (!_hasRenderedOnce)
+        {
+            _hasRenderedOnce = true;
+            return true;
+        }
+
+        // Always allow re-render while open so dynamic menu items stay fresh
+        if (_isOpen)
+        {
+            return true;
+        }
+
+        return ComputeFingerprint() != _lastFingerprint;
+    }
+
+    private void ToggleOpen()
+    {
+        if (Disabled) return;
+        _isOpen = !_isOpen;
+    }
+
+    public void Close()
+    {
+        if (!_isOpen) return;
+        _isOpen = false;
+        StateHasChanged();
+    }
+}

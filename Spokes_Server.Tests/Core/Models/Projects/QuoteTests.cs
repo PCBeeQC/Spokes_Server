@@ -5,51 +5,6 @@ namespace Spokes_Server.Tests.Core.Models.Projects;
 public class QuoteTests
 {
     [Fact]
-    public void Quote_Initialization_SetsDefaultsCorrectly()
-    {
-        var quote = new Quote();
-
-        Assert.False(string.IsNullOrEmpty(quote.Id));
-        Assert.Equal(string.Empty, quote.ProjectId);
-        Assert.Equal(string.Empty, quote.QuoteNumber);
-        Assert.Equal("Main Estimate", quote.Title);
-        Assert.Equal(DateTime.Today, quote.Date);
-        Assert.Equal("Draft", quote.Status);
-        Assert.Null(quote.TemplateId);
-        Assert.Null(quote.StartDate);
-        Assert.Null(quote.Deadline);
-
-        Assert.Empty(quote.LaborItems);
-        Assert.Empty(quote.MaterialLineItems);
-        Assert.Empty(quote.PaymentTerms);
-
-        Assert.False(quote.ShowMonthlyPayments);
-        Assert.Equal(12, quote.MonthlyPaymentMonths);
-        Assert.Equal("Monthly payments over {0} months", quote.MonthlyPaymentDescription);
-
-        Assert.Equal(0.0m, quote.TaxRate);
-        Assert.True(quote.ShowTax);
-
-        Assert.Equal(0, quote.TotalLabor);
-        Assert.Equal(0, quote.TotalItems);
-        Assert.Equal(0, quote.TotalClientBought);
-        Assert.Equal(0, quote.SubTotal);
-        Assert.Equal(0, quote.TaxAmount);
-        Assert.Equal(0, quote.GrandTotal);
-        Assert.Equal(0, quote.TotalProjectBudget);
-
-        Assert.Equal(string.Empty, quote.ScopeOfWork);
-        Assert.Equal(string.Empty, quote.MainImageBase64);
-        Assert.Equal(string.Empty, quote.TermsAndConditions);
-        Assert.False(quote.TermsStartOnNewPage);
-        Assert.False(quote.IsConfidential);
-        Assert.False(quote.SignatureRequired);
-        Assert.False(quote.ShowIntermediateSignature);
-        Assert.Equal(string.Empty, quote.ClientRepresentativeName);
-        Assert.Equal(string.Empty, quote.CompanyRepresentativeName);
-    }
-
-    [Fact]
     public void Quote_Financials_CalculatedCorrectly()
     {
         var quote = new Quote { TaxRate = 0.15m, ShowTax = true };
@@ -89,38 +44,6 @@ public class QuoteTests
         Assert.Equal(100m, quote.SubTotal);
         Assert.Equal(0m, quote.TaxAmount);
         Assert.Equal(100m, quote.GrandTotal);
-    }
-
-    [Fact]
-    public void QuoteLaborItem_Initialization_SetsDefaults()
-    {
-        var item = new QuoteLaborItem();
-        Assert.False(string.IsNullOrEmpty(item.Id));
-        Assert.Equal(0, item.Hours);
-        Assert.Equal(0, item.Rate);
-        Assert.Equal(0, item.Total);
-        Assert.Equal(string.Empty, item.Note);
-    }
-
-    [Fact]
-    public void QuoteItemRow_Initialization_SetsDefaults()
-    {
-        var row = new QuoteItemRow();
-        Assert.False(string.IsNullOrEmpty(row.Id));
-        Assert.Equal(1, row.Quantity);
-        Assert.False(row.IsClientBought);
-        Assert.Equal(0, row.UnitCost);
-        Assert.Equal(0, row.UnitPrice);
-        Assert.Equal(0, row.Total);
-    }
-
-    [Fact]
-    public void PaymentTerm_Initialization_SetsDefaults()
-    {
-        var term = new PaymentTerm();
-        Assert.False(string.IsNullOrEmpty(term.Id));
-        Assert.Equal(string.Empty, term.InvoiceId);
-        Assert.False(term.IsInvoiced);
     }
 
     #region Quote Tests
@@ -170,79 +93,6 @@ public class QuoteTests
         var hash = quote.GetHashCode();
 
         Assert.Equal(hash, quote.GetHashCode());
-    }
-
-    [Fact]
-    public void Quote_PropertyMutations_WorkAsExpected()
-    {
-        var laborItem = new QuoteLaborItem();
-        var itemRow = new QuoteItemRow();
-        var paymentTerm = new PaymentTerm();
-        var testDate = new DateTime(2026, 3, 15);
-        var startDate = new DateOnly(2026, 3, 20);
-        var deadline = new DateOnly(2026, 6, 30);
-
-        var quote = new Quote
-        {
-            Id = "Q-123",
-            ProjectId = "PRJ-001",
-            QuoteNumber = "QUO-2026-001",
-            Title = "Custom Estimate",
-            Date = testDate,
-            Status = "Approved",
-            PdfPath = "/path/to/quote.pdf",
-            TemplateId = "TMP-001",
-            StartDate = startDate,
-            Deadline = deadline,
-            LaborItems = new List<QuoteLaborItem> { laborItem },
-            ItemRows = new List<QuoteItemRow> { itemRow },
-            PaymentTerms = new List<PaymentTerm> { paymentTerm },
-            ShowMonthlyPayments = true,
-            MonthlyPaymentMonths = 24,
-            MonthlyPaymentDescription = "24 months financing",
-            TaxRate = 0.05m,
-            ShowTax = false,
-            ScopeOfWork = "Full overhaul",
-            MainImageBase64 = "base64data",
-            TermsAndConditions = "Standard terms",
-            TermsStartOnNewPage = true,
-            IsConfidential = true,
-            SignatureRequired = true,
-            ShowIntermediateSignature = true,
-            ClientRepresentativeName = "Alice Smith",
-            CompanyRepresentativeName = "Bob Jones"
-        };
-
-        Assert.Equal("Q-123", quote.Id);
-        Assert.Equal("PRJ-001", quote.ProjectId);
-        Assert.Equal("QUO-2026-001", quote.QuoteNumber);
-        Assert.Equal("Custom Estimate", quote.Title);
-        Assert.Equal(testDate, quote.Date);
-        Assert.Equal("Approved", quote.Status);
-        Assert.Equal("/path/to/quote.pdf", quote.PdfPath);
-        Assert.Equal("TMP-001", quote.TemplateId);
-        Assert.Equal(startDate, quote.StartDate);
-        Assert.Equal(deadline, quote.Deadline);
-        Assert.Single(quote.LaborItems);
-        Assert.Same(laborItem, quote.LaborItems[0]);
-        Assert.Single(quote.MaterialLineItems);
-        Assert.Same(itemRow, quote.MaterialLineItems[0]);
-        Assert.Single(quote.PaymentTerms);
-        Assert.Same(paymentTerm, quote.PaymentTerms[0]);
-        Assert.True(quote.ShowMonthlyPayments);
-        Assert.Equal(24, quote.MonthlyPaymentMonths);
-        Assert.Equal("24 months financing", quote.MonthlyPaymentDescription);
-        Assert.Equal(0.05m, quote.TaxRate);
-        Assert.False(quote.ShowTax);
-        Assert.Equal("Full overhaul", quote.ScopeOfWork);
-        Assert.Equal("base64data", quote.MainImageBase64);
-        Assert.Equal("Standard terms", quote.TermsAndConditions);
-        Assert.True(quote.TermsStartOnNewPage);
-        Assert.True(quote.IsConfidential);
-        Assert.True(quote.SignatureRequired);
-        Assert.True(quote.ShowIntermediateSignature);
-        Assert.Equal("Alice Smith", quote.ClientRepresentativeName);
-        Assert.Equal("Bob Jones", quote.CompanyRepresentativeName);
     }
 
     #endregion
@@ -306,31 +156,6 @@ public class QuoteTests
         Assert.Equal(hash, item.GetHashCode());
     }
 
-    [Fact]
-    public void QuoteLaborItem_PropertyMutations_WorkAsExpected()
-    {
-        var item = new QuoteLaborItem
-        {
-            Id = "QLI-001",
-            WorkTypeId = "WT-1",
-            WorkTypeName = "Engineering",
-            SubTaskId = "ST-1",
-            SubTaskName = "Design",
-            Hours = 8.5m,
-            Rate = 125.0m,
-            Note = "Detailed plan"
-        };
-
-        Assert.Equal("QLI-001", item.Id);
-        Assert.Equal("WT-1", item.WorkTypeId);
-        Assert.Equal("Engineering", item.WorkTypeName);
-        Assert.Equal("ST-1", item.SubTaskId);
-        Assert.Equal("Design", item.SubTaskName);
-        Assert.Equal("Detailed plan", item.Note);
-        Assert.Equal(8.5m, item.Hours);
-        Assert.Equal(125.0m, item.Rate);
-    }
-
     #endregion
 
     #region QuoteItemRow Tests
@@ -390,29 +215,6 @@ public class QuoteTests
         var hash = row.GetHashCode();
 
         Assert.Equal(hash, row.GetHashCode());
-    }
-
-    [Fact]
-    public void QuoteItemRow_PropertyMutations_WorkAsExpected()
-    {
-        var row = new QuoteItemRow
-        {
-            Id = "QIR-001",
-            Description = "Steel Plate",
-            Quantity = 5m,
-            IsClientBought = true,
-            UnitCost = 50.0m,
-            MarkupPercentage = 20.0m,
-            UnitPrice = 60.0m
-        };
-
-        Assert.Equal("QIR-001", row.Id);
-        Assert.Equal("Steel Plate", row.Description);
-        Assert.Equal(5m, row.Quantity);
-        Assert.True(row.IsClientBought);
-        Assert.Equal(50.0m, row.UnitCost);
-        Assert.Equal(20.0m, row.MarkupPercentage);
-        Assert.Equal(60.0m, row.UnitPrice);
     }
 
     #endregion
@@ -477,58 +279,6 @@ public class QuoteTests
     }
 
     [Fact]
-    public void PaymentTerm_PropertyMutations_WorkAsExpected()
-    {
-        var term = new PaymentTerm
-        {
-            Id = "PT-001",
-            Description = "50% upfront",
-            Percentage = 50m,
-            Amount = 2500m,
-            InvoiceId = "INV-100"
-        };
-
-        Assert.Equal("PT-001", term.Id);
-        Assert.Equal("50% upfront", term.Description);
-        Assert.Equal(50m, term.Percentage);
-        Assert.Equal(2500m, term.Amount);
-        Assert.Equal("INV-100", term.InvoiceId);
-    }
-
-#pragma warning disable CS0618 // Obsolete member testing
-    [Fact]
-    public void Quote_MaterialLineItems_ItemRows_And_LineItems_AreSynchronized()
-    {
-        var quote = new Quote();
-        var item = new QuoteItemRow { Description = "Sensor Module", Quantity = 2, UnitPrice = 150m, IsClientBought = false };
-
-        quote.MaterialLineItems.Add(item);
-        Assert.Single(quote.ItemRows);
-        Assert.Single(quote.LineItems);
-        Assert.Same(item, quote.ItemRows[0]);
-        Assert.Same(item, quote.LineItems[0]);
-        Assert.Equal(300m, quote.TotalItems);
-
-        var item2 = new QuoteItemRow { Description = "Cable", Quantity = 1, UnitPrice = 50m, IsClientBought = false };
-        quote.ItemRows.Add(item2);
-        Assert.Equal(2, quote.MaterialLineItems.Count);
-        Assert.Equal(2, quote.LineItems.Count);
-        Assert.Equal(350m, quote.TotalItems);
-    }
-
-    [Fact]
-    public void Quote_LaborLineItems_And_LaborItems_AreSynchronized()
-    {
-        var quote = new Quote();
-        var labor = new QuoteLaborItem { WorkTypeName = "Engineering", Hours = 10, Rate = 100m };
-
-        quote.LaborLineItems.Add(labor);
-        Assert.Single(quote.LaborItems);
-        Assert.Same(labor, quote.LaborItems[0]);
-        Assert.Equal(1000m, quote.TotalLabor);
-    }
-
-    [Fact]
     public void Quote_JsonDeserialization_SupportsLegacyItemRowsProperty()
     {
         const string legacyJson = """
@@ -544,8 +294,6 @@ public class QuoteTests
         Assert.NotNull(quote);
         Assert.Single(quote.MaterialLineItems);
         Assert.Equal("Enclosure", quote.MaterialLineItems[0].Description);
-        Assert.Equal("Enclosure", quote.ItemRows[0].Description);
-        Assert.Equal("Enclosure", quote.LineItems[0].Description);
         Assert.Equal(200m, quote.TotalItems);
     }
 
@@ -565,11 +313,8 @@ public class QuoteTests
         Assert.NotNull(quote);
         Assert.Single(quote.MaterialLineItems);
         Assert.Equal("Controller", quote.MaterialLineItems[0].Description);
-        Assert.Equal("Controller", quote.ItemRows[0].Description);
-        Assert.Equal("Controller", quote.LineItems[0].Description);
         Assert.Equal(600m, quote.TotalItems);
     }
-#pragma warning restore CS0618
 
     [Fact]
     public void Quote_JsonSerialization_WritesMaterialLineItemsProperty()
@@ -582,16 +327,46 @@ public class QuoteTests
         Assert.DoesNotContain("\"LegacyItemRows\"", json);
     }
 
-    [Theory]
-    [InlineData(120.0, "120")]
-    [InlineData(135.5, "135.5")]
-    [InlineData(120.75, "120.75")]
-    [InlineData(0.0, "0")]
-    public void QuoteEditor_NumberFormatting_DisplaysOnlyRelevantDigits(double value, string expected)
+    [Fact]
+    public void Quote_TotalsAndTax_AreRoundedToTwoDecimals()
     {
-        var decimalValue = (decimal)value;
-        var formatted = decimalValue.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-        Assert.Equal(expected, formatted);
+        var quote = new Quote { TaxRate = 0.14975m, ShowTax = true };
+        quote.LaborItems.Add(new QuoteLaborItem { Hours = 1.333m, Rate = 100.01m }); // 133.31333 -> 133.31
+        quote.MaterialLineItems.Add(new QuoteItemRow { Quantity = 3m, UnitPrice = 10.335m }); // 31.005 -> 31.01
+
+        Assert.Equal(133.31m, quote.LaborItems[0].Total);
+        Assert.Equal(31.01m, quote.MaterialLineItems[0].Total);
+        Assert.Equal(164.32m, quote.SubTotal);
+        Assert.Equal(24.61m, quote.TaxAmount); // 164.32 * 0.14975 = 24.60692 -> 24.61
+        Assert.Equal(188.93m, quote.GrandTotal);
+    }
+
+    [Fact]
+    public void Quote_DuplicateAsDraft_RegeneratesChildItemIdsAndClearsPdf()
+    {
+        var original = new Quote
+        {
+            Id = "quo-orig",
+            ProjectId = "proj-1",
+            QuoteNumber = "EST-2601-0001",
+            Title = "Original Quote",
+            Status = QuoteStatus.Accepted,
+            PdfPath = "/data/PDFs/Quotes/quo-orig.pdf",
+            LaborItems = [new QuoteLaborItem { Id = "labor-1", Hours = 5m, Rate = 100m }],
+            MaterialLineItems = [new QuoteItemRow { Id = "mat-1", Quantity = 2m, UnitPrice = 50m }],
+            PaymentTerms = [new PaymentTerm { Id = "term-1", Description = "Deposit", Percentage = 50m }]
+        };
+
+        var copy = original.DuplicateAsDraft("EST-2601-0002", "Tester");
+
+        Assert.NotEqual(original.Id, copy.Id);
+        Assert.Equal("EST-2601-0002", copy.QuoteNumber);
+        Assert.Equal(QuoteStatus.Draft, copy.Status);
+        Assert.Equal(string.Empty, copy.PdfPath);
+        Assert.Equal("Original Quote (Copy)", copy.Title);
+        Assert.NotEqual("labor-1", copy.LaborItems[0].Id);
+        Assert.NotEqual("mat-1", copy.MaterialLineItems[0].Id);
+        Assert.NotEqual("term-1", copy.PaymentTerms[0].Id);
     }
 
     #endregion

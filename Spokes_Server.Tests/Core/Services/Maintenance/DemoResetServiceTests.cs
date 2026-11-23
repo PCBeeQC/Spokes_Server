@@ -17,54 +17,28 @@ public class DemoResetServiceTests : TestDataTestBase
             public string? GetDataPath() => _dataPath;
         }
 
-        [Fact]
-        public async Task ExecuteAsync_WhenDemoModeIsFalse_ReturnsImmediately()
+        [Theory]
+        [InlineData("false")]
+        [InlineData(null)]
+        public async Task ExecuteAsync_WhenDemoModeIsDisabledOrUnset_ReturnsImmediately(string? demoModeValue)
         {
-            // Arrange
-            var configDict = new Dictionary<string, string?>
-            {
-                { "Spokes_DemoMode", "false" },
-                { "DataPath", _testDataPath }
-            };
-            var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
-            var loggerMock = new Mock<ILogger<DemoResetService>>();
-            var serviceProviderMock = new Mock<IServiceProvider>();
-
-            var service = new TestableDemoResetService(loggerMock.Object, serviceProviderMock.Object, config);
-
-            // Act
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var executeTask = service.RunExecuteAsync(cts.Token);
-
-            // Assert: returns immediately without waiting for delay or cancellation
-            var completedTask = await Task.WhenAny(executeTask, Task.Delay(2000, cts.Token));
-            Assert.NotNull(service);
-            Assert.NotNull(executeTask);
-            Assert.NotNull(completedTask);
-            Assert.Same(executeTask, completedTask);
-            await executeTask;
-        }
-
-        [Fact]
-        public async Task ExecuteAsync_WhenDemoModeIsUnset_ReturnsImmediately()
-        {
-            // Arrange - Spokes_DemoMode key missing entirely
             var configDict = new Dictionary<string, string?>();
+            if (demoModeValue != null)
+            {
+                configDict["Spokes_DemoMode"] = demoModeValue;
+                configDict["DataPath"] = _testDataPath;
+                configDict["SPOKES_MASTER_PASSWORD"] = "UnitTest-Master-Password-2026!";
+            }
             var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
             var loggerMock = new Mock<ILogger<DemoResetService>>();
             var serviceProviderMock = new Mock<IServiceProvider>();
 
             var service = new TestableDemoResetService(loggerMock.Object, serviceProviderMock.Object, config);
 
-            // Act
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var executeTask = service.RunExecuteAsync(cts.Token);
 
-            // Assert: returns immediately
             var completedTask = await Task.WhenAny(executeTask, Task.Delay(2000, cts.Token));
-            Assert.NotNull(service);
-            Assert.NotNull(executeTask);
-            Assert.NotNull(completedTask);
             Assert.Same(executeTask, completedTask);
             await executeTask;
         }
@@ -76,7 +50,7 @@ public class DemoResetServiceTests : TestDataTestBase
             var configDict = new Dictionary<string, string?>
             {
                 { "Spokes_DemoMode", "true" },
-                { "DataPath", _testDataPath }
+                { "DataPath", _testDataPath }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" }
             };
             var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
             var loggerMock = new Mock<ILogger<DemoResetService>>();
@@ -106,7 +80,7 @@ public class DemoResetServiceTests : TestDataTestBase
             var configDict = new Dictionary<string, string?>
             {
                 { "Spokes_DemoMode", "true" },
-                { "DataPath", _testDataPath }
+                { "DataPath", _testDataPath }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" }
             };
             var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
             var loggerMock = new Mock<ILogger<DemoResetService>>();
@@ -154,7 +128,7 @@ public class DemoResetServiceTests : TestDataTestBase
             // Arrange
             var configDict = new Dictionary<string, string?>
             {
-                { "DataPath", _testDataPath }
+                { "DataPath", _testDataPath }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" }
             };
             var config = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
             var loggerMock = new Mock<ILogger<DemoResetService>>();

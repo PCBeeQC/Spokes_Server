@@ -7,7 +7,6 @@ using System.Net.Http.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Aggregate.Contexts;
@@ -43,7 +42,6 @@ public class WebPushService : IWebPushService
     private readonly IPushDecisionService _presenceState;
     private readonly NotificationQueueService _notificationQueue;
     private readonly ILogger<WebPushService> _logger;
-    private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ISystemLogService _systemLog;
     private readonly LicenseValidationService _licenseValidation;
@@ -51,7 +49,6 @@ public class WebPushService : IWebPushService
     private readonly PushTokenService _pushTokenService;
     private readonly PushPayloadBuilder _payloadBuilder;
     private readonly NativeRelayDispatcher _relayDispatcher;
-    private readonly Spokes_Server.Core.Configuration.SpokesOptions _spokesOptions;
 
     [ActivatorUtilitiesConstructor]
     public WebPushService(
@@ -60,7 +57,6 @@ public class WebPushService : IWebPushService
         IPushDecisionService presenceState,
         NotificationQueueService notificationQueue,
         ILogger<WebPushService> logger,
-        IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
         ISystemLogService systemLog,
         LicenseValidationService licenseValidation,
@@ -81,18 +77,15 @@ public class WebPushService : IWebPushService
         _presenceState = presenceState;
         _notificationQueue = notificationQueue;
         _logger = logger;
-        _configuration = configuration;
         _httpClientFactory = httpClientFactory;
         _systemLog = systemLog;
         _licenseValidation = licenseValidation;
         _pushTokenService = pushTokenService ?? new PushTokenService(dataProtection ?? new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider());
         _payloadBuilder = payloadBuilder ?? new PushPayloadBuilder();
-        _relayDispatcher = relayDispatcher ?? new NativeRelayDispatcher(httpClientFactory, coreContext.DeviceSessions, systemLog, options: spokesOptions, trialTickets: new RelayTrialTicketService(coreContext.ServerConfigs));
-        _spokesOptions = spokesOptions?.Value ?? new Spokes_Server.Core.Configuration.SpokesOptions
-        {
-            PushRelayKey = configuration["SPOKES_RELAY_KEY"] ?? configuration["Spokes:PushRelayKey"] ?? string.Empty,
-            PushRelayUrl = configuration["Spokes:PushRelayUrl"] ?? SpokesConstants.PushRelayUrl
-        };
+        _relayDispatcher = relayDispatcher ?? new NativeRelayDispatcher(
+            new SpokesRelayClient(httpClientFactory, spokesOptions, trialTicketService: new RelayTrialTicketService(coreContext.ServerConfigs)),
+            coreContext.DeviceSessions,
+            systemLog);
     }
 
     public string GetVapidPublicKey()
@@ -121,13 +114,13 @@ public class WebPushService : IWebPushService
         }
 
         var employee = _employees.GetById(request.UserId);
-        if (employee == null || !employee.PushNotificationsEnabled)
+        if (!CanReceivePush(employee, request.Category))
         {
-            _logger.LogDebug("User {UserId} has push notifications disabled", request.UserId);
+            _logger.LogDebug("User {UserId} is ineligible for push notifications (category={Category})", request.UserId, request.Category);
             return;
         }
 
-        if (!_notificationQueue.IsWithinSchedule(employee))
+        if (!_notificationQueue.IsWithinSchedule(employee!))
         {
             _notificationQueue.Enqueue(new QueuedNotification(request));
             _logger.LogDebug("User {UserId} outside schedule, notification queued", request.UserId);
@@ -147,7 +140,7 @@ public class WebPushService : IWebPushService
             return;
 
         var employee = _employees.GetById(userId);
-        if (employee == null || !employee.PushNotificationsEnabled)
+        if (!CanReceivePush(employee, "clear_notification"))
             return;
 
         await SendPushToSubscriptionsAsync(new PushNotificationRequest
@@ -171,10 +164,25 @@ public class WebPushService : IWebPushService
             return;
 
         var employee = _employees.GetById(request.UserId);
-        if (employee == null || !employee.PushNotificationsEnabled)
+        if (!CanReceivePush(employee, request.Category))
             return;
 
         await SendPushToSubscriptionsAsync(request, profile, cancellationToken);
+    }
+
+    private static bool CanReceivePush(Spokes_Server.Core.Models.HR.Employee? employee, string? category)
+    {
+        if (employee == null || !employee.IsActive || employee.IsBanned || !employee.PushNotificationsEnabled)
+            return false;
+
+        if (string.Equals(category, NotificationCategories.Calendar, StringComparison.OrdinalIgnoreCase)
+            && !Spokes_Server.Core.Services.HR.CalendarService.HasCalendarViewAccess(employee)
+            && !Spokes_Server.Core.Services.HR.CalendarService.HasCalendarAdminOverride(employee))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private List<DeviceSession> GetSubscriptionsForTier(string userId, PresenceTier? tier)
@@ -295,25 +303,10 @@ public class WebPushService : IWebPushService
                         return;
                     }
 
-                    var pushSubscription = new PushSubscription
-                    {
-                        Endpoint = sub.PushEndpoint,
-                        Keys = new Dictionary<string, string>
-                        {
-                            ["p256dh"] = sub.PushP256dh,
-                            ["auth"] = sub.PushAuth
-                        }
-                    };
                     var devicePayloadJson = (deviceRequest == request)
                         ? payloadJson
                         : _payloadBuilder.BuildWebPushPayloadJson(deviceRequest, profile, defaultIcon);
-                    var message = new PushMessage(devicePayloadJson)
-                    {
-                        Urgency = PushMessageUrgency.High,
-                        TimeToLive = _payloadBuilder.GetEffectiveTtlSeconds(deviceRequest),
-                        Topic = _payloadBuilder.GetWebPushTopic(deviceRequest)
-                    };
-                    await pushClient.RequestPushMessageDeliveryAsync(pushSubscription, message, vapidAuth, cancellationToken);
+                    await SendWebPushDeliveryAsync(pushClient, vapidAuth, sub, devicePayloadJson, deviceRequest, cancellationToken);
                     _logger.LogDebug("Push notification sent to subscription {SubscriptionId} ({DeviceType})",
                         sub.Id, sub.DeviceType);
                 }
@@ -379,7 +372,7 @@ public class WebPushService : IWebPushService
             var relayContext = new PushRelayContext(profile, serverConfig, defaultIcon, null);
             var relayPayload = _payloadBuilder.BuildRelayPayload(testRequest, sub, relayContext);
             await _relayDispatcher.DispatchRelayPushOrThrowAsync(relayPayload, sub, cancellationToken);
-            bool isPayloadEncrypted = !string.IsNullOrEmpty(sub.PushPublicKey);
+            bool isPayloadEncrypted = relayPayload.IsEncrypted;
             return TestNotificationResult.Success(isPayloadEncrypted);
         }
         else
@@ -396,37 +389,41 @@ public class WebPushService : IWebPushService
                 Subject = profile.VapidSubject
             };
 
-            var pushSubscription = new PushSubscription
-            {
-                Endpoint = sub.PushEndpoint,
-                Keys = new Dictionary<string, string>
-                {
-                    ["p256dh"] = sub.PushP256dh,
-                    ["auth"] = sub.PushAuth
-                }
-            };
-            var message = new PushMessage(payloadJson)
-            {
-                Urgency = PushMessageUrgency.High,
-                TimeToLive = _payloadBuilder.GetEffectiveTtlSeconds(testRequest),
-                Topic = _payloadBuilder.GetWebPushTopic(testRequest)
-            };
-
-            await pushClient.RequestPushMessageDeliveryAsync(pushSubscription, message, vapidAuth, cancellationToken);
+            await SendWebPushDeliveryAsync(pushClient, vapidAuth, sub, payloadJson, testRequest, cancellationToken);
             return TestNotificationResult.Success(isPayloadEncrypted: false);
         }
     }
 
+    private Task SendWebPushDeliveryAsync(
+        PushServiceClient pushClient,
+        VapidAuthentication vapidAuth,
+        DeviceSession sub,
+        string payloadJson,
+        PushNotificationRequest request,
+        CancellationToken cancellationToken)
+    {
+        var pushSubscription = new PushSubscription
+        {
+            Endpoint = sub.PushEndpoint,
+            Keys = new Dictionary<string, string>
+            {
+                ["p256dh"] = sub.PushP256dh,
+                ["auth"] = sub.PushAuth
+            }
+        };
+        var message = new PushMessage(payloadJson)
+        {
+            Urgency = PushMessageUrgency.High,
+            TimeToLive = _payloadBuilder.GetEffectiveTtlSeconds(request),
+            Topic = _payloadBuilder.GetWebPushTopic(request)
+        };
+        return pushClient.RequestPushMessageDeliveryAsync(pushSubscription, message, vapidAuth, cancellationToken);
+    }
+
     public bool IsNativePushAllowed() => GetNativePushStatus().IsAvailable;
 
-    public NativePushAvailability GetNativePushStatus()
-    {
-        var profile = _companyProfile.Get();
-        var serverConfig = _serverConfigs.GetOrCreateGlobalConfig();
-        var licenseResult = _licenseValidation.ValidateLicense(profile?.LicensePayload, serverConfig);
-        bool isAllowed = LicenseValidationService.IsLicenseActive(licenseResult.Status);
-        return new NativePushAvailability(isAllowed, licenseResult.Status.ToString(), licenseResult.Message);
-    }
+    public NativePushAvailability GetNativePushStatus() =>
+        PushLicenseEligibilityService.EvaluateNativePushStatus(_companyProfile, _serverConfigs, _licenseValidation);
 
     public static (string publicKey, string privateKey) GenerateVapidKeys()
     {

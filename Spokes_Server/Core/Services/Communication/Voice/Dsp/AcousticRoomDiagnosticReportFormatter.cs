@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using Spokes_Server.Core.Models.Communication;
 
 /// <summary>
 /// Formats live <see cref="PhysicalRoomDiagnosticSnapshot"/> captures and automated <see cref="AcousticBenchmarkScenarioResult"/>
@@ -16,24 +17,41 @@ public static class AcousticRoomDiagnosticReportFormatter
         PhysicalRoomDiagnosticSnapshot snapshot,
         string roomName,
         IReadOnlyDictionary<string, string>? userDisplayNames = null,
-        IReadOnlyDictionary<string, (string DeviceName, string FilterType)>? deviceMetadata = null)
+        IReadOnlyDictionary<string, (string DeviceName, string FilterType)>? deviceMetadata = null,
+        PhysicalRoomAudioMode? configuredAudioMode = null,
+        DirectRoomOperatingStatus? directOperatingStatus = null,
+        DirectRoomClientTelemetry? directClientTelemetry = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
         var sb = new StringBuilder();
         sb.AppendLine("=== SPOKES PHYSICAL ROOM DIAGNOSTIC REPORT ===");
+        string modeSuffix = configuredAudioMode.HasValue
+            ? string.Format(
+                CultureInfo.InvariantCulture,
+                " | AudioMode: {0} (DirectStatus={1})",
+                configuredAudioMode.Value,
+                directOperatingStatus ?? DirectRoomOperatingStatus.NotApplicable)
+            : string.Empty;
         sb.AppendLine(string.Format(
             CultureInfo.InvariantCulture,
-            "Timestamp: {0:yyyy-MM-ddTHH:mm:ssZ} | Duration: {1:F1}s | Room: \"{2}\" ({3} Active Devices) | SampleRate: {4}Hz",
+            "Timestamp: {0:yyyy-MM-ddTHH:mm:ssZ} | Duration: {1:F1}s | Room: \"{2}\" ({3} Active Devices) | SampleRate: {4}Hz{5}",
             snapshot.CapturedAtUtc,
             snapshot.CaptureDurationSeconds,
             string.IsNullOrWhiteSpace(roomName) ? "Physical Room" : roomName,
             snapshot.Participants.Count,
-            snapshot.SampleRate));
+            snapshot.SampleRate,
+            modeSuffix));
         sb.AppendLine();
 
         AppendParticipantsSection(sb, snapshot, userDisplayNames, deviceMetadata);
         sb.AppendLine();
+        if (directClientTelemetry != null ||
+            (configuredAudioMode.HasValue && configuredAudioMode.Value != PhysicalRoomAudioMode.ServerCleanup))
+        {
+            AppendDirectLanTelemetrySection(sb, configuredAudioMode, directOperatingStatus, directClientTelemetry, userDisplayNames);
+            sb.AppendLine();
+        }
         AppendPairwiseMatrixSection(sb, snapshot, userDisplayNames);
         sb.AppendLine();
         AppendTimelineSection(sb, snapshot, userDisplayNames);
@@ -195,10 +213,105 @@ public static class AcousticRoomDiagnosticReportFormatter
 
             sb.AppendLine(string.Format(
                 CultureInfo.InvariantCulture,
-                "  ClicksRejected={0} | AchievedBleedSuppression(ERLE)={1:F1}dB | PostDspResidual={2:F1}dBFS",
+                "  ClicksRejected={0} | AchievedBleedSuppression(ERLE)={1:F1}dB | PostDspResidual={2:F1}dBFS | PeakRawIn={3:F1}dBFS | ClippedSamples={4} | LevelerGain={5:+0.0;-0.0;0.0}dB",
                 p.RejectedClickTransients,
                 p.AchievedBleedSuppressionDb,
-                p.PostDspResidualDbFs));
+                p.PostDspResidualDbFs,
+                p.PeakRawInputDbFs,
+                p.ClippedSampleCount,
+                p.AppliedMakeupGainDb));
+        }
+    }
+
+    private static void AppendDirectLanTelemetrySection(
+        StringBuilder sb,
+        PhysicalRoomAudioMode? configuredAudioMode,
+        DirectRoomOperatingStatus? directOperatingStatus,
+        DirectRoomClientTelemetry? telemetry,
+        IReadOnlyDictionary<string, string>? userDisplayNames)
+    {
+        sb.AppendLine("[DIRECT LAN ENGINE & LOCAL C++ DSP TELEMETRY]");
+        sb.AppendLine(string.Format(
+            CultureInfo.InvariantCulture,
+            "- ConfiguredMode={0} | OperatingStatus={1}",
+            configuredAudioMode ?? PhysicalRoomAudioMode.LowLatencyCleaned,
+            directOperatingStatus ?? DirectRoomOperatingStatus.NotApplicable));
+
+        if (telemetry == null)
+        {
+            sb.AppendLine("- (No active Spokes Desktop Direct LAN C++ engine telemetry reported by local client)");
+            return;
+        }
+
+        sb.AppendLine(string.Format(
+            CultureInfo.InvariantCulture,
+            "- E2ELatency={0:F1}ms | MaxPeerRTT={1:F2}ms | JitterBuffer={2:F2}ms | AchievedSuppression={3:F1}dB",
+            telemetry.EstimatedEndToEndMs,
+            telemetry.MaxPeerRttMs,
+            telemetry.JitterBufferMs,
+            telemetry.AchievedBleedSuppressionDb));
+
+        string captureDetails = telemetry.CaptureNativeRateHz > 0
+            ? string.Format(
+                CultureInfo.InvariantCulture,
+                " ({0}Hz {1}ch, AC3={2}, Raw={3}, Disc={4})",
+                telemetry.CaptureNativeRateHz,
+                telemetry.CaptureNativeChannels,
+                telemetry.CaptureUsingAudioClient3 ? "true" : "false",
+                telemetry.CaptureRawMode ? "true" : "false",
+                telemetry.CaptureDiscontinuities)
+            : string.Empty;
+        string playbackDetails = telemetry.PlaybackNativeRateHz > 0
+            ? string.Format(
+                CultureInfo.InvariantCulture,
+                " ({0}Hz {1}ch, AC3={2})",
+                telemetry.PlaybackNativeRateHz,
+                telemetry.PlaybackNativeChannels,
+                telemetry.PlaybackUsingAudioClient3 ? "true" : "false")
+            : string.Empty;
+
+        sb.AppendLine(string.Format(
+            CultureInfo.InvariantCulture,
+            "- WASAPIPeriods: Capture={0:F2}ms{9}, Playback={1:F2}ms{10} | LocalMicPeak={2:F1}dBFS | LocalClippedSamples={3} | RefFifo: Underruns={4}, Overruns={5} | UDP: TX={6}, RX={7}, AuthDrops={8}",
+            telemetry.CapturePeriodMs,
+            telemetry.PlaybackPeriodMs,
+            telemetry.LocalPeakDbfs,
+            telemetry.LocalClippedSamples,
+            telemetry.RefUnderrunCount,
+            telemetry.RefOverrunCount,
+            telemetry.TxPacketCount,
+            telemetry.RxAudioPacketCount,
+            telemetry.AuthDropCount,
+            captureDetails,
+            playbackDetails));
+
+        if (telemetry.PeerDiagnostics != null && telemetry.PeerDiagnostics.Count > 0)
+        {
+            foreach (var kvp in telemetry.PeerDiagnostics.OrderBy(k => k.Key, StringComparer.Ordinal))
+            {
+                var pd = kvp.Value;
+                string peerLabel = ResolveUserLabel(string.IsNullOrWhiteSpace(pd.UserId) ? kvp.Key : pd.UserId, userDisplayNames);
+                string lookaheadPart = pd.LookaheadMs > 0.05
+                    ? string.Format(CultureInfo.InvariantCulture, ", Lookahead={0:F1}ms", pd.LookaheadMs)
+                    : string.Empty;
+                sb.AppendLine(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "  * Peer {0}: RTT={1:F2}ms, CausalLag={2:+0.0;-0.0;0.0}ms{13}, Bleed={3:F1}dB (Conf={4:F2}), PeerPeakIn={5:F1}dBFS, PeerClipped={6}, LevelerGain={7:+0.0;-0.0;0.0}dB, BleedGated={8:F0}%, Jitter(Und={9}, Ovf={10}, Trim={11}, MaxBurst={12})",
+                    peerLabel,
+                    pd.RttMs,
+                    pd.LagMs,
+                    pd.BleedDb,
+                    pd.Confidence,
+                    pd.PeakInputDbfs,
+                    pd.ClippedSamples,
+                    pd.LevelerGainDb,
+                    pd.BleedGatedPct,
+                    pd.JitterUnderruns,
+                    pd.JitterOverflows,
+                    pd.JitterTrims,
+                    pd.MaxBurstHops,
+                    lookaheadPart));
+            }
         }
     }
 

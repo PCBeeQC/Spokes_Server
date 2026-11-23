@@ -6,9 +6,9 @@
 @using Spokes_Server.Components.Shared
 @using Spokes_Server.Core.Services.Storage
 @inject Database Db
+@inject IAccountingService AccountingService
 @inject CompanyBillInboxService BillInboxService
 @inject ISnackbar Snackbar
-@inject AuthenticationStateProvider AuthStateProvider
 @inject UserService UserService
 @inject IFileService FileService
 @inject IStringLocalizer<BusinessResources> BizLoc
@@ -202,8 +202,16 @@
     private bool _periodHasExistingRecord = false;
     private bool _isSubmitting = false;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        var emp = await UserService.GetEmployeeAsync();
+        if (emp == null || emp.IsSuspended || !emp.HasEffectivePermission(AppPermissions.Purchases.ManageBills))
+        {
+            _recurringExpenses = [];
+            MudDialog.Cancel();
+            return;
+        }
+
         _recurringExpenses = Db.RecurringExpenses.GetAll()
             .Where(e => !e.IsEstimate)
             .OrderBy(e => e.Name)
@@ -357,9 +365,15 @@
         _isSubmitting = true;
         try
         {
-            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-            var currentUserId = auth.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-                ?? CompanyBillInboxConstants.SystemEmployeeId;
+            var emp = await UserService.GetEmployeeAsync();
+            if (emp == null || emp.IsSuspended || !emp.HasEffectivePermission(AppPermissions.Purchases.ManageBills))
+            {
+                Snackbar.Add(Loc["Access Denied"].Value, Severity.Error);
+                MudDialog.Cancel();
+                return;
+            }
+
+            var currentUserId = emp.Id;
 
             // Resolve attachment
             string attachmentPath = "";
@@ -391,9 +405,9 @@
             };
 
             _selectedExpense.History.Add(record);
-            Db.RecurringExpenses.Save(_selectedExpense);
+            AccountingService.SaveRecurringExpense(_selectedExpense, emp);
 
-            BillInboxService.LinkEmailToRecurringExpense(Email.Id, _selectedExpense.Id, record.Id, currentUserId);
+            BillInboxService.LinkEmailToRecurringExpense(Email.Id, _selectedExpense.Id, record.Id, currentUserId, emp);
 
             MudDialog.Close(DialogResult.Ok(record));
         }

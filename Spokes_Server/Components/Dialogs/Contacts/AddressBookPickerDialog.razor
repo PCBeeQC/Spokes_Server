@@ -1,9 +1,10 @@
+@using Spokes_Server.Core.Constants
 @inject Database Db
 @inject UserService UserService
 
 <MudDialog>
     <DialogContent>
-        <MudTable Items="@_contacts" MultiSelection="true" @bind-SelectedItems="_selectedContacts" Hover="true"
+        <MudTable Elevation="0" Outlined="true" Items="@_contacts" MultiSelection="true" @bind-SelectedItems="_selectedContacts" Hover="true"
             Striped="true" Filter="new Func<ContactFlatModel,bool>(FilterFunc)">
             <ToolBarContent>
                 <MudText Typo="Typo.h6">Select Contacts</MudText>
@@ -47,64 +48,66 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var suppliers = Db.Suppliers.GetAll();
-        foreach (var s in suppliers)
+        var employee = await UserService.GetEmployeeAsync(allowSuspended: true);
+        if (employee == null) return;
+
+        if (employee.HasEffectivePermission(AppPermissions.AddressBook.View, allowSuspended: true))
         {
-            if (s.Contacts.Count > 0)
+            var suppliers = Db.Suppliers.GetAll();
+            foreach (var s in suppliers)
             {
-                foreach (var c in s.Contacts)
+                if (s.Contacts.Count > 0)
                 {
-                    if (!string.IsNullOrEmpty(c.Email))
+                    foreach (var c in s.Contacts)
                     {
-                        _contacts.Add(new ContactFlatModel
+                        if (!string.IsNullOrEmpty(c.Email))
                         {
-                            Name = !string.IsNullOrWhiteSpace(c.Name) ? c.Name : s.ContactInfo.BusinessName,
-                            Email = c.Email,
-                            Type = c.IsPrimary ? "Company Primary" : "Company"
-                        });
+                            _contacts.Add(new ContactFlatModel
+                            {
+                                Name = !string.IsNullOrWhiteSpace(c.Name) ? c.Name : s.ContactInfo.BusinessName,
+                                Email = c.Email,
+                                Type = c.IsPrimary ? "Company Primary" : "Company"
+                            });
+                        }
                     }
                 }
-            }
-            else if (!string.IsNullOrEmpty(s.ContactInfo.ContactPersonEmail))
-            {
-                _contacts.Add(new ContactFlatModel
+                else if (!string.IsNullOrEmpty(s.ContactInfo.ContactPersonEmail))
                 {
-                    Name = !string.IsNullOrEmpty(s.ContactInfo.ContactPersonName) ? s.ContactInfo.ContactPersonName : s.ContactInfo.BusinessName,
-                    Email = s.ContactInfo.ContactPersonEmail,
-                    Type = "Company Primary"
-                });
+                    _contacts.Add(new ContactFlatModel
+                    {
+                        Name = !string.IsNullOrEmpty(s.ContactInfo.ContactPersonName) ? s.ContactInfo.ContactPersonName : s.ContactInfo.BusinessName,
+                        Email = s.ContactInfo.ContactPersonEmail,
+                        Type = "Company Primary"
+                    });
+                }
             }
-        }
 
-        var publicContacts = Db.PublicContacts.GetAll();
-        foreach (var c in publicContacts)
-        {
-            if (!string.IsNullOrEmpty(c.Email))
+            var publicContacts = Db.PublicContacts.GetAll();
+            foreach (var c in publicContacts)
             {
-                _contacts.Add(new ContactFlatModel
+                if (!string.IsNullOrEmpty(c.Email))
+                {
+                    _contacts.Add(new ContactFlatModel
                     {
                         Name = c.Name,
                         Email = c.Email,
                         Type = "Public"
                     });
+                }
             }
         }
 
-        var employee = await UserService.GetEmployeeAsync();
-        if (employee != null)
+        var privateContacts = Db.PrivateContacts.GetAllForEmployee(employee.Id);
+        foreach (var c in privateContacts)
         {
-            var privateContacts = Db.PrivateContacts.GetAllForEmployee(employee.Id);
-            foreach (var c in privateContacts)
+            if (!string.IsNullOrEmpty(c.Email))
             {
-                if (!string.IsNullOrEmpty(c.Email))
+                _contacts.Add(new ContactFlatModel
                 {
-                    _contacts.Add(new ContactFlatModel
-                        {
-                            Name = c.Name,
-                            Email = c.Email,
-                            Type = "Private"
-                        });
-                }
+                    Name = c.Name,
+                    Email = c.Email,
+                    Type = "Private"
+                });
             }
         }
     }

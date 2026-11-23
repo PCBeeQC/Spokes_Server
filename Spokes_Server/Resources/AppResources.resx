@@ -114,12 +114,6 @@
   <data name="Albums" xml:space="preserve">
     <value>Albums</value>
   </data>
-  <data name="TaskDefinitions" xml:space="preserve">
-    <value>Task Definitions</value>
-  </data>
-  <data name="StandardDocuments" xml:space="preserve">
-    <value>Standard Documents</value>
-  </data>
   <data name="Settings" xml:space="preserve">
     <value>Settings</value>
   </data>
@@ -191,9 +185,6 @@
   </data>
   <data name="{0} (Leader)" xml:space="preserve">
     <value>{0} (Leader)</value>
-  </data>
-  <data name="{0} '{1}' created" xml:space="preserve">
-    <value>{0} '{1}' created</value>
   </data>
   <data name="{0} '{1}' deleted" xml:space="preserve">
     <value>{0} '{1}' deleted</value>
@@ -489,9 +480,6 @@
   <data name="Admin" xml:space="preserve">
     <value>Admin</value>
   </data>
-  <data name="ADMIN" xml:space="preserve">
-    <value>ADMIN</value>
-  </data>
   <data name="Admin Password" xml:space="preserve">
     <value>Admin Password</value>
   </data>
@@ -525,9 +513,6 @@
   <data name="All Day" xml:space="preserve">
     <value>All Day</value>
   </data>
-  <data name="All day" xml:space="preserve">
-    <value>All day</value>
-  </data>
   <data name="All Day Event" xml:space="preserve">
     <value>All Day Event</value>
   </data>
@@ -549,17 +534,11 @@
   <data name="Allowed" xml:space="preserve">
     <value>Allowed</value>
   </data>
-  <data name="ALLOWED" xml:space="preserve">
-    <value>ALLOWED</value>
-  </data>
   <data name="ALLOWED MEMBERS" xml:space="preserve">
     <value>ALLOWED MEMBERS</value>
   </data>
   <data name="Allowed Users" xml:space="preserve">
     <value>Allowed Users</value>
-  </data>
-  <data name="ALLOWED USERS" xml:space="preserve">
-    <value>ALLOWED USERS</value>
   </data>
   <data name="Announcement Channel" xml:space="preserve">
     <value>Announcement Channel</value>
@@ -587,9 +566,6 @@
   </data>
   <data name="Archive Channel" xml:space="preserve">
     <value>Archive Channel</value>
-  </data>
-  <data name="ARCHIVED" xml:space="preserve">
-    <value>ARCHIVED</value>
   </data>
   <data name="Are you absolutely sure you want to proceed?" xml:space="preserve">
     <value>Are you absolutely sure you want to proceed?</value>
@@ -656,9 +632,6 @@
   </data>
   <data name="Attending" xml:space="preserve">
     <value>Attending</value>
-  </data>
-  <data name="AUDIO BITRATE" xml:space="preserve">
-    <value>AUDIO BITRATE</value>
   </data>
   <data name="Audio Bitrate" xml:space="preserve">
     <value>Audio Bitrate</value>
@@ -753,9 +726,6 @@
   <data name="By {0}" xml:space="preserve">
     <value>By {0}</value>
   </data>
-  <data name="by {0}" xml:space="preserve">
-    <value>by {0}</value>
-  </data>
   <data name="By continuing with the installation, you agree to the terms outlined in the Spokes End User License Agreement." xml:space="preserve">
     <value>By continuing with the installation, you agree to the terms outlined in the Spokes End User License Agreement.</value>
   </data>
@@ -794,9 +764,6 @@
   </data>
   <data name="Category" xml:space="preserve">
     <value>Category</value>
-  </data>
-  <data name="CATEGORY" xml:space="preserve">
-    <value>CATEGORY</value>
   </data>
   <data name="Category (Optional)" xml:space="preserve">
     <value>Category (Optional)</value>
@@ -840,17 +807,11 @@
   <data name="Channel Info" xml:space="preserve">
     <value>Channel Info</value>
   </data>
-  <data name="Channel info" xml:space="preserve">
-    <value>Channel info</value>
-  </data>
   <data name="Channel is now public to all members" xml:space="preserve">
     <value>Channel is now public to all members</value>
   </data>
   <data name="Channel is now restricted. You can add specific teams and members." xml:space="preserve">
     <value>Channel is now restricted. You can add specific teams and members.</value>
-  </data>
-  <data name="Channel name" xml:space="preserve">
-    <value>Channel name</value>
   </data>
   <data name="Channel Name" xml:space="preserve">
     <value>Channel Name</value>
@@ -1008,9 +969,6 @@
   <data name="Create your first album to start organizing photos and videos." xml:space="preserve">
     <value>Create your first album to start organizing photos and videos.</value>
   </data>
-  <data name="CREATED" xml:space="preserve">
-    <value>CREATED</value>
-  </data>
   <data name="Created" xml:space="preserve">
     <value>Created</value>
   </data>
@@ -1131,9 +1089,6 @@
   <data name="Deleted User" xml:space="preserve">
     <value>Deleted User</value>
   </data>
-  <data name="DESCRIPTION" xml:space="preserve">
-    <value>DESCRIPTION</value>
-  </data>
   <data name="Description" xml:space="preserve">
     <value>Description</value>
   </data>
@@ -1196,9 +1151,6 @@
   </data>
   <data name="Edit Event" xml:space="preserve">
     <value>Edit Event</value>
-  </data>
-  <data name="Edit Message" xml:space="preserve">
-    <value>Edit Message</value>
   </data>
   <data name="Edit message..." xml:space="preserve">
     <value>Edit message...</value>
@@ -1304,9 +1256,6 @@
   </data>
   <data name="Error sending message" xml:space="preserve">
     <value>Error sending message</value>
-  </data>
-  <data name="Error sending voice message" xml:space="preserve">
-    <value>Error sending voice message</value>
   </data>
   <data name="Error updating device: {0}" xml:space="preserve">
     <value>Error updating device: {0}</value>
@@ -1704,9 +1653,6 @@
   <data name="Log Out" xml:space="preserve">
     <value>Log Out</value>
   </data>
-  <data name="Login Successful" xml:space="preserve">
-    <value>Login Successful</value>
-  </data>
   <data name="Logs copied to clipboard" xml:space="preserve">
     <value>Logs copied to clipboard</value>
   </data>
@@ -1727,9 +1673,6 @@
   </data>
   <data name="Manage Contributors" xml:space="preserve">
     <value>Manage Contributors</value>
-  </data>
-  <data name="Manage contributors" xml:space="preserve">
-    <value>Manage contributors</value>
   </data>
   <data name="Manage Spokes Pass" xml:space="preserve">
     <value>Manage Spokes Pass</value>
@@ -1766,9 +1709,6 @@
   </data>
   <data name="Media removed" xml:space="preserve">
     <value>Media removed</value>
-  </data>
-  <data name="MEMBERS" xml:space="preserve">
-    <value>MEMBERS</value>
   </data>
   <data name="Members with Access" xml:space="preserve">
     <value>Members with Access</value>
@@ -1874,9 +1814,6 @@
   </data>
   <data name="Native Push Notifications Disabled:" xml:space="preserve">
     <value>Native Push Notifications Disabled:</value>
-  </data>
-  <data name="New {0}" xml:space="preserve">
-    <value>New {0}</value>
   </data>
   <data name="New {0} Channel" xml:space="preserve">
     <value>New {0} Channel</value>
@@ -1989,14 +1926,8 @@
   <data name="No unlinked OpenID accounts available. New accounts appear here when users log in." xml:space="preserve">
     <value>No unlinked OpenID accounts available. New accounts appear here when users log in.</value>
   </data>
-  <data name="No users found." xml:space="preserve">
-    <value>No users found.</value>
-  </data>
   <data name="Noise Filter" xml:space="preserve">
     <value>Noise Filter</value>
-  </data>
-  <data name="NOISE FILTER" xml:space="preserve">
-    <value>NOISE FILTER</value>
   </data>
   <data name="None" xml:space="preserve">
     <value>None</value>
@@ -2135,9 +2066,6 @@
   </data>
   <data name="Pause" xml:space="preserve">
     <value>Pause</value>
-  </data>
-  <data name="people" xml:space="preserve">
-    <value>people</value>
   </data>
   <data name="Permanently delete your account and wipe your data from the server." xml:space="preserve">
     <value>Permanently delete your account and wipe your data from the server.</value>
@@ -2282,9 +2210,6 @@
   </data>
   <data name="Reactions" xml:space="preserve">
     <value>Reactions</value>
-  </data>
-  <data name="reactions" xml:space="preserve">
-    <value>reactions</value>
   </data>
   <data name="Read how your data is handled by this server." xml:space="preserve">
     <value>Read how your data is handled by this server.</value>
@@ -2465,9 +2390,6 @@
   </data>
   <data name="Return to Login" xml:space="preserve">
     <value>Return to Login</value>
-  </data>
-  <data name="Return to Spokes" xml:space="preserve">
-    <value>Return to Spokes</value>
   </data>
   <data name="RNNoise (Lightweight AI)" xml:space="preserve">
     <value>RNNoise (Lightweight AI)</value>
@@ -2657,9 +2579,6 @@
   </data>
   <data name="Shared With" xml:space="preserve">
     <value>Shared With</value>
-  </data>
-  <data name="Shared with" xml:space="preserve">
-    <value>Shared with</value>
   </data>
   <data name="Shared with others" xml:space="preserve">
     <value>Shared with others</value>
@@ -2874,9 +2793,6 @@
   <data name="This Device" xml:space="preserve">
     <value>This Device</value>
   </data>
-  <data name="This device" xml:space="preserve">
-    <value>This device</value>
-  </data>
   <data name="This device is registered, but notifications cannot be delivered because this server's Spokes Pass has expired. Subscriptions are retained and will resume automatically once renewed." xml:space="preserve">
     <value>This device is registered, but notifications cannot be delivered because this server's Spokes Pass has expired. Subscriptions are retained and will resume automatically once renewed.</value>
   </data>
@@ -3030,9 +2946,6 @@
   <data name="Upload failed: {0}" xml:space="preserve">
     <value>Upload failed: {0}</value>
   </data>
-  <data name="Upload Failed: {0}" xml:space="preserve">
-    <value>Upload Failed: {0}</value>
-  </data>
   <data name="Upload Icon" xml:space="preserve">
     <value>Upload Icon</value>
   </data>
@@ -3062,9 +2975,6 @@
   </data>
   <data name="URL must start with http:// or https://" xml:space="preserve">
     <value>URL must start with http:// or https://</value>
-  </data>
-  <data name="User" xml:space="preserve">
-    <value>User</value>
   </data>
   <data name="User Actions" xml:space="preserve">
     <value>User Actions</value>
@@ -3140,9 +3050,6 @@
   </data>
   <data name="VOICE CALLS" xml:space="preserve">
     <value>VOICE CALLS</value>
-  </data>
-  <data name="Voice channel" xml:space="preserve">
-    <value>Voice channel</value>
   </data>
   <data name="Voice Channel" xml:space="preserve">
     <value>Voice Channel</value>
@@ -3287,12 +3194,6 @@
   </data>
   <data name="Edited" xml:space="preserve">
     <value>Edited</value>
-  </data>
-  <data name="MoveDown" xml:space="preserve">
-    <value>MoveDown</value>
-  </data>
-  <data name="MoveUp" xml:space="preserve">
-    <value>MoveUp</value>
   </data>
   <data name="Yesterday" xml:space="preserve">
     <value>Yesterday</value>
@@ -3494,9 +3395,6 @@
   </data>
   <data name="1 person reacted" xml:space="preserve">
     <value>1 person reacted</value>
-  </data>
-  <data name="Announcement channel" xml:space="preserve">
-    <value>Announcement channel</value>
   </data>
   <data name="Announcement Channel Reactions" xml:space="preserve">
     <value>Announcement Channel Reactions</value>
@@ -3716,9 +3614,6 @@
   </data>
   <data name="Spokes Pass Invalid" xml:space="preserve">
     <value>Spokes Pass Invalid</value>
-  </data>
-  <data name="Spokes Pass Update Required" xml:space="preserve">
-    <value>Spokes Pass Update Required</value>
   </data>
   <data name="A Spokes Pass is required for desktop app notifications. Only 1 pass per server is required. Talk to your server owner to enable notifications." xml:space="preserve">
     <value>A Spokes Pass is required for desktop app notifications. Only 1 pass per server is required. Talk to your server owner to enable notifications.</value>
@@ -4296,9 +4191,6 @@
   <data name="To test a remote backup upload, simply click Backup Now above. Enabled destinations will show live upload progress below." xml:space="preserve">
     <value>To test a remote backup upload, simply click Backup Now above. Enabled destinations will show live upload progress below.</value>
   </data>
-  <data name="Upload Failed" xml:space="preserve">
-    <value>Upload Failed</value>
-  </data>
   <data name="Upload failed:" xml:space="preserve">
     <value>Upload failed:</value>
   </data>
@@ -4343,9 +4235,6 @@
   </data>
   <data name="Are you sure you want to scan for and permanently delete all orphaned files? Files modified in the last 15 minutes will be safely preserved." xml:space="preserve">
     <value>Are you sure you want to scan for and permanently delete all orphaned files? Files modified in the last 15 minutes will be safely preserved.</value>
-  </data>
-  <data name="Attach Files" xml:space="preserve">
-    <value>Attach Files</value>
   </data>
   <data name="Attachments" xml:space="preserve">
     <value>Attachments</value>
@@ -4509,9 +4398,6 @@
   <data name="Unknown error" xml:space="preserve">
     <value>Unknown error</value>
   </data>
-  <data name="Album title" xml:space="preserve">
-    <value>Album title</value>
-  </data>
   <data name="Album title cannot be empty." xml:space="preserve">
     <value>Album title cannot be empty.</value>
   </data>
@@ -4629,9 +4515,6 @@
   <data name="Login to Vault" xml:space="preserve">
     <value>Login to Vault</value>
   </data>
-  <data name="Never show again" xml:space="preserve">
-    <value>Never show again</value>
-  </data>
   <data name="New Password" xml:space="preserve">
     <value>New Password</value>
   </data>
@@ -4661,9 +4544,6 @@
   </data>
   <data name="Passwords do not match" xml:space="preserve">
     <value>Passwords do not match</value>
-  </data>
-  <data name="Remind me later" xml:space="preserve">
-    <value>Remind me later</value>
   </data>
   <data name="Secure Chat Disabled. You must set a password to use secure channels." xml:space="preserve">
     <value>Secure Chat Disabled. You must set a password to use secure channels.</value>
@@ -4956,9 +4836,6 @@
   <data name="Messages" xml:space="preserve">
     <value>Messages</value>
   </data>
-  <data name="Move" xml:space="preserve">
-    <value>Move</value>
-  </data>
   <data name="Move to Folder" xml:space="preserve">
     <value>Move to Folder</value>
   </data>
@@ -4988,9 +4865,6 @@
   </data>
   <data name="No messages" xml:space="preserve">
     <value>No messages</value>
-  </data>
-  <data name="No other folders available." xml:space="preserve">
-    <value>No other folders available.</value>
   </data>
   <data name="Open the sender's unsubscribe page?" xml:space="preserve">
     <value>Open the sender's unsubscribe page?</value>
@@ -5093,9 +4967,6 @@
   </data>
   <data name="Title" xml:space="preserve">
     <value>Title</value>
-  </data>
-  <data name="to" xml:space="preserve">
-    <value>to</value>
   </data>
   <data name="To:" xml:space="preserve">
     <value>To:</value>
@@ -6176,5 +6047,410 @@
   </data>
   <data name="Focus Speaker" xml:space="preserve">
     <value>Focus Speaker</value>
+  </data>
+  <data name="Back to Edit" xml:space="preserve">
+    <value>Back to Edit</value>
+  </data>
+  <data name="Back to Markdown" xml:space="preserve">
+    <value>Back to Markdown</value>
+  </data>
+  <data name="Copy Markdown" xml:space="preserve">
+    <value>Copy Markdown</value>
+  </data>
+  <data name="Could not copy to clipboard." xml:space="preserve">
+    <value>Could not copy to clipboard.</value>
+  </data>
+  <data name="Markdown copied to clipboard." xml:space="preserve">
+    <value>Markdown copied to clipboard.</value>
+  </data>
+  <data name="Read-Only Markdown" xml:space="preserve">
+    <value>Read-Only Markdown</value>
+  </data>
+  <data name="Could not update room audio mode." xml:space="preserve">
+    <value>Could not update room audio mode.</value>
+  </data>
+  <data name="Direct LAN Active (~{0:0.0} ms)" xml:space="preserve">
+    <value>Direct LAN Active (~{0:0.0} ms)</value>
+  </data>
+  <data name="Direct LAN Ready" xml:space="preserve">
+    <value>Direct LAN Ready</value>
+  </data>
+  <data name="Room Audio Mode" xml:space="preserve">
+    <value>Room Audio Mode</value>
+  </data>
+  <data name="Server Audio Cleanup" xml:space="preserve">
+    <value>Server Audio Cleanup</value>
+  </data>
+  <data name="e.g. {0} IMAP or Gmail" xml:space="preserve">
+    <value>e.g. {0} IMAP or Gmail</value>
+  </data>
+  <data name="e.g. {0} SMTP or Resend" xml:space="preserve">
+    <value>e.g. {0} SMTP or Resend</value>
+  </data>
+  <data name="e.g. Jane Doe" xml:space="preserve">
+    <value>e.g. Jane Doe</value>
+  </data>
+  <data name="e.g. Resend Relay or {0} SMTP" xml:space="preserve">
+    <value>e.g. Resend Relay or {0} SMTP</value>
+  </data>
+  <data name="e.g. Support or Jane Doe" xml:space="preserve">
+    <value>e.g. Support or Jane Doe</value>
+  </data>
+  <data name="e.g. Support, Sales, Billing" xml:space="preserve">
+    <value>e.g. Support, Sales, Billing</value>
+  </data>
+  <data name="e.g. Work Email, Support Mailbox" xml:space="preserve">
+    <value>e.g. Work Email, Support Mailbox</value>
+  </data>
+  <data name="Real Inbox connected." xml:space="preserve">
+    <value>Real Inbox connected.</value>
+  </data>
+  <data name="Real Inbox updated! Starting initial sync..." xml:space="preserve">
+    <value>Real Inbox updated! Starting initial sync...</value>
+  </data>
+  <data name="Direct LAN Audio Pipeline (Active)" xml:space="preserve">
+    <value>Direct LAN Audio Pipeline (Active)</value>
+  </data>
+  <data name="DSP Framing: {0:F1} ms" xml:space="preserve">
+    <value>DSP Framing: {0:F1} ms</value>
+  </data>
+  <data name="Jitter Buffer: {0:F1} ms" xml:space="preserve">
+    <value>Jitter Buffer: {0:F1} ms</value>
+  </data>
+  <data name="LAN RTT: {0:F1} ms" xml:space="preserve">
+    <value>LAN RTT: {0:F1} ms</value>
+  </data>
+  <data name="Server Acoustic Calibration &amp; Standby Pipeline" xml:space="preserve">
+    <value>Server Acoustic Calibration &amp; Standby Pipeline</value>
+  </data>
+  <data name="Vocal: Idle" xml:space="preserve">
+    <value>Vocal: Idle</value>
+  </data>
+  <data name="A connected user in this room is not on Spokes Desktop (Web or Mobile), so all room members are using Server Audio Cleanup." xml:space="preserve">
+    <value>A connected user in this room is not on Spokes Desktop (Web or Mobile), so all room members are using Server Audio Cleanup.</value>
+  </data>
+  <data name="Cancels room echo and microphone bleed on the server across Desktop, Web, and Mobile on any network." xml:space="preserve">
+    <value>Cancels room echo and microphone bleed on the server across Desktop, Web, and Mobile on any network.</value>
+  </data>
+  <data name="Connected Desktop users in this room are not reachable on the same LAN, so Server Audio Cleanup is active." xml:space="preserve">
+    <value>Connected Desktop users in this room are not reachable on the same LAN, so Server Audio Cleanup is active.</value>
+  </data>
+  <data name="Connected Spokes Desktop roommates on the same LAN are streaming direct low-latency audio. Outside callers hear Server Audio Cleanup." xml:space="preserve">
+    <value>Connected Spokes Desktop roommates on the same LAN are streaming direct low-latency audio. Outside callers hear Server Audio Cleanup.</value>
+  </data>
+  <data name="Default. Streams sub-20ms direct audio with echo and bleed cancellation, available only between Spokes Desktop clients on the same LAN. If the connected users in the room don't match that (e.g. Web, Mobile, or different network), Server Audio Cleanup is automatically used as a fallback." xml:space="preserve">
+    <value>Default. Streams sub-20ms direct audio with echo and bleed cancellation, available only between Spokes Desktop clients on the same LAN. If the connected users in the room don't match that (e.g. Web, Mobile, or different network), Server Audio Cleanup is automatically used as a fallback.</value>
+  </data>
+  <data name="Low-latency direct mode is only available between Spokes Desktop clients on the same LAN. On Web and Mobile, Server Audio Cleanup will be used automatically." xml:space="preserve">
+    <value>Low-latency direct mode is only available between Spokes Desktop clients on the same LAN. On Web and Mobile, Server Audio Cleanup will be used automatically.</value>
+  </data>
+  <data name="Low-latency direct mode is only available between Spokes Desktop clients on the same LAN. This device is using Server Audio Cleanup." xml:space="preserve">
+    <value>Low-latency direct mode is only available between Spokes Desktop clients on the same LAN. This device is using Server Audio Cleanup.</value>
+  </data>
+  <data name="Roommates Muted Locally" xml:space="preserve">
+    <value>Roommates Muted Locally</value>
+  </data>
+  <data name="Server Audio Cleanup (Fallback)" xml:space="preserve">
+    <value>Server Audio Cleanup (Fallback)</value>
+  </data>
+  <data name="Waiting for another Spokes Desktop user in this room on the same LAN." xml:space="preserve">
+    <value>Waiting for another Spokes Desktop user in this room on the same LAN.</value>
+  </data>
+  <data name="Active Mode" xml:space="preserve">
+    <value>Active Mode</value>
+  </data>
+  <data name="Configuring room audio..." xml:space="preserve">
+    <value>Configuring room audio...</value>
+  </data>
+  <data name="Connecting to voice server..." xml:space="preserve">
+    <value>Connecting to voice server...</value>
+  </data>
+  <data name="Preparing audio devices..." xml:space="preserve">
+    <value>Preparing audio devices...</value>
+  </data>
+  <data name="Starting microphone &amp; noise filter..." xml:space="preserve">
+    <value>Starting microphone &amp; noise filter...</value>
+  </data>
+  <data name="Status" xml:space="preserve">
+    <value>Status</value>
+  </data>
+  <data name="View" xml:space="preserve">
+    <value>View</value>
+  </data>
+  <data name="Label" xml:space="preserve">
+    <value>Label</value>
+  </data>
+  <data name="Include" xml:space="preserve">
+    <value>Include</value>
+  </data>
+  <data name="Administrator access is required to view or manage remote backup destinations." xml:space="preserve">
+    <value>Administrator access is required to view or manage remote backup destinations.</value>
+  </data>
+  <data name="Administrator access is required." xml:space="preserve">
+    <value>Administrator access is required.</value>
+  </data>
+  <data name="An active authenticated session is required to connect Google Drive." xml:space="preserve">
+    <value>An active authenticated session is required to connect Google Drive.</value>
+  </data>
+  <data name="Cannot deactivate or demote the sole active administrator account." xml:space="preserve">
+    <value>Cannot deactivate or demote the sole active administrator account.</value>
+  </data>
+  <data name="Cannot delete the sole active administrator account. Promote another administrator first." xml:space="preserve">
+    <value>Cannot delete the sole active administrator account. Promote another administrator first.</value>
+  </data>
+  <data name="Company Bill Inbox can only bind to a server-managed Email Account." xml:space="preserve">
+    <value>Company Bill Inbox can only bind to a server-managed Email Account.</value>
+  </data>
+  <data name="Company Bill Inbox can only bind to a server-managed Virtual Inbox on the selected account." xml:space="preserve">
+    <value>Company Bill Inbox can only bind to a server-managed Virtual Inbox on the selected account.</value>
+  </data>
+  <data name="Company Bill Inbox can only use a server-managed Sending Identity." xml:space="preserve">
+    <value>Company Bill Inbox can only use a server-managed Sending Identity.</value>
+  </data>
+  <data name="Could not assign room." xml:space="preserve">
+    <value>Could not assign room.</value>
+  </data>
+  <data name="Email is not available in Family edition." xml:space="preserve">
+    <value>Email is not available in Family edition.</value>
+  </data>
+  <data name="Failed to create category." xml:space="preserve">
+    <value>Failed to create category.</value>
+  </data>
+  <data name="Failed to delete category." xml:space="preserve">
+    <value>Failed to delete category.</value>
+  </data>
+  <data name="Failed to remove contact." xml:space="preserve">
+    <value>Failed to remove contact.</value>
+  </data>
+  <data name="Failed to update category order." xml:space="preserve">
+    <value>Failed to update category order.</value>
+  </data>
+  <data name="Google Drive authorization state was invalid or expired. Please try connecting again." xml:space="preserve">
+    <value>Google Drive authorization state was invalid or expired. Please try connecting again.</value>
+  </data>
+  <data name="Only active global administrators can perform this action." xml:space="preserve">
+    <value>Only active global administrators can perform this action.</value>
+  </data>
+  <data name="Only an active Global Administrator can perform remote backup operations." xml:space="preserve">
+    <value>Only an active Global Administrator can perform remote backup operations.</value>
+  </data>
+  <data name="Only an active Global Administrator can view or modify remote backup destination credentials." xml:space="preserve">
+    <value>Only an active Global Administrator can view or modify remote backup destination credentials.</value>
+  </data>
+  <data name="Secure Vault setup is unavailable while your account is suspended or restricted." xml:space="preserve">
+    <value>Secure Vault setup is unavailable while your account is suspended or restricted.</value>
+  </data>
+  <data name="Selected Real Inbox is no longer accessible." xml:space="preserve">
+    <value>Selected Real Inbox is no longer accessible.</value>
+  </data>
+  <data name="Selected Sending Identity is no longer authorized." xml:space="preserve">
+    <value>Selected Sending Identity is no longer authorized.</value>
+  </data>
+  <data name="Selected Source Real Inbox is no longer accessible." xml:space="preserve">
+    <value>Selected Source Real Inbox is no longer accessible.</value>
+  </data>
+  <data name="Unauthorized team leader selection." xml:space="preserve">
+    <value>Unauthorized team leader selection.</value>
+  </data>
+  <data name="Unauthorized." xml:space="preserve">
+    <value>Unauthorized.</value>
+  </data>
+  <data name="Unlock your security vault to present encrypted albums." xml:space="preserve">
+    <value>Unlock your security vault to present encrypted albums.</value>
+  </data>
+  <data name="You cannot set a default permission group containing permissions you do not hold." xml:space="preserve">
+    <value>You cannot set a default permission group containing permissions you do not hold.</value>
+  </data>
+  <data name="You do not have access to the selected project." xml:space="preserve">
+    <value>You do not have access to the selected project.</value>
+  </data>
+  <data name="You do not have permission to access this calendar event." xml:space="preserve">
+    <value>You do not have permission to access this calendar event.</value>
+  </data>
+  <data name="You do not have permission to compose or send emails." xml:space="preserve">
+    <value>You do not have permission to compose or send emails.</value>
+  </data>
+  <data name="You do not have permission to create calendar events." xml:space="preserve">
+    <value>You do not have permission to create calendar events.</value>
+  </data>
+  <data name="You do not have permission to manage this Virtual Inbox." xml:space="preserve">
+    <value>You do not have permission to manage this Virtual Inbox.</value>
+  </data>
+  <data name="You do not have permission to modify this calendar event." xml:space="preserve">
+    <value>You do not have permission to modify this calendar event.</value>
+  </data>
+  <data name="You do not have permission to RSVP to calendar events." xml:space="preserve">
+    <value>You do not have permission to RSVP to calendar events.</value>
+  </data>
+  <data name="You do not have permission to save settings." xml:space="preserve">
+    <value>You do not have permission to save settings.</value>
+  </data>
+  <data name="You do not have permission to save system settings." xml:space="preserve">
+    <value>You do not have permission to save system settings.</value>
+  </data>
+  <data name="You do not have permission to update calendar categories." xml:space="preserve">
+    <value>You do not have permission to update calendar categories.</value>
+  </data>
+  <data name="You do not have permission to update reminders for this event." xml:space="preserve">
+    <value>You do not have permission to update reminders for this event.</value>
+  </data>
+  <data name="You do not have permission to view this calendar event." xml:space="preserve">
+    <value>You do not have permission to view this calendar event.</value>
+  </data>
+  <data name="Your account is currently in read-only mode and cannot modify contacts." xml:space="preserve">
+    <value>Your account is currently in read-only mode and cannot modify contacts.</value>
+  </data>
+  <data name="Your account is currently in read-only mode." xml:space="preserve">
+    <value>Your account is currently in read-only mode.</value>
+  </data>
+  <data name="Your account is currently suspended or inactive." xml:space="preserve">
+    <value>Your account is currently suspended or inactive.</value>
+  </data>
+  <data name="Your account is currently suspended or restricted. Creating or changing your Vault password is disabled." xml:space="preserve">
+    <value>Your account is currently suspended or restricted. Creating or changing your Vault password is disabled.</value>
+  </data>
+  <data name="Your account is in read-only mode." xml:space="preserve">
+    <value>Your account is in read-only mode.</value>
+  </data>
+  <data name="Your account is not authorized to change your vault password." xml:space="preserve">
+    <value>Your account is not authorized to change your vault password.</value>
+  </data>
+  <data name="Your account is not authorized to configure a vault password." xml:space="preserve">
+    <value>Your account is not authorized to configure a vault password.</value>
+  </data>
+  <data name="Your account is not permitted to unlock the vault." xml:space="preserve">
+    <value>Your account is not permitted to unlock the vault.</value>
+  </data>
+  <data name="Your account is read-only or lacks permission to modify business settings." xml:space="preserve">
+    <value>Your account is read-only or lacks permission to modify business settings.</value>
+  </data>
+  <data name="Low-Latency Direct LAN" xml:space="preserve">
+    <value>Low-Latency Direct LAN</value>
+  </data>
+  <data name="Voice Memo" xml:space="preserve">
+    <value>Voice Memo</value>
+  </data>
+  <data name="Attach Voice Memo" xml:space="preserve">
+    <value>Attach Voice Memo</value>
+  </data>
+  <data name="Ringing..." xml:space="preserve">
+    <value>Ringing...</value>
+  </data>
+  <data name="Connected" xml:space="preserve">
+    <value>Connected</value>
+  </data>
+  <data name="Rotate 90°" xml:space="preserve">
+    <value>Rotate 90°</value>
+  </data>
+  <data name="Voice Controls Drawer" xml:space="preserve">
+    <value>Voice Controls Drawer</value>
+  </data>
+  <data name="{0} ({1} cached images)" xml:space="preserve">
+    <value>{0} ({1} cached images)</value>
+  </data>
+  <data name="Calculating..." xml:space="preserve">
+    <value>Calculating...</value>
+  </data>
+  <data name="Clear Cache" xml:space="preserve">
+    <value>Clear Cache</value>
+  </data>
+  <data name="Failed to clear local media cache." xml:space="preserve">
+    <value>Failed to clear local media cache.</value>
+  </data>
+  <data name="Local Media Cache" xml:space="preserve">
+    <value>Local Media Cache</value>
+  </data>
+  <data name="Local media cache cleared." xml:space="preserve">
+    <value>Local media cache cleared.</value>
+  </data>
+  <data name="No cached images on this device." xml:space="preserve">
+    <value>No cached images on this device.</value>
+  </data>
+  <data name="Automatically adjusts your microphone loudness to a consistent level." xml:space="preserve">
+    <value>Automatically adjusts your microphone loudness to a consistent level.</value>
+  </data>
+  <data name="Automatically balances quiet and loud speakers to a consistent listening volume." xml:space="preserve">
+    <value>Automatically balances quiet and loud speakers to a consistent listening volume.</value>
+  </data>
+  <data name="Disabled while Noise Filter is set to None (Raw)." xml:space="preserve">
+    <value>Disabled while Noise Filter is set to None (Raw).</value>
+  </data>
+  <data name="Incoming Voice Normalization" xml:space="preserve">
+    <value>Incoming Voice Normalization</value>
+  </data>
+  <data name="Microphone Auto-Gain" xml:space="preserve">
+    <value>Microphone Auto-Gain</value>
+  </data>
+  <data name="{0} devices" xml:space="preserve">
+    <value>{0} devices</value>
+  </data>
+  <data name="{0} enrolled devices will be removed from this room." xml:space="preserve">
+    <value>{0} enrolled devices will be removed from this room.</value>
+  </data>
+  <data name="1 device" xml:space="preserve">
+    <value>1 device</value>
+  </data>
+  <data name="1 enrolled device will be removed from this room." xml:space="preserve">
+    <value>1 enrolled device will be removed from this room.</value>
+  </data>
+  <data name="Could not delete room." xml:space="preserve">
+    <value>Could not delete room.</value>
+  </data>
+  <data name="Could not remove device from room." xml:space="preserve">
+    <value>Could not remove device from room.</value>
+  </data>
+  <data name="Could not update room enrollment." xml:space="preserve">
+    <value>Could not update room enrollment.</value>
+  </data>
+  <data name="Could not update room mute preference." xml:space="preserve">
+    <value>Could not update room mute preference.</value>
+  </data>
+  <data name="Created by you" xml:space="preserve">
+    <value>Created by you</value>
+  </data>
+  <data name="Manage Rooms ({0})" xml:space="preserve">
+    <value>Manage Rooms ({0})</value>
+  </data>
+  <data name="No devices" xml:space="preserve">
+    <value>No devices</value>
+  </data>
+  <data name="Room deleted" xml:space="preserve">
+    <value>Room deleted</value>
+  </data>
+  <data name="Are you sure you want to delete this message? This action cannot be undone." xml:space="preserve">
+    <value>Are you sure you want to delete this message? This action cannot be undone.</value>
+  </data>
+  <data name="+{0} more" xml:space="preserve">
+    <value>+{0} more</value>
+  </data>
+  <data name="No users to display." xml:space="preserve">
+    <value>No users to display.</value>
+  </data>
+  <data name="People" xml:space="preserve">
+    <value>People</value>
+  </data>
+  <data name="View contributors" xml:space="preserve">
+    <value>View contributors</value>
+  </data>
+  <data name="Failed to load image." xml:space="preserve">
+    <value>Failed to load image.</value>
+  </data>
+  <data name="Applies to everyone" xml:space="preserve">
+    <value>Applies to everyone</value>
+  </data>
+  <data name="Channel Configuration" xml:space="preserve">
+    <value>Channel Configuration</value>
+  </data>
+  <data name="Channel Details" xml:space="preserve">
+    <value>Channel Details</value>
+  </data>
+  <data name="Only affects you" xml:space="preserve">
+    <value>Only affects you</value>
+  </data>
+  <data name="Your Preferences" xml:space="preserve">
+    <value>Your Preferences</value>
+  </data>
+  <data name="Switch Camera" xml:space="preserve">
+    <value>Switch Camera</value>
   </data>
 </root>

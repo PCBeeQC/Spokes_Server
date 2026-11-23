@@ -26,12 +26,8 @@ public class CommissionLedgerRecord : IDataEntity
     public decimal TpsAmount { get; set; }
     public decimal TvqAmount { get; set; }
     public string? GlAccountCode { get; set; }
-    public string? SageItemCode { get; set; }
-
-    // Accounting / Sage Export Tracking
-    public bool IsExported => ExportedToSageAt.HasValue;
-    public DateTime? ExportedToSageAt { get; set; }
-    public string? SageBatchId { get; set; }
+    public string? PaymentSourceGlCode { get; set; }
+    public List<DocumentTaxLine> TaxComponents { get; set; } = [];
 
     // Status Flow
     public string Status { get; set; } = CommissionStatus.Payable; // "Pending", "Payable", "Paid", "Clawback"

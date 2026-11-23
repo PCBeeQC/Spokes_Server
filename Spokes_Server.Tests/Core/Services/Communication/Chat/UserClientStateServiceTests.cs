@@ -23,10 +23,8 @@ public class UserClientStateServiceTests : IDisposable
 {
     private readonly string _testDataDir;
     private readonly DiskPersistenceService _writer;
-    private readonly UserClientStateRepository _clientStatesRepo;
     private readonly Mock<Database> _mockDb;
     private readonly ChatStateService _chatState;
-    private readonly Mock<IChatRealtimeGateway> _mockRealtimeGateway;
     private readonly UserClientStateService _service;
 
     public UserClientStateServiceTests()
@@ -34,23 +32,20 @@ public class UserClientStateServiceTests : IDisposable
         _testDataDir = Path.Combine(Path.GetTempPath(), $"Spokes_Test_UserClientStateService_{Guid.NewGuid()}");
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
 
         var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
         _writer = new DiskPersistenceService(mockLogger.Object);
 
-        _clientStatesRepo = new UserClientStateRepository(_writer, mockConfig.Object);
         var sessionRepo = new DeviceSessionRepository(_writer, mockConfig.Object);
         var empRepo = new EmployeeRepository(_writer, mockConfig.Object);
 
         _mockDb = TestDatabaseFactory.CreateMock(sessionRepo, empRepo);
-        _mockDb.Setup(d => d.ClientStates).Returns(_clientStatesRepo);
 
         _chatState = new ChatStateService();
 
-        _mockRealtimeGateway = new Mock<IChatRealtimeGateway>();
-
         var serviceLogger = Mock.Of<ILogger<UserClientStateService>>();
-        _service = new UserClientStateService(_clientStatesRepo, () => _mockDb.Object.ChatChannels, _chatState, _mockRealtimeGateway.Object, serviceLogger);
+        _service = new UserClientStateService(() => _mockDb.Object.ChatChannels, _chatState, serviceLogger);
     }
 
     public void Dispose()
@@ -63,7 +58,7 @@ public class UserClientStateServiceTests : IDisposable
     }
 
     [Fact]
-    public void UpdateDraftInMemory_DoesNotWriteToDisk_WhileTyping()
+    public void UpdateDraftInMemory_StoresDraftInMemory()
     {
         // Act: update draft as user types
         _service.UpdateDraftInMemory("user1", "chan1", "Draft in progress");
@@ -71,10 +66,6 @@ public class UserClientStateServiceTests : IDisposable
         // Assert: draft is available in service
         var draft = _service.GetDraft("user1", "chan1");
         Assert.Equal("Draft in progress", draft);
-
-        // Assert: disk repository has ZERO writes (zero disk writes during typing requirement)
-        var diskDraft = _clientStatesRepo.GetDraft("user1", "chan1");
-        Assert.Null(diskDraft);
     }
 
     [Fact]
@@ -117,13 +108,10 @@ public class UserClientStateServiceTests : IDisposable
 
         // Assert
         Assert.True(stoppedEventFired);
-        _mockRealtimeGateway.Verify(
-            p => p.SendToChannelAsync("chan1", "UserStoppedTyping", It.IsAny<object>(), default),
-            Times.Once);
     }
 
     [Fact]
-    public void FlushToDiskIfUnsent_KeepsDraftOnlyInMemory_NeverWritesToDisk_AndStopsTyping()
+    public void StopActiveTyping_KeepsDraftInMemory_AndStopsTyping()
     {
         // Arrange
         bool stoppedEventFired = false;
@@ -136,30 +124,28 @@ public class UserClientStateServiceTests : IDisposable
         _service.SetTyping("user1", "chan1", true);
 
         // Act: user backgrounds or disconnects before sending
-        _service.FlushToDiskIfUnsent("user1");
+        _service.StopActiveTyping("user1");
 
-        // Assert: draft remains in RAM and is never persisted to disk
+        // Assert: draft remains in RAM
         Assert.Equal("Unsent message before backgrounding", _service.GetDraft("user1", "chan1"));
-        Assert.Null(_clientStatesRepo.GetDraft("user1", "chan1"));
 
         // Assert: typing was immediately stopped
         Assert.True(stoppedEventFired);
     }
 
     [Fact]
-    public void ClearDraft_RemovesMemoryAndDisk_AndStopsTyping()
+    public void ClearDraft_RemovesDraftFromMemory_AndStopsTyping()
     {
         // Arrange: prepare draft in memory
         _service.UpdateDraftInMemory("user1", "chan1", "Message to send");
-        _service.FlushToDiskIfUnsent("user1");
+        _service.StopActiveTyping("user1");
         Assert.NotNull(_service.GetDraft("user1", "chan1"));
 
         // Act: message is sent
         _service.ClearDraft("user1", "chan1");
 
-        // Assert: cleared from both memory and disk
+        // Assert: cleared from memory
         Assert.Null(_service.GetDraft("user1", "chan1"));
-        Assert.Null(_clientStatesRepo.GetDraft("user1", "chan1"));
         Assert.Null(_service.GetActiveDraftChannel("user1"));
     }
 
@@ -169,6 +155,7 @@ public class UserClientStateServiceTests : IDisposable
         // Arrange: Mock ChatChannels to simulate non-existent / deleted channel
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataDir);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         var chatChannelRepo = new ChatChannelRepository(_writer, mockConfig.Object);
         _mockDb.Setup(d => d.ChatChannels).Returns(chatChannelRepo);
 

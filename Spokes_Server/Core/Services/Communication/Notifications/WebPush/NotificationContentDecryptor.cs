@@ -40,7 +40,7 @@ public class NotificationContentDecryptor
             if (_keystore.IsUserUnlocked(userId))
             {
                 var privateKey = _keystore.GetPrivateKey(userId);
-                if (privateKey != null && channel != null && channel.EncryptedChannelKeys.TryGetValue(userId, out var cipherKey))
+                if (privateKey != null && channel != null && channel.TryGetEncryptedKeyForEpoch(message.KeyEpoch, userId, out var cipherKey))
                 {
                     try
                     {

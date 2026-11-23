@@ -1,4 +1,5 @@
 @using Spokes_Server.Core.Models.Core
+@using Spokes_Server.Core.Models.Common
 @using Spokes_Server.Core.Models.Projects
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Data
@@ -9,7 +10,6 @@
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.Projects
 @inject UserService UserService
-@inject ITimelineEventService TimelineEventService
 
 <MudGrid Class="mb-4 align-center">
 
@@ -45,17 +45,7 @@
                     <StatusChip Status="@context.Status" />
                 </MudTd>
                 <MudTd>
-                    @* <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
-                                   OnClick="@(() => OpenViewer(context))" /> *@
                     <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenViewer(context))">View</MudButton>
-
-                    @* @if (CanEdit && context.Status != "Accepted")
-                    {
-                        <MudTooltip Text="Mark as Winning Quote">
-                            <MudIconButton Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Color="Color.Success"
-                                           OnClick="@(() => MarkAccepted(context))" />
-                        </MudTooltip>
-                    } *@
                 </MudTd>
             </RowTemplate>
         </MudTable>
@@ -109,9 +99,6 @@
                         }
                     </MudTd>
                     <MudTd>
-                        @* <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
-                                       OnClick="@(() => OpenInvoice(context))" /> *@
-
                         <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenInvoice(context))">View</MudButton>
                     </MudTd>
                 </RowTemplate>
@@ -124,7 +111,7 @@
                     <MudText Typo="Typo.h5">Invoices</MudText>
                 </MudItem>
                 <MudItem xs="6" Class="d-flex justify-end gap-2">
-                    @if (CanEdit)
+                    @if (_canCreateInvoice)
                     {
                         <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateInvoice">Create Invoice</MudButton>
                     }
@@ -176,10 +163,29 @@
     [Inject] NavigationManager Nav { get; set; } = default!;
     private List<Quote> Quotes = [];
     private bool CanEdit = false;
+    private bool _canApproveQuote = false;
+    private bool _canCreateInvoice = false;
+    private bool _canApproveInvoice = false;
+    private bool _hasAuthorizedAccess;
+    private string? _authorizedProjectId;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
-        Project = Db.Projects.GetById(ProjectId);
+        if (!string.Equals(_authorizedProjectId, ProjectId, StringComparison.Ordinal))
+        {
+            Project = null;
+            Quotes = [];
+            Invoices = [];
+            UnbilledLabor = 0;
+            UnbilledExpenses = 0;
+            CanEdit = false;
+            _canApproveQuote = false;
+            _canCreateInvoice = false;
+            _canApproveInvoice = false;
+            _hasAuthorizedAccess = false;
+            _authorizedProjectId = null;
+        }
+
         await LoadPermissions();
         Refresh();
     }
@@ -187,11 +193,39 @@
     private async Task LoadPermissions()
     {
         var emp = await UserService.GetEmployeeAsync();
-        if (emp != null) CanEdit = emp.HasPermission(AppPermissions.Projects.Edit);
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        if (emp == null || liveProject == null || !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: false))
+        {
+            Project = null;
+            _hasAuthorizedAccess = false;
+            _authorizedProjectId = null;
+            CanEdit = false;
+            _canApproveQuote = false;
+            _canCreateInvoice = false;
+            _canApproveInvoice = false;
+            return;
+        }
+
+        Project = liveProject;
+        _hasAuthorizedAccess = true;
+        _authorizedProjectId = liveProject.Id;
+        _canApproveQuote = emp.HasPermission(AppPermissions.Projects.ApproveQuotes);
+        _canApproveInvoice = emp.HasPermission(AppPermissions.Finance.ApproveInvoices);
+        _canCreateInvoice = emp.HasPermission(AppPermissions.Finance.AccessAccounting) || _canApproveInvoice;
+        CanEdit = emp.HasPermission(AppPermissions.Projects.Edit) || _canApproveQuote;
     }
 
     private void Refresh()
     {
+        if (!_hasAuthorizedAccess || string.IsNullOrEmpty(ProjectId))
+        {
+            Quotes = [];
+            Invoices = [];
+            UnbilledLabor = 0;
+            UnbilledExpenses = 0;
+            return;
+        }
+
         Quotes = Db.Quotes.GetByProject(ProjectId);
         Invoices = Db.Invoices.GetByProject(ProjectId);
         if (Project != null && Project.BillingMethod == BillingMethods.TimeAndMaterials)
@@ -200,28 +234,83 @@
         }
     }
 
-    private void MarkAccepted(Quote winner)
+    private async Task<(Spokes_Server.Core.Models.HR.Employee Actor, Project Project)?> AuthorizeQuoteEditAsync(bool requireApprovePermission = false)
     {
-        var oldStatus = winner.Status;
-        // 1. Mark winner
-        winner.Status = QuoteStatus.Accepted;
-        Db.Quotes.Save(winner);
-        TimelineEventService.SyncQuoteStatusTimelineEvent(winner, oldStatus, QuoteStatus.Accepted, null);
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        if (emp == null || liveProject == null || !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: false))
+        {
+            CanEdit = false;
+            _canApproveQuote = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
 
-        // 2. Mark others as Rejected (Optional, but usually preferred)
+        var canApprove = emp.HasPermission(AppPermissions.Projects.ApproveQuotes);
+        var canEdit = emp.HasPermission(AppPermissions.Projects.Edit) || canApprove;
+        if (requireApprovePermission ? !canApprove : !canEdit)
+        {
+            CanEdit = canEdit;
+            _canApproveQuote = canApprove;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
 
-        Refresh();
-        Snackbar.Add($"Quote {winner.QuoteNumber} marked as Accepted!", Severity.Success);
+        return (emp, liveProject);
+    }
+
+    private async Task<(Spokes_Server.Core.Models.HR.Employee Actor, Project Project)?> AuthorizeInvoiceCreateAsync()
+    {
+        var emp = await UserService.GetEmployeeAsync();
+        var liveProject = string.IsNullOrEmpty(ProjectId) ? null : Db.Projects.GetById(ProjectId);
+        if (emp == null || liveProject == null || !UserService.CanViewProject(emp, liveProject, allowAccountingFinancialRead: false))
+        {
+            _canCreateInvoice = false;
+            _canApproveInvoice = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+
+        var canApprove = emp.HasPermission(AppPermissions.Finance.ApproveInvoices);
+        var canCreate = emp.HasPermission(AppPermissions.Finance.AccessAccounting) || canApprove;
+        if (!canCreate)
+        {
+            _canCreateInvoice = false;
+            _canApproveInvoice = false;
+            Snackbar.Add("Access denied.", Severity.Error);
+            return null;
+        }
+
+        return (emp, liveProject);
     }
 
     private async Task CreateQuote()
     {
+        var auth = await AuthorizeQuoteEditAsync();
+        if (auth == null) return;
+
         var profile = Db.CompanyProfile.Get();
         var nextNum = Db.Quotes.GenerateQuoteNumber(profile.QuotePrefix);
-        var newQuote = new Quote { ProjectId = ProjectId, QuoteNumber = nextNum, Date = DateTime.Today };
+        var newQuote = new Quote
+        {
+            ProjectId = auth.Value.Project.Id,
+            QuoteNumber = nextNum,
+            Date = DateTime.Today,
+            History =
+            [
+                new DocumentHistoryEntry
+                {
+                    Timestamp = DateTime.UtcNow,
+                    Action = DocumentHistoryActions.Created,
+                    NewStatus = QuoteStatus.Draft,
+                    ChangedBy = auth.Value.Actor.FullName ?? auth.Value.Actor.Email ?? "System",
+                    Summary = "Created draft quote"
+                }
+            ]
+        };
 
         // Pull template defaults ONLY on creation
-        var project = Db.Projects.GetById(ProjectId);
+        var project = auth.Value.Project;
         if (project != null)
         {
             var template = (!string.IsNullOrEmpty(project.DefaultTemplateId))
@@ -249,13 +338,41 @@
 
     private async Task OpenEditor(Quote quote)
     {
-        var parameters = new DialogParameters { ["Quote"] = quote, ["ProjectId"] = ProjectId };
+        var auth = await AuthorizeQuoteEditAsync();
+        if (auth == null) return;
+
+        var actorCanApprove = auth.Value.Actor.HasPermission(AppPermissions.Projects.ApproveQuotes);
+        var actorName = auth.Value.Actor.FullName ?? auth.Value.Actor.Email ?? "System";
+        var parameters = new DialogParameters<QuoteEditorDialog>
+        {
+            { x => x.Quote, quote },
+            { x => x.ProjectId, auth.Value.Project.Id },
+            { x => x.CanEditDraft, true },
+            { x => x.CanApproveQuote, actorCanApprove },
+            { x => x.CurrentUserName, actorName }
+        };
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
         var dialog = await DialogService.ShowAsync<QuoteEditorDialog>("Edit Quote", parameters, options);
         var result = await dialog.Result;
 
         if (result != null && !result.Canceled && result.Data is Quote q)
         {
+            var saveAuth = await AuthorizeQuoteEditAsync();
+            if (saveAuth == null) return;
+
+            q.ProjectId = saveAuth.Value.Project.Id;
+            var existing = Db.Quotes.GetById(q.Id);
+            if (existing != null && existing.ProjectId != saveAuth.Value.Project.Id)
+            {
+                Snackbar.Add("Access denied.", Severity.Error);
+                return;
+            }
+            if (existing != null && existing.Status != QuoteStatus.Draft && !saveAuth.Value.Actor.HasPermission(AppPermissions.Projects.ApproveQuotes))
+            {
+                Snackbar.Add("Only quote approvers can modify non-draft quotes.", Severity.Error);
+                return;
+            }
+
             Db.Quotes.Save(q);
             Refresh();
         }
@@ -300,7 +417,7 @@
         // 4. Scan Expense Reports
         var allReports = Db.ExpenseReports.GetAll();
         var expenseItems = allReports
-        .Where(r => r.DateSubmitted.HasValue)
+        .Where(r => r.DateSubmitted.HasValue && r.Status != ExpenseReportStatus.Draft)
         .SelectMany(r => r.LineItems.Where(i => i.ProjectId == ProjectId));
         var unbilledExpenseItems = expenseItems.Where(i => !billedExpenseItemIds.Contains(i.Id));
 
@@ -318,22 +435,43 @@
 
     private async Task CreateInvoice()
     {
+        var auth = await AuthorizeInvoiceCreateAsync();
+        if (auth == null) return;
+
+        var liveProject = auth.Value.Project;
+        var actorName = auth.Value.Actor.FullName ?? auth.Value.Actor.Email ?? "System";
         var profile = Db.CompanyProfile.Get();
-        var template = (Project != null && !string.IsNullOrEmpty(Project.DefaultTemplateId))
-            ? Db.DocumentTemplates.GetById(Project.DefaultTemplateId)
+        var template = (!string.IsNullOrEmpty(liveProject.DefaultTemplateId))
+            ? Db.DocumentTemplates.GetById(liveProject.DefaultTemplateId)
             : Db.DocumentTemplates.GetDefault();
         if (template == null) template = Db.DocumentTemplates.GetDefault();
 
         var invoice = new Invoice
         {
-            ProjectId = ProjectId,
+            ProjectId = liveProject.Id,
             InvoiceNumber = Db.Invoices.GenerateInvoiceNumber(profile.InvoicePrefix),
             Date = DateTime.Today,
             Status = InvoiceStatus.Draft,
-            TaxRate = template.TaxRate
+            TaxRate = template.TaxRate,
+            History =
+            [
+                new DocumentHistoryEntry
+                {
+                    Timestamp = DateTime.UtcNow,
+                    Action = DocumentHistoryActions.Created,
+                    NewStatus = InvoiceStatus.Draft,
+                    ChangedBy = actorName,
+                    Summary = "Created draft invoice"
+                }
+            ]
         };
 
-        var parameters = new DialogParameters { ["Invoice"] = invoice };
+        var parameters = new DialogParameters<InvoiceMasterDialog>
+        {
+            { x => x.Invoice, invoice },
+            { x => x.CanEditDraft, true },
+            { x => x.CanApproveInvoice, auth.Value.Actor.HasPermission(AppPermissions.Finance.ApproveInvoices) }
+        };
         var options = new DialogOptions { MaxWidth = MaxWidth.ExtraExtraLarge, FullWidth = true };
 
         var dialog = await DialogService.ShowAsync<InvoiceMasterDialog>("Create Invoice", parameters, options);

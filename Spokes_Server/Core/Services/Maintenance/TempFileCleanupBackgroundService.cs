@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Services.Storage;
@@ -8,8 +9,8 @@ using Spokes_Server.Core.Services.Storage;
 namespace Spokes_Server.Core.Services.Maintenance;
 
 /// <summary>
-/// Background service that periodically purges abandoned temporary upload files.
-/// Runs once on boot and periodically thereafter, eliminating constructor-level background task launches.
+/// Background service that periodically purges abandoned temporary upload files,
+/// orphaned uploads/PDFs, and stale device sessions.
 /// </summary>
 public class TempFileCleanupBackgroundService : BackgroundService
 {
@@ -17,6 +18,7 @@ public class TempFileCleanupBackgroundService : BackgroundService
     private readonly ILogger<TempFileCleanupBackgroundService> _logger;
     private readonly TimeSpan _cleanupInterval;
     private readonly TimeProvider _timeProvider;
+    private readonly StorageMaintenanceService? _storageMaintenance;
     private readonly object _lock = new();
     private int _completedIterations;
     private TaskCompletionSource _nextIterationTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -24,10 +26,12 @@ public class TempFileCleanupBackgroundService : BackgroundService
     public event Action? OnIterationCompleted;
     public int CompletedIterations => Volatile.Read(ref _completedIterations);
 
+    [ActivatorUtilitiesConstructor]
     public TempFileCleanupBackgroundService(
         IFileService fileService,
-        ILogger<TempFileCleanupBackgroundService> logger)
-        : this(fileService, logger, TimeSpan.FromHours(1), TimeProvider.System)
+        ILogger<TempFileCleanupBackgroundService> logger,
+        StorageMaintenanceService? storageMaintenance = null)
+        : this(fileService, logger, TimeSpan.FromHours(1), TimeProvider.System, storageMaintenance)
     {
     }
 
@@ -35,7 +39,7 @@ public class TempFileCleanupBackgroundService : BackgroundService
         IFileService fileService,
         ILogger<TempFileCleanupBackgroundService> logger,
         TimeSpan cleanupInterval)
-        : this(fileService, logger, cleanupInterval, TimeProvider.System)
+        : this(fileService, logger, cleanupInterval, TimeProvider.System, null)
     {
     }
 
@@ -43,12 +47,14 @@ public class TempFileCleanupBackgroundService : BackgroundService
         IFileService fileService,
         ILogger<TempFileCleanupBackgroundService> logger,
         TimeSpan cleanupInterval,
-        TimeProvider? timeProvider)
+        TimeProvider? timeProvider,
+        StorageMaintenanceService? storageMaintenance = null)
     {
         _fileService = fileService;
         _logger = logger;
         _cleanupInterval = cleanupInterval;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _storageMaintenance = storageMaintenance;
     }
 
     public Task WaitForIterationAsync(CancellationToken cancellationToken = default)
@@ -78,7 +84,13 @@ public class TempFileCleanupBackgroundService : BackgroundService
                 try
                 {
                     _fileService.PurgeStaleTempFiles();
-                    _logger.LogDebug("[TempFileCleanup] Completed stale temp file purge.");
+                    if (_storageMaintenance != null)
+                    {
+                        _storageMaintenance.PurgeStaleDeviceSessions();
+                        await _storageMaintenance.PurgeOrphanedUploadsAsync(cancellationToken: stoppingToken);
+                        await _storageMaintenance.PurgeOrphanedPdfsAsync(cancellationToken: stoppingToken);
+                    }
+                    _logger.LogDebug("[TempFileCleanup] Completed scheduled storage and session maintenance.");
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {

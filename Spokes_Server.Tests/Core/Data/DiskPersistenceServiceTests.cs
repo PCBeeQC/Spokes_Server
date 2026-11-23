@@ -230,4 +230,32 @@ public class DiskPersistenceServiceTests : IDisposable
         mockHealth.Verify(h => h.RecordPersistenceFailure(), Times.Once);
         mockLog.Verify(l => l.LogError("Storage", It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
     }
+
+    [Fact]
+    public async Task ConcurrentWritesAndFlushAllAsync_NoTempFileContentionOrFailure()
+    {
+        var mockHealth = new Mock<IStorageHealthNotifier>();
+        var mockLog = new Mock<IStoragePersistenceLogger>();
+        var mockLogger = new Mock<ILogger<DiskPersistenceService>>();
+        using var service = new DiskPersistenceService(mockLogger.Object, mockHealth.Object, mockLog.Object);
+
+        var filePath = Path.Combine(_testDataDir, "concurrent_session.json");
+        using var cts = new CancellationTokenSource();
+        await service.StartAsync(cts.Token);
+
+        var writers = Enumerable.Range(0, 50).Select(i => Task.Run(() =>
+        {
+            service.QueueWrite(filePath, new { Iteration = i });
+            return service.FlushAllAsync();
+        })).ToArray();
+
+        await Task.WhenAll(writers);
+        await service.FlushAllAsync();
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.True(File.Exists(filePath));
+        Assert.Empty(Directory.GetFiles(_testDataDir, "*.tmp"));
+        mockHealth.Verify(h => h.RecordPersistenceFailure(), Times.Never);
+        mockLog.Verify(l => l.LogError(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+    }
 }

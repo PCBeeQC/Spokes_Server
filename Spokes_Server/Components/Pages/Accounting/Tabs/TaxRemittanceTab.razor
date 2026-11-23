@@ -1,0 +1,280 @@
+@using System.Globalization
+@using Spokes_Server.Components.Shared
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@inject Database Db
+@inject ITaxRemittanceService TaxRemittanceService
+@inject IFinancialAccountService FinancialAccountService
+@inject IJurisdictionTemplateService JurisdictionService
+@inject ISnackbar Snackbar
+@inject UserService UserService
+@using Spokes_Server.Core.Constants
+
+<MudGrid Spacing="3">
+    @* Period Generator Card *@
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+            <div class="d-flex justify-space-between align-center flex-wrap gap-3">
+                <div>
+                    <MudText Typo="Typo.h6">@BizLoc["Sales Tax Filing & Remittance (TPS/GST · TVQ/QST · HST/VAT)"]</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @BizLoc["Calculate collected sales taxes vs. input tax credits (ITCs/CTIs) for any period, lock filed returns, and record remittance payments."]
+                    </MudText>
+                </div>
+
+                <div class="d-flex align-center flex-wrap gap-2">
+                    <MudDatePicker @bind-Date="_startDate"
+                                   Label="@BizLoc["Period Start"]"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   Style="max-width: 170px;" />
+                    <MudDatePicker @bind-Date="_endDate"
+                                   Label="@BizLoc["Period End"]"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   Style="max-width: 170px;" />
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Info"
+                               StartIcon="@Icons.Material.Filled.Calculate"
+                               OnClick="CalculatePreview">
+                        @BizLoc["Calculate Return"]
+                    </MudButton>
+                    @if (_canWriteAccounting)
+                    {
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Lock"
+                                   OnClick="FileAndLockCurrentPeriod">
+                            @BizLoc["File & Lock Period"]
+                        </MudButton>
+                    }
+                </div>
+            </div>
+        </MudPaper>
+    </MudItem>
+
+    @* Live Preview / Active Period Breakdown *@
+    @if (_previewPeriod != null)
+    {
+        <MudItem xs="12">
+            <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-3">
+                    <div>
+                        <MudText Typo="Typo.subtitle1">
+                            <b>@BizLoc["Tax Return Worksheet:"] @_previewPeriod.StartDate.ToString("yyyy-MM-dd") → @_previewPeriod.EndDate.ToString("yyyy-MM-dd")</b>
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @BizLoc["Jurisdiction:"] @_activeJurisdictionName · @BizLoc["Sales Before Tax:"] @_previewPeriod.TotalSalesBeforeTax.ToString("C2") · @BizLoc["Eligible Purchases:"] @_previewPeriod.TotalPurchasesBeforeTax.ToString("C2")
+                        </MudText>
+                    </div>
+                    <MudChip T="string" Color="@(_previewPeriod.NetTaxRemittanceDue >= 0 ? Color.Warning : Color.Success)">
+                        @(_previewPeriod.NetTaxRemittanceDue >= 0
+                            ? $"{BizLoc["Net Remittance Due:"].Value} {_previewPeriod.NetTaxRemittanceDue:C2}"
+                            : $"{BizLoc["Net Refund Claim:"].Value} {Math.Abs(_previewPeriod.NetTaxRemittanceDue):C2}")
+                    </MudChip>
+                </div>
+
+                <MudSimpleTable Elevation="0" Outlined="true" Dense="true" Hover="true" Bordered="true" Striped="true">
+                    <thead>
+                        <tr>
+                            <th>@BizLoc["Tax Code"]</th>
+                            <th>@BizLoc["Tax Authority"]</th>
+                            <th style="text-align: right;">@BizLoc["Rate"]</th>
+                            <th style="text-align: right;">@BizLoc["Tax Collected (Sales)"]</th>
+                            <th style="text-align: right;">@BizLoc["Input Tax Credits (ITCs/CTIs)"]</th>
+                            <th style="text-align: right;">@BizLoc["Net Remittance / (Refund)"]</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var line in _previewPeriod.AuthorityLines)
+                        {
+                            <tr>
+                                <td><b>@line.TaxCode</b> (@line.TaxName)</td>
+                                <td>@line.AuthorityName</td>
+                                <td style="text-align: right;">@FinancialCalculationEngine.FormatTaxRatePercent(line.Rate)%</td>
+                                <td style="text-align: right; font-weight: 600;">@line.TaxCollectedOnSales.ToString("C2")</td>
+                                <td style="text-align: right; color: var(--mud-palette-success);">@line.InputTaxCreditsOnPurchases.ToString("C2")</td>
+                                <td style="text-align: right; font-weight: 700;">@line.NetTaxOwing.ToString("C2")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            </MudPaper>
+        </MudItem>
+    }
+
+    @* Saved Tax Filing Periods History *@
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+            <div class="d-flex justify-space-between align-center flex-wrap gap-2 mb-3">
+                <MudText Typo="Typo.h6">@BizLoc["Filed & Paid Tax Returns"]</MudText>
+                @if (_canWriteAccounting)
+                {
+                    <div style="min-width: 240px;">
+                        <FinancialAccountSelect @bind-Value="_paymentAccountGlCode"
+                                                Label="@BizLoc["Remittance Payment Account"]"
+                                                Variant="Variant.Outlined"
+                                                Margin="Margin.Dense" />
+                    </div>
+                }
+            </div>
+            <MudTable Items="@_savedPeriods" Dense="true" Hover="true" Striped="true" Outlined="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>@BizLoc["Period"]</MudTh>
+                    <MudTh>@BizLoc["Date Range"]</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Collected on Sales"]</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Input Tax Credits"]</MudTh>
+                    <MudTh Style="text-align: right;">@BizLoc["Net Remittance"]</MudTh>
+                    <MudTh>@Loc["Status"]</MudTh>
+                    <MudTh>@BizLoc["Payment Reference"]</MudTh>
+                    <MudTh Style="text-align: right;">@Loc["Actions"]</MudTh>
+                </HeaderContent>
+                <RowTemplate Context="period">
+                    <MudTd DataLabel="@BizLoc["Period"]"><b>@period.PeriodLabel</b></MudTd>
+                    <MudTd DataLabel="@BizLoc["Date Range"]">
+                        @period.StartDate.ToString("yyyy-MM-dd") → @period.EndDate.ToString("yyyy-MM-dd")
+                    </MudTd>
+                    <MudTd DataLabel="@BizLoc["Collected on Sales"]" Style="text-align: right;">
+                        @period.TotalTaxCollected.ToString("C2")
+                    </MudTd>
+                    <MudTd DataLabel="@BizLoc["Input Tax Credits"]" Style="text-align: right;">
+                        @period.TotalInputTaxCredits.ToString("C2")
+                    </MudTd>
+                    <MudTd DataLabel="@BizLoc["Net Remittance"]" Style="text-align: right; font-weight: 700;">
+                        @period.NetTaxRemittanceDue.ToString("C2")
+                    </MudTd>
+                    <MudTd DataLabel="@Loc["Status"]">
+                        <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(period.Status)">
+                            @period.Status
+                        </MudChip>
+                    </MudTd>
+                    <MudTd DataLabel="@BizLoc["Payment Reference"]">
+                        @(string.IsNullOrWhiteSpace(period.PaymentReference) ? "—" : period.PaymentReference)
+                    </MudTd>
+                    <MudTd DataLabel="@Loc["Actions"]" Style="text-align: right; white-space: nowrap;">
+                        <MudButton Variant="Variant.Outlined"
+                                   Size="Size.Small"
+                                   Class="mr-1"
+                                   OnClick="@(() => InspectPeriod(period))">
+                            @Loc["View"]
+                        </MudButton>
+                        @if (period.Status == TaxFilingStatus.Filed && _canWriteAccounting)
+                        {
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Success"
+                                       Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Payments"
+                                       OnClick="@(() => MarkRemittancePaid(period))">
+                                @BizLoc["Record Remittance Paid"]
+                            </MudButton>
+                        }
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Align="Align.Center" Class="py-4 mud-text-secondary">
+                        @BizLoc["No tax filing periods filed yet. Use the calculator above to generate and file your first sales tax return."]
+                    </MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private DateTime? _startDate;
+    private DateTime? _endDate;
+    private string _activeJurisdictionName = string.Empty;
+    private TaxFilingPeriod? _previewPeriod;
+    private List<TaxFilingPeriod> _savedPeriods = [];
+
+    private bool _canWriteAccounting;
+    private Spokes_Server.Core.Models.HR.Employee? _currentUser;
+    private string? _paymentAccountGlCode;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUser = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canWriteAccounting = _currentUser?.HasPermission(AppPermissions.Finance.AccessAccounting) == true;
+        _paymentAccountGlCode = FinancialAccountService.ResolveDefaultGlCodeForMethod(null);
+        var today = DateTime.Today;
+        var quarterIndex = (today.Month - 1) / 3;
+        var quarterStart = new DateTime(today.Year, quarterIndex * 3 + 1, 1);
+        _startDate = quarterStart;
+        _endDate = quarterStart.AddMonths(3).AddDays(-1);
+
+        _activeJurisdictionName = JurisdictionService.GetActiveTemplate().Name;
+        CalculatePreview();
+        LoadSavedPeriods();
+    }
+
+    private void LoadSavedPeriods()
+    {
+        _savedPeriods = Db.TaxFilingPeriods?.GetAll().ToList() ?? [];
+    }
+
+    private void CalculatePreview()
+    {
+        if (!_startDate.HasValue || !_endDate.HasValue) return;
+        _previewPeriod = TaxRemittanceService.CalculateTaxPeriodSummary(_startDate.Value, _endDate.Value);
+    }
+
+    private async Task<bool> EnsureCanWriteAccountingAsync()
+    {
+        var liveUser = await UserService.GetEmployeeAsync();
+        _currentUser = liveUser ?? await UserService.GetEmployeeAsync(allowSuspended: true);
+        _canWriteAccounting = liveUser?.IsActiveUnsuspended == true &&
+                              liveUser.HasPermission(AppPermissions.Finance.AccessAccounting);
+        if (_canWriteAccounting) return true;
+        Snackbar.Add("You do not have permission to modify accounting records.", Severity.Warning);
+        StateHasChanged();
+        return false;
+    }
+
+    private async Task FileAndLockCurrentPeriod()
+    {
+        if (!_startDate.HasValue || !_endDate.HasValue) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        try
+        {
+            _previewPeriod = TaxRemittanceService.FileAndClosePeriod(_startDate.Value, _endDate.Value, "Quarterly", _currentUser!.FullName);
+            LoadSavedPeriods();
+            Snackbar.Add(BizLoc["Tax return filed and period locked."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private void InspectPeriod(TaxFilingPeriod period)
+    {
+        _previewPeriod = period;
+        _startDate = period.StartDate;
+        _endDate = period.EndDate;
+    }
+
+    private async Task MarkRemittancePaid(TaxFilingPeriod period)
+    {
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        try
+        {
+            var bankCode = !string.IsNullOrWhiteSpace(_paymentAccountGlCode)
+                ? _paymentAccountGlCode
+                : FinancialAccountService.ResolveDefaultGlCodeForMethod(null);
+            TaxRemittanceService.RecordTaxRemittancePayment(period.Id, DateTime.Today, bankCode, $"REMIT-{DateTime.Today:yyyyMMdd}");
+            LoadSavedPeriods();
+            Snackbar.Add(BizLoc["Tax remittance payment recorded in the General Ledger."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private static Color GetStatusColor(string status) => status switch
+    {
+        TaxFilingStatus.Paid => Color.Success,
+        TaxFilingStatus.Filed => Color.Info,
+        _ => Color.Warning
+    };
+}

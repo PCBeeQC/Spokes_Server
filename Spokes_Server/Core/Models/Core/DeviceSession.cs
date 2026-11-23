@@ -65,6 +65,14 @@ public class DeviceSession : IDataEntity
     public bool HasVaultCookie { get; set; }
 
     /// <summary>
+    /// Server-side nonce rotated whenever vault cookies are minted or revoked, binding
+    /// each encrypted vault persistence cookie to a specific unlock generation.
+    /// Empty only for sessions that have never minted or revoked a v2 vault cookie
+    /// (including pre-v2 sessions loaded from disk prior to one-time v1 -> v2 upgrade).
+    /// </summary>
+    public string VaultNonce { get; set; } = string.Empty;
+
+    /// <summary>
     /// The IdToken used for OIDC logout (stored here to prevent massive chunked cookies on mobile).
     /// </summary>
     public string? IdToken { get; set; }
@@ -94,6 +102,12 @@ public class DeviceSession : IDataEntity
 
     /// <summary>Whether push notifications are enabled for this device.</summary>
     public bool PushEnabled { get; set; }
+
+    /// <summary>
+    /// Whether the user explicitly unsubscribed or disabled push notifications on this server session.
+    /// Prevents automatic background re-subscription when the OS/app-level push token is still active for other servers.
+    /// </summary>
+    public bool PushExplicitlyDisabled { get; set; }
 
     /// <summary>When push was enabled on this device.</summary>
     public DateTime? PushSubscribedAt { get; set; }

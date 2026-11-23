@@ -1,9 +1,13 @@
 @using Spokes_Server.Core.Constants
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Projects
+@using Spokes_Server.Core.Services.Security
 @inject Database Db
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject UserService UserService
+@inject FileUrlSigner FileUrls
 @inject ILogger<ExpenseMobileView> Logger
 
 <div class="expense-mobile-view px-1">
@@ -32,10 +36,13 @@
                                 }
                             </MudMenu>
                         }
-                        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true">
-                            <MudMenuItem Icon="@Icons.Material.Filled.Add" OnClick="CreateNewDraftReport">New Draft Report</MudMenuItem>
-                            <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="DeleteActiveReport">Delete Report</MudMenuItem>
-                        </MudMenu>
+                        @if (_canMutateExpenses)
+                        {
+                            <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true">
+                                <MudMenuItem Icon="@Icons.Material.Filled.Add" OnClick="CreateNewDraftReport">New Draft Report</MudMenuItem>
+                                <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="DeleteActiveReport">Delete Report</MudMenuItem>
+                            </MudMenu>
+                        }
                     </div>
                 </div>
 
@@ -58,7 +65,7 @@
                            FullWidth="true"
                            Class="rounded-pill"
                            Style="font-weight: 600; text-transform: none; height: 44px;"
-                           Disabled="@(!_activeReport.LineItems.Any())"
+                           Disabled="@(!_canMutateExpenses || !_activeReport.LineItems.Any())"
                            StartIcon="@Icons.Material.Filled.Send"
                            OnClick="SubmitActiveReport">
                     Submit for Approval
@@ -125,7 +132,7 @@
                         <div class="d-flex align-center gap-3 cursor-pointer" @onclick="OpenCurrentReceipt">
                             @if (IsImageFile(_itemReceiptPath))
                             {
-                                <MudImage Src="@_itemReceiptPath" Width="44" Height="44" ObjectFit="ObjectFit.Cover" Class="rounded-lg" Elevation="1" />
+                                <MudImage Src="@FileUrls.SignUrl(_itemReceiptPath)" Width="44" Height="44" ObjectFit="ObjectFit.Cover" Class="rounded-lg" Elevation="1" />
                             }
                             else
                             {
@@ -140,7 +147,10 @@
                         </div>
                         <div class="d-flex align-center">
                             <MudIconButton Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Color="Color.Primary" OnClick="OpenCurrentReceipt" title="View Receipt" />
-                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" Color="Color.Error" OnClick="RemoveCurrentReceipt" title="Remove Receipt" />
+                            @if (_canMutateExpenses)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" Color="Color.Error" OnClick="RemoveCurrentReceipt" title="Remove Receipt" />
+                            }
                         </div>
                     </div>
                 }
@@ -151,6 +161,7 @@
                                    Color="Color.Primary"
                                    FullWidth="true"
                                    Class="rounded-lg py-2"
+                                   Disabled="@(!_canMutateExpenses)"
                                    StartIcon="@Icons.Material.Filled.PhotoCamera"
                                    OnClick="@(() => TriggerUpload("expense-receipt-camera"))">
                             Take Photo
@@ -159,6 +170,7 @@
                                    Color="Color.Default"
                                    FullWidth="true"
                                    Class="rounded-lg py-2"
+                                   Disabled="@(!_canMutateExpenses)"
                                    StartIcon="@Icons.Material.Filled.PhotoLibrary"
                                    OnClick="@(() => TriggerUpload("expense-receipt-file"))">
                             Photo / PDF
@@ -256,6 +268,7 @@
                            FullWidth="true"
                            Class="rounded-pill mt-3"
                            Style="font-weight: 600; text-transform: none; height: 42px;"
+                           Disabled="@(!_canMutateExpenses)"
                            StartIcon="@(string.IsNullOrEmpty(_editingItemId) ? Icons.Material.Filled.Add : Icons.Material.Filled.Check)"
                            OnClick="SaveExpenseItem">
                     @(string.IsNullOrEmpty(_editingItemId) ? "Add to Report" : "Save Changes")
@@ -320,7 +333,7 @@
                                         <div class="d-flex align-center gap-1 cursor-pointer" @onclick="@(() => OpenReceipt(item.ReceiptPath))">
                                             @if (IsImageFile(item.ReceiptPath))
                                             {
-                                                <MudImage Src="@item.ReceiptPath" Width="36" Height="36" ObjectFit="ObjectFit.Cover" Class="rounded" Elevation="1" />
+                                                <MudImage Src="@FileUrls.SignUrl(item.ReceiptPath)" Width="36" Height="36" ObjectFit="ObjectFit.Cover" Class="rounded" Elevation="1" />
                                             }
                                             else
                                             {
@@ -332,8 +345,8 @@
                                 </div>
                             </MudCardContent>
                             <MudCardActions Class="px-3 pb-2 pt-0 d-flex justify-end gap-1">
-                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => DeleteItem(item))">Delete</MudButton>
-                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => StartEditItem(item))">Edit</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" Disabled="@(!_canMutateExpenses)" OnClick="@(() => DeleteItem(item))">Delete</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" Disabled="@(!_canMutateExpenses)" OnClick="@(() => StartEditItem(item))">Edit</MudButton>
                             </MudCardActions>
                         </MudCard>
                     </MudItem>
@@ -352,7 +365,7 @@
             <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
                 Start an expense report to log receipts and kilometrage on the go.
             </MudText>
-            @if (CanCreateReport)
+            @if (CanCreateReport && _canMutateExpenses)
             {
                 <MudButton Variant="Variant.Filled"
                            Color="Color.Primary"
@@ -425,6 +438,8 @@
     [Parameter] public EventCallback OnReportUpdated { get; set; }
 
     private ExpenseReport? _activeReport;
+    private Employee? _currentUser;
+    private bool _canMutateExpenses;
     private List<ExpenseReport> DraftReports => MyReports.Where(r => r.Status == ExpenseReportStatus.Draft).ToList();
     private List<ExpenseReport> PastReports => MyReports.Where(r => r.Status != ExpenseReportStatus.Draft).ToList();
 
@@ -451,6 +466,10 @@
 
     protected override void OnParametersSet()
     {
+        if (!CanCreateReport)
+        {
+            _canMutateExpenses = false;
+        }
         // Re-evaluate active report if current active report was deleted or submitted
         if (_activeReport != null)
         {
@@ -483,34 +502,22 @@
 
     private async Task LoadProjectsAndRateAsync()
     {
-        var user = await UserService.GetEmployeeAsync();
+        var user = await UserService.GetEmployeeAsync(allowSuspended: true);
+        _currentUser = user;
+        _canMutateExpenses = CanCreateReport &&
+                             user != null &&
+                             user.IsActiveUnsuspended &&
+                             user.HasPermission(AppPermissions.Finance.AccessExpenses);
         if (user != null)
         {
-            if (user.IsAdmin)
-            {
-                _projects = Db.Projects.GetAll().Where(p => p.IsActive).OrderBy(p => p.DisplayName).ToList();
-            }
-            else
-            {
-                var all = Db.Projects.GetAll().Where(p => p.IsActive);
-                List<Project> filtered = [];
-                foreach (var p in all)
-                {
-                    if (p.AccessPolicy == ProjectAccessPolicy.Public)
-                    {
-                        filtered.Add(p);
-                    }
-                    else
-                    {
-                        if (p.AllowedUserIds.Contains(user.Id) ||
-                            (!string.IsNullOrEmpty(user.TeamId) && p.AllowedTeamIds.Contains(user.TeamId)))
-                        {
-                            filtered.Add(p);
-                        }
-                    }
-                }
-                _projects = filtered.OrderBy(p => p.DisplayName).ToList();
-            }
+            _projects = Db.Projects.GetAll()
+                .Where(p => p.IsActive && ProjectAccessHelper.CanAccessProjectForContribution(user, p, Db.Teams, allowSuspended: true))
+                .OrderBy(p => p.DisplayName)
+                .ToList();
+        }
+        else
+        {
+            _projects = [];
         }
 
         var profile = Db.CompanyProfile.Get();
@@ -524,7 +531,10 @@
     {
         if (string.IsNullOrEmpty(projectId)) return "No Project";
         var proj = Db.Projects.GetById(projectId);
-        return proj?.DisplayName ?? "No Project";
+        if (proj == null) return "No Project";
+        return ProjectAccessHelper.CanAccessProjectForContribution(_currentUser, proj, Db.Teams, allowSuspended: true)
+            ? proj.DisplayName
+            : "Restricted Project";
     }
 
     private static bool IsImageFile(string? path)
@@ -534,8 +544,25 @@
         return ext is ".jpg" or ".jpeg" or ".png" or ".webp" or ".gif" or ".bmp" or ".heic";
     }
 
+    private async Task<bool> AuthorizeMobileExpenseMutationAsync()
+    {
+        var liveUser = await UserService.GetEmployeeAsync();
+        _canMutateExpenses = CanCreateReport &&
+                             liveUser != null &&
+                             liveUser.IsActiveUnsuspended &&
+                             liveUser.HasPermission(AppPermissions.Finance.AccessExpenses);
+        if (!_canMutateExpenses)
+        {
+            Snackbar.Add("You do not have permission to modify expense reports.", Severity.Warning);
+            StateHasChanged();
+            return false;
+        }
+        return true;
+    }
+
     private async Task TriggerUpload(string inputId)
     {
+        if (!await AuthorizeMobileExpenseMutationAsync()) return;
         try
         {
             await JS.InvokeVoidAsync("spokesUpload.openFilePicker", inputId);
@@ -559,9 +586,15 @@
         StateHasChanged();
     }
 
-    private void HandleUploadCompleted(List<ApiFileUpload.UploadResult> results)
+    private async Task HandleUploadCompleted(List<ApiFileUpload.UploadResult> results)
     {
         _isUploadingReceipt = false;
+        if (!await AuthorizeMobileExpenseMutationAsync())
+        {
+            _itemReceiptPath = "";
+            StateHasChanged();
+            return;
+        }
         var result = results.FirstOrDefault();
         if (result != null)
         {
@@ -583,22 +616,23 @@
         if (string.IsNullOrEmpty(path)) return;
         try
         {
-            await JS.InvokeVoidAsync("open", path, "_blank");
+            await JS.InvokeVoidAsync("open", FileUrls.SignUrl(path), "_blank");
         }
         catch { }
     }
 
     private Task OpenCurrentReceipt() => OpenReceipt(_itemReceiptPath);
 
-    private void RemoveCurrentReceipt()
+    private async Task RemoveCurrentReceipt()
     {
+        if (!await AuthorizeMobileExpenseMutationAsync()) return;
         _itemReceiptPath = "";
         StateHasChanged();
     }
 
     private async Task CreateNewDraftReport()
     {
-        if (!CanCreateReport) return;
+        if (!await AuthorizeMobileExpenseMutationAsync()) return;
 
         var newReport = new ExpenseReport
         {
@@ -616,7 +650,8 @@
 
     private async Task DeleteActiveReport()
     {
-        if (_activeReport == null) return;
+        if (_activeReport == null || !await AuthorizeMobileExpenseMutationAsync()) return;
+        if (_activeReport.EmployeeId != EmployeeId) return;
 
         var result = await DialogService.ShowMessageBoxAsync(
             "Delete Report",
@@ -625,6 +660,7 @@
 
         if (result == true)
         {
+            if (!await AuthorizeMobileExpenseMutationAsync()) return;
             Db.ExpenseReports.Delete(_activeReport.Id);
             _activeReport = null;
             CancelEdit();
@@ -637,7 +673,8 @@
 
     private async Task SubmitActiveReport()
     {
-        if (_activeReport == null || !_activeReport.LineItems.Any()) return;
+        if (_activeReport == null || !_activeReport.LineItems.Any() || !await AuthorizeMobileExpenseMutationAsync()) return;
+        if (_activeReport.EmployeeId != EmployeeId) return;
 
         var result = await DialogService.ShowMessageBoxAsync(
             "Submit Report",
@@ -646,6 +683,7 @@
 
         if (result == true)
         {
+            if (!await AuthorizeMobileExpenseMutationAsync()) return;
             _activeReport.DateSubmitted = DateTime.Now;
             Db.ExpenseReports.Save(_activeReport);
             Snackbar.Add($"Report #{_activeReport.ReportNumber} submitted for approval!", Severity.Success);
@@ -658,7 +696,7 @@
 
     private async Task SaveExpenseItem()
     {
-        if (_activeReport == null) return;
+        if (_activeReport == null || !await AuthorizeMobileExpenseMutationAsync()) return;
 
         // Validation
         if (_itemIsKilometrage && _itemKilometers <= 0)
@@ -673,10 +711,25 @@
             return;
         }
 
+        var liveUser = await UserService.GetEmployeeAsync();
+        var existingItem = !string.IsNullOrEmpty(_editingItemId)
+            ? _activeReport.LineItems.FirstOrDefault(i => i.Id == _editingItemId)
+            : null;
+        if (!string.IsNullOrWhiteSpace(_itemProjectId))
+        {
+            bool unchanged = existingItem != null &&
+                             string.Equals(existingItem.ProjectId, _itemProjectId, StringComparison.OrdinalIgnoreCase);
+            if (!unchanged && !ProjectAccessHelper.CanAccessProjectForContribution(liveUser, Db.Projects.GetById(_itemProjectId), Db.Teams, allowSuspended: false))
+            {
+                Snackbar.Add("You do not have access to log expenses to this restricted project.", Severity.Error);
+                return;
+            }
+        }
+
         if (!string.IsNullOrEmpty(_editingItemId))
         {
             // Update existing item
-            var existing = _activeReport.LineItems.FirstOrDefault(i => i.Id == _editingItemId);
+            var existing = existingItem;
             if (existing != null)
             {
                 existing.Date = _itemDate ?? DateTime.Today;
@@ -750,7 +803,7 @@
 
     private async Task DeleteItem(ExpenseItem item)
     {
-        if (_activeReport == null) return;
+        if (_activeReport == null || !await AuthorizeMobileExpenseMutationAsync()) return;
 
         var result = await DialogService.ShowMessageBoxAsync(
             "Delete Expense",
@@ -759,6 +812,7 @@
 
         if (result == true)
         {
+            if (!await AuthorizeMobileExpenseMutationAsync()) return;
             _activeReport.LineItems.Remove(item);
             Db.ExpenseReports.Save(_activeReport);
             if (_editingItemId == item.Id)

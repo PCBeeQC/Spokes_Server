@@ -1,0 +1,26 @@
+@using Spokes_Server.Core.Configuration
+
+@if (Preset != null &&
+     !string.Equals(Preset.Id, SuppressForPresetId, StringComparison.Ordinal) &&
+     !string.IsNullOrWhiteSpace(Preset.InstructionsText))
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="@Class">
+        <div class="d-flex flex-column gap-1">
+            <span>@Loc[Preset.InstructionsText]</span>
+            @if (!string.IsNullOrWhiteSpace(Preset.HelpUrl))
+            {
+                <div>
+                    <MudLink Href="@Preset.HelpUrl" Target="_blank" Typo="Typo.caption" Style="font-weight: 600;">
+                        @(!string.IsNullOrWhiteSpace(Preset.HelpLinkLabel) ? Loc[Preset.HelpLinkLabel].Value : Preset.HelpUrl)
+                    </MudLink>
+                </div>
+            }
+        </div>
+    </MudAlert>
+}
+
+@code {
+    [Parameter] public EmailProviderPreset? Preset { get; set; }
+    [Parameter] public string? SuppressForPresetId { get; set; }
+    [Parameter] public string? Class { get; set; }
+}

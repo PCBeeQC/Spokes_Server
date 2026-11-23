@@ -1,6 +1,8 @@
 using System.Globalization;
+using Spokes_Server.Core.Configuration;
 using Spokes_Server.Core.Data.Repositories.HR;
 using Spokes_Server.Core.Models.HR;
+using Spokes_Server.Core.Services.Reports.Helpers;
 
 namespace Spokes_Server.Core.Services.HR;
 
@@ -53,76 +55,8 @@ public class OvertimeService
         }
 
         var startDate = employee.DateOfJoining;
-        var endDate = employee.EmploymentEndDate ?? DateOnly.FromDateTime(DateTime.Today);
-        var today = DateOnly.FromDateTime(DateTime.Today);
-
-        // Don't calculate future weeks
-        if (endDate > today)
-        {
-            endDate = today;
-        }
-
-        var allTimesheets = _timesheets.GetAll()
-            .Where(t => t.EmployeeId == employeeId)
-            .ToList();
-
-        decimal totalWorked = 0;
-        decimal totalExpected = 0;
-        decimal calculatedBank = 0;
-        int weekCount = 0;
-
-        var current = GetMondayOfWeek(startDate);
-        var endMonday = GetMondayOfWeek(endDate);
-
-        // Don't include partial current week - only completed weeks
-        var currentWeekMonday = GetMondayOfWeek(today);
-
-        while (current <= endMonday && current < currentWeekMonday)
-        {
-            var year = ISOWeek.GetYear(current.ToDateTime(TimeOnly.MinValue));
-            var week = ISOWeek.GetWeekOfYear(current.ToDateTime(TimeOnly.MinValue));
-
-            var timesheet = allTimesheets.FirstOrDefault(t => t.Year == year && t.WeekNumber == week);
-            var weeklyWorked = timesheet?.TotalHours ?? 0;
-            var weeklyExpected = GetExpectedWeeklyHours(employee, current);
-
-            totalWorked += weeklyWorked;
-            totalExpected += weeklyExpected;
-            weekCount++;
-
-            if (hrConfig.OvertimeCalculationMode == "Daily" && timesheet != null)
-            {
-                // Daily calculation: Overtime is banked per day exceeding the threshold
-                decimal dailyThreshold = hrConfig.DailyOvertimeThreshold;
-                var dailyHours = timesheet.Entries
-                    .GroupBy(e => e.Date.Date)
-                    .Select(g => g.Sum(e => e.Hours));
-
-                decimal weekBank = 0;
-                foreach (var dh in dailyHours)
-                {
-                    if (dh > dailyThreshold)
-                    {
-                        weekBank += (dh - dailyThreshold);
-                    }
-                }
-                calculatedBank += weekBank;
-
-                // Subtract hours if they didn't meet the weekly minimum?
-                // For a true daily overtime setup, usually missing the weekly target deducts from the bank.
-                if (weeklyWorked < weeklyExpected)
-                {
-                    calculatedBank -= (weeklyExpected - weeklyWorked);
-                }
-            }
-            else if (hrConfig.OvertimeCalculationMode == "Weekly")
-            {
-                calculatedBank += (weeklyWorked - weeklyExpected);
-            }
-
-            // Move to next week (add 7 days)
-            current = current.AddDays(7);
-        }
+        var sim = SimulateCompletedWeeks(employee, employeeId, hrConfig, includeAuditRecords: false);
+        decimal calculatedBank = sim.RawBank;
 
         // Add manual adjustments
         var adjustments = _adjustments.GetByEmployeeId(employeeId);
@@ -137,13 +71,129 @@ public class OvertimeService
 
         return new HourBankResult
         {
-            TotalWorkedHours = totalWorked,
-            TotalExpectedHours = totalExpected,
+            TotalWorkedHours = sim.TotalWorked,
+            TotalExpectedHours = sim.TotalExpected,
             HourBank = calculatedBank,
-            WeeksTracked = weekCount,
+            WeeksTracked = sim.WeekCount,
             StartDate = startDate,
             EndDate = employee.EmploymentEndDate
         };
+    }
+
+    private (decimal TotalWorked, decimal TotalExpected, decimal RawBank, int WeekCount, List<HourBankAuditRecord> SystemAuditRecords) SimulateCompletedWeeks(
+        Employee employee,
+        string employeeId,
+        HRSettings hrConfig,
+        bool includeAuditRecords)
+    {
+        var startDate = employee.DateOfJoining;
+        var endDate = employee.EmploymentEndDate ?? DateOnly.FromDateTime(DateTime.Today);
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        if (endDate > today)
+        {
+            endDate = today;
+        }
+
+        var allTimesheets = _timesheets.GetAll()
+            .Where(t => t.EmployeeId == employeeId)
+            .ToList();
+
+        decimal totalWorked = 0;
+        decimal totalExpected = 0;
+        decimal calculatedBank = 0;
+        int weekCount = 0;
+        List<HourBankAuditRecord> audit = [];
+
+        var current = TimesheetDateRangeHelper.GetMondayOfWeek(startDate);
+        var endMonday = TimesheetDateRangeHelper.GetMondayOfWeek(endDate);
+        var currentWeekMonday = TimesheetDateRangeHelper.GetMondayOfWeek(today);
+
+        while (current <= endMonday && current < currentWeekMonday)
+        {
+            var year = ISOWeek.GetYear(current.ToDateTime(TimeOnly.MinValue));
+            var week = ISOWeek.GetWeekOfYear(current.ToDateTime(TimeOnly.MinValue));
+
+            var timesheet = allTimesheets.FirstOrDefault(t => t.Year == year && t.WeekNumber == week);
+            var weeklyWorked = GetEffectiveTargetHours(timesheet);
+            var weeklyExpected = GetExpectedWeeklyHours(employee, current);
+
+            totalWorked += weeklyWorked;
+            totalExpected += weeklyExpected;
+            weekCount++;
+
+            if (hrConfig.OvertimeCalculationMode == "Daily" && timesheet != null)
+            {
+                decimal dailyThreshold = hrConfig.DailyOvertimeThreshold;
+                var dailyHours = timesheet.Entries
+                    .Where(e => TimeEntryTypes.CountsTowardWeeklyExpectedTarget(e.EntryType, e.ProjectId))
+                    .GroupBy(e => e.Date.Date)
+                    .Select(g => new { Date = g.Key, Hours = g.Sum(e => e.Hours) });
+
+                foreach (var dh in dailyHours)
+                {
+                    if (dh.Hours > dailyThreshold)
+                    {
+                        decimal overtime = dh.Hours - dailyThreshold;
+                        calculatedBank += overtime;
+                        if (includeAuditRecords)
+                        {
+                            audit.Add(new HourBankAuditRecord
+                            {
+                                Date = dh.Date,
+                                Hours = overtime,
+                                Description = $"Daily Overtime ({dh.Hours}h > {dailyThreshold}h limit)",
+                                Type = "System"
+                            });
+                        }
+                    }
+                }
+
+                if (weeklyWorked < weeklyExpected)
+                {
+                    decimal missing = weeklyExpected - weeklyWorked;
+                    calculatedBank -= missing;
+                    if (includeAuditRecords)
+                    {
+                        var bankedRedeemed = GetBankedTimeOffHours(timesheet);
+                        var desc = bankedRedeemed > 0
+                            ? $"Banked Time Off Redeemed ({bankedRedeemed}h) / Weekly Target ({weeklyWorked}h / {weeklyExpected}h)"
+                            : $"Weekly Target Shortfall ({weeklyWorked}h / {weeklyExpected}h)";
+                        audit.Add(new HourBankAuditRecord
+                        {
+                            Date = current.AddDays(6).ToDateTime(TimeOnly.MinValue),
+                            Hours = -missing,
+                            Description = desc,
+                            Type = "System"
+                        });
+                    }
+                }
+            }
+            else if (hrConfig.OvertimeCalculationMode == "Weekly")
+            {
+                decimal diff = weeklyWorked - weeklyExpected;
+                calculatedBank += diff;
+                if (includeAuditRecords && diff != 0)
+                {
+                    var bankedRedeemed = GetBankedTimeOffHours(timesheet);
+                    var desc = diff > 0
+                        ? $"Weekly Overtime ({weeklyWorked}h / {weeklyExpected}h)"
+                        : (bankedRedeemed > 0
+                            ? $"Banked Time Off Redeemed ({bankedRedeemed}h) / Weekly Target ({weeklyWorked}h / {weeklyExpected}h)"
+                            : $"Weekly Target Shortfall ({weeklyWorked}h / {weeklyExpected}h)");
+                    audit.Add(new HourBankAuditRecord
+                    {
+                        Date = current.AddDays(6).ToDateTime(TimeOnly.MinValue),
+                        Hours = diff,
+                        Description = desc,
+                        Type = "System"
+                    });
+                }
+            }
+
+            current = current.AddDays(7);
+        }
+
+        return (totalWorked, totalExpected, calculatedBank, weekCount, audit);
     }
 
     /// <summary>
@@ -155,7 +205,7 @@ public class OvertimeService
         if (employee == null) return new WeeklyOvertimeResult();
 
         var timesheet = _timesheets.GetByWeek(employeeId, year, weekNumber);
-        var workedHours = timesheet?.TotalHours ?? 0;
+        var workedHours = GetEffectiveTargetHours(timesheet);
         
         var weekMonday = ISOWeek.ToDateTime(year, weekNumber, DayOfWeek.Monday);
         var expectedHours = GetExpectedWeeklyHours(employee, DateOnly.FromDateTime(weekMonday));
@@ -169,7 +219,27 @@ public class OvertimeService
         };
     }
 
-    private decimal GetExpectedWeeklyHours(Employee employee, DateOnly weekMonday)
+    private static decimal GetEffectiveTargetHours(Timesheet? timesheet)
+    {
+        if (timesheet?.Entries == null || timesheet.Entries.Count == 0)
+            return 0m;
+
+        return timesheet.Entries
+            .Where(e => e != null && TimeEntryTypes.CountsTowardWeeklyExpectedTarget(e.EntryType, e.ProjectId))
+            .Sum(e => e.Hours);
+    }
+
+    private static decimal GetBankedTimeOffHours(Timesheet? timesheet)
+    {
+        if (timesheet?.Entries == null || timesheet.Entries.Count == 0)
+            return 0m;
+
+        return timesheet.Entries
+            .Where(e => e != null && !TimeEntryTypes.CountsTowardWeeklyExpectedTarget(e.EntryType, e.ProjectId))
+            .Sum(e => e.Hours);
+    }
+
+    private static decimal GetExpectedWeeklyHours(Employee employee, DateOnly weekMonday)
     {
         if (employee.WorkSchedules == null || !employee.WorkSchedules.Any())
             return employee.WeeklyHours;
@@ -187,87 +257,14 @@ public class OvertimeService
     /// </summary>
     public List<HourBankAuditRecord> GetHourBankAuditTrail(string employeeId)
     {
-        var audit = new List<HourBankAuditRecord>();
-        
         var employee = _employees.GetById(employeeId);
-        if (employee == null) return audit;
+        if (employee == null) return [];
 
         var hrConfig = _companyProfiles.GetHRSettings();
-        if (!hrConfig.EnableHourBank) return audit;
+        if (!hrConfig.EnableHourBank) return [];
 
-        var startDate = employee.DateOfJoining;
-        var endDate = employee.EmploymentEndDate ?? DateOnly.FromDateTime(DateTime.Today);
-        var today = DateOnly.FromDateTime(DateTime.Today);
-        if (endDate > today) endDate = today;
-
-        var allTimesheets = _timesheets.GetAll().Where(t => t.EmployeeId == employeeId).ToList();
-
-        var current = GetMondayOfWeek(startDate);
-        var endMonday = GetMondayOfWeek(endDate);
-        var currentWeekMonday = GetMondayOfWeek(today);
-
-        while (current <= endMonday && current < currentWeekMonday)
-        {
-            var year = ISOWeek.GetYear(current.ToDateTime(TimeOnly.MinValue));
-            var week = ISOWeek.GetWeekOfYear(current.ToDateTime(TimeOnly.MinValue));
-
-            var timesheet = allTimesheets.FirstOrDefault(t => t.Year == year && t.WeekNumber == week);
-            var weeklyWorked = timesheet?.TotalHours ?? 0;
-            var weeklyExpected = GetExpectedWeeklyHours(employee, current);
-
-            if (hrConfig.OvertimeCalculationMode == "Daily" && timesheet != null)
-            {
-                decimal dailyThreshold = hrConfig.DailyOvertimeThreshold;
-                var dailyHours = timesheet.Entries
-                    .GroupBy(e => e.Date.Date)
-                    .Select(g => new { Date = g.Key, Hours = g.Sum(e => e.Hours) });
-
-                decimal weekBank = 0;
-                foreach (var dh in dailyHours)
-                {
-                    if (dh.Hours > dailyThreshold)
-                    {
-                        decimal overtime = dh.Hours - dailyThreshold;
-                        weekBank += overtime;
-                        audit.Add(new HourBankAuditRecord
-                        {
-                            Date = dh.Date,
-                            Hours = overtime,
-                            Description = $"Daily Overtime ({dh.Hours}h > {dailyThreshold}h limit)",
-                            Type = "System"
-                        });
-                    }
-                }
-
-                if (weeklyWorked < weeklyExpected)
-                {
-                    decimal missing = weeklyExpected - weeklyWorked;
-                    audit.Add(new HourBankAuditRecord
-                    {
-                        Date = current.AddDays(6).ToDateTime(TimeOnly.MinValue), // End of week
-                        Hours = -missing,
-                        Description = $"Weekly Target Shortfall ({weeklyWorked}h / {weeklyExpected}h)",
-                        Type = "System"
-                    });
-                }
-            }
-            else if (hrConfig.OvertimeCalculationMode == "Weekly")
-            {
-                decimal diff = weeklyWorked - weeklyExpected;
-                if (diff != 0)
-                {
-                    audit.Add(new HourBankAuditRecord
-                    {
-                        Date = current.AddDays(6).ToDateTime(TimeOnly.MinValue), // End of week
-                        Hours = diff,
-                        Description = diff > 0 ? $"Weekly Overtime ({weeklyWorked}h / {weeklyExpected}h)" : $"Weekly Target Shortfall ({weeklyWorked}h / {weeklyExpected}h)",
-                        Type = "System"
-                    });
-                }
-            }
-
-            current = current.AddDays(7);
-        }
+        var sim = SimulateCompletedWeeks(employee, employeeId, hrConfig, includeAuditRecords: true);
+        var audit = sim.SystemAuditRecords;
 
         // Add manual adjustments
         var adjustments = _adjustments.GetByEmployeeId(employeeId);
@@ -284,16 +281,6 @@ public class OvertimeService
         }
 
         return audit.OrderByDescending(a => a.Date).ToList();
-    }
-
-    /// <summary>
-    /// Get the Monday of the week containing the given date.
-    /// </summary>
-    private static DateOnly GetMondayOfWeek(DateOnly date)
-    {
-        var dt = date.ToDateTime(TimeOnly.MinValue);
-        var diff = (7 + (dt.DayOfWeek - DayOfWeek.Monday)) % 7;
-        return DateOnly.FromDateTime(dt.AddDays(-diff));
     }
 }
 

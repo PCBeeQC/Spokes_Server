@@ -30,6 +30,7 @@ public class ProjectCommissionEvaluationTests : TestDataTestBase
 
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
         services.AddSingleton<IConfiguration>(mockConfig.Object);
 
         services.AddLogging(builder => builder.AddConsole());
@@ -90,7 +91,7 @@ public class ProjectCommissionEvaluationTests : TestDataTestBase
             ProjectId = project.Id,
             InvoiceNumber = "INV-C1",
             Status = "Paid",
-            Lines =
+            LineItems =
             [
                 new InvoiceLine { Description = "Services", Quantity = 1, UnitPrice = 1000m }
             ]
@@ -145,7 +146,7 @@ public class ProjectCommissionEvaluationTests : TestDataTestBase
             ProjectId = project.Id,
             InvoiceNumber = "INV-M1",
             Status = "Paid",
-            Lines =
+            LineItems =
             [
                 new InvoiceLine { Description = "Work", Quantity = 1, UnitPrice = 1000m }
             ]
@@ -157,7 +158,7 @@ public class ProjectCommissionEvaluationTests : TestDataTestBase
         {
             Id = "po_m1",
             PoNumber = "PO-M1",
-            Items =
+            LineItems =
             [
                 new PoItem { ProjectId = project.Id, Quantity = 2, UnitPrice = 100m }
             ]
@@ -169,7 +170,8 @@ public class ProjectCommissionEvaluationTests : TestDataTestBase
         {
             Id = "exp_m1",
             ReportNumber = "EXP-M1",
-            Items =
+            DateSubmitted = DateTime.Today,
+            LineItems =
             [
                 new ExpenseItem { ProjectId = project.Id, Amount = 100m }
             ]
@@ -332,7 +334,7 @@ public class ProjectCommissionEvaluationTests : TestDataTestBase
             Id = "inv_dup_1",
             ProjectId = project.Id,
             Status = "Paid",
-            Lines = [new InvoiceLine { Quantity = 1, UnitPrice = 1000m }]
+            LineItems = [new InvoiceLine { Quantity = 1, UnitPrice = 1000m }]
         };
         _db.Invoices.Save(invoice);
 
@@ -426,14 +428,14 @@ public class ProjectCommissionEvaluationTests : TestDataTestBase
             Id = "inv_neg",
             ProjectId = project.Id,
             Status = "Paid",
-            Lines = [new InvoiceLine { Quantity = 1, UnitPrice = 100m }]
+            LineItems = [new InvoiceLine { Quantity = 1, UnitPrice = 100m }]
         };
         _db.Invoices.Save(invoice);
 
         var po = new PurchaseOrder
         {
             Id = "po_neg",
-            Items = [new PoItem { ProjectId = project.Id, Quantity = 1, UnitPrice = 500m }]
+            LineItems = [new PoItem { ProjectId = project.Id, Quantity = 1, UnitPrice = 500m }]
         };
         _db.PurchaseOrders.Save(po);
 
@@ -522,7 +524,7 @@ public class ProjectCommissionEvaluationTests : TestDataTestBase
             Id = "inv_custom_s",
             ProjectId = project.Id,
             Status = "Paid",
-            Lines = [new InvoiceLine { Quantity = 1, UnitPrice = 500m }]
+            LineItems = [new InvoiceLine { Quantity = 1, UnitPrice = 500m }]
         };
         _db.Invoices.Save(invoice);
 
@@ -562,7 +564,7 @@ public class ProjectCommissionEvaluationTests : TestDataTestBase
             Id = "inv_name_id",
             ProjectId = project.Id,
             Status = "Paid",
-            Lines = [new InvoiceLine { Quantity = 1, UnitPrice = 200m }]
+            LineItems = [new InvoiceLine { Quantity = 1, UnitPrice = 200m }]
         };
         _db.Invoices.Save(invoice);
 

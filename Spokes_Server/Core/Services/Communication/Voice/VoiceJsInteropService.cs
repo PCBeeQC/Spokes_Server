@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using Spokes_Server.Core.Helpers;
+using Spokes_Server.Core.Models.Communication;
 
 namespace Spokes_Server.Core.Services.Communication.Voice;
 
@@ -10,20 +11,18 @@ public class VoiceJsInteropService : JsModuleBase, IVoiceJsInteropService
 {
     private readonly ILogger<VoiceJsInteropService>? _logger;
 
-    public bool IsModuleLoaded => moduleTask != null && moduleTask.IsValueCreated && moduleTask.Value.IsCompletedSuccessfully && moduleTask.Value.Result != null;
-
     public VoiceJsInteropService(IJSRuntime? js, ILogger<VoiceJsInteropService>? logger = null)
-        : base(js, "./js/voiceInterop.js?v=20261104c")
+        : base(js, "./js/voiceInterop.js")
     {
         _logger = logger;
     }
 
     public async Task InitializeAsync<T>(DotNetObjectReference<T> objRef) where T : class
     {
-        if (moduleTask == null || IsModuleLoaded) return;
+        if (IsModuleLoaded) return;
         try
         {
-            await moduleTask.Value;
+            await EnsureModuleAsync();
         }
         catch (JSDisconnectedException ex)
         {
@@ -58,10 +57,25 @@ public class VoiceJsInteropService : JsModuleBase, IVoiceJsInteropService
         return await SafeInvokeAsync<bool>("isNativePlatformApp");
     }
 
-    public async Task<bool> ConnectToVoiceAsync<T>(string token, string url, DotNetObjectReference<T> objRef, int audioBitrateKbps, string noiseSuppression) where T : class
+    public async Task<bool> ConnectToVoiceAsync<T>(string token, string url, DotNetObjectReference<T> objRef, int audioBitrateKbps, string noiseSuppression, VoicePreJoinContext? preJoinContext = null) where T : class
     {
         if (!IsModuleLoaded) throw new InvalidOperationException("Voice module not initialized.");
-        return await SafeInvokeAsync<bool>("connectToVoice", token, url, objRef, audioBitrateKbps, noiseSuppression);
+        return preJoinContext != null
+            ? await SafeInvokeAsync<bool>("connectToVoice", token, url, objRef, audioBitrateKbps, noiseSuppression, preJoinContext)
+            : await SafeInvokeAsync<bool>("connectToVoice", token, url, objRef, audioBitrateKbps, noiseSuppression);
+    }
+
+    public async Task PrepareVoiceConnectionAsync(string url, string? token = null)
+    {
+        if (!IsModuleLoaded || string.IsNullOrWhiteSpace(url)) return;
+        await SafeInvokeVoidAsync("prepareVoiceConnection", url, token ?? string.Empty);
+    }
+
+    public async Task<bool> IsRoomConnectedAsync()
+    {
+        if (!IsModuleLoaded) return false;
+        var module = await EnsureModuleAsync();
+        return module != null && await module.InvokeAsync<bool>("isRoomConnected");
     }
 
     public async Task DisconnectFromVoiceAsync()
@@ -90,10 +104,10 @@ public class VoiceJsInteropService : JsModuleBase, IVoiceJsInteropService
         }
     }
 
-    public async Task SwitchActiveCameraAsync(string deviceId)
+    public async Task<string> SwitchActiveCameraAsync(string? deviceId = null)
     {
-        if (!IsModuleLoaded) return;
-        await SafeInvokeVoidAsync("switchActiveCamera", deviceId);
+        if (!IsModuleLoaded) return "";
+        return await SafeInvokeAsync<string>("switchActiveCamera", deviceId ?? "") ?? "";
     }
 
     public async Task UpdateCameraSettingsAsync(string quality, int fps, string deviceId)
@@ -162,6 +176,18 @@ public class VoiceJsInteropService : JsModuleBase, IVoiceJsInteropService
         await SafeInvokeVoidAsync("setVoiceSensitivity", sensitivity);
     }
 
+    public async Task SetAutoGainControlAsync(bool enabled)
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("setAutoGainControl", enabled);
+    }
+
+    public async Task SetIncomingVoiceNormalizationAsync(bool enabled)
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("setIncomingVoiceNormalization", enabled);
+    }
+
     public async Task InitVoiceSettingsAsync(string settingsJson)
     {
         if (!IsModuleLoaded) return;
@@ -222,16 +248,52 @@ public class VoiceJsInteropService : JsModuleBase, IVoiceJsInteropService
         return await SafeInvokeAsync<PhysicalDeviceIdentity>("getOrCreatePhysicalDeviceIdentity");
     }
 
+    public async Task<VoiceClientBootstrapInfo?> GetClientVoiceBootstrapAsync()
+    {
+        if (!IsModuleLoaded) return null;
+        return await SafeInvokeAsync<VoiceClientBootstrapInfo>("getClientVoiceBootstrap");
+    }
+
     public async Task SyncPhysicalRoomStateAsync(string[] coLocatedUserIds, string[] mutedRoommateUserIds)
     {
         if (!IsModuleLoaded) return;
         await SafeInvokeVoidAsync("syncPhysicalRoomState", coLocatedUserIds, mutedRoommateUserIds);
     }
 
+    public async Task<bool> IsDesktopDirectRoomSupportedAsync()
+    {
+        if (!IsModuleLoaded) return false;
+        return await SafeInvokeAsync<bool>("isDesktopDirectRoomSupported");
+    }
+
+    public async Task<string[]?> PrepareDirectRoomEndpointsAsync()
+    {
+        if (!IsModuleLoaded) return null;
+        return await SafeInvokeAsync<string[]>("prepareDirectRoomEndpoints");
+    }
+
+    public async Task SyncDirectRoomSessionAsync(PhysicalRoomDirectSessionDescriptor? session, bool isLocalMuted)
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("syncDirectRoomSession", session, isLocalMuted);
+    }
+
+    public async Task<DirectRoomClientTelemetry?> GetDirectRoomAudioTelemetryAsync()
+    {
+        if (!IsModuleLoaded) return null;
+        return await SafeInvokeAsync<DirectRoomClientTelemetry>("getDirectRoomAudioTelemetry");
+    }
+
     public async Task SyncPipMetadataAsync(VoicePipMetadataPayload payload)
     {
         if (!IsModuleLoaded) return;
         await SafeInvokeVoidAsync("syncPipMetadata", payload);
+    }
+
+    public async Task SyncSpeakingParticipantsAsync(string? channelId, string[] speakerIds)
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("syncSpeakingParticipants", channelId ?? string.Empty, (object)(speakerIds ?? Array.Empty<string>()));
     }
 
     public async Task SetInAppPipActiveAsync(bool active)
@@ -252,15 +314,33 @@ public class VoiceJsInteropService : JsModuleBase, IVoiceJsInteropService
         return await SafeInvokeAsync<bool>("toggleOsPip");
     }
 
-    public async Task CloseOsPipAsync()
-    {
-        if (!IsModuleLoaded) return;
-        await SafeInvokeVoidAsync("closeOsPip");
-    }
-
     public async Task<bool> IsOsPipSupportedAsync()
     {
         if (!IsModuleLoaded) return false;
         return await SafeInvokeAsync<bool>("isOsPipSupported");
+    }
+
+    public async Task EnterParticipantFullscreenAsync<T>(string participantId, DotNetObjectReference<T> dotNetHelper) where T : class
+    {
+        if (!IsModuleLoaded || string.IsNullOrWhiteSpace(participantId)) return;
+        await SafeInvokeVoidAsync("enterParticipantFullscreen", participantId, dotNetHelper);
+    }
+
+    public async Task SetParticipantFullscreenRotationAsync(int rotationDeg)
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("setParticipantFullscreenRotation", rotationDeg);
+    }
+
+    public async Task ResetParticipantFullscreenZoomAsync()
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("resetParticipantFullscreenZoom");
+    }
+
+    public async Task ExitParticipantFullscreenAsync(bool goBack = true)
+    {
+        if (!IsModuleLoaded) return;
+        await SafeInvokeVoidAsync("exitParticipantFullscreen", goBack);
     }
 }

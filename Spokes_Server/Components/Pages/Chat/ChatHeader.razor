@@ -1,115 +1,156 @@
-<MudPaper Elevation="0" Class="pa-2" Style="border-bottom: 1px solid var(--mud-palette-divider);">
-    <div class="d-flex align-center gap-2">
-        <MudIconButton id="chat-mobile-back-btn" Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small" Class="d-md-none mr-2"
-            OnClick="OnGoBack" />
+@{
+    var dmParticipant = GetDirectMessageParticipant();
+}
+<MudPaper Elevation="0" Class="chat-header-bar" Style="border-bottom: 1px solid var(--mud-palette-divider);">
+    <div class="chat-header-row d-flex align-center">
+        <MudIconButton id="chat-mobile-back-btn" Icon="@Icons.Material.Filled.ArrowBack"
+            Size="@(IsMobile ? Size.Medium : Size.Small)"
+            Edge="@(IsMobile ? Edge.Start : Edge.False)"
+            Class="d-md-none flex-shrink-0" OnClick="OnGoBack" />
 
-        <MudIcon Icon="@GetChannelIcon()" Size="Size.Small" />
-        <MudText Typo="Typo.h6"><b>@DisplayName</b></MudText>
-        @if (Channel?.IsEncrypted == true)
-        {
-            <MudTooltip Text="@Loc["Channel Encrypted"]">
-                <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Color="Color.Info" Class="mt-1" />
-            </MudTooltip>
-        }
-        @if (!string.IsNullOrEmpty(Channel?.Description))
-        {
-            <MudHidden Breakpoint="Breakpoint.SmAndDown">
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 ml-2" Style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 400px; display: inline-block;">
+        @* Clickable Channel / Contact Identity *@
+        <div class="chat-header-identity d-flex align-center">
+            <div id="chat-header-info-trigger"
+                 role="button"
+                 tabindex="0"
+                 class="chat-header-title-btn d-inline-flex align-center"
+                 @onclick="OnToggleInfo"
+                 @onkeydown="HandleTitleKeyDown"
+                 title="@Loc["Channel Info"]"
+                 aria-label="@($"{DisplayName} - {Loc["Channel Info"]}")">
+                @if (dmParticipant != null)
+                {
+                    <EmployeeAvatar Employee="@dmParticipant"
+                                    Size="Size.Small"
+                                    Class="chat-header-avatar flex-shrink-0" />
+                }
+                else
+                {
+                    <MudIcon Icon="@GetChannelIcon()" Size="@(IsMobile ? Size.Medium : Size.Small)" Class="flex-shrink-0" />
+                }
+
+                <MudText Typo="Typo.h6" Class="chat-header-title"><b>@DisplayName</b></MudText>
+
+                @if (Channel?.IsEncrypted == true)
+                {
+                    <span class="d-inline-flex flex-shrink-0" title="@Loc["Channel Encrypted"]" aria-label="@Loc["Channel Encrypted"]">
+                        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" Color="Color.Info" Class="chat-header-status-icon" />
+                    </span>
+                }
+
+                <MudIcon Icon="@Icons.Material.Filled.ChevronRight"
+                         Size="Size.Small"
+                         Class="chat-header-chevron d-md-none flex-shrink-0" />
+            </div>
+
+            @if (!IsMobile && !string.IsNullOrEmpty(Channel?.Description))
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="chat-header-description d-none d-md-inline-block ml-2">
                     @Channel.Description
                 </MudText>
-            </MudHidden>
-        }
-
-        <div style="flex: 1;"></div>
-
-        @* Join Voice *@
-        @if (Channel?.ChannelType == ChatChannelType.Direct && !IsSelfDirectMessage())
-        {
-            <MudTooltip Text="@Loc["Start Voice Call"]" Class="mr-2">
-                <MudIconButton Icon="@Icons.Material.Filled.Call" Size="Size.Small"
-                    Color="Color.Info" OnClick="OnJoinVoice" />
-            </MudTooltip>
-        }
-
-        @* Search (Desktop) *@
-        <MudHidden Breakpoint="Breakpoint.SmAndDown">
-            @if (_showSearch)
-            {
-                <ChatSearchBar ChannelId="@Channel?.Id" CurrentUserId="@CurrentUserId" Employees="Employees" OnResultSelected="OnSearchResultSelected" />
             }
-        </MudHidden>
-        <MudTooltip Text="@Loc["Search messages"]">
-            <MudIconButton Icon="@Icons.Material.Filled.Search" Size="Size.Small"
-                Color="@(_showSearch ? Color.Primary : Color.Default)" OnClick="ToggleSearch" />
-        </MudTooltip>
+        </div>
 
-        @* Channel info *@
-        <MudTooltip Text="@Loc["Channel info"]">
-            <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small"
-                Color="@(ShowInfoPanel ? Color.Primary : Color.Default)" OnClick="OnToggleInfo" />
-        </MudTooltip>
+        @* Right Action Controls *@
+        <div class="chat-header-actions d-flex align-center flex-shrink-0">
+            @* Join Voice *@
+            @if (CanJoinVoice && Channel?.ChannelType == ChatChannelType.Direct && !IsSelfDirectMessage())
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.Call" Size="@(IsMobile ? Size.Medium : Size.Small)"
+                    Class="mr-md-1"
+                    Color="Color.Info" OnClick="OnJoinVoice"
+                    title="@Loc["Start Voice Call"]" aria-label="@Loc["Start Voice Call"]" />
+            }
 
-        @* Notification Level Bell Menu *@
-        <MudTooltip Text="@Loc["Notification settings"]" Placement="Placement.Left" Class="mr-4">
-            <MudMenu Icon="@GetNotificationIcon()" Size="Size.Small" Dense="true" Class="mt-1"
-                Color="@GetNotificationColor()" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
-                <MudMenuItem OnClick="@(() => SetNotificationLevel(ChatNotificationLevel.All))">
-                    <div class="d-flex align-center gap-2">
-                        <MudIcon Icon="@Icons.Material.Filled.Notifications" Size="Size.Small"
-                            Color="@(NotificationLevel == ChatNotificationLevel.All ? Color.Success : Color.Default)" />
-                        <div>
-                            <MudText Typo="Typo.body2" Style="@(NotificationLevel == ChatNotificationLevel.All ? "font-weight: 600;" : "")">
-                                @Loc["All Messages"]
-                            </MudText>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                @Loc["Get notified for every new message"]
-                            </MudText>
-                        </div>
-                    </div>
-                </MudMenuItem>
-                <MudMenuItem OnClick="@(() => SetNotificationLevel(ChatNotificationLevel.Mentions))">
-                    <div class="d-flex align-center gap-2">
-                        <MudIcon Icon="@Icons.Material.Filled.AlternateEmail" Size="Size.Small"
-                            Color="@(NotificationLevel == ChatNotificationLevel.Mentions ? Color.Warning : Color.Default)" />
-                        <div>
-                            <MudText Typo="Typo.body2"
-                                Style="@(NotificationLevel == ChatNotificationLevel.Mentions ? "font-weight: 600;" : "")">
-                                @Loc["Mentions Only"]
-                            </MudText>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Only when you're @mentioned"]</MudText>
-                        </div>
-                    </div>
-                </MudMenuItem>
-                <MudMenuItem OnClick="@(() => SetNotificationLevel(ChatNotificationLevel.None))">
-                    <div class="d-flex align-center gap-2">
-                        <MudIcon Icon="@Icons.Material.Filled.NotificationsOff" Size="Size.Small"
-                            Color="@(NotificationLevel == ChatNotificationLevel.None ? Color.Error : Color.Default)" />
-                        <div>
-                            <MudText Typo="Typo.body2"
-                                Style="@(NotificationLevel == ChatNotificationLevel.None ? "font-weight: 600;" : "")">
-                                @Loc["Muted"]
-                            </MudText>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                @Loc["No notifications from this channel"]
-                            </MudText>
-                        </div>
-                    </div>
-                </MudMenuItem>
-            </MudMenu>
-        </MudTooltip>
+            @* Search (Desktop Inline Input) *@
+            @if (!IsMobile && _showSearch)
+            {
+                <ChatSearchBar ChannelId="@Channel?.Id" CurrentUserId="@CurrentUserId" Employees="Employees" SuggestionEmployees="SuggestionEmployees" OnResultSelected="OnSearchResultSelected" />
+            }
 
+            <MudIconButton Icon="@Icons.Material.Filled.Search"
+                Size="@(IsMobile ? Size.Medium : Size.Small)"
+                Edge="@(IsMobile ? Edge.End : Edge.False)"
+                Color="@(_showSearch ? Color.Primary : Color.Default)" OnClick="ToggleSearch"
+                title="@Loc["Search messages"]" aria-label="@Loc["Search messages"]" />
+
+            @if (!IsMobile)
+            {
+                @* Channel info (Desktop button; mobile taps channel name) *@
+                <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small"
+                    Color="@(ShowInfoPanel ? Color.Primary : Color.Default)" OnClick="OnToggleInfo"
+                    title="@Loc["Channel Info"]" aria-label="@Loc["Channel Info"]" />
+
+                @* Notification Level Bell Menu (Desktop; also available in Channel Info card) *@
+                <LazyMudMenu Icon="@ChatUiHelper.GetNotificationIcon(NotificationLevel)" Size="Size.Small" Dense="true" Class="mr-2"
+                    Color="@ChatUiHelper.GetNotificationColor(NotificationLevel)" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
+                    Title="@Loc["Notification settings"]" AriaLabel="@Loc["Notification settings"]"
+                    MinWidth="240px"
+                    ContentVersion="@HashCode.Combine(NotificationLevel)"
+                    Context="closeMenu">
+                    <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { closeMenu(); await SetNotificationLevel(ChatNotificationLevel.All); })">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Notifications" Size="Size.Small"
+                                Color="@(NotificationLevel == ChatNotificationLevel.All ? Color.Success : Color.Default)" />
+                            <div>
+                                <MudText Typo="Typo.body2" Style="@(NotificationLevel == ChatNotificationLevel.All ? "font-weight: 600;" : "")">
+                                    @Loc["All Messages"]
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @Loc["Get notified for every new message"]
+                                </MudText>
+                            </div>
+                        </div>
+                    </MudListItem>
+                    <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { closeMenu(); await SetNotificationLevel(ChatNotificationLevel.Mentions); })">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.AlternateEmail" Size="Size.Small"
+                                Color="@(NotificationLevel == ChatNotificationLevel.Mentions ? Color.Warning : Color.Default)" />
+                            <div>
+                                <MudText Typo="Typo.body2"
+                                    Style="@(NotificationLevel == ChatNotificationLevel.Mentions ? "font-weight: 600;" : "")">
+                                    @Loc["Mentions Only"]
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Only when you're @mentioned"]</MudText>
+                            </div>
+                        </div>
+                    </MudListItem>
+                    <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { closeMenu(); await SetNotificationLevel(ChatNotificationLevel.None); })">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.NotificationsOff" Size="Size.Small"
+                                Color="@(NotificationLevel == ChatNotificationLevel.None ? Color.Error : Color.Default)" />
+                            <div>
+                                <MudText Typo="Typo.body2"
+                                    Style="@(NotificationLevel == ChatNotificationLevel.None ? "font-weight: 600;" : "")">
+                                    @Loc["Muted"]
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @Loc["No notifications from this channel"]
+                                </MudText>
+                            </div>
+                        </div>
+                    </MudListItem>
+                </LazyMudMenu>
+            }
+        </div>
     </div>
 
     @* Search (Mobile Panel) *@
-    <MudHidden Breakpoint="Breakpoint.MdAndUp">
-        @if (_showSearch)
-        {
-            <div class="mt-2 mb-2 w-100 px-1">
-                <ChatSearchBar ChannelId="@Channel?.Id" CurrentUserId="@CurrentUserId" Employees="Employees" OnResultSelected="OnSearchResultSelected" />
+    @if (IsMobile && _showSearch)
+    {
+        <div class="chat-header-mobile-search d-flex align-center gap-1 pb-2 pt-1 w-100">
+            <div class="flex-grow-1" style="min-width: 0;">
+                <ChatSearchBar IsMobile="true" ChannelId="@Channel?.Id" CurrentUserId="@CurrentUserId" Employees="Employees" SuggestionEmployees="SuggestionEmployees" OnResultSelected="OnSearchResultSelected" />
             </div>
-        }
-    </MudHidden>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Medium" Edge="Edge.End" Class="flex-shrink-0"
+                OnClick="ToggleSearch" title="@Loc["Close"]" aria-label="@Loc["Close"]" />
+        </div>
+    }
 </MudPaper>
+@{
+    _lastRenderFingerprint = ComputeRenderFingerprint(dmParticipant);
+    _hasRenderedOnce = true;
+}
 
 @code {
     [Parameter] public string? CurrentUserId { get; set; }
@@ -120,46 +161,79 @@
     [Parameter] public string NotificationLevel { get; set; } = ChatNotificationLevel.All;
     [Parameter] public EventCallback<string> OnNotificationLevelChanged { get; set; }
     [Parameter] public List<Employee> Employees { get; set; } = [];
+    [Parameter] public List<Employee>? SuggestionEmployees { get; set; }
     [Parameter] public EventCallback<string> OnSearchResultSelected { get; set; }
     [Parameter] public EventCallback OnToggleInfo { get; set; }
     [Parameter] public bool ShowInfoPanel { get; set; }
+    [Parameter] public bool CanJoinVoice { get; set; } = true;
+    [Parameter] public bool IsMobile { get; set; }
 
     private bool _showSearch;
+    private string? _lastChannelId;
+    private int _lastRenderFingerprint;
+    private bool _hasRenderedOnce;
+
+    protected override void OnParametersSet()
+    {
+        if (!string.Equals(_lastChannelId, Channel?.Id, StringComparison.Ordinal))
+        {
+            _lastChannelId = Channel?.Id;
+            _showSearch = false;
+        }
+    }
+
+    private Employee? GetDirectMessageParticipant() =>
+        ChatChannelFormatter.GetDirectMessageParticipant(Channel, CurrentUserId, Employees);
+
+    private int ComputeRenderFingerprint(Employee? dmParticipant)
+    {
+        var hash = new HashCode();
+        hash.Add(Channel?.Id, StringComparer.Ordinal);
+        hash.Add(Channel?.Name, StringComparer.Ordinal);
+        hash.Add(Channel?.Icon, StringComparer.Ordinal);
+        hash.Add(Channel?.IsEncrypted ?? false);
+        hash.Add(Channel?.IsVoiceChannel ?? false);
+        hash.Add(Channel?.ChannelType, StringComparer.Ordinal);
+        hash.Add(Channel?.Description, StringComparer.Ordinal);
+        hash.Add(Channel?.ParticipantIds?.Count ?? 0);
+        hash.Add(DisplayName, StringComparer.Ordinal);
+        hash.Add(CurrentUserId, StringComparer.Ordinal);
+        hash.Add(NotificationLevel, StringComparer.Ordinal);
+        hash.Add(ShowInfoPanel);
+        hash.Add(CanJoinVoice);
+        hash.Add(IsMobile);
+        hash.Add(_showSearch);
+        hash.Add(dmParticipant?.Id, StringComparer.Ordinal);
+        hash.Add(dmParticipant?.HasCustomAvatar ?? false);
+        hash.Add(dmParticipant?.AvatarVersion ?? 0);
+        hash.Add(dmParticipant?.ProfileColor, StringComparer.Ordinal);
+        hash.Add(dmParticipant?.Initials, StringComparer.Ordinal);
+        hash.Add(dmParticipant?.FirstName, StringComparer.Ordinal);
+        hash.Add(dmParticipant?.LastName, StringComparer.Ordinal);
+        if (_showSearch)
+        {
+            hash.Add(Employees.Count);
+            hash.Add(SuggestionEmployees?.Count ?? 0);
+        }
+        return hash.ToHashCode();
+    }
+
+    protected override bool ShouldRender() => !_hasRenderedOnce || ComputeRenderFingerprint(GetDirectMessageParticipant()) != _lastRenderFingerprint;
 
     private void ToggleSearch()
     {
         _showSearch = !_showSearch;
     }
 
-    private string GetChannelIcon()
+    private async Task HandleTitleKeyDown(KeyboardEventArgs e)
     {
-        if (!string.IsNullOrEmpty(Channel?.Icon))
-            return Channel.Icon;
-
-        return Channel?.ChannelType switch
+        if (e.Key is "Enter" or " ")
         {
-            ChatChannelType.General => Icons.Material.Filled.Public,
-            ChatChannelType.Project => Icons.Material.Filled.Folder,
-            ChatChannelType.Team => Icons.Material.Filled.Groups,
-            ChatChannelType.Direct => Icons.Material.Filled.Person,
-            ChatChannelType.Group => Icons.Material.Filled.Group,
-            _ => Icons.Material.Filled.Tag
-        };
+            await OnToggleInfo.InvokeAsync();
+        }
     }
 
-    private string GetNotificationIcon() => NotificationLevel switch
-    {
-        ChatNotificationLevel.None => Icons.Material.Filled.NotificationsOff,
-        ChatNotificationLevel.Mentions => Icons.Material.Filled.AlternateEmail,
-        _ => Icons.Material.Filled.Notifications
-    };
-
-    private Color GetNotificationColor() => NotificationLevel switch
-    {
-        ChatNotificationLevel.None => Color.Error,
-        ChatNotificationLevel.Mentions => Color.Warning,
-        _ => Color.Success
-    };
+    private string GetChannelIcon() => ChatUiHelper.GetChannelIcon(Channel);
 
     private async Task SetNotificationLevel(string level)
     {
@@ -168,4 +242,3 @@
 
     private bool IsSelfDirectMessage() => ChatChannelFormatter.IsSelfDirectMessage(Channel, CurrentUserId);
 }
-

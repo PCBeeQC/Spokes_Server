@@ -29,7 +29,7 @@ public class ApiFileUploadTests : BunitContext, IDisposable
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            { "DataPath", _testDataDir },
+            { "DataPath", _testDataDir }, { "SPOKES_MASTER_PASSWORD", "UnitTest-Master-Password-2026!" },
             { "Spokes_DemoMode", "false" }
         }).Build();
 
@@ -71,7 +71,7 @@ public class ApiFileUploadTests : BunitContext, IDisposable
             .Add(p => p.ContextId, "proj-123"));
 
         var invocation = JSInterop.Invocations
-            .First(inv => inv.Identifier == "spokesUpload.initializeInput");
+            .First(inv => inv.Identifier == "window.spokesInitializeUploadInput");
 
         Assert.Equal(5, invocation.Arguments.Count);
         // Argument 0: inputId (string)
@@ -95,10 +95,59 @@ public class ApiFileUploadTests : BunitContext, IDisposable
             .Add(p => p.MaxAllowedSize, explicitLimit));
 
         var invocation = JSInterop.Invocations
-            .First(inv => inv.Identifier == "spokesUpload.initializeInput");
+            .First(inv => inv.Identifier == "window.spokesInitializeUploadInput");
 
         Assert.Equal(5, invocation.Arguments.Count);
         var passedSize = Assert.IsType<long>(invocation.Arguments[2]);
         Assert.Equal(explicitLimit, passedSize);
+    }
+
+    [Fact]
+    public async Task ApiFileUpload_WhenShowProgressIsFalse_SkipsInternalReRendersOnCallbacks()
+    {
+        int startedCount = 0;
+        var progressUpdates = new List<(string State, double Progress)>();
+
+        var cut = Render<ApiFileUpload>(parameters => parameters
+            .Add(p => p.Category, "chat")
+            .Add(p => p.ContextId, "general")
+            .Add(p => p.ShowProgress, false)
+            .Add(p => p.OnUploadStarted, () => startedCount++)
+            .Add(p => p.OnDetailedProgressUpdate, update => progressUpdates.Add(update)));
+
+        int initialRenderCount = cut.RenderCount;
+
+        await cut.InvokeAsync(async () =>
+        {
+            await cut.Instance.OnUploadStartedCallback(1);
+            await cut.Instance.OnCompressingCallback(System.Text.Json.JsonDocument.Parse("-1").RootElement);
+            await cut.Instance.OnProgressUpdateCallback(System.Text.Json.JsonDocument.Parse("50").RootElement);
+            await cut.Instance.OnProcessingCallback("Processing...");
+            await cut.Instance.OnUploadErrorCallback("Cancelled");
+        });
+
+        Assert.Equal(1, startedCount);
+        Assert.Equal(3, progressUpdates.Count);
+        Assert.Equal(initialRenderCount, cut.RenderCount);
+    }
+
+    [Fact]
+    public async Task ApiFileUpload_WhenShowProgressIsTrue_ReRendersOnProgressCallbacks()
+    {
+        var cut = Render<ApiFileUpload>(parameters => parameters
+            .Add(p => p.Category, "chat")
+            .Add(p => p.ContextId, "general")
+            .Add(p => p.ShowProgress, true));
+
+        int initialRenderCount = cut.RenderCount;
+
+        await cut.InvokeAsync(async () =>
+        {
+            await cut.Instance.OnUploadStartedCallback(1);
+            await cut.Instance.OnProgressUpdateCallback(System.Text.Json.JsonDocument.Parse("60").RootElement);
+        });
+
+        Assert.True(cut.RenderCount > initialRenderCount);
+        Assert.Contains("60%", cut.Markup);
     }
 }

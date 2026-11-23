@@ -1,0 +1,165 @@
+@{
+    var effectiveMax = Math.Max(1, Max);
+    var visible = new List<Employee>(effectiveMax);
+    List<Employee>? hiddenForTooltip = ShowOverflowNamesInTooltip ? [] : null;
+    int totalCount = 0;
+
+    if (Employees != null)
+    {
+        foreach (var emp in Employees)
+        {
+            if (emp == null) continue;
+            totalCount++;
+            if (visible.Count < effectiveMax)
+            {
+                visible.Add(emp);
+            }
+            else if (hiddenForTooltip != null)
+            {
+                hiddenForTooltip.Add(emp);
+            }
+        }
+    }
+
+    var overflowCount = Math.Max(0, totalCount - visible.Count);
+    var layoutClass = Layout == AvatarGroupLayout.Inline
+        ? "spokes-avatar-group-inline"
+        : "spokes-avatar-group-stacked";
+    var groupClass = string.IsNullOrWhiteSpace(Class)
+        ? $"mud-avatar-group spokes-avatar-group {layoutClass}"
+        : $"mud-avatar-group spokes-avatar-group {layoutClass} {Class}";
+    var sizeClass = GetSizeClass(Size);
+    var colorClass = GetOverflowColorClass(OverflowColor);
+    var overflowBadgeClass = $"mud-avatar mud-avatar-filled {colorClass} {sizeClass} spokes-avatar-group-overflow {(OnOverflowClick.HasDelegate ? "is-interactive" : "")} {AvatarClass}".Trim();
+    var overflowTooltip = overflowCount > 0 ? ResolveOverflowTooltip(overflowCount, hiddenForTooltip) : string.Empty;
+}
+
+@if (visible.Count > 0)
+{
+    <div class="@groupClass" style="@Style">
+        @foreach (var emp in visible)
+        {
+            <EmployeeAvatar @key="@(string.IsNullOrEmpty(emp.Id) ? (object)emp : emp.Id)"
+                            Employee="@emp"
+                            Size="@Size"
+                            ShowPresence="@ShowPresence"
+                            Title="@emp.FullName"
+                            Class="@AvatarClass" />
+        }
+
+        @if (overflowCount > 0)
+        {
+            @if (Layout == AvatarGroupLayout.Inline && OverflowStyle == AvatarOverflowStyle.Count)
+            {
+                @if (OnOverflowClick.HasDelegate)
+                {
+                    <button type="button"
+                            class="spokes-avatar-group-overflow-text is-interactive"
+                            title="@overflowTooltip"
+                            aria-label="@overflowTooltip"
+                            @onclick="OnOverflowClick"
+                            @onclick:stopPropagation="true">
+                        +@overflowCount
+                    </button>
+                }
+                else
+                {
+                    <span class="spokes-avatar-group-overflow-text" title="@overflowTooltip">
+                        +@overflowCount
+                    </span>
+                }
+            }
+            else if (OnOverflowClick.HasDelegate)
+            {
+                <button type="button"
+                        class="@overflowBadgeClass"
+                        title="@overflowTooltip"
+                        aria-label="@overflowTooltip"
+                        @onclick="OnOverflowClick"
+                        @onclick:stopPropagation="true">
+                    @RenderOverflowBadgeInner(overflowCount)
+                </button>
+            }
+            else
+            {
+                <div class="@overflowBadgeClass" title="@overflowTooltip" aria-label="@overflowTooltip">
+                    @RenderOverflowBadgeInner(overflowCount)
+                </div>
+            }
+        }
+    </div>
+}
+else if (EmptyContent != null)
+{
+    <div class="@groupClass" style="@Style">
+        @EmptyContent
+    </div>
+}
+
+@code {
+    [Parameter] public IEnumerable<Employee>? Employees { get; set; }
+    [Parameter] public int Max { get; set; } = 3;
+    [Parameter] public Size Size { get; set; } = Size.Small;
+    [Parameter] public AvatarGroupLayout Layout { get; set; } = AvatarGroupLayout.Stacked;
+    [Parameter] public AvatarOverflowStyle OverflowStyle { get; set; } = AvatarOverflowStyle.Ellipsis;
+    [Parameter] public Color OverflowColor { get; set; } = Color.Primary;
+    [Parameter] public bool ShowPresence { get; set; } = false;
+    [Parameter] public string? OverflowTitle { get; set; }
+    [Parameter] public bool ShowOverflowNamesInTooltip { get; set; } = false;
+    [Parameter] public EventCallback OnOverflowClick { get; set; }
+    [Parameter] public RenderFragment? EmptyContent { get; set; }
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string AvatarClass { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+
+    private RenderFragment RenderOverflowBadgeInner(int overflowCount) => __builder =>
+    {
+        <div class="spokes-avatar-inner">
+            @if (OverflowStyle == AvatarOverflowStyle.Ellipsis)
+            {
+                <svg class="mud-icon-root mud-svg-icon spokes-avatar-group-overflow-dots" focusable="false" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" fill="currentColor" />
+                </svg>
+            }
+            else
+            {
+                <span class="spokes-avatar-initials spokes-avatar-group-overflow-count">+@overflowCount</span>
+            }
+        </div>
+    };
+
+    private string ResolveOverflowTooltip(int overflowCount, List<Employee>? hiddenForTooltip)
+    {
+        if (!string.IsNullOrWhiteSpace(OverflowTitle))
+        {
+            return OverflowTitle;
+        }
+
+        if (hiddenForTooltip is { Count: > 0 })
+        {
+            return string.Join(", ", hiddenForTooltip.Select(e => e.FullName));
+        }
+
+        return string.Format(Loc["+{0} more"].Value, overflowCount);
+    }
+
+    private static string GetSizeClass(Size size) => size switch
+    {
+        Size.Small => "mud-avatar-small",
+        Size.Large => "mud-avatar-large",
+        _ => "mud-avatar-medium"
+    };
+
+    private static string GetOverflowColorClass(Color color) => color switch
+    {
+        Color.Primary => "mud-avatar-filled-primary",
+        Color.Secondary => "mud-avatar-filled-secondary",
+        Color.Tertiary => "mud-avatar-filled-tertiary",
+        Color.Info => "mud-avatar-filled-info",
+        Color.Success => "mud-avatar-filled-success",
+        Color.Warning => "mud-avatar-filled-warning",
+        Color.Error => "mud-avatar-filled-error",
+        Color.Dark => "mud-avatar-filled-dark",
+        _ => string.Empty
+    };
+}
