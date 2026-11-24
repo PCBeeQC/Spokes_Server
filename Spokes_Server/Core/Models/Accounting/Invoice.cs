@@ -145,6 +145,7 @@ public class InvoiceLine
 
     public override int GetHashCode() => Id?.GetHashCode() ?? base.GetHashCode();
     public string Description { get; set; } = string.Empty;
+    public string? ProjectId { get; set; }
     public string? WorkTypeId { get; set; }
     public string? SubTaskId { get; set; }
     public string? Note { get; set; } = string.Empty;

@@ -29,6 +29,30 @@ public interface IBusinessOverheadService
         DateTime endDate,
         string? targetProjectId = null,
         Employee? actor = null);
+
+    /// <summary>
+    /// Returns active scheduled recurring expense profiles whose <see cref="RecurringExpense.NextDueDate"/>
+    /// is on or before <paramref name="asOfDate"/>.
+    /// </summary>
+    List<DueRecurringOccurrence> GetOverdueRecurringOccurrences(DateTime? asOfDate = null);
+
+    /// <summary>
+    /// On-demand generator that creates unpaid <see cref="RecurringBillRecord"/> entries for all missed
+    /// periods up to <paramref name="upToDate"/>, advances <see cref="RecurringExpense.NextDueDate"/>,
+    /// persists to disk, and syncs the General Ledger.
+    /// </summary>
+    int GenerateDueRecurringBills(IEnumerable<string>? expenseIds = null, DateTime? upToDate = null, Employee? actor = null);
+}
+
+public sealed class DueRecurringOccurrence
+{
+    public string RecurringExpenseId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Supplier { get; set; } = string.Empty;
+    public string Frequency { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+    public DateTime NextDueDate { get; set; }
+    public int MissedPeriodsCount { get; set; }
 }
 
 public class PeriodOverheadCalculationResult

@@ -323,7 +323,13 @@ public static class UniversalTaxReconciler
         }
         else
         {
-            if (candidatePaid > 0m && candidateTotal >= candidatePaid)
+            if (!data.IsCreditNote && candidateTotal > 0m && candidatePaid > candidateTotal * 1.05m)
+            {
+                // Guard against misparsed numbers (e.g. a 4-digit year like 2026) exceeding the document total
+                candidatePaid = 0m;
+                candidateBalanceDue = candidateTotal;
+            }
+            else if (candidatePaid > 0m && candidateTotal >= candidatePaid)
             {
                 candidateBalanceDue = candidateTotal - candidatePaid;
             }
@@ -355,8 +361,11 @@ public static class UniversalTaxReconciler
         var matches = Regex.Matches(text, pattern, RegexOptions.IgnoreCase);
         for (int i = matches.Count - 1; i >= 0; i--)
         {
-            var raw = matches[i].Groups[1].Value;
+            var group = matches[i].Groups[1];
+            var raw = group.Value;
             if (string.IsNullOrWhiteSpace(raw)) continue;
+            // Skip 4-digit year fragments inside ISO/slash dates (e.g. "2026-11-20" or "20/11/2026")
+            if (IsDateYearFragment(text, group.Index, group.Length, raw)) continue;
             var val = ParseAmount(raw);
             if (val != 0 || (allowZero && Regex.IsMatch(raw, @"\d")))
             {
@@ -364,6 +373,23 @@ public static class UniversalTaxReconciler
                 return true;
             }
         }
+        return false;
+    }
+
+    private static bool IsDateYearFragment(string text, int index, int length, string raw)
+    {
+        var trimmed = raw.Trim();
+        if (trimmed.Length != 4 || !int.TryParse(trimmed, out var year) || year < 1990 || year > 2099)
+            return false;
+
+        int afterIdx = index + length;
+        if (afterIdx < text.Length && (text[afterIdx] == '-' || text[afterIdx] == '/'))
+            return true;
+
+        int beforeIdx = index - 1;
+        if (beforeIdx >= 0 && (text[beforeIdx] == '-' || text[beforeIdx] == '/'))
+            return true;
+
         return false;
     }
 

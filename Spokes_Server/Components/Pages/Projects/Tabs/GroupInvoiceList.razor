@@ -158,15 +158,17 @@
 
         var projectIds = _accessibleGroupProjects.Select(p => p.Id).ToHashSet();
         
-        // Get IDs of everything already billed by group invoices
-        var billedTimeIds = Invoices.SelectMany(i => i.BilledTimeEntryIds).ToHashSet();
-        var billedPoItemIds = Invoices.SelectMany(i => i.BilledPoItemIds).ToHashSet();
-        var billedExpenseItemIds = Invoices.SelectMany(i => i.BilledExpenseItemIds).ToHashSet();
+        // Get IDs of everything already billed by posted group invoices (Draft and Void invoices do not count)
+        var postedGroupInvoices = Invoices.Where(i => InvoiceStatus.IsPosted(i.Status)).ToList();
+        var billedTimeIds = postedGroupInvoices.SelectMany(i => i.BilledTimeEntryIds).ToHashSet();
+        var billedPoItemIds = postedGroupInvoices.SelectMany(i => i.BilledPoItemIds).ToHashSet();
+        var billedExpenseItemIds = postedGroupInvoices.SelectMany(i => i.BilledExpenseItemIds).ToHashSet();
 
-        // Also consider individual project invoices (for projects that might have some)
+        // Also consider individual posted project invoices (for projects that might have some)
         foreach (var projectId in projectIds)
         {
-            var projectInvoices = Db.Invoices.GetByProject(projectId);
+            var projectInvoices = Db.Invoices.GetByProject(projectId)
+                .Where(i => InvoiceStatus.IsPosted(i.Status));
             foreach (var inv in projectInvoices)
             {
                 billedTimeIds.UnionWith(inv.BilledTimeEntryIds);

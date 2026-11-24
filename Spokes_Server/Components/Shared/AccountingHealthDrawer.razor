@@ -1,0 +1,156 @@
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@inject IAccountingHealthService HealthService
+
+<MudDrawer @bind-Open="@Open"
+           Anchor="Anchor.End"
+           Elevation="4"
+           Variant="DrawerVariant.Temporary"
+           Width="520px"
+           OverlayAutoClose="true">
+    <MudDrawerHeader Class="d-flex align-center justify-space-between px-4 py-3 border-b">
+        <div>
+            <MudText Typo="Typo.h6">@BizLoc["Accounting Health & Readiness"]</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                @BizLoc["Live audit of GL integrity, taxes, subledgers, and close steps"]
+            </MudText>
+        </div>
+        <div class="d-flex align-center gap-1">
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="RefreshReport" title="@Loc["Refresh"]" />
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => OpenChanged.InvokeAsync(false))" title="@Loc["Close"]" />
+        </div>
+    </MudDrawerHeader>
+
+    <div class="pa-4 overflow-auto flex-grow-1">
+        @if (Report == null)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+        }
+        else
+        {
+            <MudStack Spacing="3">
+                <div class="d-flex align-center gap-2 flex-wrap">
+                    <MudChip T="string" Color="@(Report.CriticalCount > 0 ? Color.Error : Color.Success)" Size="Size.Small" Variant="Variant.Filled">
+                        @Report.CriticalCount @BizLoc["Critical"]
+                    </MudChip>
+                    <MudChip T="string" Color="@(Report.WarningCount > 0 ? Color.Warning : Color.Default)" Size="Size.Small" Variant="Variant.Filled">
+                        @Report.WarningCount @BizLoc["Warnings"]
+                    </MudChip>
+                    <MudChip T="string" Color="Color.Info" Size="Size.Small" Variant="Variant.Outlined">
+                        @Report.InfoCount @BizLoc["Info"]
+                    </MudChip>
+                    <MudSpacer />
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @Report.CompletedChecklistCount / @Report.CloseChecklist.Count @BizLoc["steps complete"]
+                    </MudText>
+                </div>
+
+                @if (Report.IsReadyForClose)
+                {
+                    <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Filled">
+                        @BizLoc["All critical and warning checks passed. Your books are ready for reconciliation and period close."]
+                    </MudAlert>
+                }
+
+                <MudText Typo="Typo.subtitle2" Class="mt-1">@BizLoc["Guided Cutover & Close Checklist"]</MudText>
+                <MudPaper Outlined="true" Class="pa-2">
+                    <MudStack Spacing="1">
+                        @foreach (var step in Report.CloseChecklist)
+                        {
+                            <div class="d-flex align-start justify-space-between gap-2 pa-2 rounded">
+                                <div class="d-flex align-start gap-2">
+                                    @if (step.IsComplete)
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" Class="mt-1" />
+                                    }
+                                    else if (step.HasBlocker)
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Filled.Error" Color="Color.Error" Size="Size.Small" Class="mt-1" />
+                                    }
+                                    else
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Filled.RadioButtonUnchecked" Color="Color.Secondary" Size="Size.Small" Class="mt-1" />
+                                    }
+                                    <div>
+                                        <MudText Typo="Typo.body2"><b>@step.Title</b></MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@step.Summary</MudText>
+                                    </div>
+                                </div>
+                                @if (!step.IsComplete && !string.IsNullOrWhiteSpace(step.ActionKey))
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => TriggerAction(step.ActionKey))">
+                                        @BizLoc["Open"]
+                                    </MudButton>
+                                }
+                            </div>
+                        }
+                    </MudStack>
+                </MudPaper>
+
+                @if (Report.Issues.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-2">@BizLoc["Detected Issues"] (@Report.Issues.Count)</MudText>
+                    <MudStack Spacing="2">
+                        @foreach (var issue in Report.Issues.OrderByDescending(i => i.Severity))
+                        {
+                            var sev = issue.Severity switch
+                            {
+                                AccountingHealthSeverity.Critical => Severity.Error,
+                                AccountingHealthSeverity.Warning => Severity.Warning,
+                                _ => Severity.Info
+                            };
+                            <MudAlert Severity="@sev" Dense="true" Variant="Variant.Outlined">
+                                <div class="d-flex flex-column gap-1">
+                                    <div class="d-flex align-center justify-space-between gap-2">
+                                        <MudText Typo="Typo.body2"><b>@issue.Title</b></MudText>
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text">@issue.Category</MudChip>
+                                    </div>
+                                    <MudText Typo="Typo.caption">@issue.Details</MudText>
+                                    @if (!string.IsNullOrWhiteSpace(issue.ActionKey))
+                                    {
+                                        <div class="mt-1">
+                                            <MudButton Size="Size.Small"
+                                                       Variant="Variant.Filled"
+                                                       Color="@(issue.Severity == AccountingHealthSeverity.Critical ? Color.Error : Color.Primary)"
+                                                       OnClick="@(() => TriggerAction(issue.ActionKey))">
+                                                @(string.IsNullOrWhiteSpace(issue.ActionLabel) ? BizLoc["Inspect"].Value : issue.ActionLabel)
+                                            </MudButton>
+                                        </div>
+                                    }
+                                </div>
+                            </MudAlert>
+                        }
+                    </MudStack>
+                }
+            </MudStack>
+        }
+    </div>
+</MudDrawer>
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter] public AccountingHealthReport? Report { get; set; }
+    [Parameter] public EventCallback OnRefreshRequested { get; set; }
+    [Parameter] public EventCallback<string> OnActionSelected { get; set; }
+
+    private async Task RefreshReport()
+    {
+        if (OnRefreshRequested.HasDelegate)
+        {
+            await OnRefreshRequested.InvokeAsync();
+        }
+        else
+        {
+            Report = HealthService.EvaluateHealth();
+        }
+    }
+
+    private async Task TriggerAction(string actionKey)
+    {
+        if (OnActionSelected.HasDelegate)
+        {
+            await OnActionSelected.InvokeAsync(actionKey);
+        }
+    }
+}

@@ -118,7 +118,7 @@ public class BalanceWriteOffTests : TestDataTestBase
             ]
         };
         _db.Invoices.Save(invoice);
-        _ledgerService.SyncInvoice(invoice, "Cosinus");
+        _ledgerService.SyncInvoice(invoice, "Client Alpha");
 
         Assert.Equal(0.06m, invoice.BalanceDue);
 

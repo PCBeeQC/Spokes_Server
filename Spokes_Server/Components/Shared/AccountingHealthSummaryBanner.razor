@@ -1,0 +1,43 @@
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Services.Accounting
+@inject IAccountingHealthService HealthService
+
+@if (_report != null && (_report.CriticalCount > 0 || _report.WarningCount > 0))
+{
+    <MudAlert Severity="@(_report.CriticalCount > 0 ? Severity.Error : Severity.Warning)"
+              Dense="true"
+              Variant="Variant.Outlined"
+              Class="mb-3">
+        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+            <div>
+                <MudText Typo="Typo.body2">
+                    <b>@BizLoc["Pre-Flight Readiness Check"]:</b>
+                    @_report.CriticalCount @BizLoc["Critical"], @_report.WarningCount @BizLoc["Warnings"]
+                    (@string.Join(" · ", _report.Issues.Where(i => i.Severity >= AccountingHealthSeverity.Warning).Take(2).Select(i => i.Title)))
+                </MudText>
+            </div>
+            @if (OnOpenFullHealthDrawer.HasDelegate)
+            {
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" OnClick="OnOpenFullHealthDrawer">
+                    @BizLoc["Open Readiness Check"]
+                </MudButton>
+            }
+        </div>
+    </MudAlert>
+}
+
+@code {
+    [Parameter] public EventCallback OnOpenFullHealthDrawer { get; set; }
+
+    private AccountingHealthReport? _report;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+    }
+
+    public void Refresh()
+    {
+        _report = HealthService.EvaluateHealth();
+    }
+}

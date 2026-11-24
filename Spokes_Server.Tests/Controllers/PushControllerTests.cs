@@ -723,12 +723,12 @@ public class PushControllerTests : TestDataTestBase
     [Fact]
     public async Task SendDeviceTestNotification_ReturnsOk_WhenEncrypted()
     {
-        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Mats" });
+        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Alex" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
         SetUser("sub1");
 
         var mockPush = new Mock<IWebPushService>();
-        mockPush.Setup(p => p.SendDeviceTestNotificationAsync(It.Is<DeviceTestNotificationRequest>(r => r.SubscriptionId == "dev1" && r.UserId == "emp1" && r.Body.Contains("Mats") && r.Category == "chat"), It.IsAny<CancellationToken>()))
+        mockPush.Setup(p => p.SendDeviceTestNotificationAsync(It.Is<DeviceTestNotificationRequest>(r => r.SubscriptionId == "dev1" && r.UserId == "emp1" && r.Body.Contains("Alex") && r.Category == "chat"), It.IsAny<CancellationToken>()))
             .ReturnsAsync(TestNotificationResult.Success(isPayloadEncrypted: true));
         var controller = CreateControllerWithWebPush(mockPush.Object);
 
@@ -740,7 +740,7 @@ public class PushControllerTests : TestDataTestBase
     [Fact]
     public async Task SendDeviceTestNotification_ReturnsOk_WhenEncryptedText()
     {
-        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Mats" });
+        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Alex" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
         SetUser("sub1");
 
@@ -757,7 +757,7 @@ public class PushControllerTests : TestDataTestBase
     [Fact]
     public async Task SendDeviceTestNotification_ReturnsBadRequest_WhenLicenseExpired()
     {
-        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Mats" });
+        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Alex" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
         SetUser("sub1");
 
@@ -776,7 +776,7 @@ public class PushControllerTests : TestDataTestBase
     [Fact]
     public async Task SendDeviceTestNotification_ReturnsRelayProblemCode_WhenRelayRejects()
     {
-        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Mats" });
+        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Alex" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
         SetUser("sub1");
 
@@ -793,7 +793,7 @@ public class PushControllerTests : TestDataTestBase
     [Fact]
     public async Task SendDeviceTestNotification_ReturnsBadRequest_WhenWebPushException()
     {
-        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Mats" });
+        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Alex" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
         SetUser("sub1");
 
@@ -813,7 +813,7 @@ public class PushControllerTests : TestDataTestBase
     [Fact]
     public async Task SendDeviceTestNotification_ReturnsBadRequest_WhenGeneralException()
     {
-        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Mats" });
+        _empRepo.Save(new Employee { Id = "emp1", FirstName = "Alex" });
         _openIdRepo.Save(new OpenIdAccount { Sub = "sub1", LinkedEmployeeId = "emp1" });
         SetUser("sub1");
 

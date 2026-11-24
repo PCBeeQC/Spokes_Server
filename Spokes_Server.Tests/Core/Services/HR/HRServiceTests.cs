@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
+using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.HR;
@@ -572,6 +573,76 @@ public class HRServiceTests : IDisposable
 
             Assert.False(result.IsSuccess);
             Assert.Equal("FORBIDDEN", result.Code);
+        }
+
+        [Fact]
+        public void BulkUpdateTimeEntries_DraftInvoiceDoesNotLockEntry_PostedInvoiceDoes()
+        {
+            var manager = new Employee
+            {
+                Id = "mgr-draft-lock",
+                IsActive = true,
+                IsAdmin = false,
+                TeamId = "team-lock",
+                Permissions = [Spokes_Server.Core.Constants.AppPermissions.Projects.View]
+            };
+            var worker = new Employee { Id = "wrk-draft-lock", IsActive = true, IsAdmin = false, TeamId = "team-lock" };
+            _db.Employees.Save(manager);
+            _db.Employees.Save(worker);
+            _db.Teams.Save(new Team { Id = "team-lock", Name = "Eng", LeaderId = manager.Id });
+            _db.Projects.Save(new Spokes_Server.Core.Models.Projects.Project { Id = "proj-1", Name = "Project 1" });
+            _db.Projects.Save(new Spokes_Server.Core.Models.Projects.Project { Id = "proj-2", Name = "Project 2" });
+
+            var sheet = new Timesheet
+            {
+                Id = "sheet-draft-lock",
+                EmployeeId = worker.Id,
+                Year = 2026,
+                WeekNumber = 10,
+                Status = TimesheetStatus.Approved,
+                Entries =
+                [
+                    new TimeEntry { Id = "te-on-draft", ProjectId = "proj-1", Hours = 4m },
+                    new TimeEntry { Id = "te-on-posted", ProjectId = "proj-1", Hours = 4m }
+                ]
+            };
+            _db.Timesheets.Save(sheet);
+
+            _db.Invoices.Save(new Invoice
+            {
+                Id = "inv-draft-lock",
+                ProjectId = "proj-1",
+                Status = InvoiceStatus.Draft,
+                BilledTimeEntryIds = ["te-on-draft"]
+            });
+            _db.Invoices.Save(new Invoice
+            {
+                Id = "inv-posted-lock",
+                ProjectId = "proj-1",
+                Status = InvoiceStatus.Final,
+                BilledTimeEntryIds = ["te-on-posted"]
+            });
+
+            var hrWithInvoices = new HRService(_db.Timesheets, _db.Employees, _db.Teams, projects: _db.Projects, invoices: _db.Invoices);
+
+            // Draft invoice must NOT lock the time entry for a non-accounting team leader
+            var draftResult = hrWithInvoices.BulkUpdateTimeEntries(new BulkTimesheetEditRequest
+            {
+                EntryIds = ["te-on-draft"],
+                UpdateProject = true,
+                ProjectId = "proj-2"
+            }, manager.Id);
+            Assert.True(draftResult.IsSuccess);
+
+            // Posted invoice MUST still lock the time entry for a non-accounting team leader
+            var postedResult = hrWithInvoices.BulkUpdateTimeEntries(new BulkTimesheetEditRequest
+            {
+                EntryIds = ["te-on-posted"],
+                UpdateProject = true,
+                ProjectId = "proj-2"
+            }, manager.Id);
+            Assert.False(postedResult.IsSuccess);
+            Assert.Equal("FORBIDDEN", postedResult.Code);
         }
 
         [Fact]

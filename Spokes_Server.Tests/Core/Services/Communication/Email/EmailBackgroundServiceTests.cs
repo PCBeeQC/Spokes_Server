@@ -280,7 +280,7 @@ public class EmailBackgroundServiceTests : IDisposable
         {
             Id = "acc-bill-only",
             IsServerManaged = true,
-            EmailAddress = "accomp@poly-robotics.com",
+            EmailAddress = "bills@acme.test",
             EncryptedPassword = "pwd",
             Enabled = true
         });
@@ -289,7 +289,7 @@ public class EmailBackgroundServiceTests : IDisposable
         {
             Id = "acc-shared-direct",
             IsServerManaged = true,
-            EmailAddress = "support@poly-robotics.com",
+            EmailAddress = "support@acme.test",
             EncryptedPassword = "pwd",
             Enabled = true,
             AllowedUserIds = ["emp-1"]
@@ -299,7 +299,7 @@ public class EmailBackgroundServiceTests : IDisposable
         {
             Id = "acc-shared-via-vinbox",
             IsServerManaged = true,
-            EmailAddress = "catchall@poly-robotics.com",
+            EmailAddress = "catchall@acme.test",
             EncryptedPassword = "pwd",
             Enabled = true
         });
@@ -309,7 +309,7 @@ public class EmailBackgroundServiceTests : IDisposable
             AccountId = "acc-shared-via-vinbox",
             IsServerManaged = true,
             Name = "Sales",
-            TargetAddresses = ["sales@poly-robotics.com"],
+            TargetAddresses = ["sales@acme.test"],
             AllowedTeamIds = ["team-sales"]
         });
 
@@ -318,7 +318,7 @@ public class EmailBackgroundServiceTests : IDisposable
             Id = "acc-personal",
             IsServerManaged = false,
             OwnerEmployeeId = "emp-2",
-            EmailAddress = "mats@poly-robotics.com",
+            EmailAddress = "alex@acme.test",
             EncryptedPassword = "pwd",
             Enabled = true
         });

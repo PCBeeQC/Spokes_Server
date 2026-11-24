@@ -374,7 +374,10 @@ public class BackupService : BackgroundService
                 }
             }
 
-            ReportProgress(LocalBackupStage.Finalizing, totalUncompressedBytes, totalUncompressedBytes, totalFiles, totalFiles);
+            var finalFileInfo = new FileInfo(finalBackupPath);
+            long finalArchiveBytes = finalFileInfo.Exists ? finalFileInfo.Length : 0;
+
+            ReportProgress(LocalBackupStage.Finalizing, finalArchiveBytes, finalArchiveBytes, totalFiles, totalFiles);
 
             // Prune old backups
             var retention = profile?.BackupRetentionCount ?? 5;
@@ -383,11 +386,10 @@ public class BackupService : BackgroundService
             LastBackupAt = DateTime.UtcNow;
             LastBackupStatus = "Success";
             IsLocalBackupInProgress = false;
-            ReportProgress(LocalBackupStage.Completed, totalUncompressedBytes, totalUncompressedBytes, totalFiles, totalFiles);
+            ReportProgress(LocalBackupStage.Completed, finalArchiveBytes, finalArchiveBytes, totalFiles, totalFiles);
             _logger.LogInformation("Backup created successfully: {Path}", finalBackupPath);
 
-            var finalFileInfo = new FileInfo(finalBackupPath);
-            var sizeFormatted = BackupFormatHelper.FormatKilobyteOrMegabyteSize(finalFileInfo.Length);
+            var sizeFormatted = BackupFormatHelper.FormatKilobyteOrMegabyteSize(finalArchiveBytes);
 
             _systemLog?.LogInfo("Backup",
                 $"Backup created successfully: {Path.GetFileName(finalBackupPath)}",

@@ -30,4 +30,7 @@ public interface IAccountingService
     void RecordRecurringBillWriteOff(RecurringExpense profile, RecurringBillRecord record, BalanceWriteOff writeOff, string? user = null, Employee? actor = null);
     void DeleteRecurringBillWriteOff(RecurringExpense profile, RecurringBillRecord record, string writeOffId, string? user = null, string? reason = null, Employee? actor = null);
     void MarkCommissionPaid(CommissionLedgerRecord commission, DateTime datePaid, string? bankGlCode = null, string? user = null, Employee? actor = null);
+    int BackfillTaxSplitOnBills(IEnumerable<string> billIds, string? user = null, Employee? actor = null);
+    void ApplySuggestedInvoicePayment(string suggestionId, string? user = null, Employee? actor = null);
+    void DismissSuggestedInvoicePayment(string suggestionId, string? user = null, Employee? actor = null);
 }

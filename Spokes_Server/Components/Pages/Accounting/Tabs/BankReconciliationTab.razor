@@ -6,11 +6,15 @@
 @using Spokes_Server.Components.Shared
 @inject Database Db
 @inject IBankReconciliationService ReconciliationService
+@inject IAccountingService AccountingService
 @inject IFinancialAccountService FinancialAccountService
 @inject IJurisdictionTemplateService JurisdictionService
+@inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject UserService UserService
 @using Spokes_Server.Core.Constants
+
+<AccountingHealthSummaryBanner OnOpenFullHealthDrawer="OnOpenFullHealthDrawer" />
 
 <MudGrid Spacing="3">
     @* Left / Top Panel: Import & Statement Selector *@
@@ -130,6 +134,40 @@
                     </div>
                 </div>
 
+                @if (_cutoverSanity != null && _cutoverSanity.HasPreCutoverLines && _cutoverSanity.CutoverDate.HasValue)
+                {
+                    var cutoverSev = _cutoverSanity.IsBalancedAtCutover ? Severity.Success : Severity.Warning;
+                    <MudAlert Severity="@cutoverSev" Dense="true" Variant="Variant.Outlined" Class="mb-3">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                            <div>
+                                <MudText Typo="Typo.body2">
+                                    <b>@BizLoc["Cutover Sanity Check"] (@_cutoverSanity.CutoverDate.Value.ToString("yyyy-MM-dd")):</b>
+                                    @if (_cutoverSanity.BankBalanceAtCutover.HasValue)
+                                    {
+                                        @($"{BizLoc["Bank"]}: {_cutoverSanity.BankBalanceAtCutover.Value:C2} · GL: {_cutoverSanity.GlBalanceAtCutover:C2} · {BizLoc["Diff"]}: {_cutoverSanity.Discrepancy!.Value:C2}")
+                                    }
+                                    else
+                                    {
+                                        @($"GL: {_cutoverSanity.GlBalanceAtCutover:C2} ({BizLoc["No running balance column in CSV"]})")
+                                    }
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @($"{_cutoverSanity.MatchedPreCutoverCount} {BizLoc["matched"]} · {_cutoverSanity.UnmatchedPreCutoverCount} {BizLoc["unmatched pre-cutover"]} · {_cutoverSanity.UnmatchedPostCutoverCount} {BizLoc["unmatched post-cutover"]}")
+                                </MudText>
+                            </div>
+                            @if (_selectedStatement.Status != BankStatementStatus.Reconciled && _canWriteAccounting && _cutoverSanity.UnmatchedPreCutoverCount > 0)
+                            {
+                                <MudButton Size="Size.Small"
+                                           Variant="Variant.Outlined"
+                                           Color="@(_cutoverSanity.IsBalancedAtCutover ? Color.Success : Color.Warning)"
+                                           OnClick="ExcludeCoveredPreCutoverLines">
+                                    @BizLoc["Exclude Covered Pre-Cutover Lines"] (@_cutoverSanity.UnmatchedPreCutoverCount)
+                                </MudButton>
+                            }
+                        </div>
+                    </MudAlert>
+                }
+
                 @if (_selectedStatement.Status != BankStatementStatus.Reconciled && _canWriteAccounting)
                 {
                     <MudGrid Spacing="2" Class="mb-3 align-center">
@@ -219,8 +257,12 @@
                                     <div class="d-flex justify-end align-center gap-1">
                                         @{
                                             var candidates = ReconciliationService.GetCandidatesForLine(_selectedStatement, line, _currentUser);
+                                            var crossAccountCands = ReconciliationService.GetCrossAccountCandidatesForLine(_selectedStatement, line, _currentUser);
+                                            var openDocCands = ReconciliationService.GetOpenDocumentCandidatesForLine(_selectedStatement, line, _currentUser);
+                                            var recurringCands = ReconciliationService.GetRecurringCandidatesForLine(_selectedStatement, line, _currentUser);
+                                            bool anyMatchOption = candidates.Count > 0 || crossAccountCands.Count > 0 || openDocCands.Count > 0 || recurringCands.Count > 0;
                                         }
-                                        @if (candidates.Count > 0)
+                                        @if (anyMatchOption)
                                         {
                                             <MudMenu Label="@BizLoc["Match"]" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Dense="true">
                                                 @foreach (var cand in candidates.Take(5))
@@ -228,6 +270,36 @@
                                                     <MudMenuItem OnClick="@(() => MatchToCandidate(line, cand))">
                                                         @cand.Summary (@cand.SignedBankMovement.ToString("C2"))
                                                     </MudMenuItem>
+                                                }
+                                                @if (crossAccountCands.Count > 0)
+                                                {
+                                                    <MudDivider />
+                                                    @foreach (var xcand in crossAccountCands)
+                                                    {
+                                                        <MudMenuItem OnClick="@(() => ReassignAndMatchCandidate(line, xcand))">
+                                                            @BizLoc["Reassign Account"]: @xcand.Summary
+                                                        </MudMenuItem>
+                                                    }
+                                                }
+                                                @if (openDocCands.Count > 0)
+                                                {
+                                                    <MudDivider />
+                                                    @foreach (var oc in openDocCands)
+                                                    {
+                                                        <MudMenuItem OnClick="@(() => SettleOpenDocCandidate(line, oc))">
+                                                            @oc.Summary
+                                                        </MudMenuItem>
+                                                    }
+                                                }
+                                                @if (recurringCands.Count > 0)
+                                                {
+                                                    <MudDivider />
+                                                    @foreach (var rc in recurringCands)
+                                                    {
+                                                        <MudMenuItem OnClick="@(() => MatchToRecurringCandidate(line, rc))">
+                                                            @BizLoc["Recurring"]: @rc.Summary
+                                                        </MudMenuItem>
+                                                    }
                                                 }
                                             </MudMenu>
                                         }
@@ -256,9 +328,12 @@
 </MudGrid>
 
 @code {
+    [Parameter] public EventCallback OnOpenFullHealthDrawer { get; set; }
+
     private string? _bankGlAccountCode = "1020";
     private List<BankStatement> _statements = [];
     private BankStatement? _selectedStatement;
+    private BankCutoverSanityReport? _cutoverSanity;
     private bool _includeSalesTaxOnDirectPost;
     private bool _canWriteAccounting;
     private Spokes_Server.Core.Models.HR.Employee? _currentUser;
@@ -297,11 +372,97 @@
         {
             _selectedStatement = _statements.FirstOrDefault();
         }
+        RefreshCutoverSanity();
+    }
+
+    private void RefreshCutoverSanity()
+    {
+        _cutoverSanity = _selectedStatement != null
+            ? ReconciliationService.EvaluateCutoverSanity(_selectedStatement, _currentUser)
+            : null;
     }
 
     private void SelectStatement(BankStatement statement)
     {
         _selectedStatement = statement;
+        RefreshCutoverSanity();
+    }
+
+    private async Task<bool> ConfirmIfPreCutoverAsync(BankTransactionLine line)
+    {
+        if (_cutoverSanity?.CutoverDate == null || line.Date.Date > _cutoverSanity.CutoverDate.Value.Date)
+            return true;
+
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            BizLoc["Pre-Cutover Transaction Warning"].Value,
+            $"This transaction ({line.Date:yyyy-MM-dd}, {line.Amount:C2}) is on or before your cutover date ({_cutoverSanity.CutoverDate.Value:yyyy-MM-dd}). Only post a new journal entry if it was missing from your Opening Balance Trial Balance; otherwise exclude it to avoid double-counting.",
+            yesText: BizLoc["Post Anyway"].Value,
+            cancelText: Loc["Cancel"].Value);
+
+        return confirmed == true;
+    }
+
+    private async Task ExcludeCoveredPreCutoverLines()
+    {
+        if (_selectedStatement == null || _cutoverSanity?.CutoverDate == null) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        int excluded = ReconciliationService.ExcludePreCutoverUnmatchedLines(_selectedStatement, _cutoverSanity.CutoverDate.Value, _currentUser);
+        LoadStatements();
+        Snackbar.Add($"Excluded {excluded} pre-cutover line(s) covered by your opening balance.", Severity.Success);
+    }
+
+    private async Task ReassignAndMatchCandidate(BankTransactionLine line, CrossAccountBankCandidate candidate)
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        try
+        {
+            ReconciliationService.ReassignAccountAndMatchLine(_selectedStatement, line.Id, candidate.Entry.Id, _currentUser);
+            LoadStatements();
+            Snackbar.Add($"Reassigned {candidate.Entry.EntryNumber} from {candidate.CurrentBankGlCode} to {_selectedStatement.GlAccountCode} and matched.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task SettleOpenDocCandidate(BankTransactionLine line, OpenDocumentBankCandidate candidate)
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        try
+        {
+            ReconciliationService.SettleOpenDocumentAndMatchLine(_selectedStatement, line.Id, candidate, AccountingService, _currentUser);
+            LoadStatements();
+            Snackbar.Add($"Settled {candidate.DocumentNumber} and matched bank line.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task MatchToRecurringCandidate(BankTransactionLine line, RecurringExpenseBankCandidate candidate)
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        if (!await ConfirmIfPreCutoverAsync(line)) return;
+        try
+        {
+            ReconciliationService.MatchLineToRecurringExpense(
+                _selectedStatement,
+                line.Id,
+                candidate.Profile.Id,
+                splitTaxIncluded: !candidate.Profile.IsTaxExempt,
+                actor: _currentUser);
+            LoadStatements();
+            Snackbar.Add($"Matched and booked recurring expense '{candidate.Profile.Name}'.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
     }
 
     private async Task UpdateOpeningBalanceAsync(decimal value)
@@ -387,6 +548,7 @@
     {
         if (_selectedStatement == null) return;
         if (!await EnsureCanWriteAccountingAsync()) return;
+        if (!await ConfirmIfPreCutoverAsync(line)) return;
         var offsetCode = GetTargetGlForLine(line);
         ReconciliationService.CategorizeUnmatchedLineDirect(_selectedStatement, line.Id, offsetCode, line.Description, _includeSalesTaxOnDirectPost, actor: _currentUser);
         LoadStatements();

@@ -85,7 +85,7 @@
                             <InputFile id="unified-migration-upload"
                                        OnChange="OnFilesSelected"
                                        multiple
-                                       accept=".csv,.txt,.imp,.gff"
+                                       accept=".xlsx,.csv,.txt,.imp,.gff"
                                        style="display:none;" />
                             <MudButton HtmlTag="label"
                                        for="unified-migration-upload"
@@ -93,7 +93,7 @@
                                        Color="Color.Primary"
                                        StartIcon="@Icons.Material.Filled.CloudUpload"
                                        Disabled="@_isBusy">
-                                @BizLoc["Select Export Files (.txt, .imp, .csv)"]
+                                @BizLoc["Select Export Files (.xlsx, .csv, .txt, .imp)"]
                             </MudButton>
 
                             @if (_queuedFiles.Count > 0)
@@ -279,7 +279,7 @@
                 await stream.CopyToAsync(ms);
                 var bytes = ms.ToArray();
 
-                var detected = AccountingMigrationParser.DetectBannerKind(bytes);
+                var detected = AccountingMigrationParser.DetectBannerKind(bytes, browserFile.Name);
                 _queuedFiles.Add(new QueuedImportFile
                 {
                     File = new MigrationUploadedFile

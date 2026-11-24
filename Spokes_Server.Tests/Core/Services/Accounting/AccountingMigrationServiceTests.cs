@@ -2,7 +2,11 @@ namespace Spokes_Server.Tests.Core.Services.Accounting;
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Security;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,6 +14,7 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Data;
+using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Models.Accounting;
 using Spokes_Server.Core.Models.Common;
 using Spokes_Server.Core.Models.Core;
@@ -81,9 +86,9 @@ public class AccountingMigrationServiceTests : TestDataTestBase
 
         var emp = new Employee
         {
-            FirstName = "Mats",
-            LastName = "Dallaire",
-            Email = "mats@spokes.local"
+            FirstName = "Alex",
+            LastName = "Tremblay",
+            Email = "alex@spokes.local"
         };
         _db.Employees.Save(emp);
 
@@ -117,7 +122,7 @@ public class AccountingMigrationServiceTests : TestDataTestBase
         Assert.Equal(existingSupplier.Id, matchedVendor.MatchedEntityId);
         Assert.Contains("Équipement", matchedVendor.ContactInfo.BusinessAddressStreet);
 
-        var empMatch = PartyMatchingHelper.FindBestEmployeeMatch("Dallaire, Mats", null, [emp]);
+        var empMatch = PartyMatchingHelper.FindBestEmployeeMatch("Tremblay, Alex", null, [emp]);
         Assert.NotNull(empMatch);
         Assert.Equal(emp.Id, empMatch.MatchedEntity.Id);
     }
@@ -444,5 +449,268 @@ public class AccountingMigrationServiceTests : TestDataTestBase
         Assert.Empty(_db.Employees.GetAll());
         Assert.Empty(_db.Suppliers.GetAll());
         Assert.Empty(_db.Projects.GetAll());
+    }
+
+    [Fact]
+    public void Sage50ReportCentreXlsxPack_ImportsTrialBalanceGroupedAgedArApAndPayrollYtd()
+    {
+        var existingEmp = new Employee
+        {
+            FirstName = "Alex",
+            LastName = "Tremblay",
+            Email = "alex.tremblay@example.test",
+            IsActive = true
+        };
+        _db.Employees.Save(existingEmp);
+
+        // 1. Sage 50 French Balance de vérification (.xlsx with multi-line title banner & blank account-code header)
+        var tbXlsx = BuildTestXlsx(
+            ["Acme Demo Inc."],
+            ["Balance de vérification au 2026-10-31"],
+            ["", "Description", "Débits", "Crédits"],
+            ["1020", "Compte bancaire courant", 85000.00m, 0m],
+            ["1200", "Comptes clients", 15000.00m, 0m],
+            ["2100", "Comptes fournisseurs", 0m, 6500.00m],
+            ["3600", "Bénéfices non répartis", 0m, 93500.00m],
+            ["Total", "", 100000.00m, 100000.00m]);
+
+        // 2. Sage 50 French Chronologique clients - Détail (.xlsx with grouped customer rows + Excel serial dates)
+        var arXlsx = BuildTestXlsx(
+            ["Acme Demo Inc."],
+            ["Chronologique clients - Détail au 2026-10-31"],
+            ["Source", "Date", "Date d'échéance", "Total", "Courant", "31 à 60"],
+            ["Client Alpha Inc."],
+            ["INV-2610-001", new DateTime(2026, 10, 5), new DateTime(2026, 11, 4), 10000.00m, 10000.00m, 0m],
+            ["Total pour Client Alpha Inc.", "", "", 10000.00m, 10000.00m, 0m],
+            ["Client Beta Ltée"],
+            ["INV-2609-019", new DateTime(2026, 9, 20), new DateTime(2026, 10, 20), 5000.00m, 0m, 5000.00m],
+            ["Total pour Client Beta Ltée", "", "", 5000.00m, 0m, 5000.00m],
+            ["Total général", "", "", 15000.00m, 10000.00m, 5000.00m]);
+
+        // 3. Sage 50 French Chronologique fournisseurs - Détail (.xlsx with grouped vendor rows)
+        var apXlsx = BuildTestXlsx(
+            ["Acme Demo Inc."],
+            ["Chronologique fournisseurs - Détail au 2026-10-31"],
+            ["Source", "Date", "Échéance", "Total", "Courant"],
+            ["Fournisseur Gamma"],
+            ["FAC-8812", new DateTime(2026, 10, 12), new DateTime(2026, 11, 11), 6500.00m, 6500.00m],
+            ["Total pour Fournisseur Gamma", "", "", 6500.00m, 6500.00m]);
+
+        // 4. Sage 50 French Sommaire des employés (.xlsx with Quebec deductions)
+        var payXlsx = BuildTestXlsx(
+            ["Acme Demo Inc."],
+            ["Sommaire des employés du 2026-01-01 au 2026-10-31"],
+            ["Employé", "Revenu brut", "Vacances", "Impôt", "Impôt du Québec", "RRQ", "RRQ2", "AE", "RQAP"],
+            ["Tremblay, Alex", 72000.00m, 2880.00m, 9100.00m, 10400.00m, 4160.00m, 188.00m, 834.24m, 355.68m],
+            ["Total", 72000.00m, 2880.00m, 9100.00m, 10400.00m, 4160.00m, 188.00m, 834.24m, 355.68m]);
+
+        // Auto-detection must identify all 4 .xlsx reports immediately from title/headers
+        Assert.Equal(MigrationFileKind.TrialBalance, AccountingMigrationParser.DetectBannerKind(tbXlsx, "Balance_verification.xlsx"));
+        Assert.Equal(MigrationFileKind.OpenReceivables, AccountingMigrationParser.DetectBannerKind(arXlsx, "Chrono_clients.xlsx"));
+        Assert.Equal(MigrationFileKind.OpenPayables, AccountingMigrationParser.DetectBannerKind(apXlsx, "Chrono_fournisseurs.xlsx"));
+        Assert.Equal(MigrationFileKind.PayrollYtd, AccountingMigrationParser.DetectBannerKind(payXlsx, "Sommaire_employes.xlsx"));
+
+        var cutoverDate = new DateTime(2026, 10, 31);
+        var preview = _migration.BuildPreview(new AccountingMigrationPreviewRequest
+        {
+            Mode = AccountingMigrationMode.FreshCutover,
+            Format = AccountingMigrationSourceFormat.AutoDetect,
+            AsOfDate = cutoverDate,
+            Files =
+            [
+                new MigrationUploadedFile { FileName = "Balance_verification.xlsx", Content = tbXlsx },
+                new MigrationUploadedFile { FileName = "Chrono_clients.xlsx", Content = arXlsx },
+                new MigrationUploadedFile { FileName = "Chrono_fournisseurs.xlsx", Content = apXlsx },
+                new MigrationUploadedFile { FileName = "Sommaire_employes.xlsx", Content = payXlsx }
+            ]
+        }, AdminActor);
+
+        Assert.True(preview.CanExecute, string.Join("; ", preview.BlockingErrors));
+        Assert.Equal(4, preview.GlMappings.Count);
+        Assert.Equal(100000.00m, preview.TotalExternalDebits);
+        Assert.Equal(100000.00m, preview.TotalExternalCredits);
+
+        Assert.Equal(2, preview.OpenInvoices.Count);
+        Assert.Contains(preview.OpenInvoices, i => i.PartyName == "Client Alpha Inc." && i.DocumentNumber == "INV-2610-001" && i.OpenAmount == 10000.00m && i.IssueDate == new DateTime(2026, 10, 5));
+        Assert.Contains(preview.OpenInvoices, i => i.PartyName == "Client Beta Ltée" && i.DocumentNumber == "INV-2609-019" && i.OpenAmount == 5000.00m && i.DueDate == new DateTime(2026, 10, 20));
+
+        var bill = Assert.Single(preview.OpenBills);
+        Assert.Equal("Fournisseur Gamma", bill.PartyName);
+        Assert.Equal("FAC-8812", bill.DocumentNumber);
+        Assert.Equal(6500.00m, bill.OpenAmount);
+
+        var ytd = Assert.Single(preview.PayrollYtds);
+        Assert.Equal(existingEmp.Id, ytd.MatchedEmployeeId);
+        Assert.Equal(72000.00m, ytd.GrossPayYtd);
+        Assert.Equal(9100.00m, ytd.FederalTaxYtd);
+        Assert.Equal(10400.00m, ytd.RegionalTaxYtd);
+        Assert.Equal(4160.00m, ytd.QppCppEmployeeYtd);
+        Assert.Equal(355.68m, ytd.QpipEmployeeYtd);
+
+        // Account 3900 clearing nets to exact $0.00 because AR ($15k) and AP ($6.5k) match TB control accounts
+        Assert.Equal(0m, preview.ProjectedClearing3900Residual);
+
+        var res = _migration.ExecuteMigration(preview, "admin-1", "Admin", AdminActor);
+        Assert.Equal(2, res.OpenInvoicesCreated);
+        Assert.Equal(1, res.OpenBillsCreated);
+        Assert.Equal(1, res.PayrollYtdStubsCreated);
+        Assert.Equal(0m, res.Batch.ResidualClearingBalance3900);
+    }
+
+    [Fact]
+    public void LegacyBinaryXls_EmitsClearWarningInsteadOfFailing()
+    {
+        var fakeLegacyXls = new byte[] { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0x00, 0x00 };
+        Assert.True(XlsxReaderHelper.IsLegacyBinaryXls(fakeLegacyXls));
+
+        var parsed = AccountingMigrationParser.ParseFiles(
+            [new MigrationUploadedFile { FileName = "old_report.xls", Content = fakeLegacyXls }],
+            AccountingMigrationSourceFormat.AutoDetect,
+            new DateTime(2026, 10, 31));
+
+        Assert.Contains(parsed.Warnings, w => w.Contains(".xlsx", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Sage50FrenchDecimalStringsAndGroupedEmployeeDetail_ParseAccuratelyAndNetPaidSubledger()
+    {
+        // Replicates Sage 50 Canada French .xlsx formatting quirks using synthetic fixtures:
+        // 1) 1-decimal comma strings ("12345,5", "150,2") stored as shared strings
+        // 2) Grouped "Détail des employés" with multiple paycheques per employee & "A-E", "RRQ", "RPC", "Impôt", "Impôt Qc"
+        // 3) Historical "Paiement" rows in Aged Detail are automatically netted against their preceding "Facture"
+        var tbXlsx = BuildTestXlsx(
+            ["Acme Demo Inc."],
+            ["Balance de vérification au 2026-10-31"],
+            ["N° compte", "Desc. du compte", "Débits", "Crédits"],
+            ["1060", "Compte bancaire principal", "0", "12345,5"],
+            ["1200", "Comptes clients", "12345,5", "0"]);
+
+        var emplDetXlsx = BuildTestXlsx(
+            ["Acme Demo Inc."],
+            ["Détail des employés du 2026-01-01 au 2026-10-31"],
+            ["", "Date", "N° chèque", "Brut", "Avances payées", "Prêts payés", "Retenues", "Salaire net", "A-E", "RQAP", "RPC", "RPC2", "RRQ", "RRQ2", "Impôt", "Impôt Qc"],
+            ["Sophie Martin"],
+            ["", new DateTime(2026, 1, 8), "PAY-001", "1000", "0", "0", "250,5", "749,5", "13,20", "4,50", "0", "0", "60,10", "0", "80,25", "92,45"],
+            ["", new DateTime(2026, 1, 22), "PAY-002", "2500", "0", "0", "625,5", "1874,5", "32,50", "11,25", "0", "0", "150,2", "0", "200,50", "231,05"],
+            ["Total", "", "", "3500", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"]);
+
+        var paidApXlsx = BuildTestXlsx(
+            ["Acme Demo Inc."],
+            ["Détails chronologiques des fournisseurs au 2026-10-31"],
+            ["", "Source", "Date", "Type", "Total", "Courant"],
+            ["Fournisseur Delta"],
+            ["", "INV-OLD-1", new DateTime(2025, 4, 10), "Facture", "215,5", "0"],
+            ["", "CHQ-OLD-1", new DateTime(2025, 4, 20), "Paiement", "-215,5", "0"],
+            ["Total impayé:", "", "", "", "0", "0"],
+            ["Fournisseur Epsilon"],
+            ["", "BILL-501", new DateTime(2026, 2, 1), "Facture", "600,00", "0"],
+            ["", "CHQ-100", new DateTime(2026, 2, 15), "Paiement", "-250,75", "0"],
+            ["Total impayé:", "", "", "", "349,25", "0"]);
+
+        Assert.Equal(MigrationFileKind.TrialBalance, AccountingMigrationParser.DetectBannerKind(tbXlsx, "Balance.xlsx"));
+        Assert.Equal(MigrationFileKind.PayrollYtd, AccountingMigrationParser.DetectBannerKind(emplDetXlsx, "EmplDet.xlsx"));
+        Assert.Equal(MigrationFileKind.OpenPayables, AccountingMigrationParser.DetectBannerKind(paidApXlsx, "FournDet.xlsx"));
+
+        var parsed = AccountingMigrationParser.ParseFiles(
+            [
+                new MigrationUploadedFile { FileName = "Balance.xlsx", Content = tbXlsx },
+                new MigrationUploadedFile { FileName = "EmplDet.xlsx", Content = emplDetXlsx },
+                new MigrationUploadedFile { FileName = "FournDet.xlsx", Content = paidApXlsx }
+            ],
+            AccountingMigrationSourceFormat.AutoDetect,
+            new DateTime(2026, 10, 31));
+
+        // 1-decimal French comma "12345,5" parsed as 12345.50 (NOT 123455!)
+        Assert.Equal(12345.50m, parsed.GlRows.Single(r => r.Code == "1060").Credit);
+        Assert.Equal(12345.50m, parsed.GlRows.Single(r => r.Code == "1200").Debit);
+
+        // Grouped EmplDet rows merged & summed cleanly across paycheques (ignoring Sage's broken 0-valued Total row)
+        var emp = Assert.Single(parsed.PayrollYtds);
+        Assert.Equal("Sophie Martin", emp.EmployeeName);
+        Assert.Equal(3500.00m, emp.GrossPay);
+        Assert.Equal(45.70m, emp.EiEmployee);
+        Assert.Equal(15.75m, emp.QpipEmployee);
+        Assert.Equal(210.30m, emp.QppCppEmployee);
+        Assert.Equal(280.75m, emp.FederalTax);
+        Assert.Equal(323.50m, emp.RegionalTax);
+
+        // Fully paid Fournisseur Delta bill filtered out; partially paid Fournisseur Epsilon bill kept at exact remaining $349.25
+        var openBill = Assert.Single(parsed.OpenBills);
+        Assert.Equal("Fournisseur Epsilon", openBill.PartyName);
+        Assert.Equal("BILL-501", openBill.DocumentNumber);
+        Assert.Equal(349.25m, openBill.OpenAmount);
+        Assert.Contains(parsed.InformationalNotices, n => n.Contains("automatically netted", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static byte[] BuildTestXlsx(params object?[][] rows)
+    {
+        var sharedStrings = new List<string>();
+        var sharedStringIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        int InternString(string s)
+        {
+            if (!sharedStringIndex.TryGetValue(s, out var idx))
+            {
+                idx = sharedStrings.Count;
+                sharedStrings.Add(s);
+                sharedStringIndex[s] = idx;
+            }
+            return idx;
+        }
+
+        var sheetSb = new StringBuilder();
+        sheetSb.Append("""<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>""");
+        for (int r = 0; r < rows.Length; r++)
+        {
+            sheetSb.Append($"""<row r="{r + 1}">""");
+            for (int c = 0; c < rows[r].Length; c++)
+            {
+                var val = rows[r][c];
+                if (val == null || (val is string sEmpty && string.IsNullOrEmpty(sEmpty))) continue;
+                var cellRef = $"{(char)('A' + c)}{r + 1}";
+                if (val is DateTime dt)
+                {
+                    var serial = (dt.Date - new DateTime(1899, 12, 30)).TotalDays;
+                    sheetSb.Append($"""<c r="{cellRef}" s="1"><v>{serial.ToString(CultureInfo.InvariantCulture)}</v></c>""");
+                }
+                else if (val is decimal dec)
+                {
+                    sheetSb.Append($"""<c r="{cellRef}"><v>{dec.ToString(CultureInfo.InvariantCulture)}</v></c>""");
+                }
+                else
+                {
+                    var idx = InternString(val.ToString()!);
+                    sheetSb.Append($"""<c r="{cellRef}" t="s"><v>{idx}</v></c>""");
+                }
+            }
+            sheetSb.Append("</row>");
+        }
+        sheetSb.Append("</sheetData></worksheet>");
+
+        var ssSb = new StringBuilder();
+        ssSb.Append($"""<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{sharedStrings.Count}" uniqueCount="{sharedStrings.Count}">""");
+        foreach (var s in sharedStrings)
+            ssSb.Append($"<si><t>{SecurityElement.Escape(s)}</t></si>");
+        ssSb.Append("</sst>");
+
+        const string workbookXml = """<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>""";
+        const string relsXml = """<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>""";
+        const string stylesXml = """<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>""";
+
+        using var ms = new MemoryStream();
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            void AddEntry(string path, string xml)
+            {
+                var entry = zip.CreateEntry(path);
+                using var sw = new StreamWriter(entry.Open(), Encoding.UTF8);
+                sw.Write(xml);
+            }
+            AddEntry("xl/workbook.xml", workbookXml);
+            AddEntry("xl/_rels/workbook.xml.rels", relsXml);
+            AddEntry("xl/styles.xml", stylesXml);
+            AddEntry("xl/sharedStrings.xml", ssSb.ToString());
+            AddEntry("xl/worksheets/sheet1.xml", sheetSb.ToString());
+        }
+        return ms.ToArray();
     }
 }

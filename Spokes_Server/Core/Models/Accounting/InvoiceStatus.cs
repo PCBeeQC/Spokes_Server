@@ -20,6 +20,18 @@ public static class InvoiceStatus
         string.Equals(status, Paid, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, WrittenOff, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Returns true only when the invoice is finalized/posted and participates in Accounting,
+    /// General Ledger, Tax, Project financial totals, and billing allocations.
+    /// Explicitly excludes Draft, Void, and unknown/empty statuses.
+    /// </summary>
+    public static bool IsPosted(string? status) =>
+        string.Equals(status, Final, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, Sent, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, Partial, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, Paid, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, WrittenOff, StringComparison.OrdinalIgnoreCase);
+
     public static int GetRank(string? status) => status switch
     {
         Draft => 0,

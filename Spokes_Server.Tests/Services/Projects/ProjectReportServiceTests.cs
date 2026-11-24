@@ -467,8 +467,8 @@ public class ProjectReportServiceTests : TestDataTestBase
         var emp = new Employee
         {
             Id = "emp-contrib",
-            FirstName = "Jolain",
-            LastName = "Dallaire",
+            FirstName = "Marc",
+            LastName = "Lavoie",
             HourlyRate = 50m,
             WeeklyHours = 40m
         };
@@ -496,7 +496,7 @@ public class ProjectReportServiceTests : TestDataTestBase
         var wt = new WorkType { Id = "wt-c", Name = "Engineering", DefaultRate = 120m, CostRate = 50m };
         _db.WorkTypes.Save(wt);
 
-        var project = new Project { Id = "proj-contrib", Name = "Transfert", ProjectNumber = "KON701B" };
+        var project = new Project { Id = "proj-contrib", Name = "Transfert", ProjectNumber = "PRJ-701" };
         _db.Projects.Save(project);
 
         _db.Timesheets.Save(new Timesheet
@@ -528,7 +528,7 @@ public class ProjectReportServiceTests : TestDataTestBase
     public void BuildSnapshot_MarksInvoicesPaidWhenPaidOnOrBeforeAsOfDate_OrWithinRoundingTolerance()
     {
         // Arrange
-        var project = new Project { Id = "proj-inv-paid", Name = "Cosinus", ProjectNumber = "KON701B" };
+        var project = new Project { Id = "proj-inv-paid", Name = "Client Alpha", ProjectNumber = "PRJ-701" };
         _db.Projects.Save(project);
 
         // Invoice 1: Paid via Payments list with 1-cent tax rounding difference ($14,946.74 vs $14,946.75)
@@ -621,8 +621,8 @@ public class ProjectReportServiceTests : TestDataTestBase
         var emp = new Employee
         {
             Id = "emp-qva",
-            FirstName = "Jolain",
-            LastName = "Dallaire",
+            FirstName = "Marc",
+            LastName = "Lavoie",
             HourlyRate = 50m,
             WeeklyHours = 40m,
             IsActive = true
@@ -641,7 +641,7 @@ public class ProjectReportServiceTests : TestDataTestBase
         var wt = new WorkType { Id = "wt-qva", Name = "Robotics", DefaultRate = 120m, CostRate = 50m };
         _db.WorkTypes.Save(wt);
 
-        var project = new Project { Id = "proj-qva", Name = "Transfert", ProjectNumber = "KON701B" };
+        var project = new Project { Id = "proj-qva", Name = "Transfert", ProjectNumber = "PRJ-701" };
         _db.Projects.Save(project);
 
         // Quote:
@@ -1020,5 +1020,63 @@ public class ProjectReportServiceTests : TestDataTestBase
         Assert.Single(source.ExpenseItems);
         Assert.True(source.TotalLaborInternalCost > 0m);
         Assert.Single(source.EmployeeLaborRows);
+    }
+
+    [Fact]
+    public void BuildSnapshot_ExcludesDraftInvoicesFromTotalsAndBilledTracking()
+    {
+        var project = new Project { Id = "proj-rep-draft-inv", Name = "Report Draft Invoice Test" };
+        _db.Projects.Save(project);
+
+        var wt = new WorkType { Id = "wt-rep-draft", Name = "Dev", DefaultRate = 100m, CostRate = 50m };
+        _db.WorkTypes.Save(wt);
+
+        var emp = new Employee { Id = "emp-rep-draft", FirstName = "Jane", LastName = "Dev", IsActive = true };
+        _db.Employees.Save(emp);
+
+        _db.Timesheets.Save(new Timesheet
+        {
+            Id = "ts-rep-draft",
+            EmployeeId = emp.Id,
+            EmployeeName = emp.FullName,
+            Year = 2026,
+            WeekNumber = 10,
+            Status = TimesheetStatus.Approved,
+            Entries = [new TimeEntry { Id = "te-draft-only", ProjectId = project.Id, WorkTypeId = wt.Id, Date = new DateTime(2026, 3, 5), Hours = 4m }]
+        });
+
+        // Posted invoice ($1,000 subtotal)
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-rep-posted",
+            ProjectId = project.Id,
+            InvoiceNumber = "INV-POSTED",
+            Date = new DateTime(2026, 3, 10),
+            Status = InvoiceStatus.Final,
+            TaxRate = 0m,
+            LineItems = [new InvoiceLine { Description = "Posted", Quantity = 1m, UnitPrice = 1000m }]
+        });
+
+        // Draft invoice ($5,000 subtotal, referencing te-draft-only) — must be completely ignored
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-rep-draft",
+            ProjectId = project.Id,
+            InvoiceNumber = "INV-DRAFT",
+            Date = new DateTime(2026, 3, 12),
+            Status = InvoiceStatus.Draft,
+            TaxRate = 0m,
+            BilledTimeEntryIds = ["te-draft-only"],
+            LineItems = [new InvoiceLine { Description = "Draft", Quantity = 1m, UnitPrice = 5000m }]
+        });
+
+        var snapshot = _reportService.BuildSnapshot(project, new DateTime(2026, 3, 1), new DateTime(2026, 3, 31));
+
+        var onlyInv = Assert.Single(snapshot.Invoices);
+        Assert.Equal("inv-rep-posted", onlyInv.InvoiceId);
+        Assert.Equal(1000m, snapshot.TotalInvoicedSubTotal);
+        Assert.Equal(1000m, snapshot.TotalInvoiced);
+        // Time entry referenced only by a Draft invoice remains unbilled (4h * $100 = $400)
+        Assert.Equal(400m, snapshot.UnbilledLaborValue);
     }
 }

@@ -628,7 +628,7 @@ public class CompanyBillDuplicateDetectionTests : TestDataTestBase
         mime.Subject = "Notice for your business account";
         mime.Body = new TextPart("plain")
         {
-            Text = "Bonjour / Hello Poly-Robotics, thank you for using our automated banking notification service today. " +
+            Text = "Bonjour / Hello Acme Demo, thank you for using our automated banking notification service today. " +
                    "Client ABC Manufacturing has sent you an Interac e-Transfer of $1,450.00 which has been automatically deposited into your account."
         };
 

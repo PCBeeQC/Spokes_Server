@@ -310,7 +310,7 @@
         var projects = Db.Projects.GetAll().ToDictionary(p => p.Id, p => p);
         var projectGroups = Db.ProjectGroups.GetAll().ToDictionary(g => g.Id, g => g);
         var invoices = Db.Invoices.GetAll()
-            .Where(i => i.Status != InvoiceStatus.Void)
+            .Where(i => InvoiceStatus.IsPosted(i.Status))
             .Where(i =>
             {
                 if (!string.IsNullOrEmpty(i.ProjectId))

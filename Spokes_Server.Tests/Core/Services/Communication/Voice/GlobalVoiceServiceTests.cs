@@ -1737,7 +1737,7 @@ namespace Spokes_Server.Tests.Core.Services.Communication.Voice;
             _voiceState.NotifyVoiceMemberJoined("ch1", "mats2");
             _service.OnRoomConnected(["mats2"]);
 
-            // Claim Physical Room DSP authority for admin-first (active 2+ Bureau Stewie room)
+            // Claim Physical Room DSP authority for admin-first (active 2+ Room Alpha room)
             _voiceState.SetPhysicalRoomDspManaged("ch1", "admin-first", true);
 
             // Roommate mats2 talks loudly and bleeds into admin-first's desk mic -> local VAD reports true

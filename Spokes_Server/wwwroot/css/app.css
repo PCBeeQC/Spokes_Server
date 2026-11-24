@@ -1414,3 +1414,236 @@ html.keyboard-open-ios {
     pointer-events: none;
     overflow: hidden;
 }
+
+/* --- THEME COLOR PICKER (Shared Lazy Primitive) --- */
+.spokes-color-picker {
+    display: inline-block;
+    width: 100%;
+}
+
+.spokes-color-picker-btn {
+    width: 100%;
+    height: 40px;
+    padding: 0 10px 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--mud-palette-lines-inputs);
+    border-radius: var(--mud-default-borderradius);
+    background-color: transparent;
+    color: var(--mud-palette-text-primary);
+    font-family: inherit;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+    text-align: left;
+}
+
+.spokes-color-picker-btn:hover:not(:disabled) {
+    border-color: var(--mud-palette-text-primary);
+}
+
+.spokes-color-picker-btn:focus-visible {
+    outline: none;
+    border-color: var(--mud-palette-primary);
+    box-shadow: 0 0 0 1px var(--mud-palette-primary);
+}
+
+.spokes-color-picker-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.spokes-color-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: inline-block;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14);
+}
+
+.spokes-color-picker-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.spokes-color-picker-chevron {
+    color: var(--mud-palette-action-default);
+    font-size: 0.75rem;
+    flex-shrink: 0;
+}
+
+.spokes-color-picker-list {
+    display: flex;
+    flex-direction: column;
+    padding: 4px 0;
+    max-height: 280px;
+    overflow-y: auto;
+}
+
+.spokes-color-picker-option {
+    width: 100%;
+    padding: 7px 14px;
+    border: none;
+    background: transparent;
+    color: var(--mud-palette-text-primary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: inherit;
+    font-size: 0.875rem;
+    cursor: pointer;
+    text-align: left;
+}
+
+.spokes-color-picker-option:hover {
+    background-color: var(--mud-palette-action-default-hover);
+}
+
+.spokes-color-picker-option.is-selected {
+    background-color: rgba(var(--mud-palette-primary-rgb), 0.12);
+    font-weight: 600;
+}
+
+/* --- CALENDAR CATEGORY LIST EDITOR (Shared Single-Layout Responsive Primitive) --- */
+.spokes-cat-editor {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: var(--mud-default-borderradius);
+    background-color: var(--mud-palette-surface);
+    overflow: hidden;
+}
+
+.spokes-cat-header,
+.spokes-cat-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) 152px minmax(100px, auto) 44px;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 12px;
+}
+
+.spokes-cat-header {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--mud-palette-text-secondary);
+    border-bottom: 1px solid var(--mud-palette-table-lines);
+    background-color: var(--mud-palette-background-gray);
+}
+
+.spokes-cat-actions-col,
+.spokes-cat-col-actions {
+    text-align: center;
+}
+
+.spokes-cat-row {
+    border-bottom: 1px solid var(--mud-palette-table-lines);
+    transition: background-color 0.12s ease;
+}
+
+.spokes-cat-row:last-child {
+    border-bottom: none;
+}
+
+.spokes-cat-row:hover {
+    background-color: var(--mud-palette-table-hover);
+}
+
+.spokes-cat-col-name .mud-input-control {
+    margin-top: 0;
+}
+
+.spokes-cat-col-preview {
+    min-width: 0;
+    overflow: hidden;
+}
+
+.spokes-cat-footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--mud-palette-table-lines);
+}
+
+@media (max-width: 599.98px) {
+    .spokes-cat-header {
+        display: none;
+    }
+
+    .spokes-cat-row {
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+            "name actions"
+            "color preview";
+        gap: 8px 10px;
+        padding: 12px;
+    }
+
+    .spokes-cat-col-name {
+        grid-area: name;
+    }
+
+    .spokes-cat-col-actions {
+        grid-area: actions;
+    }
+
+    .spokes-cat-col-color {
+        grid-area: color;
+        max-width: 168px;
+    }
+
+    .spokes-cat-col-preview {
+        grid-area: preview;
+        display: flex;
+        justify-content: flex-end;
+    }
+}
+
+/* --- SPOKES SWIPE PAGER (Reusable 3-Pane Finger-Tracked Horizontal Pager) --- */
+.spokes-swipe-pager {
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+    touch-action: pan-y pinch-zoom;
+    overscroll-behavior-x: contain;
+}
+
+.spokes-swipe-pager.is-swiping {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.spokes-swipe-pager-track {
+    position: relative;
+    width: 100%;
+    transform: translate3d(0, 0, 0);
+    will-change: transform;
+}
+
+.spokes-swipe-pager-pane {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.spokes-swipe-pager-pane-prev {
+    position: absolute;
+    top: 0;
+    left: -100%;
+}
+
+.spokes-swipe-pager-pane-current {
+    position: relative;
+}
+
+.spokes-swipe-pager-pane-next {
+    position: absolute;
+    top: 0;
+    left: 100%;
+}

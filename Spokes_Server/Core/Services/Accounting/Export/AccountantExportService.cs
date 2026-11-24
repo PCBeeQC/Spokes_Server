@@ -350,8 +350,7 @@ public class AccountantExportService : IAccountantExportService
         sb.AppendLine("SubledgerType,DocumentNumber,PartyName,DocumentDate,DueDate,DaysPastDue,AgingBucket,TotalAmount,PaidAmount,BalanceRemaining");
 
         var openInvoices = _accountingContext.Invoices.GetAll()
-            .Where(i => i.Status != InvoiceStatus.Void
-                        && i.Status != InvoiceStatus.Draft
+            .Where(i => InvoiceStatus.IsPosted(i.Status)
                         && i.Date.Date <= cutoff
                         && i.BalanceDue > 0.009m)
             .OrderBy(i => i.Date)

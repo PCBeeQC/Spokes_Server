@@ -24,10 +24,10 @@
             <!-- Calendar Controls -->
             <div class="d-flex justify-space-between align-center mb-4">
                 <div class="d-flex align-center gap-2">
-                    <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevMonth" />
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevDesktopMonthAsync" />
                     <MudText Typo="Typo.h5" Align="Align.Center" Style="width: 220px;"><b>@CurrentMonth.ToString("MMMM yyyy")</b></MudText>
-                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextMonth" />
-                    <MudButton Variant="Variant.Outlined" OnClick="GoToToday" Size="Size.Small" Class="ml-4">@Loc["Today"]
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextDesktopMonthAsync" />
+                    <MudButton Variant="Variant.Outlined" OnClick="GoToTodayAsync" Size="Size.Small" Class="ml-4">@Loc["Today"]
                     </MudButton>
                 </div>
 
@@ -65,47 +65,23 @@
 
             <!-- Calendar Grid -->
             <div style="overflow-x: auto;">
-                <div class="calendar-grid" style="min-width: 700px;">
-                    <!-- Headers -->
-                    @foreach (var day in new[] { Loc["Mon"].Value, Loc["Tue"].Value, Loc["Wed"].Value, Loc["Thu"].Value, Loc["Fri"].Value, Loc["Sat"].Value, Loc["Sun"].Value })
-                    {
-                        <div class="calendar-header">@day</div>
-                    }
+                <div style="min-width: 700px;">
+                    <!-- Fixed Weekday Headers -->
+                    <div class="calendar-grid calendar-grid-headers">
+                        @foreach (var day in WeekdayHeaders)
+                        {
+                            <div class="calendar-header">@day</div>
+                        }
+                    </div>
 
-                    <!-- Cells -->
-                    @foreach (var day in CalendarDays)
-                    {
-                        <div class="@GetCellClass(day)" @onclick="@(() => OnDayClick(day))" @ondblclick="@(() => OnDayDoubleClick(day))">
-                            <div class="day-number">@day.Date.Day</div>
-
-                            <div class="day-content">
-                                @foreach (var evt in FilteredEvents.Where(e => e.Date == day.Date && (SelectedCategoryKeys.Count == 0 || SelectedCategoryKeys.Contains(e.EffectiveCategory.FilterKey))))
-                                {
-                                    <div class="calendar-event @evt.TypeClass @(evt.IsContinuation ? "evt-cont" : "")"
-                                        style="background-color: var(--mud-palette-@(evt.Color.ToString().ToLower()));"
-                                    @onclick="@((e) => OnEventClick(evt, e))" @onclick:stopPropagation="true"
-                                        title="@evt.Title (@evt.EffectiveCategory.DisplayName) @(string.IsNullOrEmpty(evt.SourceEvent.Location) ? "" : " - " + evt.SourceEvent.Location)">
-                                        @if (!evt.IsContinuation)
-                                        {
-                                            <span class="evt-time">@(evt.IsAllDay ? "" : evt.TimeStr)</span>
-                                        }
-                                        @if (!string.IsNullOrEmpty(evt.OwnerName) && (!evt.IsContinuation || day.Date.DayOfWeek == DayOfWeek.Monday))
-                                        {
-                                            <span class="evt-owner">@evt.OwnerName:</span>
-                                        }
-                                        @if (!evt.IsContinuation || day.Date.DayOfWeek == DayOfWeek.Monday)
-                                        {
-                                            <span>@evt.Title</span>
-                                        }
-                                        else
-                                        {
-                                            <span>&nbsp;</span>
-                                        }
-                                    </div>
-                                }
-                            </div>
-                        </div>
-                    }
+                    <!-- Swipeable Month Cells -->
+                    <SpokesSwipePager @ref="_desktopPager"
+                                      PageKey="@CurrentMonth"
+                                      OnNavigate="OnSwipeNavigate">
+                        <PreviousContent>@RenderDesktopMonthGrid(_prevMonthGrid)</PreviousContent>
+                        <CurrentContent>@RenderDesktopMonthGrid(_currentMonthGrid)</CurrentContent>
+                        <NextContent>@RenderDesktopMonthGrid(_nextMonthGrid)</NextContent>
+                    </SpokesSwipePager>
                 </div>
             </div>
 
@@ -309,7 +285,7 @@
         <div class="mobile-calendar-card">
             <!-- Mobile Header Row 1: Action Controls -->
             <div class="d-flex justify-space-between align-center px-2 pt-2">
-                <MudButton StartIcon="@Icons.Material.Filled.Today" OnClick="GoToToday">@Loc["Today"]</MudButton>
+                <MudButton StartIcon="@Icons.Material.Filled.Today" OnClick="GoToTodayAsync">@Loc["Today"]</MudButton>
                 @if (CanManageCalendarActions)
                 {
                     <MudButton EndIcon="@Icons.Material.Filled.Palette" OnClick="OpenCategoryManager">@Loc["Categories"]</MudButton>
@@ -318,9 +294,9 @@
 
             <!-- Mobile Header Row 2: Month Navigation -->
             <div class="d-flex justify-space-between align-center px-2 py-2">
-                <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevMonth" />
+                <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" OnClick="PrevMobileMonthAsync" />
                 <MudText Typo="Typo.h5" Class="font-weight-bold" Style="letter-spacing: 1px;">@CurrentMonth.ToString("MMM yyyy").ToUpper()</MudText>
-                <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextMonth" />
+                <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" OnClick="NextMobileMonthAsync" />
             </div>
 
             <!-- Mobile Category Filters -->
@@ -341,7 +317,7 @@
 
             <!-- Weekly Header -->
             <div class="mobile-calendar-header mobile-calendar-grid pb-2 px-2 border-b">
-                @foreach (var day in new[] { Loc["Mon"].Value, Loc["Tue"].Value, Loc["Wed"].Value, Loc["Thu"].Value, Loc["Fri"].Value, Loc["Sat"].Value, Loc["Sun"].Value })
+                @foreach (var day in WeekdayHeaders)
                 {
                     <div style="color: @(day == Loc["Sun"].Value ? "var(--mud-palette-secondary)" : "var(--mud-palette-text-secondary)"); font-size: 0.8rem; font-weight: bold; text-align: center;">
                         @day
@@ -354,30 +330,14 @@
                 <MudProgressLinear Indeterminate="true" />
             }
 
-            <!-- Grid -->
-            <div class="mobile-calendar-grid px-2 pb-2">
-                @foreach (var day in CalendarDays)
-                {
-                    <div class="@GetMobileCellClass(day)" @onclick="@(() => OnMobileDayClick(day))">
-                        <div class="m-day-number">@day.Date.Day</div>
-                        <div class="m-day-events">
-                            @foreach (var evt in FilteredEvents.Where(e => e.Date == day.Date && (SelectedCategoryKeys.Count == 0 || SelectedCategoryKeys.Contains(e.EffectiveCategory.FilterKey))))
-                            {
-                                var colorHex = $"var(--mud-palette-{evt.Color.ToString().ToLower()})";
-                                <div class="m-evt @(evt.IsContinuation ? "m-evt-cont" : "")"
-                                     style="border-left-color: @colorHex; @(evt.IsContinuation ? "opacity: 0.85;" : "")"
-                                     title="@evt.Title">
-                                    @if (evt.IsContinuation && evt.Date.DayOfWeek != DayOfWeek.Monday)
-                                    {
-                                        <span class="m-evt-cont-indicator" style="color: @colorHex;">&rsaquo;</span>
-                                    }
-                                    @evt.Title
-                                </div>
-                            }
-                        </div>
-                    </div>
-                }
-            </div>
+            <!-- Swipeable Mobile Grid -->
+            <SpokesSwipePager @ref="_mobilePager"
+                              PageKey="@CurrentMonth"
+                              OnNavigate="OnSwipeNavigate">
+                <PreviousContent>@RenderMobileMonthGrid(_prevMonthGrid)</PreviousContent>
+                <CurrentContent>@RenderMobileMonthGrid(_currentMonthGrid)</CurrentContent>
+                <NextContent>@RenderMobileMonthGrid(_nextMonthGrid)</NextContent>
+            </SpokesSwipePager>
         </div>
 
         <!-- Agenda View -->
@@ -498,6 +458,10 @@
         gap: 1px;
         background-color: var(--mud-palette-divider);
         border: 1px solid var(--mud-palette-divider);
+    }
+
+    .calendar-grid-headers {
+        border-bottom: none;
     }
 
     .calendar-header {
@@ -776,17 +740,90 @@
 </style>
 
 @code {
-    private DateOnly CurrentMonth = DateOnly.FromDateTime(DateTime.Today);
-    private List<CalendarDay> CalendarDays = [];
+    private DateOnly CurrentMonth = CalendarMonthGridHelper.NormalizeMonth(DateOnly.FromDateTime(DateTime.Today));
+    private CalendarMonthPane _prevMonthGrid = new(DateOnly.MinValue, []);
+    private CalendarMonthPane _currentMonthGrid = new(DateOnly.MinValue, []);
+    private CalendarMonthPane _nextMonthGrid = new(DateOnly.MinValue, []);
+
+    private SpokesSwipePager? _desktopPager;
+    private SpokesSwipePager? _mobilePager;
 
     private List<CalendarCategory> Categories = [];
     private List<CalendarEffectiveCategory> DynamicCategories = [];
     private HashSet<string> SelectedCategoryKeys = [];
     private HashSet<string> CurrentUserTeamIds = [];
 
-    // View Model for rendering
-    private List<CalendarEventViewModel> AllEvents = [];
-    private IEnumerable<CalendarEventViewModel> FilteredEvents => AllEvents; // Can add filters later
+    // Events indexed by date across the active 3-month swipe window
+    private Dictionary<DateOnly, List<CalendarEventViewModel>> _eventsByDate = [];
+
+    private string[] WeekdayHeaders =>
+        [Loc["Mon"].Value, Loc["Tue"].Value, Loc["Wed"].Value, Loc["Thu"].Value, Loc["Fri"].Value, Loc["Sat"].Value, Loc["Sun"].Value];
+
+    private RenderFragment<CalendarMonthPane> RenderDesktopMonthGrid => pane => __builder =>
+    {
+        <div class="calendar-grid">
+            @foreach (var day in pane.Days)
+            {
+                <div class="@GetCellClass(day)" @onclick="@(() => OnDayClick(day))" @ondblclick="@(() => OnDayDoubleClick(day))">
+                    <div class="day-number">@day.Date.Day</div>
+
+                    <div class="day-content">
+                        @foreach (var evt in GetFilteredEventsForDate(day.Date))
+                        {
+                            <div class="calendar-event @evt.TypeClass @(evt.IsContinuation ? "evt-cont" : "")"
+                                style="background-color: var(--mud-palette-@(evt.Color.ToString().ToLower()));"
+                                @onclick="@((e) => OnEventClick(evt, e))" @onclick:stopPropagation="true"
+                                title="@evt.Title (@evt.EffectiveCategory.DisplayName) @(string.IsNullOrEmpty(evt.SourceEvent.Location) ? "" : " - " + evt.SourceEvent.Location)">
+                                @if (!evt.IsContinuation)
+                                {
+                                    <span class="evt-time">@(evt.IsAllDay ? "" : evt.TimeStr)</span>
+                                }
+                                @if (!string.IsNullOrEmpty(evt.OwnerName) && (!evt.IsContinuation || day.Date.DayOfWeek == DayOfWeek.Monday))
+                                {
+                                    <span class="evt-owner">@evt.OwnerName:</span>
+                                }
+                                @if (!evt.IsContinuation || day.Date.DayOfWeek == DayOfWeek.Monday)
+                                {
+                                    <span>@evt.Title</span>
+                                }
+                                else
+                                {
+                                    <span>&nbsp;</span>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    };
+
+    private RenderFragment<CalendarMonthPane> RenderMobileMonthGrid => pane => __builder =>
+    {
+        <div class="mobile-calendar-grid px-2 pb-2">
+            @foreach (var day in pane.Days)
+            {
+                <div class="@GetMobileCellClass(day)" @onclick="@(() => OnMobileDayClick(day))">
+                    <div class="m-day-number">@day.Date.Day</div>
+                    <div class="m-day-events">
+                        @foreach (var evt in GetFilteredEventsForDate(day.Date))
+                        {
+                            var colorHex = $"var(--mud-palette-{evt.Color.ToString().ToLower()})";
+                            <div class="m-evt @(evt.IsContinuation ? "m-evt-cont" : "")"
+                                 style="border-left-color: @colorHex; @(evt.IsContinuation ? "opacity: 0.85;" : "")"
+                                 title="@evt.Title">
+                                @if (evt.IsContinuation && evt.Date.DayOfWeek != DayOfWeek.Monday)
+                                {
+                                    <span class="m-evt-cont-indicator" style="color: @colorHex;">&rsaquo;</span>
+                                }
+                                @evt.Title
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    };
 
     [SupplyParameterFromQuery(Name = "date")]
     public string? QueryDate { get; set; }
@@ -803,9 +840,9 @@
     // Mobile View Variables
     private DateOnly SelectedDate = DateOnly.FromDateTime(DateTime.Today);
 
-    private void OnMobileDayClick(CalendarDay day) => SelectedDate = day.Date;
+    private void OnMobileDayClick(CalendarMonthDay day) => SelectedDate = day.Date;
 
-    private string GetMobileCellClass(CalendarDay day)
+    private string GetMobileCellClass(CalendarMonthDay day)
     {
         var cls = "m-cell";
         if (!day.IsCurrentMonth) cls += " m-other-month";
@@ -941,38 +978,83 @@
         }
     }
 
-    private void PrevMonth()
+    private Task PrevDesktopMonthAsync() => NavigateMonthWithPagerAsync(-1, _desktopPager);
+
+    private Task NextDesktopMonthAsync() => NavigateMonthWithPagerAsync(1, _desktopPager);
+
+    private Task PrevMobileMonthAsync() => NavigateMonthWithPagerAsync(-1, _mobilePager);
+
+    private Task NextMobileMonthAsync() => NavigateMonthWithPagerAsync(1, _mobilePager);
+
+    private async Task NavigateMonthWithPagerAsync(int delta, SpokesSwipePager? pager)
     {
-        CurrentMonth = CurrentMonth.AddMonths(-1);
+        if (pager != null)
+        {
+            await pager.NavigateAsync(delta);
+        }
+        else
+        {
+            ShiftMonth(delta);
+        }
+    }
+
+    private void OnSwipeNavigate(int delta)
+    {
+        ShiftMonth(delta);
+    }
+
+    private void ShiftMonth(int delta)
+    {
+        if (delta == 0) return;
+        CurrentMonth = CalendarMonthGridHelper.NormalizeMonth(CurrentMonth.AddMonths(delta));
         LoadData();
     }
 
-    private void NextMonth()
+    private async Task GoToTodayAsync()
     {
-        CurrentMonth = CurrentMonth.AddMonths(1);
-        LoadData();
-    }
+        if (_desktopPager != null)
+        {
+            await _desktopPager.ResetImmediateAsync();
+        }
+        if (_mobilePager != null)
+        {
+            await _mobilePager.ResetImmediateAsync();
+        }
 
-    private void GoToToday()
-    {
         var today = DateOnly.FromDateTime(DateTime.Today);
-        CurrentMonth = new DateOnly(today.Year, today.Month, 1);
+        CurrentMonth = CalendarMonthGridHelper.NormalizeMonth(today);
         SelectedDate = today;
         LoadData();
     }
 
+    private IEnumerable<CalendarEventViewModel> GetFilteredEventsForDate(DateOnly date)
+    {
+        if (!_eventsByDate.TryGetValue(date, out var list) || list.Count == 0)
+        {
+            return [];
+        }
+
+        if (SelectedCategoryKeys.Count == 0)
+        {
+            return list;
+        }
+
+        return list.Where(e => SelectedCategoryKeys.Contains(e.EffectiveCategory.FilterKey));
+    }
+
     private void LoadData()
     {
+        var (prev, current, next, windowStart, windowEnd) = CalendarMonthGridHelper.BuildThreeMonthWindow(CurrentMonth);
+        _prevMonthGrid = prev;
+        _currentMonthGrid = current;
+        _nextMonthGrid = next;
+
         if (string.IsNullOrEmpty(CurrentUserId)) return;
 
         Categories = CalendarService.GetEffectiveCategories(CurrentUserId);
 
         Loading = true;
-        BuildGrid();
-
-        AllEvents.Clear();
-        var startEx = CalendarDays.First().Date;
-        var endEx = CalendarDays.Last().Date;
+        _eventsByDate = [];
 
         // Fetch only discoverable employees and teams for viewer-safe mapping
         var liveViewer = Db.Employees.GetById(CurrentUserId) ?? _currentUser;
@@ -996,8 +1078,11 @@
             teamsDict,
             userCategoriesDict);
 
-        // Load Events from DB
+        // Load Events from DB across the 3-month window in a single pass
         var dbEvents = CalendarService.GetEventsForUser(CurrentUserId, CurrentUserTeamIds);
+        var activeMonthCategorySeeds = new List<CalendarEventViewModel>();
+        var activeMonthStart = _currentMonthGrid.FirstDate;
+        var activeMonthEnd = _currentMonthGrid.LastDate;
 
         foreach (var evt in dbEvents)
         {
@@ -1007,11 +1092,11 @@
             // If End < Start (bug safeguard), fix it locally
             if (end < start) end = start;
 
-            // Check intersection with view
-            if (start <= endEx && end >= startEx)
+            // Check intersection with the 3-month swipe window
+            if (start <= windowEnd && end >= windowStart)
             {
-                var current = start < startEx ? startEx : start;
-                var last = end > endEx ? endEx : end;
+                var dayCursor = start < windowStart ? windowStart : start;
+                var last = end > windowEnd ? windowEnd : end;
 
                 var ownerName = evt.EmployeeId == CurrentUserId
                     ? ""
@@ -1020,14 +1105,14 @@
                         : (Db.Employees.GetById(evt.EmployeeId) != null ? AppLabels.Employee : Loc["Unknown"].Value));
                 var effCat = CalendarEffectiveCategory.Resolve(evt, viewingContext);
 
-                while (current <= last)
+                while (dayCursor <= last)
                 {
-                    var isStart = current == start;
+                    var isStart = dayCursor == start;
                     var isCont = !isStart;
 
                     var vm = new CalendarEventViewModel
                         {
-                            Date = current,
+                            Date = dayCursor,
                             Title = evt.Title,
                             OwnerName = ownerName,
                             Color = effCat.Color,
@@ -1035,22 +1120,39 @@
                             SourceEvent = evt,
                             IsAllDay = evt.IsAllDay,
                             TimeStr = evt.Start.ToString("HH:mm"),
-                            TypeClass = $"{(current < last ? "evt-span-start" : "")}", // Add custom color logic here
+                            TypeClass = dayCursor < end ? "evt-span-start" : "",
                             IsContinuation = isCont
                         };
 
-                    AllEvents.Add(vm);
-                    current = current.AddDays(1);
+                    if (!_eventsByDate.TryGetValue(dayCursor, out var dayList))
+                    {
+                        dayList = [];
+                        _eventsByDate[dayCursor] = dayList;
+                    }
+                    dayList.Add(vm);
+
+                    if (!isCont && dayCursor >= activeMonthStart && dayCursor <= activeMonthEnd)
+                    {
+                        activeMonthCategorySeeds.Add(vm);
+                    }
+
+                    dayCursor = dayCursor.AddDays(1);
                 }
             }
         }
 
-        // Sort: Earliest time first
-        AllEvents = AllEvents.OrderBy(e => e.IsAllDay ? 0 : 1).ThenBy(e => e.TimeStr).ToList();
+        // Sort each day's events: all-day first, then earliest time
+        foreach (var dayList in _eventsByDate.Values)
+        {
+            dayList.Sort((a, b) =>
+            {
+                int allDayCmp = (a.IsAllDay ? 0 : 1).CompareTo(b.IsAllDay ? 0 : 1);
+                return allDayCmp != 0 ? allDayCmp : string.Compare(a.TimeStr, b.TimeStr, StringComparison.Ordinal);
+            });
+        }
 
         // Dynamically compute active month categories for filtering
-        DynamicCategories = AllEvents
-            .Where(e => !e.IsContinuation)
+        DynamicCategories = activeMonthCategorySeeds
             .GroupBy(e => e.EffectiveCategory.FilterKey)
             .Select(g =>
             {
@@ -1076,23 +1178,7 @@
         Loading = false;
     }
 
-    private void BuildGrid()
-    {
-        CalendarDays.Clear();
-        var firstDayOfMonth = CurrentMonth;
-        var lastDayOfMonth = firstDayOfMonth.AddMonths(1).AddDays(-1);
-
-        int diff = (7 + (firstDayOfMonth.DayOfWeek - DayOfWeek.Monday)) % 7;
-        var runner = firstDayOfMonth.AddDays(-1 * diff);
-
-        while (runner <= lastDayOfMonth || runner.DayOfWeek != DayOfWeek.Monday)
-        {
-            CalendarDays.Add(new CalendarDay { Date = runner, IsCurrentMonth = runner.Month == CurrentMonth.Month });
-            runner = runner.AddDays(1);
-        }
-    }
-
-    private string GetCellClass(CalendarDay day)
+    private string GetCellClass(CalendarMonthDay day)
     {
         var cls = "calendar-cell";
         if (!day.IsCurrentMonth) cls += " other-month";
@@ -1101,8 +1187,7 @@
         return cls;
     }
 
-    private List<CalendarEventViewModel> SelectedDayEvents => FilteredEvents
-        .Where(e => e.Date == SelectedDate && (SelectedCategoryKeys.Count == 0 || SelectedCategoryKeys.Contains(e.EffectiveCategory.FilterKey)))
+    private List<CalendarEventViewModel> SelectedDayEvents => GetFilteredEventsForDate(SelectedDate)
         .OrderBy(e => e.IsAllDay ? 0 : 1)
         .ThenBy(e => e.SourceEvent.Start)
         .ToList();
@@ -1124,12 +1209,12 @@
         await OpenDialog(newEvent, true);
     }
 
-    private void OnDayClick(CalendarDay day)
+    private void OnDayClick(CalendarMonthDay day)
     {
         SelectedDate = day.Date;
     }
 
-    private async Task OnDayDoubleClick(CalendarDay day)
+    private async Task OnDayDoubleClick(CalendarMonthDay day)
     {
         SelectedDate = day.Date;
         var newEvent = new CalendarEvent
@@ -1260,12 +1345,6 @@
     {
         var now = DateTime.Now;
         return evt.End < now;
-    }
-
-    public class CalendarDay
-    {
-        public DateOnly Date { get; set; }
-        public bool IsCurrentMonth { get; set; }
     }
 
     public class CalendarEventViewModel

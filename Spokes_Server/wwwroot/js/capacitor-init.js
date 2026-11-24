@@ -402,12 +402,14 @@ window.initCapacitorEnv = async function () {
                         const closeBtn = topDialog.querySelector('button[aria-label="close"], button[aria-label="Close"], button.mud-button-close, .mud-dialog-header button');
                         if (closeBtn) {
                             recordBack('close-dialog');
+                            try { window.spokesChatDiagnostics?.startTransition('DialogClose (Back)', 'Client: Native backButton (close-dialog)', { kind: 'ui' }); } catch (e) {}
                             closeBtn.click();
                             return;
                         }
                         const dialogBackdrop = topDialog.querySelector('.mud-overlay-dialog, .mud-overlay');
                         if (dialogBackdrop) {
                             recordBack('close-dialog-backdrop');
+                            try { window.spokesChatDiagnostics?.startTransition('DialogClose (Back)', 'Client: Native backButton (close-dialog-backdrop)', { kind: 'ui' }); } catch (e) {}
                             dialogBackdrop.click();
                             return;
                         }
@@ -419,6 +421,7 @@ window.initCapacitorEnv = async function () {
                     const drawerOverlay = document.querySelector('.mud-overlay-drawer');
                     if (drawerOverlay) {
                         recordBack('close-drawer');
+                        try { window.spokesChatDiagnostics?.startTransition('DrawerClose (Back)', 'Client: Native backButton (close-drawer)', { kind: 'ui' }); } catch (e) {}
                         drawerOverlay.click();
                         return;
                     }

@@ -70,6 +70,7 @@ public class Database
     public virtual FinancialReportRepository FinancialReports => AccountingContext?.FinancialReports!;
     public virtual DirectTransactionRepository DirectTransactions => AccountingContext?.DirectTransactions!;
     public virtual FinancialAccountRepository FinancialAccounts => AccountingContext?.FinancialAccounts!;
+    public virtual SuggestedInvoicePaymentRepository SuggestedInvoicePayments => AccountingContext?.SuggestedInvoicePayments!;
 
     // Communication Bounded Context
     public virtual ChatChannelRepository ChatChannels => CommunicationContext?.ChatChannels!;

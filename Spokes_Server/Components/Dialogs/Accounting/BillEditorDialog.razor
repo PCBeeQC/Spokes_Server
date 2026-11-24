@@ -111,6 +111,24 @@
                                 <MudText Typo="Typo.caption" Color="@(Bill.BalanceDue > 0 ? Color.Warning : Color.Success)"><b>@BizLoc["Balance Due"]: @Bill.BalanceDue.ToString("C2")</b></MudText>
                             }
                         </MudItem>
+                        @if (Bill.Status != BillStatus.Void && !Bill.IsTaxExempt && Bill.Amount > 0 && Bill.TaxAmount <= 0 && Bill.TpsAmount <= 0 && Bill.TvqAmount <= 0 && FinancialCalculationEngine.ActiveCombinedTaxRate > 0)
+                        {
+                            <MudItem xs="12">
+                                <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" NoIcon="false">
+                                    <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                        <MudText Typo="Typo.body2">@BizLoc["No sales tax breakdown recorded on this bill. Split taxes to claim input tax credits (ITC/ITR) or mark as tax-exempt."]</MudText>
+                                        <div class="d-flex gap-2">
+                                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="ApplyTaxIncludedSplit">
+                                                @BizLoc["Split Tax-Included Amount"]
+                                            </MudButton>
+                                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" OnClick="MarkBillTaxExempt">
+                                                @BizLoc["Mark Tax-Exempt"]
+                                            </MudButton>
+                                        </div>
+                                    </div>
+                                </MudAlert>
+                            </MudItem>
+                        }
                         <MudItem xs="6" sm="4">
                             <MudSelect T="string" Value="Bill.Status" ValueChanged="OnStatusChanged" Label="Status" Disabled="@(Bill.Status == BillStatus.Void || !CanManageBills)">
                                 <MudSelectItem Value="@(BillStatus.AwaitingApproval)">Awaiting Approval</MudSelectItem>
@@ -1121,5 +1139,31 @@
             if (!Bill.Payments.Any()) Bill.DatePaid = null;
         }
         MudDialog.Close(DialogResult.Ok(Bill));
+    }
+
+    private void ApplyTaxIncludedSplit()
+    {
+        if (Bill.Amount <= 0m) return;
+        var breakdown = FinancialCalculationEngine.CalculateFromGrandTotal(Bill.Amount, isTaxExempt: false);
+        Bill.IsTaxExempt = false;
+        Bill.SubTotal = breakdown.SubTotal;
+        Bill.TpsAmount = breakdown.TpsAmount;
+        Bill.TvqAmount = breakdown.TvqAmount;
+        Bill.TaxAmount = breakdown.TaxAmount;
+        Bill.TaxComponents = FinancialCalculationEngine.BuildTaxComponentsFromSubTotal(
+            breakdown.SubTotal,
+            FinancialCalculationEngine.ActiveTemplate?.SalesTaxes,
+            isTaxExempt: false,
+            forPurchases: true);
+    }
+
+    private void MarkBillTaxExempt()
+    {
+        Bill.IsTaxExempt = true;
+        Bill.SubTotal = Bill.Amount;
+        Bill.TpsAmount = 0m;
+        Bill.TvqAmount = 0m;
+        Bill.TaxAmount = 0m;
+        Bill.TaxComponents = [];
     }
 }

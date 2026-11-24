@@ -659,7 +659,13 @@
         AvailableTerms = result.AvailableTerms;
         _laborSelections = result.LaborSelections;
         _itemSelections = result.ItemSelections;
-        SelectedTerms = AvailableTerms.Where(v => v.Term.InvoiceId == Invoice.Id).ToHashSet();
+        var stagedMilestoneIds = Invoice.LineItems
+            .Where(l => string.Equals(l.SourceType, "Milestone", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(l.SourceId))
+            .Select(l => l.SourceId!)
+            .ToHashSet(StringComparer.Ordinal);
+        SelectedTerms = AvailableTerms
+            .Where(v => stagedMilestoneIds.Contains(v.Term.Id) || string.Equals(v.Term.InvoiceId, Invoice.Id, StringComparison.Ordinal))
+            .ToHashSet();
     }
 
     private void UpdateSelectedExpenses(HashSet<BillingExpenseItem> items)

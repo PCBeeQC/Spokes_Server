@@ -534,7 +534,7 @@
 
         // 5. Open & Overdue AR
         var unpaidInvoices = Db.Invoices.GetAll()
-            .Where(i => !InvoiceStatus.IsSettled(i.Status) && i.Status != InvoiceStatus.Void && i.Status != InvoiceStatus.Draft && i.BalanceDue > 0)
+            .Where(i => InvoiceStatus.IsPosted(i.Status) && !InvoiceStatus.IsSettled(i.Status) && i.BalanceDue > 0)
             .ToList();
         TotalARDue = unpaidInvoices.Sum(i => i.BalanceDue);
 
@@ -567,7 +567,7 @@
 
         var allInvoices = Db.Invoices.GetAll();
         TotalInvoicedThisMonth = allInvoices
-            .Where(i => i.Date >= startOfMonth && i.Date <= endOfMonth && i.Status != InvoiceStatus.Draft && i.Status != InvoiceStatus.Void)
+            .Where(i => i.Date >= startOfMonth && i.Date <= endOfMonth && InvoiceStatus.IsPosted(i.Status))
             .Sum(i => i.SubTotal);
 
         MoneyInReceived = allInvoices
@@ -663,7 +663,7 @@
                 continue;
             }
 
-            var projectInvoices = allInvoices.Where(i => i.ProjectId == project.Id && !InvoiceStatus.IsSettled(i.Status) && i.Status != InvoiceStatus.Void && i.BalanceDue > 0);
+            var projectInvoices = allInvoices.Where(i => i.ProjectId == project.Id && InvoiceStatus.IsPosted(i.Status) && !InvoiceStatus.IsSettled(i.Status) && i.BalanceDue > 0);
             var oldestUnpaid = projectInvoices.OrderBy(i => i.Date).FirstOrDefault();
             if (oldestUnpaid != null && (today - oldestUnpaid.Date).Days > 30)
             {

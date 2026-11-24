@@ -833,6 +833,92 @@ public class CompanyBillInboxService
         return ContainsAnyKeyword(cleanedText, settings.ReceiptKeywords);
     }
 
+    private void TryCreateSuggestedInvoicePayment(EmailMessage email, EmailInspectionOutcome inspection)
+    {
+        if (_db.SuggestedInvoicePayments == null || _db.Invoices == null) return;
+
+        var primaryDoc = inspection.AllInspectedDocs.FirstOrDefault();
+        var extractedAmount = inspection.AllInspectedDocs
+            .Select(d => d.Extraction.TotalAmount > 0m ? d.Extraction.TotalAmount : d.Extraction.PaidAmount)
+            .FirstOrDefault(a => a > 0m);
+
+        var combinedText = $"{email.Subject} {email.FromName} {email.FromAddress} {inspection.BodyText}";
+        if (extractedAmount <= 0m) return;
+
+        var projectsById = (_db.Projects?.GetAll() ?? []).ToDictionary(p => p.Id, StringComparer.OrdinalIgnoreCase);
+        var candidateInvoices = _db.Invoices.GetAll()
+            .Where(inv => InvoiceStatus.IsPosted(inv.Status) &&
+                          !InvoiceStatus.IsSettled(inv.Status) &&
+                          inv.GrandTotal > 0m)
+            .ToList();
+
+        Invoice? bestInvoice = null;
+        string bestReason = string.Empty;
+        string bestClientName = string.Empty;
+
+        foreach (var inv in candidateInvoices)
+        {
+            var expectedAmt = inv.BalanceDue > 0m ? inv.BalanceDue : inv.GrandTotal;
+            bool amountMatches = Math.Abs(expectedAmt - extractedAmount) <= 0.05m ||
+                                 Math.Abs(inv.GrandTotal - extractedAmount) <= 0.05m;
+            if (!amountMatches) continue;
+
+            projectsById.TryGetValue(inv.ProjectId, out var proj);
+            var clientName = proj?.Client?.BusinessName ?? proj?.Name ?? string.Empty;
+
+            bool invNumberMentioned = !string.IsNullOrWhiteSpace(inv.InvoiceNumber) &&
+                                      combinedText.Contains(inv.InvoiceNumber, StringComparison.OrdinalIgnoreCase);
+
+            bool clientMentioned = false;
+            if (!string.IsNullOrWhiteSpace(clientName))
+            {
+                var normClient = PartyMatchingHelper.NormalizeCompanyName(clientName);
+                var normCombined = PartyMatchingHelper.NormalizeCompanyName(combinedText);
+                clientMentioned = !string.IsNullOrEmpty(normClient) && normClient.Length >= 3 &&
+                                  normCombined.Contains(normClient, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (invNumberMentioned)
+            {
+                bestInvoice = inv;
+                bestClientName = clientName;
+                bestReason = $"Matched Invoice {inv.InvoiceNumber} & amount ({extractedAmount:C2})";
+                break;
+            }
+            if (clientMentioned && bestInvoice == null)
+            {
+                bestInvoice = inv;
+                bestClientName = clientName;
+                bestReason = $"Matched Client '{clientName}' & amount ({extractedAmount:C2})";
+            }
+        }
+
+        if (bestInvoice == null) return;
+        if (_db.SuggestedInvoicePayments.ExistsForEmailAndInvoice(email.Id, bestInvoice.Id)) return;
+
+        var suggestion = new SuggestedInvoicePayment
+        {
+            InvoiceId = bestInvoice.Id,
+            InvoiceNumber = bestInvoice.InvoiceNumber,
+            ProjectId = bestInvoice.ProjectId,
+            ClientName = bestClientName,
+            InvoiceTotal = bestInvoice.GrandTotal,
+            InvoiceBalanceDue = bestInvoice.BalanceDue > 0m ? bestInvoice.BalanceDue : bestInvoice.GrandTotal,
+            InvoiceStatus = bestInvoice.Status,
+            SuggestedAmount = extractedAmount,
+            PaymentDate = primaryDoc.Extraction?.InvoiceDate ?? email.Date.DateTime,
+            SourceEmailId = email.Id,
+            SourceEmailSubject = email.Subject,
+            SourceSenderEmail = email.FromAddress,
+            AttachmentPath = primaryDoc.SavedPath,
+            AttachmentName = primaryDoc.FileName,
+            MatchReason = bestReason,
+            Status = SuggestedInvoicePaymentStatus.Pending
+        };
+
+        _db.SuggestedInvoicePayments.Save(suggestion);
+    }
+
     private sealed record EmailInspectionOutcome(
         List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)> ExtractedInvoices,
         List<(ExtractedInvoiceData Extraction, string SavedPath, string FileName)> AllInspectedDocs,
@@ -1102,6 +1188,7 @@ public class CompanyBillInboxService
         else if (IsPaymentReceiptEmail(email, inspection.AllInspectedDocs, settings, inspection.BodyText))
         {
             email.BillingStatus = CompanyBillInboxConstants.BillingStatus.Receipt;
+            TryCreateSuggestedInvoicePayment(email, inspection);
         }
         else
         {
@@ -1404,7 +1491,9 @@ public class CompanyBillInboxService
             }
         }
 
-        if (extraction != null && extraction.PaidAmount > 0)
+        if (extraction != null &&
+            extraction.PaidAmount > 0 &&
+            (draftBill.Amount <= 0m || extraction.PaidAmount <= draftBill.Amount * 1.05m))
         {
             bool isPaymentAlreadyRecorded = false;
             if (!string.IsNullOrWhiteSpace(draftBill.InvoiceNumber))
@@ -2734,6 +2823,10 @@ public class CompanyBillInboxService
         if (email != null && invoice != null)
         {
             EnsureInvoiceAccessForReceiptLinking(invoice, actor!);
+            if (!InvoiceStatus.IsPosted(invoice.Status))
+            {
+                throw new InvalidOperationException($"Cannot link a payment receipt to non-posted invoice '{invoice.InvoiceNumber}' ({invoice.Status}).");
+            }
 
             if (paymentToRecord != null)
             {

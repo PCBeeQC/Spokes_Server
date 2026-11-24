@@ -299,7 +299,7 @@ public class HRService
             !actor.HasEffectivePermission(AppPermissions.Finance.ApproveInvoices))
         {
             var billedIds = _invoices.GetAll()
-                .Where(i => i.Status != InvoiceStatus.Void && i.BilledTimeEntryIds != null)
+                .Where(i => InvoiceStatus.IsPosted(i.Status) && i.BilledTimeEntryIds != null)
                 .SelectMany(i => i.BilledTimeEntryIds)
                 .Where(id => !string.IsNullOrWhiteSpace(id))
                 .ToHashSet(StringComparer.Ordinal);

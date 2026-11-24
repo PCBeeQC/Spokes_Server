@@ -2334,9 +2334,6 @@
   <data name="Reset Categories?" xml:space="preserve">
     <value>Reset Categories?</value>
   </data>
-  <data name="Reset Defaults" xml:space="preserve">
-    <value>Reset Defaults</value>
-  </data>
   <data name="Reset to 100%" xml:space="preserve">
     <value>Reset to 100%</value>
   </data>
@@ -4214,9 +4211,6 @@
   </data>
   <data name="Your Spokes Pass has expired. Setting up a new account is disabled, but your current Google Drive backup will keep working." xml:space="preserve">
     <value>Your Spokes Pass has expired. Setting up a new account is disabled, but your current Google Drive backup will keep working.</value>
-  </data>
-  <data name="Archiving files..." xml:space="preserve">
-    <value>Archiving files...</value>
   </data>
   <data name="Backup complete" xml:space="preserve">
     <value>Backup complete</value>
@@ -6452,5 +6446,14 @@
   </data>
   <data name="Switch Camera" xml:space="preserve">
     <value>Switch Camera</value>
+  </data>
+  <data name="Retry" xml:space="preserve">
+    <value>Retry</value>
+  </data>
+  <data name="Compressing data..." xml:space="preserve">
+    <value>Compressing data...</value>
+  </data>
+  <data name="raw" xml:space="preserve">
+    <value>raw</value>
   </data>
 </root>

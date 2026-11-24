@@ -714,7 +714,7 @@
     private void LoadInvoicing()
     {
         var projectInvoices = Db.Invoices.GetByProject(ProjectId)
-        .Where(i => i.Status != InvoiceStatus.Void)
+        .Where(i => InvoiceStatus.IsPosted(i.Status))
         .ToList();
 
         TotalInvoiced = projectInvoices.Sum(i => i.GrandTotal);
@@ -722,7 +722,7 @@
 
         // Check for Aging Receivables (> 30 days old with balance due)
         var unpaidInvoices = projectInvoices
-        .Where(i => !InvoiceStatus.IsSettled(i.Status) && i.Status != InvoiceStatus.Void && i.BalanceDue > 0)
+        .Where(i => !InvoiceStatus.IsSettled(i.Status) && i.BalanceDue > 0)
         .OrderBy(i => i.Date)
         .ToList();
 

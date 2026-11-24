@@ -32,21 +32,21 @@ public class ContextTagRegistryTests
 
     private CompanyProfile CreateTestProfile() => new CompanyProfile
     {
-        CompanyName = "Poly Robotics",
+        CompanyName = "Acme Demo",
         AddressStreet = "456 Tech Ave",
         AddressCity = "Laval",
         AddressState = "QC",
         AddressZip = "H7T 2T9",
         AddressCountry = "Canada",
         PhoneNumber = "514-555-9876",
-        Website = "https://polyrobotics.com"
+        Website = "https://acmedemo.test"
     };
 
     private Employee CreateTestManager() => new Employee
     {
         FirstName = "Alice",
         LastName = "Martin",
-        Email = "alice@polyrobotics.com",
+        Email = "alice@acmedemo.test",
         Position = "Senior Project Manager"
     };
 
@@ -101,7 +101,7 @@ public class ContextTagRegistryTests
         var body = "From @Company.Name, @Company.Phone, @Company.Website";
         var result = ContextTagRegistry.Resolve(body, CreateTestProject(), CreateTestProfile(), CreateTestManager());
 
-        Assert.Equal("From Poly Robotics, 514-555-9876, https://polyrobotics.com", result);
+        Assert.Equal("From Acme Demo, 514-555-9876, https://acmedemo.test", result);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class ContextTagRegistryTests
         manager.IsEmailPublic = true;
         var result = ContextTagRegistry.Resolve(body, CreateTestProject(), CreateTestProfile(), manager);
 
-        Assert.Equal("Your PM: Alice Martin (alice@polyrobotics.com), Senior Project Manager", result);
+        Assert.Equal("Your PM: Alice Martin (alice@acmedemo.test), Senior Project Manager", result);
     }
 
     [Fact]
@@ -223,7 +223,7 @@ Project Manager: @ProjectManager.Name (@ProjectManager.Email)";
 
         var result = ContextTagRegistry.Resolve(body, CreateTestProject(), CreateTestProfile(), CreateTestManager());
 
-        Assert.Contains("Poly Robotics", result);
+        Assert.Contains("Acme Demo", result);
         Assert.Contains("Acme Corporation", result);
         Assert.Contains("Mr. John Smith, VP of Operations", result);
         Assert.Contains("PRJ-2401-0001 - Robot Arm Assembly", result);

@@ -1285,7 +1285,7 @@
             }
             await chatProfilerInstance.enable(window.spokesDotNetRef);
             window.spokesChatDiagnostics.reports = chatProfilerInstance.reports;
-            console.log('[Perf] Chat transition & wire profiler ENABLED for this page session (resets to OFF on refresh). Use spokesChatDiagnostics.dump() for the last report, or spokesPerf.disableChatDiagnostics() to stop.');
+            console.log('[Perf] UI, Chat & wire profiler ENABLED for this page session (resets to OFF on refresh). Use spokesChatDiagnostics.dump() for the last report, or spokesPerf.disableChatDiagnostics() to stop.');
             return true;
         }
 
@@ -1298,7 +1298,7 @@
                     try { await window.spokesDotNetRef.invokeMethodAsync('SetChatProfilerEnabled', false); } catch (_) { }
                 }
             }
-            console.log('[Perf] Chat transition & wire profiler DISABLED.');
+            console.log('[Perf] UI, Chat & wire profiler DISABLED.');
             return false;
         }
 
@@ -1308,11 +1308,11 @@
                 return;
             }
             console.log([
-                '[Spokes] Console Commands (chat profiler OFF by default; resets on page refresh):',
+                '[Spokes] Console Commands (wire profiler OFF by default; resets on page refresh):',
                 '  spokesPerf.summary()                — Print session TTI & media baseline summary',
                 '  spokesPerf.exportBaseline()         — Export structured JSON baseline metrics',
-                '  spokesPerf.enableChatDiagnostics()  — Enable live chat-transition & wire profiler',
-                '  spokesPerf.disableChatDiagnostics() — Disable chat-transition profiler',
+                '  spokesPerf.enableChatDiagnostics()  — Enable live UI, chat & wire profiler',
+                '  spokesPerf.disableChatDiagnostics() — Disable UI, chat & wire profiler',
                 '  spokesPerf.reset()                  — Clear session performance counters',
                 '  spokesPerf.help()                   — Show this command list again'
             ].join('\n'));
@@ -1323,7 +1323,7 @@
             disable: disableChatDiagnostics,
             isEnabled: () => chatProfilerActive,
             attachServer: function (dotNetRef) { chatProfilerInstance?.attachServer(dotNetRef); },
-            startTransition: function (name, initialStep) { chatProfilerInstance?.startTransition(name, initialStep); },
+            startTransition: function (name, initialStep, meta) { chatProfilerInstance?.startTransition(name, initialStep, meta); },
             mark: function (name) { chatProfilerInstance?.mark(name); },
             reports: [],
             dump: function () { return chatProfilerInstance ? chatProfilerInstance.dump() : 'null'; }
@@ -1426,5 +1426,48 @@
                 }
             }
         });
+    })();
+
+    // Reusable container-scoped infinite scroll sentinel observer (keyed per component instance, zero eval).
+    window.spokesInfiniteScroll = (function () {
+        const observers = new Map();
+
+        function disconnect(key) {
+            if (!key) return;
+            const existing = observers.get(key);
+            if (existing) {
+                existing.observer.disconnect();
+                observers.delete(key);
+            }
+        }
+
+        function observe(key, scrollContainer, sentinel, dotNetHelper, methodName, rootMargin) {
+            if (!key || !sentinel || !dotNetHelper) return;
+
+            const rootEl = scrollContainer || null;
+            const existing = observers.get(key);
+            if (existing && existing.sentinel === sentinel && existing.root === rootEl) {
+                return;
+            }
+
+            disconnect(key);
+
+            let inFlight = false;
+            const observer = new IntersectionObserver((entries) => {
+                if (inFlight || !entries.some((e) => e.isIntersecting)) return;
+                inFlight = true;
+                Promise.resolve(dotNetHelper.invokeMethodAsync(methodName || 'LoadMore'))
+                    .catch(() => { })
+                    .finally(() => { inFlight = false; });
+            }, {
+                root: rootEl,
+                rootMargin: rootMargin || '200px'
+            });
+
+            observer.observe(sentinel);
+            observers.set(key, { observer, sentinel, root: rootEl });
+        }
+
+        return { observe, disconnect };
     })();
 })();

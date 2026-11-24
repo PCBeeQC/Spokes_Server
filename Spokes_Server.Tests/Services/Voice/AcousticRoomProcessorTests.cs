@@ -799,18 +799,18 @@ public class AcousticRoomProcessorTests
     {
         var processor = new AcousticRoomProcessor();
         processor.RegisterParticipant("admin");
-        processor.RegisterParticipant("mats");
+        processor.RegisterParticipant("peerA");
 
         int totalFrames = 120; // 1.2s total
         for (int f = 0; f < totalFrames; f++)
         {
             var frameAdmin = new short[FrameSamples];
-            var frameMats = new short[FrameSamples];
+            var framePeerA = new short[FrameSamples];
 
-            // Inject a brief 90ms cough on "mats" (frames 10..18) and a tiny RNNoise residual blip on "admin" 140ms later (frame 24)
+            // Inject a brief 90ms cough on "peerA" (frames 10..18) and a tiny RNNoise residual blip on "admin" 140ms later (frame 24)
             if (f >= 10 && f < 19)
             {
-                frameMats = GenerateSyntheticSpeech(FrameSamples, 240.0, 12000.0, f * FrameSamples);
+                framePeerA = GenerateSyntheticSpeech(FrameSamples, 240.0, 12000.0, f * FrameSamples);
             }
             if (f == 24)
             {
@@ -820,7 +820,7 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 ["admin"] = frameAdmin,
-                ["mats"] = frameMats
+                ["peerA"] = framePeerA
             }, f * 10);
         }
 
@@ -831,7 +831,7 @@ public class AcousticRoomProcessorTests
         string report = AcousticRoomDiagnosticReportFormatter.FormatLiveRoomReport(
             snapshot,
             "bureau",
-            new Dictionary<string, string> { ["admin"] = "admin", ["mats"] = "mats" });
+            new Dictionary<string, string> { ["admin"] = "admin", ["peerA"] = "peerA" });
         Assert.Contains("buckets,", report);
     }
 
@@ -839,33 +839,33 @@ public class AcousticRoomProcessorTests
     public void NotifyParticipantTrackReplaced_SwitchingFromRnnoiseToWebRtc_KeepsBothParticipantsActiveAndReCalibratesLag()
     {
         var processor = new AcousticRoomProcessor();
-        processor.SyncParticipants(["admin", "mats"]);
+        processor.SyncParticipants(["admin", "peerA"]);
 
         int phase1Frames = 60; // 600ms with RNNoise (-20ms lag, 30cm high bleed = 0.42)
         int rnnoiseLagSamples = 20 * 48; // 960 samples (20ms)
         var rawSpeech1 = AcousticRoomSimulator.GenerateNaturalSpeech(phase1Frames * FrameSamples + rnnoiseLagSamples + FrameSamples * 4, 225.0, 14000.0);
         var filteredAdmin1 = AcousticRoomSimulator.ApplyClientAiFilterSimulation(rawSpeech1, rnnoiseLagSamples, true);
-        var bleedOnMats1 = AcousticRoomSimulator.ApplyRoomImpulseResponse(rawSpeech1, directDelaySamples: 0, directBleedGain: 0.42, rt60Ms: 60.0);
+        var bleedOnPeerA1 = AcousticRoomSimulator.ApplyRoomImpulseResponse(rawSpeech1, directDelaySamples: 0, directBleedGain: 0.42, rt60Ms: 60.0);
 
         for (int f = 0; f < phase1Frames; f++)
         {
             var fA = filteredAdmin1.AsSpan(f * FrameSamples, FrameSamples).ToArray();
-            var fB = bleedOnMats1.AsSpan(f * FrameSamples, FrameSamples).ToArray();
+            var fB = bleedOnPeerA1.AsSpan(f * FrameSamples, FrameSamples).ToArray();
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 ["admin"] = fA,
-                ["mats"] = fB
+                ["peerA"] = fB
             }, f * 10);
         }
 
         var snap1 = processor.GetDiagnosticSnapshot();
         Assert.Equal(2, snap1.Participants.Count);
-        var cal1 = snap1.Calibrations.FirstOrDefault(c => c.SourceUserId == "admin" && c.TargetUserId == "mats");
+        var cal1 = snap1.Calibrations.FirstOrDefault(c => c.SourceUserId == "admin" && c.TargetUserId == "peerA");
         Assert.NotNull(cal1);
         Assert.InRange(cal1!.DelayMs, -22.5, -17.5);
 
         // Simulate "admin" switching Noise Filter from RNNoise -> Basic (WebRTC) (+2.0ms lag at ~30cm/60cm)
-        processor.SyncParticipants(["admin", "mats"]);
+        processor.SyncParticipants(["admin", "peerA"]);
         processor.NotifyParticipantTrackReplaced("admin");
 
         // Verify Room Isolation remains active (2 participants) immediately after track replacement
@@ -875,22 +875,22 @@ public class AcousticRoomProcessorTests
         int phase2Frames = 60; // 600ms with Basic WebRTC (+2.0ms lag, 30cm bleed = 0.42)
         int webrtcLagSamples = 2 * 48; // +96 samples (+2.0ms)
         var rawSpeech2 = AcousticRoomSimulator.GenerateNaturalSpeech(phase2Frames * FrameSamples + FrameSamples * 4, 225.0, 14000.0);
-        var bleedOnMats2 = AcousticRoomSimulator.ApplyRoomImpulseResponse(rawSpeech2, directDelaySamples: webrtcLagSamples, directBleedGain: 0.42, rt60Ms: 60.0);
+        var bleedOnPeerB = AcousticRoomSimulator.ApplyRoomImpulseResponse(rawSpeech2, directDelaySamples: webrtcLagSamples, directBleedGain: 0.42, rt60Ms: 60.0);
 
         for (int f = 0; f < phase2Frames; f++)
         {
             var fA = rawSpeech2.AsSpan(f * FrameSamples, FrameSamples).ToArray();
-            var fB = bleedOnMats2.AsSpan(f * FrameSamples, FrameSamples).ToArray();
+            var fB = bleedOnPeerB.AsSpan(f * FrameSamples, FrameSamples).ToArray();
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 ["admin"] = fA,
-                ["mats"] = fB
+                ["peerA"] = fB
             }, (phase1Frames + f) * 10);
         }
 
         var snap2 = processor.GetDiagnosticSnapshot();
         Assert.Equal(2, snap2.Participants.Count);
-        var cal2 = snap2.Calibrations.FirstOrDefault(c => c.SourceUserId == "admin" && c.TargetUserId == "mats");
+        var cal2 = snap2.Calibrations.FirstOrDefault(c => c.SourceUserId == "admin" && c.TargetUserId == "peerA");
         Assert.NotNull(cal2);
         Assert.InRange(cal2!.DelayMs, 0.0, 4.5);
     }
@@ -917,11 +917,11 @@ public class AcousticRoomProcessorTests
         var displayNames = new Dictionary<string, string>
         {
             [guidA] = "admin",
-            [guidB] = "mats"
+            [guidB] = "peerA"
         };
         string uncalReport = AcousticRoomDiagnosticReportFormatter.FormatLiveRoomReport(uncalSnap, "bureau", displayNames);
         Assert.Contains("\"admin\"", uncalReport);
-        Assert.Contains("\"mats\"", uncalReport);
+        Assert.Contains("\"peerA\"", uncalReport);
         Assert.DoesNotContain($"have {guidA} speak", uncalReport);
         Assert.Contains("have \"admin\" speak", uncalReport);
 
@@ -968,16 +968,16 @@ public class AcousticRoomProcessorTests
     {
         // Reproduces the live "bureau" room capture:
         // - "admin": Windows PC (Chrome, rnnoise) speaking quietly at ~-40 dBFS vocal RMS
-        // - "mats": Android Device (Spokes App, client-default) with +94.0ms (+4512 samples) net delay and -15.7 dB bleed
+        // - "peerA": Android Device (Spokes App, client-default) with +94.0ms (+4512 samples) net delay and -15.7 dB bleed
         var processor = new AcousticRoomProcessor();
         string adminId = "3014bc97-b629-4ec0-bf06-15446c7b6622";
-        string matsId = "419bedb9-85ac-4923-9e23-45d8ad0e29dd";
-        processor.SyncParticipants([adminId, matsId]);
+        string peerAId = "419bedb9-85ac-4923-9e23-45d8ad0e29dd";
+        processor.SyncParticipants([adminId, peerAId]);
 
         int delaySamplesAB = 94 * 48; // +4512 samples (+94.0ms)
         int speechFrames = 100;       // 1.0s of quiet (-40 dBFS) speech from "admin"
         int pauseFrames = 40;         // 0.4s of silence (allows +94ms delayed bleed to finish and pause-synchronized lookahead to expand)
-        int matsSpeechFrames = 60;    // 0.6s of speech from "mats" (arriving 86ms after bleeding into "admin"'s mic)
+        int peerASpeechFrames = 60;    // 0.6s of speech from "peerA" (arriving 86ms after bleeding into "admin"'s mic)
 
         int phase1Samples = (speechFrames + pauseFrames) * FrameSamples;
         var rawAdminSpeech = AcousticRoomSimulator.GenerateNaturalSpeech(
@@ -989,7 +989,7 @@ public class AcousticRoomProcessorTests
         var adminTrackPhase1 = new short[phase1Samples];
         Array.Copy(rawAdminSpeech, 0, adminTrackPhase1, 0, rawAdminSpeech.Length);
 
-        var matsBleedPhase1 = AcousticRoomSimulator.ApplyRoomImpulseResponse(
+        var peerABleedPhase1 = AcousticRoomSimulator.ApplyRoomImpulseResponse(
             adminTrackPhase1,
             directDelaySamples: delaySamplesAB,
             directBleedGain: 0.164, // -15.7 dB
@@ -999,68 +999,68 @@ public class AcousticRoomProcessorTests
         for (int f = 0; f < speechFrames + pauseFrames; f++)
         {
             var fAdmin = adminTrackPhase1.AsSpan(f * FrameSamples, FrameSamples).ToArray();
-            var fMats = matsBleedPhase1.AsSpan(f * FrameSamples, FrameSamples).ToArray();
+            var fPeerA = peerABleedPhase1.AsSpan(f * FrameSamples, FrameSamples).ToArray();
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = fAdmin,
-                [matsId] = fMats
+                [peerAId] = fPeerA
             }, f * 10);
         }
 
         var snapAfterPhase1 = processor.GetDiagnosticSnapshot();
-        var calAB = snapAfterPhase1.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == matsId);
-        var calBA = snapAfterPhase1.Calibrations.FirstOrDefault(c => c.SourceUserId == matsId && c.TargetUserId == adminId);
+        var calAB = snapAfterPhase1.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == peerAId);
+        var calBA = snapAfterPhase1.Calibrations.FirstOrDefault(c => c.SourceUserId == peerAId && c.TargetUserId == adminId);
 
         Assert.NotNull(calAB);
-        Assert.False(calAB!.IsReciprocalPrior, "Expected admin -> mats to lock directly on -40 dBFS speech");
+        Assert.False(calAB!.IsReciprocalPrior, "Expected admin -> peerA to lock directly on -40 dBFS speech");
         Assert.InRange(calAB.DelayMs, 91.0, 97.0);
 
         Assert.NotNull(calBA);
-        Assert.True(calBA!.IsReciprocalPrior, "Expected mats -> admin to be seeded as a ReciprocalPrior (-86ms)");
+        Assert.True(calBA!.IsReciprocalPrior, "Expected peerA -> admin to be seeded as a ReciprocalPrior (-86ms)");
         Assert.InRange(calBA.DelayMs, -89.0, -83.0);
 
         var adminDiag = snapAfterPhase1.Participants.First(p => p.UserId == adminId);
-        var matsDiag = snapAfterPhase1.Participants.First(p => p.UserId == matsId);
+        var peerADiag = snapAfterPhase1.Participants.First(p => p.UserId == peerAId);
 
         // Verify pause-synchronized adaptive lookahead expanded on "admin" to cover the -86ms reciprocal prior (+15ms margin = ~101ms)
         Assert.InRange(adminDiag.EffectiveLookaheadMs, 98, 105);
         Assert.Equal(0, adminDiag.GatedBleedSubFrames);
-        Assert.True(matsDiag.AchievedBleedSuppressionDb >= 18.0, $"Expected mats ERLE >= 18 dB on -40 dBFS speech, got {matsDiag.AchievedBleedSuppressionDb:F1} dB");
+        Assert.True(peerADiag.AchievedBleedSuppressionDb >= 18.0, $"Expected peerA ERLE >= 18 dB on -40 dBFS speech, got {peerADiag.AchievedBleedSuppressionDb:F1} dB");
 
-        // Verify timeline buckets show mats=Gated during active speech, never falsely report mats as Dominant speaker,
-        // and never deadlock with both admin=Gated and mats=Gated simultaneously
+        // Verify timeline buckets show peerA=Gated during active speech, never falsely report peerA as Dominant speaker,
+        // and never deadlock with both admin=Gated and peerA=Gated simultaneously
         Assert.Contains(snapAfterPhase1.TimelineBuckets, b =>
-            b.ParticipantGateStates.TryGetValue(matsId, out var gs) && gs == AcousticGateState.GatedBleed);
+            b.ParticipantGateStates.TryGetValue(peerAId, out var gs) && gs == AcousticGateState.GatedBleed);
         Assert.DoesNotContain(snapAfterPhase1.TimelineBuckets, b =>
-            string.Equals(b.DominantSpeakerUserId, matsId, StringComparison.Ordinal));
+            string.Equals(b.DominantSpeakerUserId, peerAId, StringComparison.Ordinal));
         Assert.DoesNotContain(snapAfterPhase1.TimelineBuckets, b =>
             b.ParticipantGateStates.TryGetValue(adminId, out var gA) && gA == AcousticGateState.GatedBleed &&
-            b.ParticipantGateStates.TryGetValue(matsId, out var gB) && gB == AcousticGateState.GatedBleed);
+            b.ParticipantGateStates.TryGetValue(peerAId, out var gB) && gB == AcousticGateState.GatedBleed);
 
-        // Phase 2: Now "mats" speaks first word; because "admin" already expanded lookahead to ~101ms,
-        // "admin" gates "mats"'s -86ms negative-lag bleed immediately!
+        // Phase 2: Now "peerA" speaks first word; because "admin" already expanded lookahead to ~101ms,
+        // "admin" gates "peerA"'s -86ms negative-lag bleed immediately!
         int negLagBA = 86 * 48; // 4128 samples (86ms)
-        int phase2Samples = matsSpeechFrames * FrameSamples;
-        var rawMatsVoice = AcousticRoomSimulator.GenerateNaturalSpeech(phase2Samples + negLagBA, 285.0, 12000.0);
+        int phase2Samples = peerASpeechFrames * FrameSamples;
+        var rawPeerAVoice = AcousticRoomSimulator.GenerateNaturalSpeech(phase2Samples + negLagBA, 285.0, 12000.0);
         double adminBleedInEnergy = 0;
         double adminBleedOutEnergy = 0;
 
-        for (int f = 0; f < matsSpeechFrames; f++)
+        for (int f = 0; f < peerASpeechFrames; f++)
         {
             int baseIdx = f * FrameSamples;
-            // Bleed arrives on "admin"'s PC mic 86ms EARLIER than "mats"'s delayed Android stream
+            // Bleed arrives on "admin"'s PC mic 86ms EARLIER than "peerA"'s delayed Android stream
             var fAdminBleed = new short[FrameSamples];
-            var fMatsDirect = new short[FrameSamples];
+            var fPeerADirect = new short[FrameSamples];
             for (int i = 0; i < FrameSamples; i++)
             {
-                fAdminBleed[i] = (short)Math.Round(rawMatsVoice[baseIdx + i + negLagBA] * 0.15);
-                fMatsDirect[i] = rawMatsVoice[baseIdx + i];
+                fAdminBleed[i] = (short)Math.Round(rawPeerAVoice[baseIdx + i + negLagBA] * 0.15);
+                fPeerADirect[i] = rawPeerAVoice[baseIdx + i];
             }
 
             var outStep = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = fAdminBleed,
-                [matsId] = fMatsDirect
+                [peerAId] = fPeerADirect
             }, (speechFrames + pauseFrames + f) * 10);
 
             if (f >= 20)
@@ -1071,7 +1071,7 @@ public class AcousticRoomProcessorTests
         }
 
         Assert.True(adminBleedOutEnergy < adminBleedInEnergy * 0.15,
-            $"Expected pre-expanded reciprocal lookahead on admin to suppress mats's -86ms bleed by >85%, got in={adminBleedInEnergy:F1}, out={adminBleedOutEnergy:F1}");
+            $"Expected pre-expanded reciprocal lookahead on admin to suppress peerA's -86ms bleed by >85%, got in={adminBleedInEnergy:F1}, out={adminBleedOutEnergy:F1}");
     }
 
     [Fact]
@@ -1079,30 +1079,30 @@ public class AcousticRoomProcessorTests
     {
         var processor = new AcousticRoomProcessor();
         string adminId = "admin";
-        string matsId = "mats";
-        processor.SyncParticipants([adminId, matsId]);
+        string peerAId = "peerA";
+        processor.SyncParticipants([adminId, peerAId]);
 
-        // Provide client pipeline telemetry matching Sentence 1 below (admin=150ms slow capture, mats=20ms fast rnnoise capture -> admin->mats lag = -130ms)
+        // Provide client pipeline telemetry matching Sentence 1 below (admin=150ms slow capture, peerA=20ms fast rnnoise capture -> admin->peerA lag = -130ms)
         processor.SetParticipantClientPipelineInfo(adminId, 150.0);
-        processor.SetParticipantClientPipelineInfo(matsId, 20.0);
+        processor.SetParticipantClientPipelineInfo(peerAId, 20.0);
 
-        // Seed persistent room calibration from previous call: admin -> mats is -130.0ms (-6240 samples)
+        // Seed persistent room calibration from previous call: admin -> peerA is -130.0ms (-6240 samples)
         int trueLagSamples = -6240; // -130.0ms
-        processor.SeedSavedPairCalibration(adminId, matsId, trueLagSamples, bleedGain: 0.25f, confidence: 0.72f);
+        processor.SeedSavedPairCalibration(adminId, peerAId, trueLagSamples, bleedGain: 0.25f, confidence: 0.72f);
 
         // Verify warm-start: before a single frame of audio is processed, calibration is already locked
-        // and mats's lookahead buffer is already pre-sized to cover -130ms (+15ms margin = 145ms)!
+        // and peerA's lookahead buffer is already pre-sized to cover -130ms (+15ms margin = 145ms)!
         var initialSnap = processor.GetDiagnosticSnapshot();
-        var initialCal = initialSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == matsId);
+        var initialCal = initialSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == peerAId);
         Assert.NotNull(initialCal);
         Assert.False(initialCal!.IsReciprocalPrior);
         Assert.True(initialCal.Confidence >= 0.70);
         Assert.Equal(-130.0, initialCal.DelayMs, 1);
 
-        var initialMatsDiag = initialSnap.Participants.First(p => p.UserId == matsId);
-        Assert.InRange(initialMatsDiag.EffectiveLookaheadMs, 140, 150);
+        var initialPeerADiag = initialSnap.Participants.First(p => p.UserId == peerAId);
+        Assert.InRange(initialPeerADiag.EffectiveLookaheadMs, 140, 150);
 
-        // Sentence 1 (0.8s): Admin speaks; bleed arrives on Mats 130ms EARLIER (-6240 samples) with heavy head-shadow EQ
+        // Sentence 1 (0.8s): Admin speaks; bleed arrives on PeerA 130ms EARLIER (-6240 samples) with heavy head-shadow EQ
         int sentenceFrames = 80;
         int absLag = Math.Abs(trueLagSamples);
         var rawSentence1 = AcousticRoomSimulator.GenerateNaturalSpeech(sentenceFrames * FrameSamples + absLag, 205.0, 9500.0);
@@ -1120,26 +1120,26 @@ public class AcousticRoomProcessorTests
         {
             int idx = f * FrameSamples;
             var fAdmin = rawSentence1.AsSpan(idx, FrameSamples).ToArray();
-            var fMats = filteredBleed1.AsSpan(idx + absLag, FrameSamples).ToArray();
+            var fPeerA = filteredBleed1.AsSpan(idx + absLag, FrameSamples).ToArray();
 
             var outStep = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = fAdmin,
-                [matsId] = fMats
+                [peerAId] = fPeerA
             }, f * 10);
 
             // Check the very first syllable (frames 15..30, once lookahead FIFO fills)
             if (f >= 15 && f < 30)
             {
-                firstSyllableBleedIn += ComputeRms(fMats);
-                firstSyllableBleedOut += ComputeRms(outStep[matsId]);
+                firstSyllableBleedIn += ComputeRms(fPeerA);
+                firstSyllableBleedOut += ComputeRms(outStep[peerAId]);
             }
         }
 
         Assert.True(firstSyllableBleedOut < firstSyllableBleedIn * 0.15,
             $"Expected warm-started calibration to suppress first-syllable bleed by >85%, got in={firstSyllableBleedIn:F1}, out={firstSyllableBleedOut:F1}");
 
-        var afterSentence1Cal = processor.GetCalibrations().First(c => c.SourceUserId == adminId && c.TargetUserId == matsId);
+        var afterSentence1Cal = processor.GetCalibrations().First(c => c.SourceUserId == adminId && c.TargetUserId == peerAId);
         double lockedConfidence = afterSentence1Cal.Confidence;
         Assert.False(afterSentence1Cal.IsReciprocalPrior);
         Assert.True(afterSentence1Cal.Confidence >= 0.70);
@@ -1161,11 +1161,11 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = noiseA,
-                [matsId] = noiseB
+                [peerAId] = noiseB
             }, (sentenceFrames + f) * 10);
         }
 
-        var afterSilenceCal = processor.GetCalibrations().First(c => c.SourceUserId == adminId && c.TargetUserId == matsId);
+        var afterSilenceCal = processor.GetCalibrations().First(c => c.SourceUserId == adminId && c.TargetUserId == peerAId);
         Assert.False(afterSilenceCal.IsReciprocalPrior, "Expected latched calibration to remain directly locked across inter-sentence pause");
         Assert.True(afterSilenceCal.Confidence >= lockedConfidence,
             $"Expected latched calibration confidence not to decay (before={lockedConfidence:F3}, after={afterSilenceCal.Confidence:F3})");
@@ -1175,10 +1175,10 @@ public class AcousticRoomProcessorTests
     [Fact]
     public void ThreeDevices_TwoHeadsetsAndFarFieldAgcPhoneAt142Ms_KeepsHeadsetOpen_GatesPhone_AndSupportsTurnTaking()
     {
-        // Exact reproduction of real-world "Bureau Stewie" 3-device failure mode:
+        // Exact reproduction of real-world "Room Alpha" 3-device failure mode:
         // - Headset 1 ("admin first"): Windows Chrome + rnnoise, speaking directly into boom mic at ~ -27.4 dBFS
-        // - Headset 2 ("mats"): Windows Chrome + rnnoise, passive headset picking up -41.5 dBFS bleed at +89.6ms
-        // - Android Phone ("mats2"): Far-field phone at other end of room (+141.8ms delay, RT60=220ms), whose
+        // - Headset 2 ("peerA"): Windows Chrome + rnnoise, passive headset picking up -41.5 dBFS bleed at +89.6ms
+        // - Android Phone ("peerB"): Far-field phone at other end of room (+141.8ms delay, RT60=220ms), whose
         //   speakerphone hardware AGC boosts far-field room bleed up to -15.7 dBFS (+11.7 dB LOUDER than Headset 1!).
         var processor = new AcousticRoomProcessor();
         string headset1 = "6f30c05d-c9d6-4cbb-bdbb-b2f8f3b3c9c3";
@@ -1259,12 +1259,12 @@ public class AcousticRoomProcessorTests
         var snap1 = processor.GetDiagnosticSnapshot();
         _output.WriteLine(AcousticRoomDiagnosticReportFormatter.FormatLiveRoomReport(
             snap1,
-            "Bureau Stewie",
+            "Room Alpha",
             new Dictionary<string, string>
             {
                 [headset1] = "admin first",
-                [headset2] = "mats",
-                [agcPhone] = "mats2"
+                [headset2] = "peerA",
+                [agcPhone] = "peerB"
             }));
 
         var calH1ToPhone = snap1.Calibrations.FirstOrDefault(c => c.SourceUserId == headset1 && c.TargetUserId == agcPhone);
@@ -1300,7 +1300,7 @@ public class AcousticRoomProcessorTests
         Assert.True(diagH1.EffectiveLookaheadMs >= 145,
             $"Expected Headset 1 lookahead >= 145ms to cover negative lag from phone, got {diagH1.EffectiveLookaheadMs}ms");
 
-        // Phase 2: Turn-taking — now someone actually speaks directly into the Android phone ("mats2") at -14 dBFS dry near-field,
+        // Phase 2: Turn-taking — now someone actually speaks directly into the Android phone ("peerB") at -14 dBFS dry near-field,
         // while Headset 1 & Headset 2 across the room only receive -50 dBFS far-field bleed arriving 134ms EARLIER!
         int phoneSpeechFrames = 85;
         int negLagSamples = 6422; // 133.8ms
@@ -1348,15 +1348,15 @@ public class AcousticRoomProcessorTests
     [Fact]
     public void SoloSpeakerWithReverberantBleedAndQuietTrailingSyllables_NeverSelfGatesOnRoommateHangover()
     {
-        // Reproduces "Bureau Stewie" Test 1 anomaly at t=51.73s..51.98s where solo speaker ("admin first")
+        // Reproduces "Room Alpha" Test 1 anomaly at t=51.73s..51.98s where solo speaker ("admin first")
         // dipped to quiet trailing syllables (-36..-40 dBFS) and briefly self-gated against roommate's reverberant hangover.
         var processor = new AcousticRoomProcessor();
         string adminId = "6f30c05d-c9d6-4cbb-bdbb-b2f8f3b3c9c3";
-        string matsId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
+        string peerAId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
 
-        processor.SyncParticipants([adminId, matsId]);
-        processor.SeedSavedPairCalibration(adminId, matsId, delaySamples: 1807, bleedGain: 0.142f, confidence: 0.88f);  // +37.6ms
-        processor.SeedSavedPairCalibration(matsId, adminId, delaySamples: -1469, bleedGain: 0.085f, confidence: 0.88f); // -30.6ms
+        processor.SyncParticipants([adminId, peerAId]);
+        processor.SeedSavedPairCalibration(adminId, peerAId, delaySamples: 1807, bleedGain: 0.142f, confidence: 0.88f);  // +37.6ms
+        processor.SeedSavedPairCalibration(peerAId, adminId, delaySamples: -1469, bleedGain: 0.085f, confidence: 0.88f); // -30.6ms
 
         int totalFrames = 240; // 2.4 seconds
         int totalSamples = totalFrames * FrameSamples;
@@ -1374,7 +1374,7 @@ public class AcousticRoomProcessorTests
             baseSpeech[i] = (short)Math.Round(baseSpeech[i] * phraseEnv);
         }
 
-        var matsReverbBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(
+        var peerAReverbBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(
             baseSpeech,
             directDelaySamples: 1807, // +37.6ms
             directBleedGain: 0.15,
@@ -1384,24 +1384,24 @@ public class AcousticRoomProcessorTests
         for (int f = 0; f < totalFrames; f++)
         {
             var fAdmin = baseSpeech.AsSpan(f * FrameSamples, FrameSamples).ToArray();
-            var fMats = matsReverbBleed.AsSpan(f * FrameSamples, FrameSamples).ToArray();
+            var fPeerA = peerAReverbBleed.AsSpan(f * FrameSamples, FrameSamples).ToArray();
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = fAdmin,
-                [matsId] = fMats
+                [peerAId] = fPeerA
             }, f * 10);
         }
 
         var snap = processor.GetDiagnosticSnapshot();
         var adminDiag = snap.Participants.First(p => p.UserId == adminId);
-        var matsDiag = snap.Participants.First(p => p.UserId == matsId);
+        var peerADiag = snap.Participants.First(p => p.UserId == peerAId);
 
         Assert.Equal(0, adminDiag.GatedBleedSubFrames);
-        Assert.True(matsDiag.AchievedBleedSuppressionDb >= 25.0,
-            $"Expected roommate bleed suppression >= 25 dB, got {matsDiag.AchievedBleedSuppressionDb:F1} dB");
+        Assert.True(peerADiag.AchievedBleedSuppressionDb >= 25.0,
+            $"Expected roommate bleed suppression >= 25 dB, got {peerADiag.AchievedBleedSuppressionDb:F1} dB");
         Assert.DoesNotContain(snap.TimelineBuckets, b =>
             b.ParticipantGateStates.TryGetValue(adminId, out var gA) && gA == AcousticGateState.GatedBleed &&
-            b.ParticipantGateStates.TryGetValue(matsId, out var gB) && gB == AcousticGateState.GatedBleed);
+            b.ParticipantGateStates.TryGetValue(peerAId, out var gB) && gB == AcousticGateState.GatedBleed);
     }
 
     [Fact]
@@ -1412,11 +1412,11 @@ public class AcousticRoomProcessorTests
         // Verify that the unverified cross-session reverse seed (-30.6ms) does NOT block live re-anchoring to -14.0ms!
         var processor = new AcousticRoomProcessor();
         string adminId = "admin_first";
-        string matsId = "mats";
+        string peerAId = "peerA";
 
-        processor.SyncParticipants([adminId, matsId]);
-        processor.SeedSavedPairCalibration(adminId, matsId, delaySamples: 1807, bleedGain: 0.142f, confidence: 0.88f);
-        processor.SeedSavedPairCalibration(matsId, adminId, delaySamples: -1469, bleedGain: 0.031f, confidence: 0.95f);
+        processor.SyncParticipants([adminId, peerAId]);
+        processor.SeedSavedPairCalibration(adminId, peerAId, delaySamples: 1807, bleedGain: 0.142f, confidence: 0.88f);
+        processor.SeedSavedPairCalibration(peerAId, adminId, delaySamples: -1469, bleedGain: 0.031f, confidence: 0.95f);
 
         int newSessionLagSamples = -672; // -14.0ms
         int absLag = Math.Abs(newSessionLagSamples);
@@ -1427,7 +1427,7 @@ public class AcousticRoomProcessorTests
             amplitude: 3600.0,
             includeSyllablePauses: true);
 
-        var bleedMats = AcousticRoomSimulator.ApplyRoomImpulseResponse(
+        var bleedPeerA = AcousticRoomSimulator.ApplyRoomImpulseResponse(
             rawAdmin,
             directDelaySamples: 0,
             directBleedGain: 0.22,
@@ -1438,18 +1438,18 @@ public class AcousticRoomProcessorTests
         {
             int idx = f * FrameSamples;
             var fAdmin = rawAdmin.AsSpan(idx, FrameSamples).ToArray();
-            var fMats = bleedMats.AsSpan(idx + absLag, FrameSamples).ToArray();
+            var fPeerA = bleedPeerA.AsSpan(idx + absLag, FrameSamples).ToArray();
 
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = fAdmin,
-                [matsId] = fMats
+                [peerAId] = fPeerA
             }, f * 10);
         }
 
         var snap = processor.GetDiagnosticSnapshot();
-        var calAB = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == matsId);
-        var calBA = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == matsId && c.TargetUserId == adminId);
+        var calAB = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == peerAId);
+        var calBA = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == peerAId && c.TargetUserId == adminId);
 
         Assert.NotNull(calAB);
         Assert.False(calAB!.IsReciprocalPrior);
@@ -1459,9 +1459,9 @@ public class AcousticRoomProcessorTests
         Assert.True(calBA!.IsReciprocalPrior, "Expected stale cross-session reverse seed (-30.6ms) to refresh to a consistent reciprocal prior (+22ms)");
         Assert.InRange(calBA.DelayMs, 18.0, 26.0);
 
-        var matsDiag = snap.Participants.First(p => p.UserId == matsId);
-        Assert.True(matsDiag.AchievedBleedSuppressionDb >= 20.0,
-            $"Expected re-anchored session calibration to suppress bleed by >= 20 dB, got {matsDiag.AchievedBleedSuppressionDb:F1} dB");
+        var peerADiag = snap.Participants.First(p => p.UserId == peerAId);
+        Assert.True(peerADiag.AchievedBleedSuppressionDb >= 20.0,
+            $"Expected re-anchored session calibration to suppress bleed by >= 20 dB, got {peerADiag.AchievedBleedSuppressionDb:F1} dB");
     }
 
     [Fact]
@@ -1590,17 +1590,17 @@ public class AcousticRoomProcessorTests
     [Fact]
     public void ProcessParticipantFrame_BurstJitterStallsUpTo110Ms_NeverInjectsFakeDtxSilenceOrCorruptsCalibration()
     {
-        // Reproduces "Bureau Stewie" wireless Corsair headset clock-drift desync:
+        // Reproduces "Room Alpha" wireless Corsair headset clock-drift desync:
         // Two symmetric desktop wireless headsets (+4.0ms = +192 samples air delay, -8.5 dB bleed) stream via
         // ProcessParticipantFrame while experiencing periodic 50..110ms Wi-Fi/GC/thread wakeup stalls followed
         // immediately by queued packet bursts draining. Verify zero fake DTX silence injection, 0.0ms spurious
         // ClockDrift, accurate +4.0ms DirectLock, and zero self-gating.
         var processor = new AcousticRoomProcessor();
         const string adminId = "6f30c05d-c9d6-4cbb-bdbb-b2f8f3b3c9c3";
-        const string matsId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
-        processor.SyncParticipants([adminId, matsId]);
+        const string peerAId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
+        processor.SyncParticipants([adminId, peerAId]);
         processor.SetParticipantClientPipelineInfo(adminId, 20.0, 17.0);
-        processor.SetParticipantClientPipelineInfo(matsId, 20.0, 9.0);
+        processor.SetParticipantClientPipelineInfo(peerAId, 20.0, 9.0);
 
         int totalFrames = 240; // 2.4s
         int totalSamples = totalFrames * FrameSamples;
@@ -1612,7 +1612,7 @@ public class AcousticRoomProcessorTests
             amplitude: 11500.0,
             includeSyllablePauses: true);
 
-        var bleedOnMats = AcousticRoomSimulator.ApplyRoomImpulseResponse(
+        var bleedOnPeerA = AcousticRoomSimulator.ApplyRoomImpulseResponse(
             rawSpeech,
             directDelaySamples: airDelaySamples,
             directBleedGain: 0.378, // -8.5 dB
@@ -1626,9 +1626,9 @@ public class AcousticRoomProcessorTests
         {
             long wallMs = f * 10L;
             pendingA.Enqueue(rawSpeech.AsSpan(f * FrameSamples, FrameSamples).ToArray());
-            pendingB.Enqueue(bleedOnMats.AsSpan(f * FrameSamples, FrameSamples).ToArray());
+            pendingB.Enqueue(bleedOnPeerA.AsSpan(f * FrameSamples, FrameSamples).ToArray());
 
-            // Simulate 60ms stall on admin (frames 30..35, 110..115) and 100ms stall on mats (frames 55..64, 145..154)
+            // Simulate 60ms stall on admin (frames 30..35, 110..115) and 100ms stall on peerA (frames 55..64, 145..154)
             bool stallA = (f >= 30 && f < 36) || (f >= 110 && f < 116);
             bool stallB = (f >= 55 && f < 65) || (f >= 145 && f < 155);
 
@@ -1644,22 +1644,22 @@ public class AcousticRoomProcessorTests
             {
                 while (pendingB.Count > 0)
                 {
-                    processor.ProcessParticipantFrame(matsId, pendingB.Dequeue(), wallMs);
+                    processor.ProcessParticipantFrame(peerAId, pendingB.Dequeue(), wallMs);
                 }
             }
         }
 
         var snap = processor.GetDiagnosticSnapshot();
         var adminDiag = snap.Participants.First(p => p.UserId == adminId);
-        var matsDiag = snap.Participants.First(p => p.UserId == matsId);
+        var peerADiag = snap.Participants.First(p => p.UserId == peerAId);
 
         Assert.Equal(0.0, adminDiag.ClockDriftCompensatedMs, 1);
-        Assert.Equal(0.0, matsDiag.ClockDriftCompensatedMs, 1);
+        Assert.Equal(0.0, peerADiag.ClockDriftCompensatedMs, 1);
         Assert.Equal(0, adminDiag.GatedBleedSubFrames);
-        Assert.True(matsDiag.AchievedBleedSuppressionDb >= 20.0,
-            $"Expected mats bleed suppression >= 20 dB across async packet bursts, got {matsDiag.AchievedBleedSuppressionDb:F1} dB");
+        Assert.True(peerADiag.AchievedBleedSuppressionDb >= 20.0,
+            $"Expected peerA bleed suppression >= 20 dB across async packet bursts, got {peerADiag.AchievedBleedSuppressionDb:F1} dB");
 
-        var calAB = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == matsId);
+        var calAB = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == peerAId);
         Assert.NotNull(calAB);
         Assert.False(calAB!.IsReciprocalPrior);
         Assert.True(calAB.IsLiveVerified);
@@ -1669,33 +1669,33 @@ public class AcousticRoomProcessorTests
     [Fact]
     public void TwoWirelessHeadsets_AsymmetricBleedAndMidCallNetEqShift_DirectLocksBothDirectionsAndNeverSelfGates()
     {
-        // Reproduces "Bureau Stewie" turn-taking on two wireless Corsair headsets:
-        // 1. Phase 1 (0..1.8s): "mats" speaks first with heavy -8.5 dB (0.378) bleed into "admin first" (+4.0ms).
-        // 2. Mid-call WebRTC NetEq shift (+32.0ms on "mats") + Phase 2 (2.0..4.0s): "admin first" speaks loudly
-        //    (-11 dBFS with syllable pauses) while directional boom + Chrome WebRTC NS on "mats" attenuates bleed
+        // Reproduces "Room Alpha" turn-taking on two wireless Corsair headsets:
+        // 1. Phase 1 (0..1.8s): "peerA" speaks first with heavy -8.5 dB (0.378) bleed into "admin first" (+4.0ms).
+        // 2. Mid-call WebRTC NetEq shift (+32.0ms on "peerA") + Phase 2 (2.0..4.0s): "admin first" speaks loudly
+        //    (-11 dBFS with syllable pauses) while directional boom + Chrome WebRTC NS on "peerA" attenuates bleed
         //    to -46 dB (0.005x) at shifted lag +36.0ms (+1728 samples).
-        // 3. Phase 3 (4.3..6.1s): "mats" speaks again at shifted lag -28.0ms (-1344 samples), proving the latched
+        // 3. Phase 3 (4.3..6.1s): "peerA" speaks again at shifted lag -28.0ms (-1344 samples), proving the latched
         //    calibration self-heals to -28.0ms, both directions end DirectLocked with ~+4.0ms decomposed air delay,
         //    and active speakers never self-gate or mutual-gate.
         var processor = new AcousticRoomProcessor();
         const string adminId = "6f30c05d-c9d6-4cbb-bdbb-b2f8f3b3c9c3";
-        const string matsId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
-        processor.SyncParticipants([adminId, matsId]);
+        const string peerAId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
+        processor.SyncParticipants([adminId, peerAId]);
         processor.SetParticipantClientPipelineInfo(adminId, 20.0, 17.0);
-        processor.SetParticipantClientPipelineInfo(matsId, 20.0, 9.0);
+        processor.SetParticipantClientPipelineInfo(peerAId, 20.0, 9.0);
 
         var silentFrame = new short[FrameSamples];
         long frameCursor = 0;
 
-        // Phase 1: "mats" speaks for 1.8s (+4.0ms = +192 samples on admin, 0.378 = -8.5 dB bleed)
+        // Phase 1: "peerA" speaks for 1.8s (+4.0ms = +192 samples on admin, 0.378 = -8.5 dB bleed)
         int phase1Frames = 180;
-        var matsSpeech1 = AcousticRoomSimulator.GenerateNaturalSpeech(
+        var peerASpeech1 = AcousticRoomSimulator.GenerateNaturalSpeech(
             phase1Frames * FrameSamples,
             fundamentalHz: 195.0,
             amplitude: 10500.0,
             includeSyllablePauses: true);
         var adminBleed1 = AcousticRoomSimulator.ApplyRoomImpulseResponse(
-            matsSpeech1,
+            peerASpeech1,
             directDelaySamples: 192,
             directBleedGain: 0.378,
             rt60Ms: 150.0,
@@ -1706,7 +1706,7 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = adminBleed1.AsSpan(f * FrameSamples, FrameSamples).ToArray(),
-                [matsId] = matsSpeech1.AsSpan(f * FrameSamples, FrameSamples).ToArray()
+                [peerAId] = peerASpeech1.AsSpan(f * FrameSamples, FrameSamples).ToArray()
             }, frameCursor * 10);
         }
 
@@ -1716,11 +1716,11 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = (short[])silentFrame.Clone(),
-                [matsId] = (short[])silentFrame.Clone()
+                [peerAId] = (short[])silentFrame.Clone()
             }, frameCursor * 10);
         }
 
-        // Phase 2: WebRTC NetEq on "mats" shifts by +32ms -> true lag (admin -> mats) is now +36.0ms (+1728 samples),
+        // Phase 2: WebRTC NetEq on "peerA" shifts by +32ms -> true lag (admin -> peerA) is now +36.0ms (+1728 samples),
         // with directional boom + WebRTC NS attenuating bleed to 0.005 (-46 dB).
         int phase2Frames = 200;
         int shiftedPosLag = 1728; // +36.0ms
@@ -1729,7 +1729,7 @@ public class AcousticRoomProcessorTests
             fundamentalHz: 185.0,
             amplitude: 13500.0,
             includeSyllablePauses: true);
-        var matsQuietBleed2 = AcousticRoomSimulator.ApplyRoomImpulseResponse(
+        var peerAQuietBleed2 = AcousticRoomSimulator.ApplyRoomImpulseResponse(
             adminSpeech2,
             directDelaySamples: shiftedPosLag,
             directBleedGain: 0.0075, // -42.5 dB direct -> ~ -46.5 dB post-RIR/head-shadow (< 0.008 old vocal-band threshold!)
@@ -1741,11 +1741,11 @@ public class AcousticRoomProcessorTests
         for (int f = 0; f < phase2Frames; f++, frameCursor++)
         {
             var fAdmin = adminSpeech2.AsSpan(f * FrameSamples, FrameSamples).ToArray();
-            var fMats = matsQuietBleed2.AsSpan(f * FrameSamples, FrameSamples).ToArray();
+            var fPeerA = peerAQuietBleed2.AsSpan(f * FrameSamples, FrameSamples).ToArray();
             var stepOut = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = fAdmin,
-                [matsId] = fMats
+                [peerAId] = fPeerA
             }, frameCursor * 10);
 
             if (f >= 20 && f < phase2Frames - 10)
@@ -1764,61 +1764,61 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = (short[])silentFrame.Clone(),
-                [matsId] = (short[])silentFrame.Clone()
+                [peerAId] = (short[])silentFrame.Clone()
             }, frameCursor * 10);
         }
 
-        // Phase 3: "mats" speaks again under the +32ms NetEq shift -> true lag (mats -> admin) is now -28.0ms (-1344 samples)
+        // Phase 3: "peerA" speaks again under the +32ms NetEq shift -> true lag (peerA -> admin) is now -28.0ms (-1344 samples)
         int phase3Frames = 180;
-        int shiftedNegLagAbs = 1344; // 28.0ms (bleed arrives on admin 28ms BEFORE mats's NetEq-delayed stream)
-        var rawMatsSpeech3 = AcousticRoomSimulator.GenerateNaturalSpeech(
+        int shiftedNegLagAbs = 1344; // 28.0ms (bleed arrives on admin 28ms BEFORE peerA's NetEq-delayed stream)
+        var rawPeerASpeech3 = AcousticRoomSimulator.GenerateNaturalSpeech(
             phase3Frames * FrameSamples + shiftedNegLagAbs,
             fundamentalHz: 195.0,
             amplitude: 10800.0,
             includeSyllablePauses: true);
         var rawAdminBleed3 = AcousticRoomSimulator.ApplyRoomImpulseResponse(
-            rawMatsSpeech3,
+            rawPeerASpeech3,
             directDelaySamples: 0,
             directBleedGain: 0.378,
             rt60Ms: 150.0,
             applyHeadShadowLowPass: true);
 
-        double matsPhase3In = 0;
-        double matsPhase3Out = 0;
+        double peerAPhase3In = 0;
+        double peerAPhase3Out = 0;
         for (int f = 0; f < phase3Frames; f++, frameCursor++)
         {
             int idx = f * FrameSamples;
-            var fMats = rawMatsSpeech3.AsSpan(idx, FrameSamples).ToArray();
+            var fPeerA = rawPeerASpeech3.AsSpan(idx, FrameSamples).ToArray();
             var fAdmin = rawAdminBleed3.AsSpan(idx + shiftedNegLagAbs, FrameSamples).ToArray();
             var stepOut = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = fAdmin,
-                [matsId] = fMats
+                [peerAId] = fPeerA
             }, frameCursor * 10);
 
             if (f >= 20 && f < phase3Frames - 10)
             {
-                matsPhase3In += ComputeRms(fMats);
-                matsPhase3Out += ComputeRms(stepOut[matsId]);
+                peerAPhase3In += ComputeRms(fPeerA);
+                peerAPhase3Out += ComputeRms(stepOut[peerAId]);
             }
         }
 
-        Assert.True(matsPhase3Out >= matsPhase3In * 0.94,
-            $"Expected active speaker 'mats' never to self-gate during Phase 3, got retention {(100.0 * matsPhase3Out / Math.Max(1.0, matsPhase3In)):F1}%");
+        Assert.True(peerAPhase3Out >= peerAPhase3In * 0.94,
+            $"Expected active speaker 'peerA' never to self-gate during Phase 3, got retention {(100.0 * peerAPhase3Out / Math.Max(1.0, peerAPhase3In)):F1}%");
 
         var finalSnap = processor.GetDiagnosticSnapshot();
-        var calAdminToMats = finalSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == matsId);
-        var calMatsToAdmin = finalSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == matsId && c.TargetUserId == adminId);
+        var calAdminToPeerA = finalSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == peerAId);
+        var calPeerAToAdmin = finalSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == peerAId && c.TargetUserId == adminId);
 
-        Assert.NotNull(calAdminToMats);
-        Assert.False(calAdminToMats!.IsReciprocalPrior, "Expected admin -> mats (-46 dB WebRTC NS bleed) to achieve DirectLock");
-        Assert.True(calAdminToMats.IsLiveVerified);
-        Assert.InRange(calAdminToMats.DelayMs, 33.0, 39.0);
+        Assert.NotNull(calAdminToPeerA);
+        Assert.False(calAdminToPeerA!.IsReciprocalPrior, "Expected admin -> peerA (-46 dB WebRTC NS bleed) to achieve DirectLock");
+        Assert.True(calAdminToPeerA.IsLiveVerified);
+        Assert.InRange(calAdminToPeerA.DelayMs, 33.0, 39.0);
 
-        Assert.NotNull(calMatsToAdmin);
-        Assert.False(calMatsToAdmin!.IsReciprocalPrior, "Expected latched mats -> admin to re-latch onto -28.0ms NetEq shift");
-        Assert.True(calMatsToAdmin.IsLiveVerified);
-        Assert.InRange(calMatsToAdmin.DelayMs, -31.0, -25.0);
+        Assert.NotNull(calPeerAToAdmin);
+        Assert.False(calPeerAToAdmin!.IsReciprocalPrior, "Expected latched peerA -> admin to re-latch onto -28.0ms NetEq shift");
+        Assert.True(calPeerAToAdmin.IsLiveVerified);
+        Assert.InRange(calPeerAToAdmin.DelayMs, -31.0, -25.0);
 
         Assert.Single(finalSnap.Decompositions);
         Assert.True(finalSnap.Decompositions[0].BothDirectionsDirectlyLocked);
@@ -1828,59 +1828,59 @@ public class AcousticRoomProcessorTests
         Assert.DoesNotContain(finalSnap.TimelineBuckets, b =>
             !string.Equals(b.DominantSpeakerUserId, "Silence", StringComparison.OrdinalIgnoreCase) &&
             b.ParticipantGateStates.TryGetValue(adminId, out var gA) && gA == AcousticGateState.GatedBleed &&
-            b.ParticipantGateStates.TryGetValue(matsId, out var gB) && gB == AcousticGateState.GatedBleed);
+            b.ParticipantGateStates.TryGetValue(peerAId, out var gB) && gB == AcousticGateState.GatedBleed);
     }
 
     [Fact]
-    public void ThreeDevices_BureauStewie_AndroidOnsetBleedBurst_Over220MsLag_AndWifiJitterShift_GatesOnsetEchoCleanly()
+    public void ThreeDevices_RoomAlpha_AndroidOnsetBleedBurst_Over220MsLag_AndWifiJitterShift_GatesOnsetEchoCleanly()
     {
-        // Reproduces the live 3-device "Bureau Stewie" diagnostic report:
+        // Reproduces the live 3-device "Room Alpha" diagnostic report:
         // - "admin first" (Windows Chrome, Filter="webrtc", ClientDsp=20ms, ServerDelay=17ms)
-        // - "mats"        (Windows Chrome, Filter="webrtc", ClientDsp=20ms, ServerDelay=9ms)
-        // - "mats2"       (Android App,    Filter="webrtc", ClientDsp=75ms, ServerDelay=60ms)
+        // - "peerA"        (Windows Chrome, Filter="webrtc", ClientDsp=20ms, ServerDelay=9ms)
+        // - "peerB"       (Android App,    Filter="webrtc", ClientDsp=75ms, ServerDelay=60ms)
         //
         // Validates all 4 interacting fixes:
-        // 1. Mobile -> Desktop lag > +220ms (+247.8ms on admin -> mats2) locks directly without clamping at +220.0ms.
+        // 1. Mobile -> Desktop lag > +220ms (+247.8ms on admin -> peerB) locks directly without clamping at +220.0ms.
         // 2. Android hardware-NS 90ms un-attenuated phrase-onset bleed bursts (0.36x onset -> 0.05x steady-state)
-        //    do NOT trigger false DoubleTalkSTFT echo leaks on mats2 or self-gating back-reaction on solo speakers.
-        // 3. 3-node triangle transitivity + Wi-Fi jitter window lets mats -> mats2 (+110.0ms) acquire a live DirectLock
+        //    do NOT trigger false DoubleTalkSTFT echo leaks on peerB or self-gating back-reaction on solo speakers.
+        // 3. 3-node triangle transitivity + Wi-Fi jitter window lets peerA -> peerB (+110.0ms) acquire a live DirectLock
         //    even after a +42ms Android Wi-Fi jitter-buffer shift away from Phase 1's +58.1ms ReciprocalPrior.
-        // 4. Genuine simultaneous near-field double-talk on mats2 still opens and preserves mats2's voice.
+        // 4. Genuine simultaneous near-field double-talk on peerB still opens and preserves peerB's voice.
         var processor = new AcousticRoomProcessor();
         string adminId = "6f30c05d-c9d6-4cbb-bdbb-b2f8f3b3c9c3";
-        string matsId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
-        string mats2Id = "340555a5-a468-477f-870f-3b49a4d09679";
+        string peerAId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
+        string peerBId = "340555a5-a468-477f-870f-3b49a4d09679";
 
-        processor.SyncParticipants([adminId, matsId, mats2Id]);
+        processor.SyncParticipants([adminId, peerAId, peerBId]);
         processor.SetParticipantClientPipelineInfo(adminId, 20.0, 17.0);
-        processor.SetParticipantClientPipelineInfo(matsId, 20.0, 9.0);
-        processor.SetParticipantClientPipelineInfo(mats2Id, 75.0, 60.0);
+        processor.SetParticipantClientPipelineInfo(peerAId, 20.0, 9.0);
+        processor.SetParticipantClientPipelineInfo(peerBId, 75.0, 60.0);
 
         int frameCursor = 0;
         var silentFrame = new short[FrameSamples];
 
-        // --- PHASE 1: "mats2" (Android) speaks briefly before Wi-Fi jitter shift ---
-        // Bleed arrives earlier on admin (-166.2ms = -7978 smp) and mats (-50.1ms = -2404 smp, seeding mats->mats2 prior at +58.1ms).
+        // --- PHASE 1: "peerB" (Android) speaks briefly before Wi-Fi jitter shift ---
+        // Bleed arrives earlier on admin (-166.2ms = -7978 smp) and peerA (-50.1ms = -2404 smp, seeding peerA->peerB prior at +58.1ms).
         int p1SpeechFrames = 110;
         int p1PauseFrames = 45;
         int p1LeadAdmin = 7978; // 166.2ms
-        int p1LeadMats = 2404;  // 50.1ms
-        var p1RawMats2 = AcousticRoomSimulator.GenerateNaturalSpeech(
+        int p1LeadPeerA = 2404;  // 50.1ms
+        var p1RawPeerB = AcousticRoomSimulator.GenerateNaturalSpeech(
             p1SpeechFrames * FrameSamples + p1LeadAdmin,
             fundamentalHz: 260.0,
             amplitude: 10500.0,
             includeSyllablePauses: true);
-        var p1BleedAdmin = AcousticRoomSimulator.ApplyRoomImpulseResponse(p1RawMats2, 0, directBleedGain: 0.055, rt60Ms: 150.0, applyHeadShadowLowPass: true);
-        var p1BleedMats = AcousticRoomSimulator.ApplyRoomImpulseResponse(p1RawMats2, 0, directBleedGain: 0.174, rt60Ms: 130.0, applyHeadShadowLowPass: true);
+        var p1BleedAdmin = AcousticRoomSimulator.ApplyRoomImpulseResponse(p1RawPeerB, 0, directBleedGain: 0.055, rt60Ms: 150.0, applyHeadShadowLowPass: true);
+        var p1BleedPeerA = AcousticRoomSimulator.ApplyRoomImpulseResponse(p1RawPeerB, 0, directBleedGain: 0.174, rt60Ms: 130.0, applyHeadShadowLowPass: true);
 
         for (int f = 0; f < p1SpeechFrames; f++, frameCursor++)
         {
             int idx = f * FrameSamples;
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
-                [mats2Id] = p1RawMats2.AsSpan(idx, FrameSamples).ToArray(),
+                [peerBId] = p1RawPeerB.AsSpan(idx, FrameSamples).ToArray(),
                 [adminId] = p1BleedAdmin.AsSpan(idx + p1LeadAdmin, FrameSamples).ToArray(),
-                [matsId] = p1BleedMats.AsSpan(idx + p1LeadMats, FrameSamples).ToArray()
+                [peerAId] = p1BleedPeerA.AsSpan(idx + p1LeadPeerA, FrameSamples).ToArray()
             }, frameCursor * 10);
         }
         for (int f = 0; f < p1PauseFrames; f++, frameCursor++)
@@ -1888,15 +1888,15 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = (short[])silentFrame.Clone(),
-                [matsId] = (short[])silentFrame.Clone(),
-                [mats2Id] = (short[])silentFrame.Clone()
+                [peerAId] = (short[])silentFrame.Clone(),
+                [peerBId] = (short[])silentFrame.Clone()
             }, frameCursor * 10);
         }
 
-        // --- PHASE 2: Android Wi-Fi jitter buffer shifts mats2 by +42ms; "admin first" speaks 2 phrases separated by 450ms silence ---
-        // True lags: admin -> mats = +138.1ms (+6628 smp, 0.582x high bleed); admin -> mats2 = +247.8ms (+11894 smp, > 220ms!).
-        int lagAdminToMats = 6628;   // +138.1ms
-        int lagAdminToMats2 = 11894; // +247.8ms (exceeds old +220.0ms / 10560-sample ceiling!)
+        // --- PHASE 2: Android Wi-Fi jitter buffer shifts peerB by +42ms; "admin first" speaks 2 phrases separated by 450ms silence ---
+        // True lags: admin -> peerA = +138.1ms (+6628 smp, 0.582x high bleed); admin -> peerB = +247.8ms (+11894 smp, > 220ms!).
+        int lagAdminToPeerA = 6628;   // +138.1ms
+        int lagAdminToPeerB = 11894; // +247.8ms (exceeds old +220.0ms / 10560-sample ceiling!)
         int p2Phrase1Frames = 145;
         int p2InterPhraseSilence = 45; // 450ms pause resets Android hardware NS back to 1.0x open onset gain
         int p2Phrase2Frames = 115;
@@ -1911,54 +1911,54 @@ public class AcousticRoomProcessorTests
         int p2Phrase2OffsetSamples = (p2Phrase1Frames + p2InterPhraseSilence) * FrameSamples;
         Array.Copy(p2Phrase2Clean, 0, p2AdminTrack, p2Phrase2OffsetSamples, p2Phrase2Clean.Length);
 
-        var p2MatsTrack = AcousticRoomSimulator.ApplyRoomImpulseResponse(
+        var p2PeerATrack = AcousticRoomSimulator.ApplyRoomImpulseResponse(
             p2AdminTrack,
-            directDelaySamples: lagAdminToMats,
+            directDelaySamples: lagAdminToPeerA,
             directBleedGain: 0.582, // -4.7 dB strong nearby PC bleed
             rt60Ms: 140.0,
             applyHeadShadowLowPass: true);
 
-        var p2Mats2RawAcousticBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(
+        var p2PeerBRawAcousticBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(
             p2AdminTrack,
-            directDelaySamples: lagAdminToMats2,
+            directDelaySamples: lagAdminToPeerB,
             directBleedGain: 0.36, // Un-suppressed onset bleed burst (-8.9 dB) before Android NS clamps down
             rt60Ms: 165.0,
             applyHeadShadowLowPass: true);
-        var p2Mats2Track = AcousticRoomSimulator.ApplyMobileHardwareNsOnsetBurstSimulation(
-            p2Mats2RawAcousticBleed,
+        var p2PeerBTrack = AcousticRoomSimulator.ApplyMobileHardwareNsOnsetBurstSimulation(
+            p2PeerBRawAcousticBleed,
             onsetHoldMs: 90.0,
             steadyStateSuppressionGain: 0.14,
             silenceResetMs: 150.0);
 
-        int mats2DtBeforeAdminPhrase2 = 0;
+        int peerBDtBeforeAdminPhrase2 = 0;
         double adminPhrase2In = 0;
         double adminPhrase2Out = 0;
-        double mats2AdminOnsetBurstIn = 0;
-        double mats2AdminOnsetBurstOut = 0;
+        double peerBAdminOnsetBurstIn = 0;
+        double peerBAdminOnsetBurstOut = 0;
 
         int p2Phrase2StartFrame = p2Phrase1Frames + p2InterPhraseSilence;
-        // Onset burst arrives on mats2 at p2Phrase2StartFrame + ~25 frames (+247.8ms) and exits mats2's 50ms lookahead 5 frames later
-        int p2Mats2BurstInStart = p2Phrase2StartFrame + 24;
-        int p2Mats2BurstInEnd = p2Phrase2StartFrame + 38;
+        // Onset burst arrives on peerB at p2Phrase2StartFrame + ~25 frames (+247.8ms) and exits peerB's 50ms lookahead 5 frames later
+        int p2PeerBBurstInStart = p2Phrase2StartFrame + 24;
+        int p2PeerBBurstInEnd = p2Phrase2StartFrame + 38;
 
         for (int f = 0; f < p2TotalFrames; f++, frameCursor++)
         {
             if (f == p2Phrase2StartFrame)
             {
-                mats2DtBeforeAdminPhrase2 = processor.GetDiagnosticSnapshot()
-                    .Participants.First(p => p.UserId == mats2Id).DoubleTalkSubFrames;
+                peerBDtBeforeAdminPhrase2 = processor.GetDiagnosticSnapshot()
+                    .Participants.First(p => p.UserId == peerBId).DoubleTalkSubFrames;
             }
 
             int idx = f * FrameSamples;
             var fAdmin = p2AdminTrack.AsSpan(idx, FrameSamples).ToArray();
-            var fMats = p2MatsTrack.AsSpan(idx, FrameSamples).ToArray();
-            var fMats2 = p2Mats2Track.AsSpan(idx, FrameSamples).ToArray();
+            var fPeerA = p2PeerATrack.AsSpan(idx, FrameSamples).ToArray();
+            var fPeerB = p2PeerBTrack.AsSpan(idx, FrameSamples).ToArray();
 
             var stepOut = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = fAdmin,
-                [matsId] = fMats,
-                [mats2Id] = fMats2
+                [peerAId] = fPeerA,
+                [peerBId] = fPeerB
             }, frameCursor * 10);
 
             if (f >= p2Phrase2StartFrame + 25 && f < p2Phrase2StartFrame + p2Phrase2Frames)
@@ -1967,172 +1967,172 @@ public class AcousticRoomProcessorTests
                 adminPhrase2Out += ComputeRms(stepOut[adminId]);
             }
 
-            if (f >= p2Mats2BurstInStart && f < p2Mats2BurstInEnd)
+            if (f >= p2PeerBBurstInStart && f < p2PeerBBurstInEnd)
             {
-                mats2AdminOnsetBurstIn += ComputeRms(fMats2);
+                peerBAdminOnsetBurstIn += ComputeRms(fPeerB);
             }
-            if (f >= p2Mats2BurstInStart + 5 && f < p2Mats2BurstInEnd + 5)
+            if (f >= p2PeerBBurstInStart + 5 && f < p2PeerBBurstInEnd + 5)
             {
-                mats2AdminOnsetBurstOut += ComputeRms(stepOut[mats2Id]);
+                peerBAdminOnsetBurstOut += ComputeRms(stepOut[peerBId]);
             }
         }
 
         var snapAfterAdmin = processor.GetDiagnosticSnapshot();
-        int mats2DtAfterAdminPhrase2 = snapAfterAdmin.Participants.First(p => p.UserId == mats2Id).DoubleTalkSubFrames;
-        var calAdminToMats2 = snapAfterAdmin.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == mats2Id);
+        int peerBDtAfterAdminPhrase2 = snapAfterAdmin.Participants.First(p => p.UserId == peerBId).DoubleTalkSubFrames;
+        var calAdminToPeerB = snapAfterAdmin.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == peerBId);
 
-        Assert.NotNull(calAdminToMats2);
-        Assert.False(calAdminToMats2!.IsReciprocalPrior, "Expected admin -> mats2 (+247.8ms) to achieve live DirectLock above old 220ms ceiling");
-        Assert.InRange(calAdminToMats2.DelayMs, 243.0, 253.0);
-        Assert.Equal(0, mats2DtAfterAdminPhrase2 - mats2DtBeforeAdminPhrase2);
-        Assert.True(mats2AdminOnsetBurstOut <= mats2AdminOnsetBurstIn * 0.08,
-            $"Expected mats2 90ms onset bleed burst from admin to be gated by >= 92%, got out={mats2AdminOnsetBurstOut:F1} / in={mats2AdminOnsetBurstIn:F1}");
+        Assert.NotNull(calAdminToPeerB);
+        Assert.False(calAdminToPeerB!.IsReciprocalPrior, "Expected admin -> peerB (+247.8ms) to achieve live DirectLock above old 220ms ceiling");
+        Assert.InRange(calAdminToPeerB.DelayMs, 243.0, 253.0);
+        Assert.Equal(0, peerBDtAfterAdminPhrase2 - peerBDtBeforeAdminPhrase2);
+        Assert.True(peerBAdminOnsetBurstOut <= peerBAdminOnsetBurstIn * 0.08,
+            $"Expected peerB 90ms onset bleed burst from admin to be gated by >= 92%, got out={peerBAdminOnsetBurstOut:F1} / in={peerBAdminOnsetBurstIn:F1}");
         Assert.True(adminPhrase2Out >= adminPhrase2In * 0.94,
-            $"Expected solo speaker admin never to self-gate during mats2 onset burst, got retention {(100.0 * adminPhrase2Out / Math.Max(1.0, adminPhrase2In)):F1}%");
+            $"Expected solo speaker admin never to self-gate during peerB onset burst, got retention {(100.0 * adminPhrase2Out / Math.Max(1.0, adminPhrase2In)):F1}%");
 
-        // --- PHASE 3: "mats" speaks 2 phrases separated by 400ms silence ---
-        // True lags: mats -> admin = -114.4ms (-5492 smp, 0.378x bleed); mats -> mats2 = +110.0ms (+5280 smp, shifted +51.9ms from Phase 1 prior!).
-        int leadMatsToAdmin = 5492; // -114.4ms (arrives on admin 114.4ms BEFORE mats's stream)
-        int lagMatsToMats2 = 5280;  // +110.0ms
+        // --- PHASE 3: "peerA" speaks 2 phrases separated by 400ms silence ---
+        // True lags: peerA -> admin = -114.4ms (-5492 smp, 0.378x bleed); peerA -> peerB = +110.0ms (+5280 smp, shifted +51.9ms from Phase 1 prior!).
+        int leadPeerAToAdmin = 5492; // -114.4ms (arrives on admin 114.4ms BEFORE peerA's stream)
+        int lagPeerAToPeerB = 5280;  // +110.0ms
         int p3Phrase1Frames = 135;
         int p3InterPhraseSilence = 40;
         int p3Phrase2Frames = 105;
         int p3TailFrames = 35;
         int p3TotalFrames = p3Phrase1Frames + p3InterPhraseSilence + p3Phrase2Frames + p3TailFrames;
-        int p3TotalSamples = p3TotalFrames * FrameSamples + leadMatsToAdmin;
+        int p3TotalSamples = p3TotalFrames * FrameSamples + leadPeerAToAdmin;
 
-        var p3MatsExtended = new short[p3TotalSamples];
+        var p3PeerAExtended = new short[p3TotalSamples];
         var p3Phrase1Clean = AcousticRoomSimulator.GenerateNaturalSpeech(p3Phrase1Frames * FrameSamples, 210.0, 12000.0, includeSyllablePauses: true);
         var p3Phrase2Clean = AcousticRoomSimulator.GenerateNaturalSpeech(p3Phrase2Frames * FrameSamples, 215.0, 12000.0, includeSyllablePauses: true);
-        Array.Copy(p3Phrase1Clean, 0, p3MatsExtended, 0, p3Phrase1Clean.Length);
+        Array.Copy(p3Phrase1Clean, 0, p3PeerAExtended, 0, p3Phrase1Clean.Length);
         int p3Phrase2OffsetSamples = (p3Phrase1Frames + p3InterPhraseSilence) * FrameSamples;
-        Array.Copy(p3Phrase2Clean, 0, p3MatsExtended, p3Phrase2OffsetSamples, p3Phrase2Clean.Length);
+        Array.Copy(p3Phrase2Clean, 0, p3PeerAExtended, p3Phrase2OffsetSamples, p3Phrase2Clean.Length);
 
         var p3AdminBleedExtended = AcousticRoomSimulator.ApplyRoomImpulseResponse(
-            p3MatsExtended,
+            p3PeerAExtended,
             directDelaySamples: 0,
             directBleedGain: 0.378,
             rt60Ms: 140.0,
             applyHeadShadowLowPass: true);
 
-        var p3Mats2RawBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(
-            p3MatsExtended.AsSpan(0, p3TotalFrames * FrameSamples),
-            directDelaySamples: lagMatsToMats2,
+        var p3PeerBRawBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(
+            p3PeerAExtended.AsSpan(0, p3TotalFrames * FrameSamples),
+            directDelaySamples: lagPeerAToPeerB,
             directBleedGain: 0.35,
             rt60Ms: 155.0,
             applyHeadShadowLowPass: true);
-        var p3Mats2Track = AcousticRoomSimulator.ApplyMobileHardwareNsOnsetBurstSimulation(
-            p3Mats2RawBleed,
+        var p3PeerBTrack = AcousticRoomSimulator.ApplyMobileHardwareNsOnsetBurstSimulation(
+            p3PeerBRawBleed,
             onsetHoldMs: 90.0,
             steadyStateSuppressionGain: 0.14,
             silenceResetMs: 150.0);
 
-        int mats2DtBeforeMatsPhrase2 = 0;
-        double matsPhrase2In = 0;
-        double matsPhrase2Out = 0;
-        double mats2MatsOnsetBurstIn = 0;
-        double mats2MatsOnsetBurstOut = 0;
+        int peerBDtBeforePeerAPhrase2 = 0;
+        double peerAPhrase2In = 0;
+        double peerAPhrase2Out = 0;
+        double peerBPeerAOnsetBurstIn = 0;
+        double peerBPeerAOnsetBurstOut = 0;
 
         int p3Phrase2StartFrame = p3Phrase1Frames + p3InterPhraseSilence;
-        int p3Mats2BurstInStart = p3Phrase2StartFrame + 11; // +110ms arrival
-        int p3Mats2BurstInEnd = p3Phrase2StartFrame + 24;
+        int p3PeerBBurstInStart = p3Phrase2StartFrame + 11; // +110ms arrival
+        int p3PeerBBurstInEnd = p3Phrase2StartFrame + 24;
 
         for (int f = 0; f < p3TotalFrames; f++, frameCursor++)
         {
             if (f == p3Phrase2StartFrame)
             {
-                mats2DtBeforeMatsPhrase2 = processor.GetDiagnosticSnapshot()
-                    .Participants.First(p => p.UserId == mats2Id).DoubleTalkSubFrames;
+                peerBDtBeforePeerAPhrase2 = processor.GetDiagnosticSnapshot()
+                    .Participants.First(p => p.UserId == peerBId).DoubleTalkSubFrames;
             }
 
             int idx = f * FrameSamples;
-            var fMats = p3MatsExtended.AsSpan(idx, FrameSamples).ToArray();
-            var fAdmin = p3AdminBleedExtended.AsSpan(idx + leadMatsToAdmin, FrameSamples).ToArray();
-            var fMats2 = p3Mats2Track.AsSpan(idx, FrameSamples).ToArray();
+            var fPeerA = p3PeerAExtended.AsSpan(idx, FrameSamples).ToArray();
+            var fAdmin = p3AdminBleedExtended.AsSpan(idx + leadPeerAToAdmin, FrameSamples).ToArray();
+            var fPeerB = p3PeerBTrack.AsSpan(idx, FrameSamples).ToArray();
 
             var stepOut = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = fAdmin,
-                [matsId] = fMats,
-                [mats2Id] = fMats2
+                [peerAId] = fPeerA,
+                [peerBId] = fPeerB
             }, frameCursor * 10);
 
             if (f >= p3Phrase2StartFrame + 15 && f < p3Phrase2StartFrame + p3Phrase2Frames)
             {
-                matsPhrase2In += ComputeRms(fMats);
-                matsPhrase2Out += ComputeRms(stepOut[matsId]);
+                peerAPhrase2In += ComputeRms(fPeerA);
+                peerAPhrase2Out += ComputeRms(stepOut[peerAId]);
             }
 
-            if (f >= p3Mats2BurstInStart && f < p3Mats2BurstInEnd)
+            if (f >= p3PeerBBurstInStart && f < p3PeerBBurstInEnd)
             {
-                mats2MatsOnsetBurstIn += ComputeRms(fMats2);
+                peerBPeerAOnsetBurstIn += ComputeRms(fPeerB);
             }
-            if (f >= p3Mats2BurstInStart + 7 && f < p3Mats2BurstInEnd + 7)
+            if (f >= p3PeerBBurstInStart + 7 && f < p3PeerBBurstInEnd + 7)
             {
-                mats2MatsOnsetBurstOut += ComputeRms(stepOut[mats2Id]);
+                peerBPeerAOnsetBurstOut += ComputeRms(stepOut[peerBId]);
             }
         }
 
-        var snapAfterMats = processor.GetDiagnosticSnapshot();
+        var snapAfterPeerA = processor.GetDiagnosticSnapshot();
         _output.WriteLine(AcousticRoomDiagnosticReportFormatter.FormatLiveRoomReport(
-            snapAfterMats,
-            "Bureau Stewie (3-Device Onset Burst Verification)",
+            snapAfterPeerA,
+            "Room Alpha (3-Device Onset Burst Verification)",
             new Dictionary<string, string>
             {
                 [adminId] = "admin first",
-                [matsId] = "mats",
-                [mats2Id] = "mats2"
+                [peerAId] = "peerA",
+                [peerBId] = "peerB"
             }));
 
-        int mats2DtAfterMatsPhrase2 = snapAfterMats.Participants.First(p => p.UserId == mats2Id).DoubleTalkSubFrames;
-        var calMatsToMats2 = snapAfterMats.Calibrations.FirstOrDefault(c => c.SourceUserId == matsId && c.TargetUserId == mats2Id);
+        int peerBDtAfterPeerAPhrase2 = snapAfterPeerA.Participants.First(p => p.UserId == peerBId).DoubleTalkSubFrames;
+        var calPeerAToPeerB = snapAfterPeerA.Calibrations.FirstOrDefault(c => c.SourceUserId == peerAId && c.TargetUserId == peerBId);
 
-        Assert.NotNull(calMatsToMats2);
-        Assert.False(calMatsToMats2!.IsReciprocalPrior, "Expected 3-node triangle prior + Wi-Fi jitter window to lock mats -> mats2 directly");
-        Assert.InRange(calMatsToMats2.DelayMs, 105.0, 115.0);
-        Assert.Equal(0, mats2DtAfterMatsPhrase2 - mats2DtBeforeMatsPhrase2);
-        Assert.True(mats2MatsOnsetBurstOut <= mats2MatsOnsetBurstIn * 0.08,
-            $"Expected mats2 90ms onset bleed burst from mats to be gated by >= 92%, got out={mats2MatsOnsetBurstOut:F1} / in={mats2MatsOnsetBurstIn:F1}");
-        Assert.True(matsPhrase2Out >= matsPhrase2In * 0.94,
-            $"Expected solo speaker mats never to self-gate during mats2 onset burst, got retention {(100.0 * matsPhrase2Out / Math.Max(1.0, matsPhrase2In)):F1}%");
+        Assert.NotNull(calPeerAToPeerB);
+        Assert.False(calPeerAToPeerB!.IsReciprocalPrior, "Expected 3-node triangle prior + Wi-Fi jitter window to lock peerA -> peerB directly");
+        Assert.InRange(calPeerAToPeerB.DelayMs, 105.0, 115.0);
+        Assert.Equal(0, peerBDtAfterPeerAPhrase2 - peerBDtBeforePeerAPhrase2);
+        Assert.True(peerBPeerAOnsetBurstOut <= peerBPeerAOnsetBurstIn * 0.08,
+            $"Expected peerB 90ms onset bleed burst from peerA to be gated by >= 92%, got out={peerBPeerAOnsetBurstOut:F1} / in={peerBPeerAOnsetBurstIn:F1}");
+        Assert.True(peerAPhrase2Out >= peerAPhrase2In * 0.94,
+            $"Expected solo speaker peerA never to self-gate during peerB onset burst, got retention {(100.0 * peerAPhrase2Out / Math.Max(1.0, peerAPhrase2In)):F1}%");
 
-        // --- PHASE 4: Genuine Simultaneous Double-Talk (admin + mats2 speak near-field together) ---
+        // --- PHASE 4: Genuine Simultaneous Double-Talk (admin + peerB speak near-field together) ---
         int dtFrames = 85;
         var dtAdminClean = AcousticRoomSimulator.GenerateNaturalSpeech(dtFrames * FrameSamples + p1LeadAdmin, 184.0, 10500.0);
-        var dtMats2Clean = AcousticRoomSimulator.GenerateNaturalSpeech(dtFrames * FrameSamples + p1LeadAdmin, 272.0, 10500.0);
-        var dtAdminBleedOnMats2 = AcousticRoomSimulator.ApplyMobileHardwareNsOnsetBurstSimulation(
-            AcousticRoomSimulator.ApplyRoomImpulseResponse(dtAdminClean.AsSpan(0, dtFrames * FrameSamples), lagAdminToMats2, 0.36, 150.0, true));
-        var dtMats2BleedOnAdmin = AcousticRoomSimulator.ApplyRoomImpulseResponse(dtMats2Clean, 0, 0.055, 150.0, true);
+        var dtPeerBClean = AcousticRoomSimulator.GenerateNaturalSpeech(dtFrames * FrameSamples + p1LeadAdmin, 272.0, 10500.0);
+        var dtAdminBleedOnPeerB = AcousticRoomSimulator.ApplyMobileHardwareNsOnsetBurstSimulation(
+            AcousticRoomSimulator.ApplyRoomImpulseResponse(dtAdminClean.AsSpan(0, dtFrames * FrameSamples), lagAdminToPeerB, 0.36, 150.0, true));
+        var dtPeerBBleedOnAdmin = AcousticRoomSimulator.ApplyRoomImpulseResponse(dtPeerBClean, 0, 0.055, 150.0, true);
 
-        double mats2DtCleanIn = 0;
-        double mats2DtOut = 0;
+        double peerBDtCleanIn = 0;
+        double peerBDtOut = 0;
         for (int f = 0; f < dtFrames; f++, frameCursor++)
         {
             int idx = f * FrameSamples;
             var fAdmin = new short[FrameSamples];
-            var fMats2 = new short[FrameSamples];
+            var fPeerB = new short[FrameSamples];
             for (int i = 0; i < FrameSamples; i++)
             {
-                fAdmin[i] = (short)Math.Clamp(dtAdminClean[idx + i] + dtMats2BleedOnAdmin[idx + p1LeadAdmin + i], short.MinValue, short.MaxValue);
-                fMats2[i] = (short)Math.Clamp(dtMats2Clean[idx + i] + dtAdminBleedOnMats2[idx + i], short.MinValue, short.MaxValue);
+                fAdmin[i] = (short)Math.Clamp(dtAdminClean[idx + i] + dtPeerBBleedOnAdmin[idx + p1LeadAdmin + i], short.MinValue, short.MaxValue);
+                fPeerB[i] = (short)Math.Clamp(dtPeerBClean[idx + i] + dtAdminBleedOnPeerB[idx + i], short.MinValue, short.MaxValue);
             }
 
             var stepOut = processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = fAdmin,
-                [matsId] = (short[])silentFrame.Clone(),
-                [mats2Id] = fMats2
+                [peerAId] = (short[])silentFrame.Clone(),
+                [peerBId] = fPeerB
             }, frameCursor * 10);
 
             if (f >= 35)
             {
-                mats2DtCleanIn += ComputeRms(dtMats2Clean.AsSpan(idx, FrameSamples));
-                mats2DtOut += ComputeRms(stepOut[mats2Id]);
+                peerBDtCleanIn += ComputeRms(dtPeerBClean.AsSpan(idx, FrameSamples));
+                peerBDtOut += ComputeRms(stepOut[peerBId]);
             }
         }
 
-        Assert.True(mats2DtOut >= mats2DtCleanIn * 0.72,
-            $"Expected genuine simultaneous double-talk on mats2 to open and retain near-field speech (>= 72%), got out={mats2DtOut:F1} / cleanIn={mats2DtCleanIn:F1}");
+        Assert.True(peerBDtOut >= peerBDtCleanIn * 0.72,
+            $"Expected genuine simultaneous double-talk on peerB to open and retain near-field speech (>= 72%), got out={peerBDtOut:F1} / cleanIn={peerBDtCleanIn:F1}");
     }
 
     [Fact]
@@ -2316,27 +2316,27 @@ public class AcousticRoomProcessorTests
     [Fact]
     public void TwoDesktopRnnoisePeers_LowBleedSyllabicAlias_NeverOverwritesLiveReverseLockOrInflatesLookahead()
     {
-        // Reproduces Log 1 from "Bureau Stewie" (2 Windows Chrome PCs with client RNNoise):
-        // 1. "mats" speaks softly (-35 dBFS) for 3.2s -> locks "mats" -> "admin first" (+4.0ms, WaveCorr >= 0.55).
-        // 2. After a 3.0s pause (> 2.0s), "admin first" speaks (-27 dBFS) while client RNNoise on "mats" heavily
+        // Reproduces Log 1 from "Room Alpha" (2 Windows Chrome PCs with client RNNoise):
+        // 1. "peerA" speaks softly (-35 dBFS) for 3.2s -> locks "peerA" -> "admin first" (+4.0ms, WaveCorr >= 0.55).
+        // 2. After a 3.0s pause (> 2.0s), "admin first" speaks (-27 dBFS) while client RNNoise on "peerA" heavily
         //    suppresses and phase-warps bleed (-32 dB) with a spurious envelope-only echo burst at -186.2ms.
-        // Verifies "admin first" -> "mats" never false-locks onto the -186.2ms envelope alias, "mats" lookahead stays
-        // at 50ms (never 201ms), and "mats" -> "admin first" is never wiped back into an uncalibrated ReciprocalPrior.
+        // Verifies "admin first" -> "peerA" never false-locks onto the -186.2ms envelope alias, "peerA" lookahead stays
+        // at 50ms (never 201ms), and "peerA" -> "admin first" is never wiped back into an uncalibrated ReciprocalPrior.
         var processor = new AcousticRoomProcessor();
         const string adminId = "6f30c05d-c9d6-4cbb-bdbb-b2f8f3b3c9c3";
-        const string matsId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
+        const string peerAId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
 
-        processor.SyncParticipants([adminId, matsId]);
+        processor.SyncParticipants([adminId, peerAId]);
         processor.SetParticipantClientPipelineInfo(adminId, 30.0, 9.0);
-        processor.SetParticipantClientPipelineInfo(matsId, 30.0, 9.5);
+        processor.SetParticipantClientPipelineInfo(peerAId, 30.0, 9.5);
 
         int frameCursor = 0;
         var silentFrame = new short[FrameSamples];
 
-        // Phase 1: "mats" speaks softly for 3.2s (+4.0ms = +192 samples air delay into "admin first", 0.14x = -17.1 dB bleed)
+        // Phase 1: "peerA" speaks softly for 3.2s (+4.0ms = +192 samples air delay into "admin first", 0.14x = -17.1 dB bleed)
         int p1Frames = 320;
-        var p1MatsSpeech = AcousticRoomSimulator.GenerateNaturalSpeech(p1Frames * FrameSamples, 195.0, 3800.0, includeSyllablePauses: true);
-        var p1AdminBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(p1MatsSpeech, directDelaySamples: 192, directBleedGain: 0.14, rt60Ms: 135.0, applyHeadShadowLowPass: true);
+        var p1PeerASpeech = AcousticRoomSimulator.GenerateNaturalSpeech(p1Frames * FrameSamples, 195.0, 3800.0, includeSyllablePauses: true);
+        var p1AdminBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(p1PeerASpeech, directDelaySamples: 192, directBleedGain: 0.14, rt60Ms: 135.0, applyHeadShadowLowPass: true);
 
         for (int f = 0; f < p1Frames; f++, frameCursor++)
         {
@@ -2344,15 +2344,15 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = p1AdminBleed.AsSpan(idx, FrameSamples).ToArray(),
-                [matsId] = p1MatsSpeech.AsSpan(idx, FrameSamples).ToArray()
+                [peerAId] = p1PeerASpeech.AsSpan(idx, FrameSamples).ToArray()
             }, frameCursor * 10);
         }
 
         var snapAfterP1 = processor.GetDiagnosticSnapshot();
-        var calMatsToAdminP1 = snapAfterP1.Calibrations.FirstOrDefault(c => c.SourceUserId == matsId && c.TargetUserId == adminId);
-        Assert.NotNull(calMatsToAdminP1);
-        Assert.False(calMatsToAdminP1!.IsReciprocalPrior);
-        Assert.InRange(calMatsToAdminP1.DelayMs, 1.5, 6.5);
+        var calPeerAToAdminP1 = snapAfterP1.Calibrations.FirstOrDefault(c => c.SourceUserId == peerAId && c.TargetUserId == adminId);
+        Assert.NotNull(calPeerAToAdminP1);
+        Assert.False(calPeerAToAdminP1!.IsReciprocalPrior);
+        Assert.InRange(calPeerAToAdminP1.DelayMs, 1.5, 6.5);
 
         // 3.0s silence gap (> 2.0s isSignificantlyNewerLiveLatch window)
         for (int f = 0; f < 300; f++, frameCursor++)
@@ -2360,7 +2360,7 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = (short[])silentFrame.Clone(),
-                [matsId] = (short[])silentFrame.Clone()
+                [peerAId] = (short[])silentFrame.Clone()
             }, frameCursor * 10);
         }
 
@@ -2370,15 +2370,15 @@ public class AcousticRoomProcessorTests
         int aliasLeadSamples = 8937; // 186.2ms lead
         var p2AdminExtended = AcousticRoomSimulator.GenerateNaturalSpeech(p2Frames * FrameSamples + aliasLeadSamples, 175.0, 8200.0, includeSyllablePauses: true);
         var incoherentCarrier = AcousticRoomSimulator.GenerateNaturalSpeech(p2Frames * FrameSamples + aliasLeadSamples, 313.0, 8200.0, includeSyllablePauses: false);
-        var p2MatsAliasBleed = new short[p2Frames * FrameSamples];
+        var p2PeerAAliasBleed = new short[p2Frames * FrameSamples];
         float smoothEnv = 0f;
-        for (int i = 0; i < p2MatsAliasBleed.Length; i++)
+        for (int i = 0; i < p2PeerAAliasBleed.Length; i++)
         {
             float srcAbs = MathF.Abs(p2AdminExtended[i + aliasLeadSamples]) / 8200f;
             smoothEnv = 0.985f * smoothEnv + 0.015f * srcAbs;
             float trueBleed = p2AdminExtended[Math.Max(0, i - 192)] * 0.008f;
             float aliasBleed = incoherentCarrier[i] * smoothEnv * 0.032f;
-            p2MatsAliasBleed[i] = (short)Math.Clamp(trueBleed + aliasBleed, short.MinValue, short.MaxValue);
+            p2PeerAAliasBleed[i] = (short)Math.Clamp(trueBleed + aliasBleed, short.MinValue, short.MaxValue);
         }
 
         for (int f = 0; f < p2Frames; f++, frameCursor++)
@@ -2387,65 +2387,65 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = p2AdminExtended.AsSpan(idx, FrameSamples).ToArray(),
-                [matsId] = p2MatsAliasBleed.AsSpan(idx, FrameSamples).ToArray()
+                [peerAId] = p2PeerAAliasBleed.AsSpan(idx, FrameSamples).ToArray()
             }, frameCursor * 10);
         }
 
         var finalSnap = processor.GetDiagnosticSnapshot();
-        var matsDiag = finalSnap.Participants.First(p => p.UserId == matsId);
-        var calMatsToAdminFinal = finalSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == matsId && c.TargetUserId == adminId);
-        var calAdminToMatsFinal = finalSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == matsId);
+        var peerADiag = finalSnap.Participants.First(p => p.UserId == peerAId);
+        var calPeerAToAdminFinal = finalSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == peerAId && c.TargetUserId == adminId);
+        var calAdminToPeerAFinal = finalSnap.Calibrations.FirstOrDefault(c => c.SourceUserId == adminId && c.TargetUserId == peerAId);
 
-        Assert.InRange(matsDiag.EffectiveLookaheadMs, AcousticRoomProcessor.MinCalibratedLookaheadMs, 50);
-        Assert.NotNull(calMatsToAdminFinal);
-        Assert.False(calMatsToAdminFinal!.IsReciprocalPrior, "Expected mats -> admin live DirectLock never to be wiped by a low-WaveCorr envelope alias");
-        Assert.DoesNotContain(finalSnap.Warnings, w => w.Contains(matsId, StringComparison.Ordinal) && w.Contains("not been directly calibrated", StringComparison.OrdinalIgnoreCase));
-        if (calAdminToMatsFinal != null)
+        Assert.InRange(peerADiag.EffectiveLookaheadMs, AcousticRoomProcessor.MinCalibratedLookaheadMs, 50);
+        Assert.NotNull(calPeerAToAdminFinal);
+        Assert.False(calPeerAToAdminFinal!.IsReciprocalPrior, "Expected peerA -> admin live DirectLock never to be wiped by a low-WaveCorr envelope alias");
+        Assert.DoesNotContain(finalSnap.Warnings, w => w.Contains(peerAId, StringComparison.Ordinal) && w.Contains("not been directly calibrated", StringComparison.OrdinalIgnoreCase));
+        if (calAdminToPeerAFinal != null)
         {
-            Assert.True(calAdminToMatsFinal.DelayMs > -30.0, $"Expected admin -> mats never to false-lock at -186.2ms, got {calAdminToMatsFinal.DelayMs:F1}ms");
+            Assert.True(calAdminToPeerAFinal.DelayMs > -30.0, $"Expected admin -> peerA never to false-lock at -186.2ms, got {calAdminToPeerAFinal.DelayMs:F1}ms");
         }
     }
 
     [Fact]
     public void ThreeDevices_Sub40MsNodeSlipAndAgcGatedRoommate_PropagatesNodeOffsetAndPreventsFalseDoubleTalk()
     {
-        // Reproduces Log 2 from "Bureau Stewie" (2 Windows Chrome PCs + 1 Android AGC device):
+        // Reproduces Log 2 from "Room Alpha" (2 Windows Chrome PCs + 1 Android AGC device):
         // 1. All 3 participants calibrate:
-        //    - mats -> admin (-40.6ms), admin -> mats (+48.6ms), admin -> mats2 (+85.3ms, 3.36x = +10.5 dB Android AGC)
-        //    - mats2 -> admin (-77.5ms), mats2 -> mats (-35.4ms)  => exact ~3.9ms (~1.34m) air propagation!
+        //    - peerA -> admin (-40.6ms), admin -> peerA (+48.6ms), admin -> peerB (+85.3ms, 3.36x = +10.5 dB Android AGC)
+        //    - peerB -> admin (-77.5ms), peerB -> peerA (-35.4ms)  => exact ~3.9ms (~1.34m) air propagation!
         // 2. "admin first" experiences a +35.4ms WebRTC NetEq stream slip (inside the old <= 40ms drift blind spot),
-        //    moving true mats2 -> admin from -77.5ms to -42.1ms while mats2 -> mats stays at -35.4ms.
-        // 3. "mats2" speaks solo at hot Android levels (-12 dBFS):
-        //    - Verifies 0 false DoubleTalkSTFT buckets on mats2 against gated roommates.
+        //    moving true peerB -> admin from -77.5ms to -42.1ms while peerB -> peerA stays at -35.4ms.
+        // 3. "peerB" speaks solo at hot Android levels (-12 dBFS):
+        //    - Verifies 0 false DoubleTalkSTFT buckets on peerB against gated roommates.
         //    - Verifies kinematic node-offset propagation updates admin's stale outgoing pairs so decomposed air distance
-        //      stays realistic (~1.3-2.5m instead of 7.40m) and "mats" is never demoted back to uncalibrated ReciprocalPrior.
+        //      stays realistic (~1.3-2.5m instead of 7.40m) and "peerA" is never demoted back to uncalibrated ReciprocalPrior.
         var processor = new AcousticRoomProcessor();
         const string adminId = "6f30c05d-c9d6-4cbb-bdbb-b2f8f3b3c9c3";
-        const string matsId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
-        const string mats2Id = "340555a5-a468-477f-870f-3b49a4d09679";
+        const string peerAId = "d9ba9018-59cb-4d1d-b222-9b9aba711103";
+        const string peerBId = "340555a5-a468-477f-870f-3b49a4d09679";
 
-        processor.SyncParticipants([adminId, matsId, mats2Id]);
+        processor.SyncParticipants([adminId, peerAId, peerBId]);
         processor.SetParticipantClientPipelineInfo(adminId, 30.0, 9.0);
-        processor.SetParticipantClientPipelineInfo(matsId, 30.0, 9.5);
-        processor.SetParticipantClientPipelineInfo(mats2Id, 80.3, 11.0);
+        processor.SetParticipantClientPipelineInfo(peerAId, 30.0, 9.5);
+        processor.SetParticipantClientPipelineInfo(peerBId, 80.3, 11.0);
 
         int frameCursor = 0;
         var silentFrame = new short[FrameSamples];
 
-        // Turn 1: "mats" speaks (mats -> admin = -40.6ms = -1949 smp; mats -> mats2 = +43.4ms = +2083 smp)
+        // Turn 1: "peerA" speaks (peerA -> admin = -40.6ms = -1949 smp; peerA -> peerB = +43.4ms = +2083 smp)
         int t1Frames = 150;
-        int leadMatsToAdmin = 1949;
-        var t1Mats = AcousticRoomSimulator.GenerateNaturalSpeech(t1Frames * FrameSamples + leadMatsToAdmin, 205.0, 5200.0, includeSyllablePauses: true);
-        var t1AdminBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t1Mats, 0, 0.12, 130.0, true);
-        var t1Mats2Bleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t1Mats.AsSpan(0, t1Frames * FrameSamples), 2083, 0.45, 140.0, true);
+        int leadPeerAToAdmin = 1949;
+        var t1PeerA = AcousticRoomSimulator.GenerateNaturalSpeech(t1Frames * FrameSamples + leadPeerAToAdmin, 205.0, 5200.0, includeSyllablePauses: true);
+        var t1AdminBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t1PeerA, 0, 0.12, 130.0, true);
+        var t1PeerBBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t1PeerA.AsSpan(0, t1Frames * FrameSamples), 2083, 0.45, 140.0, true);
         for (int f = 0; f < t1Frames; f++, frameCursor++)
         {
             int idx = f * FrameSamples;
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
-                [matsId] = t1Mats.AsSpan(idx, FrameSamples).ToArray(),
-                [adminId] = t1AdminBleed.AsSpan(idx + leadMatsToAdmin, FrameSamples).ToArray(),
-                [mats2Id] = t1Mats2Bleed.AsSpan(idx, FrameSamples).ToArray()
+                [peerAId] = t1PeerA.AsSpan(idx, FrameSamples).ToArray(),
+                [adminId] = t1AdminBleed.AsSpan(idx + leadPeerAToAdmin, FrameSamples).ToArray(),
+                [peerBId] = t1PeerBBleed.AsSpan(idx, FrameSamples).ToArray()
             }, frameCursor * 10);
         }
 
@@ -2454,24 +2454,24 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = (short[])silentFrame.Clone(),
-                [matsId] = (short[])silentFrame.Clone(),
-                [mats2Id] = (short[])silentFrame.Clone()
+                [peerAId] = (short[])silentFrame.Clone(),
+                [peerBId] = (short[])silentFrame.Clone()
             }, frameCursor * 10);
         }
 
-        // Turn 2: "admin first" speaks (admin -> mats = +48.6ms = +2331 smp; admin -> mats2 = +85.3ms = +4093 smp, 2.2x AGC boost)
+        // Turn 2: "admin first" speaks (admin -> peerA = +48.6ms = +2331 smp; admin -> peerB = +85.3ms = +4093 smp, 2.2x AGC boost)
         int t2Frames = 160;
         var t2Admin = AcousticRoomSimulator.GenerateNaturalSpeech(t2Frames * FrameSamples, 178.0, 5500.0, includeSyllablePauses: true);
-        var t2MatsBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t2Admin, 2331, 0.08, 130.0, true);
-        var t2Mats2Bleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t2Admin, 4093, 2.15, 145.0, true);
+        var t2PeerABleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t2Admin, 2331, 0.08, 130.0, true);
+        var t2PeerBBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t2Admin, 4093, 2.15, 145.0, true);
         for (int f = 0; f < t2Frames; f++, frameCursor++)
         {
             int idx = f * FrameSamples;
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = t2Admin.AsSpan(idx, FrameSamples).ToArray(),
-                [matsId] = t2MatsBleed.AsSpan(idx, FrameSamples).ToArray(),
-                [mats2Id] = t2Mats2Bleed.AsSpan(idx, FrameSamples).ToArray()
+                [peerAId] = t2PeerABleed.AsSpan(idx, FrameSamples).ToArray(),
+                [peerBId] = t2PeerBBleed.AsSpan(idx, FrameSamples).ToArray()
             }, frameCursor * 10);
         }
 
@@ -2480,73 +2480,73 @@ public class AcousticRoomProcessorTests
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = (short[])silentFrame.Clone(),
-                [matsId] = (short[])silentFrame.Clone(),
-                [mats2Id] = (short[])silentFrame.Clone()
+                [peerAId] = (short[])silentFrame.Clone(),
+                [peerBId] = (short[])silentFrame.Clone()
             }, frameCursor * 10);
         }
 
-        // Turn 3: "mats2" speaks before slip (mats2 -> admin = -77.5ms = -3720 smp; mats2 -> mats = -35.4ms = -1698 smp)
+        // Turn 3: "peerB" speaks before slip (peerB -> admin = -77.5ms = -3720 smp; peerB -> peerA = -35.4ms = -1698 smp)
         int t3Frames = 150;
-        int leadMats2ToAdminPre = 3720;
-        int leadMats2ToMats = 1698;
-        var t3Mats2 = AcousticRoomSimulator.GenerateNaturalSpeech(t3Frames * FrameSamples + leadMats2ToAdminPre, 255.0, 14500.0, includeSyllablePauses: true);
-        var t3AdminBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t3Mats2, 0, 0.045, 130.0, true);
-        var t3MatsBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t3Mats2, 0, 0.075, 130.0, true);
+        int leadPeerBToAdminPre = 3720;
+        int leadPeerBToPeerA = 1698;
+        var t3PeerB = AcousticRoomSimulator.GenerateNaturalSpeech(t3Frames * FrameSamples + leadPeerBToAdminPre, 255.0, 14500.0, includeSyllablePauses: true);
+        var t3AdminBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t3PeerB, 0, 0.045, 130.0, true);
+        var t3PeerABleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t3PeerB, 0, 0.075, 130.0, true);
         for (int f = 0; f < t3Frames; f++, frameCursor++)
         {
             int idx = f * FrameSamples;
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
-                [mats2Id] = t3Mats2.AsSpan(idx, FrameSamples).ToArray(),
-                [adminId] = t3AdminBleed.AsSpan(idx + leadMats2ToAdminPre, FrameSamples).ToArray(),
-                [matsId] = t3MatsBleed.AsSpan(idx + leadMats2ToMats, FrameSamples).ToArray()
+                [peerBId] = t3PeerB.AsSpan(idx, FrameSamples).ToArray(),
+                [adminId] = t3AdminBleed.AsSpan(idx + leadPeerBToAdminPre, FrameSamples).ToArray(),
+                [peerAId] = t3PeerABleed.AsSpan(idx + leadPeerBToPeerA, FrameSamples).ToArray()
             }, frameCursor * 10);
         }
 
-        // 2.5s pause while "admin first" experiences a +35.4ms NetEq slip (mats2 -> admin moves from -77.5ms to -42.1ms = -2021 smp)
+        // 2.5s pause while "admin first" experiences a +35.4ms NetEq slip (peerB -> admin moves from -77.5ms to -42.1ms = -2021 smp)
         for (int f = 0; f < 250; f++, frameCursor++)
         {
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
                 [adminId] = (short[])silentFrame.Clone(),
-                [matsId] = (short[])silentFrame.Clone(),
-                [mats2Id] = (short[])silentFrame.Clone()
+                [peerAId] = (short[])silentFrame.Clone(),
+                [peerBId] = (short[])silentFrame.Clone()
             }, frameCursor * 10);
         }
 
         processor.ResetDiagnosticCounters();
 
-        // Turn 4: "mats2" speaks solo at hot Android level after admin's +35.4ms slip (mats2 -> admin = -42.1ms = -2021 smp, mats2 -> mats = -35.4ms)
+        // Turn 4: "peerB" speaks solo at hot Android level after admin's +35.4ms slip (peerB -> admin = -42.1ms = -2021 smp, peerB -> peerA = -35.4ms)
         int t4Frames = 180;
-        int leadMats2ToAdminPost = 2021;
-        var t4Mats2 = AcousticRoomSimulator.GenerateNaturalSpeech(t4Frames * FrameSamples + leadMats2ToAdminPost, 258.0, 16500.0, includeSyllablePauses: true);
-        var t4AdminBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t4Mats2, 0, 0.048, 130.0, true);
-        var t4MatsBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t4Mats2, 0, 0.075, 130.0, true);
+        int leadPeerBToAdminPost = 2021;
+        var t4PeerB = AcousticRoomSimulator.GenerateNaturalSpeech(t4Frames * FrameSamples + leadPeerBToAdminPost, 258.0, 16500.0, includeSyllablePauses: true);
+        var t4AdminBleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t4PeerB, 0, 0.048, 130.0, true);
+        var t4PeerABleed = AcousticRoomSimulator.ApplyRoomImpulseResponse(t4PeerB, 0, 0.075, 130.0, true);
         for (int f = 0; f < t4Frames; f++, frameCursor++)
         {
             int idx = f * FrameSamples;
             processor.ProcessSynchronizedStep(new Dictionary<string, short[]>
             {
-                [mats2Id] = t4Mats2.AsSpan(idx, FrameSamples).ToArray(),
-                [adminId] = t4AdminBleed.AsSpan(idx + leadMats2ToAdminPost, FrameSamples).ToArray(),
-                [matsId] = t4MatsBleed.AsSpan(idx + leadMats2ToMats, FrameSamples).ToArray()
+                [peerBId] = t4PeerB.AsSpan(idx, FrameSamples).ToArray(),
+                [adminId] = t4AdminBleed.AsSpan(idx + leadPeerBToAdminPost, FrameSamples).ToArray(),
+                [peerAId] = t4PeerABleed.AsSpan(idx + leadPeerBToPeerA, FrameSamples).ToArray()
             }, frameCursor * 10);
         }
 
         var snap = processor.GetDiagnosticSnapshot();
         Assert.DoesNotContain(snap.TimelineBuckets, b =>
-            b.ParticipantGateStates.TryGetValue(mats2Id, out var gM2) && gM2 == AcousticGateState.DoubleTalkSubtraction &&
+            b.ParticipantGateStates.TryGetValue(peerBId, out var gM2) && gM2 == AcousticGateState.DoubleTalkSubtraction &&
             b.ParticipantGateStates.TryGetValue(adminId, out var gA) && gA == AcousticGateState.GatedBleed &&
-            b.ParticipantGateStates.TryGetValue(matsId, out var gM) && gM == AcousticGateState.GatedBleed);
+            b.ParticipantGateStates.TryGetValue(peerAId, out var gM) && gM == AcousticGateState.GatedBleed);
 
-        var calMatsToAdmin = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == matsId && c.TargetUserId == adminId);
-        Assert.NotNull(calMatsToAdmin);
-        Assert.False(calMatsToAdmin!.IsReciprocalPrior, "Expected mats -> admin to stay calibrated (not wiped to ReciprocalPrior) after admin's 35.4ms stream slip");
+        var calPeerAToAdmin = snap.Calibrations.FirstOrDefault(c => c.SourceUserId == peerAId && c.TargetUserId == adminId);
+        Assert.NotNull(calPeerAToAdmin);
+        Assert.False(calPeerAToAdmin!.IsReciprocalPrior, "Expected peerA -> admin to stay calibrated (not wiped to ReciprocalPrior) after admin's 35.4ms stream slip");
 
-        var decompAdminMats2 = snap.Decompositions.FirstOrDefault(d =>
-            (d.UserAId == mats2Id && d.UserBId == adminId) || (d.UserAId == adminId && d.UserBId == mats2Id));
-        Assert.NotNull(decompAdminMats2);
-        Assert.InRange(decompAdminMats2!.EstimatedDistanceMeters, 0.5, 3.0);
+        var decompAdminPeerB = snap.Decompositions.FirstOrDefault(d =>
+            (d.UserAId == peerBId && d.UserBId == adminId) || (d.UserAId == adminId && d.UserBId == peerBId));
+        Assert.NotNull(decompAdminPeerB);
+        Assert.InRange(decompAdminPeerB!.EstimatedDistanceMeters, 0.5, 3.0);
     }
 
     [Fact]

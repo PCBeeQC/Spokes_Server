@@ -29,13 +29,13 @@ public class DocumentBlockLibraryTests
     {
         return new CompanyProfile
         {
-            CompanyName = "Poly Robotics Inc.",
+            CompanyName = "Pioneer Demo Inc.",
             AddressStreet = "100 Innovation Way",
             AddressCity = "Montreal",
             AddressState = "QC",
             AddressZip = "H3A 1A1",
             PhoneNumber = "514-555-0100",
-            Website = "https://polyrobotics.com",
+            Website = "https://pioneerdemo.test",
             PrimaryColor = "#0055ff",
             LogoBase64 = withLogo ? "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" : ""
         };
@@ -47,7 +47,7 @@ public class DocumentBlockLibraryTests
         {
             FirstName = "John",
             LastName = "Smith",
-            Email = "john.smith@polyrobotics.com",
+            Email = "john.smith@pioneerdemo.test",
             Position = "Senior Robotics Engineer"
         };
     }
@@ -140,7 +140,7 @@ public class DocumentBlockLibraryTests
         Assert.Contains("Acme Industries", html);
         Assert.Contains("Jane Doe", html);
         Assert.Contains("Authorized Signature (Spokes)", html);
-        Assert.Contains("Poly Robotics Inc.", html);
+        Assert.Contains("Pioneer Demo Inc.", html);
         Assert.Contains("John Smith", html);
     }
 
@@ -237,7 +237,7 @@ public class DocumentBlockLibraryTests
         string html = block.RenderHtml(instance, project, profile, null);
 
         Assert.Contains("<img src=\"data:image/png;base64,", html);
-        Assert.Contains("alt=\"Poly Robotics Inc.\"", html);
+        Assert.Contains("alt=\"Pioneer Demo Inc.\"", html);
         Assert.DoesNotContain("width: 56px; height: 56px;", html);
     }
 
@@ -254,7 +254,7 @@ public class DocumentBlockLibraryTests
         Assert.DoesNotContain("<img", html);
         Assert.Contains("width: 56px; height: 56px; border-radius: 8px;", html);
         Assert.Contains("background-color: #0055ff", html);
-        Assert.Contains(">P</div>", html); // First letter of "Poly Robotics Inc."
+        Assert.Contains(">P</div>", html); // First letter of "Pioneer Demo Inc."
     }
 
     [Fact]
@@ -310,14 +310,14 @@ public class DocumentBlockLibraryTests
             Assert.Contains("100 Innovation Way", html);
             Assert.Contains("Montreal, QC H3A 1A1", html);
             Assert.Contains("514-555-0100", html);
-            Assert.Contains("https://polyrobotics.com", html);
+            Assert.Contains("https://pioneerdemo.test", html);
         }
         else
         {
             Assert.DoesNotContain("100 Innovation Way", html);
             Assert.DoesNotContain("Montreal, QC H3A 1A1", html);
             Assert.DoesNotContain("514-555-0100", html);
-            Assert.DoesNotContain("https://polyrobotics.com", html);
+            Assert.DoesNotContain("https://pioneerdemo.test", html);
         }
     }
 
@@ -341,7 +341,7 @@ public class DocumentBlockLibraryTests
 
         if (shouldRenderName)
         {
-            Assert.Contains("<div style=\"font-weight: bold; font-size: 1.1rem;\">Poly Robotics Inc.</div>", html);
+            Assert.Contains("<div style=\"font-weight: bold; font-size: 1.1rem;\">Pioneer Demo Inc.</div>", html);
         }
         else
         {

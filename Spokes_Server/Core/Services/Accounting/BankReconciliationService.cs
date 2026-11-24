@@ -18,12 +18,67 @@ public class BankMatchCandidate
     public string Summary { get; set; } = string.Empty;
 }
 
+public class RecurringExpenseBankCandidate
+{
+    public RecurringExpense Profile { get; set; } = null!;
+    public decimal Confidence { get; set; }
+    public string Summary { get; set; } = string.Empty;
+}
+
+public class BankCutoverSanityReport
+{
+    public DateTime? CutoverDate { get; set; }
+    public string? MigrationBatchNumber { get; set; }
+    public bool HasPreCutoverLines { get; set; }
+    public decimal? BankBalanceAtCutover { get; set; }
+    public decimal GlBalanceAtCutover { get; set; }
+    public decimal? Discrepancy => BankBalanceAtCutover.HasValue
+        ? Math.Round(BankBalanceAtCutover.Value - GlBalanceAtCutover, 2)
+        : null;
+    public bool IsBalancedAtCutover => Discrepancy.HasValue && Math.Abs(Discrepancy.Value) <= 0.05m;
+    public int MatchedPreCutoverCount { get; set; }
+    public int UnmatchedPreCutoverCount { get; set; }
+    public int ExcludedPreCutoverCount { get; set; }
+    public int UnmatchedPostCutoverCount { get; set; }
+}
+
+public class CrossAccountBankCandidate
+{
+    public JournalEntry Entry { get; set; } = null!;
+    public string CurrentBankGlCode { get; set; } = string.Empty;
+    public string CurrentBankGlName { get; set; } = string.Empty;
+    public decimal SignedBankMovement { get; set; }
+    public decimal Confidence { get; set; }
+    public string Summary { get; set; } = string.Empty;
+}
+
+public class OpenDocumentBankCandidate
+{
+    public bool IsInvoice { get; set; }
+    public string DocumentId { get; set; } = string.Empty;
+    public string DocumentNumber { get; set; } = string.Empty;
+    public string PartyName { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public bool RequiresFinalizationOrApproval { get; set; }
+    public decimal OpenAmount { get; set; }
+    public decimal Confidence { get; set; }
+    public string Summary { get; set; } = string.Empty;
+}
+
 public interface IBankReconciliationService
 {
     BankStatement ImportAndAutoMatch(string content, string fileName, string glAccountCode = "1020", CsvBankImportMapping? csvMapping = null, Employee? actor = null);
     int AutoMatchStatement(BankStatement statement, Employee? actor = null);
     List<BankMatchCandidate> GetCandidatesForLine(BankStatement statement, BankTransactionLine line, Employee? actor = null);
+    List<RecurringExpenseBankCandidate> GetRecurringCandidatesForLine(BankStatement statement, BankTransactionLine line, Employee? actor = null);
+    List<CrossAccountBankCandidate> GetCrossAccountCandidatesForLine(BankStatement statement, BankTransactionLine line, Employee? actor = null);
+    List<OpenDocumentBankCandidate> GetOpenDocumentCandidatesForLine(BankStatement statement, BankTransactionLine line, Employee? actor = null);
+    BankCutoverSanityReport EvaluateCutoverSanity(BankStatement statement, Employee? actor = null);
+    int ExcludePreCutoverUnmatchedLines(BankStatement statement, DateTime cutoverDate, Employee? actor = null);
     void MatchLineToJournalEntry(BankStatement statement, string lineId, string journalEntryId, decimal? settledFunctionalAmount = null, Employee? actor = null);
+    void ReassignAccountAndMatchLine(BankStatement statement, string lineId, string journalEntryId, Employee? actor = null);
+    JournalEntry? SettleOpenDocumentAndMatchLine(BankStatement statement, string lineId, OpenDocumentBankCandidate candidate, IAccountingService accountingService, Employee? actor = null);
+    JournalEntry? MatchLineToRecurringExpense(BankStatement statement, string lineId, string recurringExpenseId, bool splitTaxIncluded = true, Employee? actor = null);
     JournalEntry CategorizeUnmatchedLineDirect(
         BankStatement statement,
         string lineId,
@@ -468,5 +523,474 @@ public class BankReconciliationService : IBankReconciliationService
         {
             _accountingContext.JournalEntries?.Save(entry);
         }
+    }
+
+    public List<RecurringExpenseBankCandidate> GetRecurringCandidatesForLine(BankStatement statement, BankTransactionLine line, Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "inspect recurring expense bank match candidates");
+        ArgumentNullException.ThrowIfNull(statement);
+        ArgumentNullException.ThrowIfNull(line);
+
+        if (line.Amount >= 0m || _accountingContext.RecurringExpenses == null) return [];
+
+        var absAmount = Math.Abs(line.Amount);
+        var lineText = PartyMatchingHelper.NormalizeCompanyName($"{line.Payee} {line.Description}");
+        var results = new List<RecurringExpenseBankCandidate>();
+
+        foreach (var profile in _accountingContext.RecurringExpenses.GetAll())
+        {
+            decimal score = 0m;
+
+            var nameNorm = PartyMatchingHelper.NormalizeCompanyName(profile.Name);
+            var supNorm = PartyMatchingHelper.NormalizeCompanyName(profile.Supplier);
+
+            bool nameHit = !string.IsNullOrEmpty(nameNorm) && nameNorm.Length >= 3 && lineText.Contains(nameNorm, StringComparison.OrdinalIgnoreCase);
+            bool supHit = !string.IsNullOrEmpty(supNorm) && supNorm.Length >= 3 && lineText.Contains(supNorm, StringComparison.OrdinalIgnoreCase);
+            if (nameHit || supHit) score += 0.55m;
+
+            if (profile.Amount > 0m)
+            {
+                var diff = Math.Abs(profile.Amount - absAmount);
+                if (diff <= 0.05m) score += 0.45m;
+                else if (diff / profile.Amount <= 0.15m) score += 0.25m;
+            }
+
+            if (score >= 0.45m)
+            {
+                var label = string.IsNullOrWhiteSpace(profile.Supplier) ? profile.Name : $"{profile.Name} ({profile.Supplier})";
+                results.Add(new RecurringExpenseBankCandidate
+                {
+                    Profile = profile,
+                    Confidence = Math.Min(1.0m, score),
+                    Summary = $"{label} · {profile.Frequency}"
+                });
+            }
+        }
+
+        return results.OrderByDescending(r => r.Confidence).Take(5).ToList();
+    }
+
+    public JournalEntry? MatchLineToRecurringExpense(
+        BankStatement statement,
+        string lineId,
+        string recurringExpenseId,
+        bool splitTaxIncluded = true,
+        Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "match bank line to recurring expense");
+        ArgumentNullException.ThrowIfNull(statement);
+        var line = statement.Lines.FirstOrDefault(l => l.Id == lineId)
+            ?? throw new KeyNotFoundException($"Bank line '{lineId}' not found.");
+        var profile = _accountingContext.RecurringExpenses?.GetById(recurringExpenseId)
+            ?? throw new KeyNotFoundException($"Recurring expense '{recurringExpenseId}' not found.");
+
+        var absAmount = Math.Round(Math.Abs(line.Amount), 2, MidpointRounding.AwayFromZero);
+        bool isTaxExempt = profile.IsTaxExempt || !splitTaxIncluded;
+        var breakdown = FinancialCalculationEngine.CalculateFromGrandTotal(absAmount, isTaxExempt);
+
+        var record = new RecurringBillRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            Date = line.Date.Date,
+            DueDate = line.Date.Date,
+            Amount = absAmount,
+            SubTotal = breakdown.SubTotal,
+            TpsAmount = breakdown.TpsAmount,
+            TvqAmount = breakdown.TvqAmount,
+            TaxAmount = breakdown.TaxAmount,
+            IsTaxExempt = isTaxExempt,
+            GlAccountCode = profile.GlAccountCode,
+            PaymentSourceGlCode = statement.GlAccountCode,
+            TaxComponents = FinancialCalculationEngine.BuildTaxComponentsFromSubTotal(
+                breakdown.SubTotal,
+                FinancialCalculationEngine.ActiveTemplate?.SalesTaxes,
+                isTaxExempt,
+                forPurchases: true),
+            IsPaid = true,
+            DatePaid = line.Date.Date,
+            Payments =
+            [
+                new PaymentRecord
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Date = line.Date.Date,
+                    Amount = absAmount,
+                    Method = "Bank Withdrawal",
+                    Reference = line.Description,
+                    BankGlAccountCode = statement.GlAccountCode
+                }
+            ]
+        };
+
+        profile.History ??= [];
+        profile.History.Add(record);
+
+        if (BusinessOverheadService.IsScheduledFrequency(profile.Frequency) &&
+            line.Date.Date >= profile.NextDueDate.Date)
+        {
+            var next = profile.NextDueDate.Date;
+            int guard = 0;
+            while (next <= line.Date.Date && guard++ < 120)
+            {
+                next = BusinessOverheadService.AdvanceRecurringDate(next, profile.Frequency);
+            }
+            profile.NextDueDate = next;
+        }
+
+        _accountingContext.RecurringExpenses.Save(profile);
+        _ledgerService.SyncRecurringExpense(profile);
+
+        var expectedPayKey = $"{profile.Id}:{record.Id}:{record.Payments[0].Id}";
+        var paymentJe = _accountingContext.JournalEntries?.GetAll()
+            .FirstOrDefault(je =>
+                string.Equals(je.SourceType, JournalSourceType.RecurringPayment, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(je.SourceId, expectedPayKey, StringComparison.OrdinalIgnoreCase));
+
+        if (paymentJe != null)
+        {
+            line.MatchStatus = BankLineMatchStatus.ManuallyMatched;
+            line.MatchedJournalEntryId = paymentJe.Id;
+            line.MatchedSourceType = paymentJe.SourceType;
+            line.MatchedSourceId = paymentJe.SourceId;
+            line.MatchedDocumentSummary = $"Recurring: {profile.Name} ({absAmount:C2})";
+            line.MatchConfidence = 1.0m;
+
+            paymentJe.IsReconciled = true;
+            paymentJe.ReconciledStatementId = statement.Id;
+            _accountingContext.JournalEntries?.Save(paymentJe);
+            _accountingContext.BankStatements?.Save(statement);
+        }
+
+        return paymentJe;
+    }
+
+    public BankCutoverSanityReport EvaluateCutoverSanity(BankStatement statement, Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "evaluate cutover bank sanity");
+        ArgumentNullException.ThrowIfNull(statement);
+
+        var report = new BankCutoverSanityReport();
+        var latestMigration = (_accountingContext.MigrationBatches?.GetAll() ?? [])
+            .Where(b => string.Equals(b.Status, AccountingMigrationBatchStatus.Applied, StringComparison.OrdinalIgnoreCase) &&
+                        b.AsOfDate != default)
+            .OrderByDescending(b => b.AsOfDate)
+            .ThenByDescending(b => b.ExecutedAtUtc)
+            .FirstOrDefault();
+
+        if (latestMigration == null) return report;
+
+        var cutover = latestMigration.AsOfDate.Date;
+        report.CutoverDate = cutover;
+        report.MigrationBatchNumber = latestMigration.BatchNumber;
+
+        var preLines = statement.Lines.Where(l => l.Date.Date <= cutover).ToList();
+        var postLines = statement.Lines.Where(l => l.Date.Date > cutover).ToList();
+
+        report.HasPreCutoverLines = preLines.Count > 0;
+        report.MatchedPreCutoverCount = preLines.Count(l => l.IsMatchedOrCategorized);
+        report.ExcludedPreCutoverCount = preLines.Count(l => string.Equals(l.MatchStatus, BankLineMatchStatus.Excluded, StringComparison.OrdinalIgnoreCase));
+        report.UnmatchedPreCutoverCount = preLines.Count(l => !l.IsMatchedOrCategorized && !string.Equals(l.MatchStatus, BankLineMatchStatus.Excluded, StringComparison.OrdinalIgnoreCase));
+        report.UnmatchedPostCutoverCount = postLines.Count(l => !l.IsMatchedOrCategorized && !string.Equals(l.MatchStatus, BankLineMatchStatus.Excluded, StringComparison.OrdinalIgnoreCase));
+
+        // Bank running balance as of cutover date (latest line <= cutoverDate that carries a RunningBalance)
+        var lastCutoverLine = preLines.LastOrDefault(l => l.RunningBalance.HasValue);
+        if (lastCutoverLine?.RunningBalance != null)
+        {
+            report.BankBalanceAtCutover = lastCutoverLine.RunningBalance.Value;
+        }
+
+        // GL signed ending balance on the statement's GL account as of cutoverDate
+        var fiscalStart = _ledgerService.GetFiscalYearStart(cutover);
+        var tb = _ledgerService.CalculateTrialBalance(fiscalStart, cutover, includeZeroAccounts: true);
+        var glRow = tb.Rows.FirstOrDefault(r => string.Equals(r.AccountCode, statement.GlAccountCode, StringComparison.OrdinalIgnoreCase));
+        if (glRow != null)
+        {
+            // For Bank (Asset, IsDebitNormal=true), EndingBalance is positive for Debit, negative for Credit (overdraft).
+            // For Credit Card (Liability, IsDebitNormal=false), negate so liability owed matches negative statement balance.
+            report.GlBalanceAtCutover = Math.Round(glRow.IsDebitNormal ? glRow.EndingBalance : -glRow.EndingBalance, 2);
+        }
+
+        return report;
+    }
+
+    public int ExcludePreCutoverUnmatchedLines(BankStatement statement, DateTime cutoverDate, Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "exclude pre-cutover bank lines");
+        ArgumentNullException.ThrowIfNull(statement);
+
+        var cutoff = cutoverDate.Date;
+        int excluded = 0;
+
+        foreach (var line in statement.Lines)
+        {
+            if (line.Date.Date > cutoff) continue;
+            if (line.IsMatchedOrCategorized || string.Equals(line.MatchStatus, BankLineMatchStatus.Excluded, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            line.MatchStatus = BankLineMatchStatus.Excluded;
+            line.MatchedDocumentSummary = $"Covered by cutover opening balance (<= {cutoff:yyyy-MM-dd})";
+            excluded++;
+        }
+
+        if (excluded > 0)
+        {
+            _accountingContext.BankStatements?.Save(statement);
+        }
+
+        return excluded;
+    }
+
+    public List<CrossAccountBankCandidate> GetCrossAccountCandidatesForLine(BankStatement statement, BankTransactionLine line, Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "inspect cross-account bank match candidates");
+        ArgumentNullException.ThrowIfNull(statement);
+        ArgumentNullException.ThrowIfNull(line);
+        if (_accountingContext.JournalEntries == null || _accountingContext.GlAccounts == null) return [];
+
+        var otherBankAccounts = _accountingContext.GlAccounts.GetAll()
+            .Where(a => !string.Equals(a.Code, statement.GlAccountCode, StringComparison.OrdinalIgnoreCase) &&
+                        (string.Equals(a.SubType, GlAccountSubType.Bank, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(a.SubType, GlAccountSubType.CreditCard, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(a.SystemRole, GlSystemRole.OperatingBank, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(a.SystemRole, GlSystemRole.CorporateCreditCard, StringComparison.OrdinalIgnoreCase)))
+            .ToDictionary(a => a.Code, StringComparer.OrdinalIgnoreCase);
+
+        if (otherBankAccounts.Count == 0) return [];
+
+        var usedEntryIds = statement.Lines
+            .Where(l => l.Id != line.Id && !string.IsNullOrWhiteSpace(l.MatchedJournalEntryId))
+            .Select(l => l.MatchedJournalEntryId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var results = new List<CrossAccountBankCandidate>();
+
+        foreach (var entry in _accountingContext.JournalEntries.GetAll())
+        {
+            if (entry.IsReconciled || entry.IsLocked || usedEntryIds.Contains(entry.Id)) continue;
+            if (string.Equals(entry.SourceType, JournalSourceType.OpeningBalance, StringComparison.OrdinalIgnoreCase)) continue;
+
+            var daysDiff = Math.Abs((entry.Date.Date - line.Date.Date).TotalDays);
+            if (daysDiff > 7) continue;
+
+            foreach (var jl in entry.Lines)
+            {
+                if (!otherBankAccounts.TryGetValue(jl.GlAccountCode, out var otherAcct)) continue;
+                var signed = Math.Round(jl.Debit - jl.Credit, 2);
+                if (Math.Abs(signed - line.Amount) > 0.05m) continue;
+
+                var conf = daysDiff <= 1 ? 0.95m : (daysDiff <= 3 ? 0.85m : 0.75m);
+                results.Add(new CrossAccountBankCandidate
+                {
+                    Entry = entry,
+                    CurrentBankGlCode = otherAcct.Code,
+                    CurrentBankGlName = otherAcct.Name,
+                    SignedBankMovement = signed,
+                    Confidence = conf,
+                    Summary = $"{entry.EntryNumber} on {otherAcct.Code} ({entry.PartyName} · {entry.Description})"
+                });
+                break;
+            }
+        }
+
+        return results.OrderByDescending(r => r.Confidence).ThenBy(r => Math.Abs((r.Entry.Date.Date - line.Date.Date).TotalDays)).Take(5).ToList();
+    }
+
+    public void ReassignAccountAndMatchLine(BankStatement statement, string lineId, string journalEntryId, Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "reassign bank account and match line");
+        ArgumentNullException.ThrowIfNull(statement);
+        var line = statement.Lines.FirstOrDefault(l => l.Id == lineId)
+            ?? throw new KeyNotFoundException($"Bank line '{lineId}' not found.");
+        var entry = _accountingContext.JournalEntries?.GetById(journalEntryId)
+            ?? throw new KeyNotFoundException($"Journal entry '{journalEntryId}' not found.");
+
+        if (entry.IsLocked)
+            throw new InvalidOperationException($"Journal entry '{entry.EntryNumber}' is locked and cannot be reassigned.");
+
+        var targetAcct = _accountingContext.GlAccounts?.GetByCode(statement.GlAccountCode);
+        var bankLine = entry.Lines.FirstOrDefault(jl => Math.Abs(Math.Round(jl.Debit - jl.Credit, 2) - line.Amount) <= 0.05m)
+            ?? throw new InvalidOperationException($"No matching movement line found on journal entry '{entry.EntryNumber}'.");
+
+        var oldCode = bankLine.GlAccountCode;
+        bankLine.GlAccountCode = statement.GlAccountCode;
+        bankLine.GlAccountName = targetAcct?.Name ?? statement.GlAccountCode;
+        bankLine.Memo = string.IsNullOrWhiteSpace(bankLine.Memo)
+            ? $"Reassigned from {oldCode} during bank reconciliation"
+            : $"{bankLine.Memo} (reassigned from {oldCode})";
+
+        entry.IsReconciled = true;
+        entry.ReconciledStatementId = statement.Id;
+        _accountingContext.JournalEntries.Save(entry);
+
+        line.MatchStatus = BankLineMatchStatus.ManuallyMatched;
+        line.MatchedJournalEntryId = entry.Id;
+        line.MatchedSourceType = entry.SourceType;
+        line.MatchedSourceId = entry.SourceId;
+        line.MatchedDocumentSummary = $"Reassigned {oldCode} -> {statement.GlAccountCode}: {entry.EntryNumber} ({entry.Description})";
+        line.MatchConfidence = 1.0m;
+
+        _accountingContext.BankStatements?.Save(statement);
+    }
+
+    public List<OpenDocumentBankCandidate> GetOpenDocumentCandidatesForLine(BankStatement statement, BankTransactionLine line, Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "inspect open document bank candidates");
+        ArgumentNullException.ThrowIfNull(statement);
+        ArgumentNullException.ThrowIfNull(line);
+
+        var absAmt = Math.Abs(line.Amount);
+        var lineText = PartyMatchingHelper.NormalizeCompanyName($"{line.Payee} {line.Description}");
+        var results = new List<OpenDocumentBankCandidate>();
+
+        if (line.Amount > 0m && _accountingContext.Invoices != null)
+        {
+            foreach (var inv in _accountingContext.Invoices.GetAll())
+            {
+                if (string.Equals(inv.Status, InvoiceStatus.Void, StringComparison.OrdinalIgnoreCase) ||
+                    InvoiceStatus.IsSettled(inv.Status))
+                    continue;
+
+                bool isDraft = string.Equals(inv.Status, InvoiceStatus.Draft, StringComparison.OrdinalIgnoreCase);
+                var expected = inv.BalanceDue > 0m ? inv.BalanceDue : inv.GrandTotal;
+                if (expected <= 0m || Math.Abs(expected - absAmt) > 0.05m) continue;
+
+                decimal score = 0.75m;
+                if (!string.IsNullOrWhiteSpace(inv.InvoiceNumber) &&
+                    line.Description.Contains(inv.InvoiceNumber, StringComparison.OrdinalIgnoreCase))
+                {
+                    score = 0.98m;
+                }
+
+                results.Add(new OpenDocumentBankCandidate
+                {
+                    IsInvoice = true,
+                    DocumentId = inv.Id,
+                    DocumentNumber = inv.InvoiceNumber,
+                    PartyName = string.Empty,
+                    Status = inv.Status,
+                    RequiresFinalizationOrApproval = isDraft,
+                    OpenAmount = expected,
+                    Confidence = score,
+                    Summary = isDraft
+                        ? $"Finalize & Pay Draft {inv.InvoiceNumber} ({expected:C2})"
+                        : $"Record Payment on {inv.InvoiceNumber} ({expected:C2})"
+                });
+            }
+        }
+        else if (line.Amount < 0m && _accountingContext.Bills != null)
+        {
+            foreach (var bill in _accountingContext.Bills.GetAll())
+            {
+                if (bill.IsVoid ||
+                    string.Equals(bill.Status, BillStatus.Void, StringComparison.OrdinalIgnoreCase) ||
+                    BillStatus.IsSettled(bill.Status))
+                    continue;
+
+                bool awaiting = string.Equals(bill.Status, BillStatus.AwaitingApproval, StringComparison.OrdinalIgnoreCase);
+                var expected = bill.BalanceDue > 0m ? bill.BalanceDue : bill.Amount;
+                if (expected <= 0m || Math.Abs(expected - absAmt) > 0.05m) continue;
+
+                decimal score = 0.70m;
+                var supNorm = PartyMatchingHelper.NormalizeCompanyName(bill.SupplierName);
+                if (!string.IsNullOrEmpty(supNorm) && supNorm.Length >= 3 && lineText.Contains(supNorm, StringComparison.OrdinalIgnoreCase))
+                    score = 0.95m;
+
+                results.Add(new OpenDocumentBankCandidate
+                {
+                    IsInvoice = false,
+                    DocumentId = bill.Id,
+                    DocumentNumber = bill.InvoiceNumber ?? bill.Id[..8],
+                    PartyName = bill.SupplierName,
+                    Status = bill.Status,
+                    RequiresFinalizationOrApproval = awaiting,
+                    OpenAmount = expected,
+                    Confidence = score,
+                    Summary = awaiting
+                        ? $"Approve & Pay Bill {bill.SupplierName} ({expected:C2})"
+                        : $"Pay Bill {bill.SupplierName} ({expected:C2})"
+                });
+            }
+        }
+
+        return results.OrderByDescending(r => r.Confidence).Take(5).ToList();
+    }
+
+    public JournalEntry? SettleOpenDocumentAndMatchLine(
+        BankStatement statement,
+        string lineId,
+        OpenDocumentBankCandidate candidate,
+        IAccountingService accountingService,
+        Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "settle open document from bank line");
+        ArgumentNullException.ThrowIfNull(statement);
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(accountingService);
+
+        var line = statement.Lines.FirstOrDefault(l => l.Id == lineId)
+            ?? throw new KeyNotFoundException($"Bank line '{lineId}' not found.");
+        var actorName = actor?.FullName ?? "System";
+        var absAmt = Math.Round(Math.Abs(line.Amount), 2, MidpointRounding.AwayFromZero);
+
+        var payment = new PaymentRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            Date = line.Date.Date,
+            Amount = absAmt,
+            Method = "Bank Statement",
+            Reference = !string.IsNullOrWhiteSpace(line.ReferenceNumber) ? line.ReferenceNumber : line.Description,
+            Notes = "Settled via Bank Reconciliation",
+            BankGlAccountCode = statement.GlAccountCode
+        };
+
+        string expectedSourceType;
+        string expectedSourceId;
+
+        if (candidate.IsInvoice)
+        {
+            var inv = _accountingContext.Invoices?.GetById(candidate.DocumentId)
+                ?? throw new KeyNotFoundException($"Invoice '{candidate.DocumentNumber}' not found.");
+            if (string.Equals(inv.Status, InvoiceStatus.Draft, StringComparison.OrdinalIgnoreCase))
+            {
+                accountingService.ProcessInvoiceStatusChange(inv, InvoiceStatus.Draft, InvoiceStatus.Final, actorName, actor);
+            }
+            accountingService.RecordInvoicePayment(inv, payment, actorName, actor);
+            expectedSourceType = JournalSourceType.InvoicePayment;
+            expectedSourceId = $"{inv.Id}:{payment.Id}";
+        }
+        else
+        {
+            var bill = _accountingContext.Bills?.GetById(candidate.DocumentId)
+                ?? throw new KeyNotFoundException($"Bill '{candidate.DocumentNumber}' not found.");
+            if (string.Equals(bill.Status, BillStatus.AwaitingApproval, StringComparison.OrdinalIgnoreCase))
+            {
+                accountingService.ApproveBill(bill, actorName, actor);
+            }
+            accountingService.RecordBillPayment(bill, payment, actorName, actor);
+            expectedSourceType = JournalSourceType.BillPayment;
+            expectedSourceId = $"{bill.Id}:{payment.Id}";
+        }
+
+        var paymentJe = _accountingContext.JournalEntries?.GetAll()
+            .FirstOrDefault(je =>
+                string.Equals(je.SourceType, expectedSourceType, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(je.SourceId, expectedSourceId, StringComparison.OrdinalIgnoreCase));
+
+        if (paymentJe != null)
+        {
+            line.MatchStatus = BankLineMatchStatus.ManuallyMatched;
+            line.MatchedJournalEntryId = paymentJe.Id;
+            line.MatchedSourceType = paymentJe.SourceType;
+            line.MatchedSourceId = paymentJe.SourceId;
+            line.MatchedDocumentSummary = candidate.Summary;
+            line.MatchConfidence = 1.0m;
+
+            paymentJe.IsReconciled = true;
+            paymentJe.ReconciledStatementId = statement.Id;
+            _accountingContext.JournalEntries?.Save(paymentJe);
+            _accountingContext.BankStatements?.Save(statement);
+        }
+
+        return paymentJe;
     }
 }

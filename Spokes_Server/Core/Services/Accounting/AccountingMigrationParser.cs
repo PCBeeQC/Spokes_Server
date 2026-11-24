@@ -161,6 +161,28 @@ public static partial class AccountingMigrationParser
         {
             if (file.Content == null || file.Content.Length == 0) continue;
 
+            if (XlsxReaderHelper.IsLegacyBinaryXls(file.Content))
+            {
+                dataset.Warnings.Add($"Skipped '{file.FileName}': legacy binary .xls format is not supported. Open the report in Excel and save as .xlsx or .csv.");
+                continue;
+            }
+
+            if (XlsxReaderHelper.IsXlsx(file.Content, file.FileName))
+            {
+                try
+                {
+                    var sheetRows = XlsxReaderHelper.ParseFirstSheet(file.Content)
+                        .Where(r => r.Any(c => !string.IsNullOrWhiteSpace(c)))
+                        .ToList();
+                    ParseTabularRows(sheetRows, file.FileName, file.ExplicitKind, requestedFormat, useEuropeanComma: false, dataset, fallbackAsOfDate, defaultCurrency);
+                }
+                catch (Exception ex)
+                {
+                    dataset.Warnings.Add($"Failed to parse Excel workbook '{file.FileName}': {ex.Message}");
+                }
+                continue;
+            }
+
             var text = ReadTextWithSageEncoding(file.Content);
             if (string.IsNullOrWhiteSpace(text)) continue;
 
@@ -192,6 +214,9 @@ public static partial class AccountingMigrationParser
 
     public static bool IsClockifyCsv(byte[] content)
     {
+        if (XlsxReaderHelper.IsXlsx(content) || XlsxReaderHelper.IsLegacyBinaryXls(content))
+            return false;
+
         var text = ReadTextWithSageEncoding(content);
         if (string.IsNullOrWhiteSpace(text)) return false;
         var firstLine = text.Split('\n').FirstOrDefault(l => !string.IsNullOrWhiteSpace(l)) ?? string.Empty;
@@ -199,8 +224,27 @@ public static partial class AccountingMigrationParser
         return lower.Contains("duration") && (lower.Contains("start date") || lower.Contains("project")) && lower.Contains("user");
     }
 
-    public static MigrationFileKind DetectBannerKind(byte[] content)
+    public static MigrationFileKind DetectBannerKind(byte[] content, string? fileName = null)
     {
+        if (content == null || content.Length == 0 || XlsxReaderHelper.IsLegacyBinaryXls(content))
+            return MigrationFileKind.Auto;
+
+        if (XlsxReaderHelper.IsXlsx(content, fileName))
+        {
+            try
+            {
+                var xlsxRows = XlsxReaderHelper.ParseFirstSheet(content)
+                    .Where(r => r.Any(c => !string.IsNullOrWhiteSpace(c)))
+                    .Take(30)
+                    .ToList();
+                return DetectKindFromTabularRows(xlsxRows, fileName ?? string.Empty);
+            }
+            catch
+            {
+                return MigrationFileKind.Auto;
+            }
+        }
+
         var text = ReadTextWithSageEncoding(content);
         if (string.IsNullOrWhiteSpace(text)) return MigrationFileKind.Auto;
         if (text.Contains("<Version>", StringComparison.OrdinalIgnoreCase) &&
@@ -208,12 +252,27 @@ public static partial class AccountingMigrationParser
         {
             return MigrationFileKind.SageImp;
         }
-        var rows = CsvReaderHelper.Parse(text, DetectDelimiter(text)).Where(r => r.Any(c => !string.IsNullOrWhiteSpace(c))).Take(2).ToList();
+        var rows = CsvReaderHelper.Parse(text, DetectDelimiter(text)).Where(r => r.Any(c => !string.IsNullOrWhiteSpace(c))).Take(30).ToList();
         if (rows.Count > 0 && TryDetectSageExportBanner(rows[0], out var bannerKind))
             return bannerKind;
         if (IsClockifyCsv(content))
             return MigrationFileKind.ClockifyTimesheets;
-        return MigrationFileKind.Auto;
+
+        return DetectKindFromTabularRows(rows, fileName ?? string.Empty);
+    }
+
+    private static MigrationFileKind DetectKindFromTabularRows(List<List<string>> rows, string fileName)
+    {
+        if (rows.Count == 0) return MigrationFileKind.Auto;
+        if (TryDetectSageExportBanner(rows[0], out var bannerKind))
+            return bannerKind;
+
+        var headerIdx = FindHeaderRowIndex(rows);
+        if (headerIdx < 0 || headerIdx >= rows.Count) return MigrationFileKind.Auto;
+
+        var headers = rows[headerIdx].Select(NormalizeHeader).ToList();
+        var titleContext = BuildTitleContext(rows, headerIdx);
+        return InferKindFromHeadersAndFileName(headers, fileName, titleContext);
     }
 
     private static bool TryDetectSageExportBanner(List<string> firstRow, out MigrationFileKind kind)
@@ -460,6 +519,25 @@ public static partial class AccountingMigrationParser
             .Where(r => r.Any(c => !string.IsNullOrWhiteSpace(c)))
             .ToList();
 
+        if (explicitKind == MigrationFileKind.ClockifyTimesheets || (explicitKind == MigrationFileKind.Auto && IsClockifyCsv(Encoding.UTF8.GetBytes(text))))
+        {
+            dataset.InformationalNotices.Add($"Clockify detailed report '{fileName}' will be handled by the Clockify timesheet mapper.");
+            return;
+        }
+
+        ParseTabularRows(allRows, fileName, explicitKind, requestedFormat, useEuropeanComma, dataset, fallbackAsOfDate, defaultCurrency);
+    }
+
+    private static void ParseTabularRows(
+        List<List<string>> allRows,
+        string fileName,
+        MigrationFileKind explicitKind,
+        AccountingMigrationSourceFormat requestedFormat,
+        bool useEuropeanComma,
+        ParsedMigrationDataset dataset,
+        DateTime fallbackAsOfDate,
+        string defaultCurrency)
+    {
         if (allRows.Count < 2)
         {
             if (allRows.Count == 1 && TryDetectSageExportBanner(allRows[0], out var emptyBannerKind) && emptyBannerKind == MigrationFileKind.Inventory)
@@ -508,13 +586,7 @@ public static partial class AccountingMigrationParser
             return;
         }
 
-        if (explicitKind == MigrationFileKind.ClockifyTimesheets || (explicitKind == MigrationFileKind.Auto && IsClockifyCsv(Encoding.UTF8.GetBytes(text))))
-        {
-            dataset.InformationalNotices.Add($"Clockify detailed report '{fileName}' will be handled by the Clockify timesheet mapper.");
-            return;
-        }
-
-        // Find actual column header row within top 12 lines
+        // Find actual column header row within top 20 lines (Sage 50 reports often have 4-8 title lines)
         var headerIdx = FindHeaderRowIndex(allRows);
         if (headerIdx < 0)
         {
@@ -523,16 +595,25 @@ public static partial class AccountingMigrationParser
         }
 
         var headers = allRows[headerIdx].Select(NormalizeHeader).ToList();
+        var titleContext = BuildTitleContext(allRows, headerIdx);
 
-        if (requestedFormat == AccountingMigrationSourceFormat.AutoDetect &&
-            headers.Any(h => h.Contains("nominal code") || h.Contains("ledger account")))
+        if (requestedFormat == AccountingMigrationSourceFormat.AutoDetect)
         {
-            dataset.DetectedFormat = AccountingMigrationSourceFormat.SageBusinessCloudCsv;
+            if (headers.Any(h => h.Contains("nominal code") || h.Contains("ledger account")))
+            {
+                dataset.DetectedFormat = AccountingMigrationSourceFormat.SageBusinessCloudCsv;
+            }
+            else if (titleContext.Contains("balance de verification") || titleContext.Contains("chronologique") ||
+                     titleContext.Contains("sommaire des employes") || titleContext.Contains("sage 50") ||
+                     titleContext.Contains("customer aged") || titleContext.Contains("vendor aged"))
+            {
+                dataset.DetectedFormat = AccountingMigrationSourceFormat.Sage50ExportCsv;
+            }
         }
 
         var detectedKind = explicitKind != MigrationFileKind.Auto
             ? explicitKind
-            : InferKindFromHeadersAndFileName(headers, fileName);
+            : InferKindFromHeadersAndFileName(headers, fileName, titleContext);
 
         var dataRows = allRows.Skip(headerIdx + 1).ToList();
 
@@ -549,10 +630,10 @@ public static partial class AccountingMigrationParser
                 ParsePartyCsvRows(headers, dataRows, isCustomer: true, dataset);
                 break;
             case MigrationFileKind.OpenReceivables:
-                ParseSubledgerCsvRows(headers, dataRows, isReceivable: true, useEuropeanComma, fallbackAsOfDate, defaultCurrency, dataset);
+                ParseSubledgerCsvRows(headers, dataRows, fileName, isReceivable: true, useEuropeanComma, fallbackAsOfDate, defaultCurrency, dataset);
                 break;
             case MigrationFileKind.OpenPayables:
-                ParseSubledgerCsvRows(headers, dataRows, isReceivable: false, useEuropeanComma, fallbackAsOfDate, defaultCurrency, dataset);
+                ParseSubledgerCsvRows(headers, dataRows, fileName, isReceivable: false, useEuropeanComma, fallbackAsOfDate, defaultCurrency, dataset);
                 break;
             case MigrationFileKind.PayrollYtd:
                 ParsePayrollYtdCsvRows(headers, dataRows, useEuropeanComma, dataset);
@@ -569,13 +650,29 @@ public static partial class AccountingMigrationParser
         bool europeanComma,
         ParsedMigrationDataset dataset)
     {
-        var codeCol = FindColumn(headers, "account number", "account no", "acct no", "acct #", "account code", "nominal code", "numero de compte", "no compte", "num compte", "code", "account");
-        var nameCol = FindColumn(headers, "account name", "account description", "ledger account", "nom du compte", "libelle", "description", "name", "nom");
+        var codeCol = FindColumn(headers, "account number", "account no", "acct no", "acct #", "account code", "nominal code", "numero de compte", "no de compte", "no compte", "n° compte", "num compte", "code", "numero", "account", "compte");
+        var nameCol = FindColumn(headers, "account name", "account description", "ledger account", "nom du compte", "description du compte", "desc du compte", "libelle", "description", "name", "nom");
         var typeCol = FindColumn(headers, "account type", "type de compte", "class", "classe", "type", "category");
         var gifiCol = FindColumn(headers, "gifi", "igrf", "standard tax", "tax code", "code taxe");
         var drCol = FindColumn(headers, "debit", "debits", "solde debiteur", "ending debit");
         var crCol = FindColumn(headers, "credit", "credits", "solde crediteur", "ending credit");
         var balCol = FindColumn(headers, "balance", "ending balance", "net balance", "current balance", "solde", "solde final", "amount", "montant");
+
+        // Sage 50 Trial Balance Excel exports sometimes omit the header cell above the Account Number column (col 0)
+        // while labeling col 1 as "Description"/"Account" and cols 2-3 as "Debits"/"Credits".
+        if (codeCol < 0 && nameCol > 0 && string.IsNullOrWhiteSpace(headers[0]) && (drCol >= 0 || crCol >= 0 || balCol >= 0))
+        {
+            codeCol = 0;
+        }
+        else if (codeCol == nameCol && codeCol > 0 && string.IsNullOrWhiteSpace(headers[0]))
+        {
+            codeCol = 0;
+        }
+        else if (codeCol >= 0 && nameCol < 0 && codeCol + 1 < headers.Count && string.IsNullOrWhiteSpace(headers[codeCol + 1]) &&
+                 codeCol + 1 != drCol && codeCol + 1 != crCol && codeCol + 1 != balCol)
+        {
+            nameCol = codeCol + 1;
+        }
 
         if (codeCol < 0 && nameCol < 0) return;
 
@@ -602,8 +699,26 @@ public static partial class AccountingMigrationParser
             }
 
             if (string.IsNullOrWhiteSpace(code)) continue;
-            if (code.Equals("total", StringComparison.OrdinalIgnoreCase) ||
-                name.StartsWith("total ", StringComparison.OrdinalIgnoreCase)) continue;
+            var normCode = PartyMatchingHelper.StripDiacritics(code).ToLowerInvariant().TrimEnd(':');
+            var normName = PartyMatchingHelper.StripDiacritics(name).ToLowerInvariant().TrimEnd(':');
+            if (normCode is "total" or "totaux" or "grand total" or "sous total" or "subtotal" ||
+                normCode.StartsWith("total ", StringComparison.Ordinal) ||
+                normName.StartsWith("total ", StringComparison.Ordinal) ||
+                normName is "total" or "totaux" or "grand total")
+            {
+                continue;
+            }
+
+            // Skip report footnotes / timestamps / section banners (e.g. "Créé le: 2026-11-23") — account codes start with a digit
+            if (!code.Any(char.IsDigit) || !char.IsDigit(code.Trim()[0])) continue;
+            if (normCode.StartsWith("cree le", StringComparison.Ordinal) ||
+                normCode.StartsWith("imprime le", StringComparison.Ordinal) ||
+                normCode.StartsWith("created", StringComparison.Ordinal) ||
+                normCode.StartsWith("printed", StringComparison.Ordinal) ||
+                normCode.StartsWith("page ", StringComparison.Ordinal))
+            {
+                continue;
+            }
 
             var rawType = GetCell(r, typeCol);
             var normalizedType = NormalizeAccountType(rawType, code);
@@ -714,32 +829,131 @@ public static partial class AccountingMigrationParser
     private static void ParseSubledgerCsvRows(
         List<string> headers,
         List<List<string>> rows,
+        string fileName,
         bool isReceivable,
         bool europeanComma,
         DateTime fallbackDate,
         string defaultCurrency,
         ParsedMigrationDataset dataset)
     {
-        var partyCol = FindColumn(headers, "customer name", "customer", "client", "vendor name", "vendor", "supplier", "fournisseur", "name", "nom");
-        var docCol = FindColumn(headers, "invoice number", "invoice no", "invoice #", "inv #", "bill #", "bill number", "document", "reference", "ref", "trans no", "numero", "no facture");
-        var dateCol = FindColumn(headers, "invoice date", "bill date", "trans date", "issue date", "date");
-        var dueCol = FindColumn(headers, "due date", "date d echeance", "echeance");
-        var openCol = FindColumn(headers, "balance due", "open balance", "amount due", "remaining", "solde du", "montant du", "total", "amount", "montant");
+        var partyCol = FindColumn(headers, "customer name", "nom du client", "customer", "client", "vendor name", "nom du fournisseur", "vendor", "supplier", "fournisseur", "name", "nom");
+        var docCol = FindColumn(headers, "invoice number", "invoice no", "invoice #", "inv #", "no de facture", "no facture", "facture", "invoice", "bill #", "bill number", "source", "document", "reference", "ref", "trans no", "numero");
+        var typeCol = FindColumn(headers, "type", "transaction type", "doc type");
+        var dateCol = FindColumn(headers, "invoice date", "bill date", "trans date", "issue date", "date de facture", "date");
+        var dueCol = FindColumn(headers, "due date", "date d echeance", "date echeance", "echeance");
+        var openCol = FindColumn(headers, "balance due", "open balance", "amount due", "remaining", "solde du", "montant du", "solde", "total", "amount", "montant");
         var subCol = FindColumn(headers, "subtotal", "sub total", "sous total", "net");
         var taxCol = FindColumn(headers, "tax", "tps", "gst", "tvq", "qst", "total tax", "taxes");
         var currCol = FindColumn(headers, "currency", "devise");
         var memoCol = FindColumn(headers, "memo", "description", "notes");
 
-        if (partyCol < 0 || openCol < 0) return;
+        if (openCol < 0) return;
+
+        // Sage 50 Aged Detail reports (Chronologique clients/fournisseurs - Détail) group invoices under
+        // a party section header row (party name in col 0, no date/amount), followed by detail rows and a "Total impayé:" subtotal.
+        // When Sage exports include paid invoices, each Facture/Invoice row is immediately followed by its
+        // Paiement/Remise/Imputé settlement rows; pairing and netting those leaves ONLY truly open balances.
+        var groupLabelCol = partyCol >= 0 ? partyCol : 0;
+        string? currentGroupParty = null;
+        ParsedSubledgerRow? pendingDoc = null;
+        int filteredSettledDocs = 0;
+        int filteredSettlementRows = 0;
+        var emittedForFile = new List<ParsedSubledgerRow>();
+
+        void FlushPendingDoc()
+        {
+            if (pendingDoc == null) return;
+            if (Math.Abs(pendingDoc.OpenAmount) > 0.004m)
+            {
+                pendingDoc.OpenAmount = Math.Round(pendingDoc.OpenAmount, 2);
+                pendingDoc.SubTotal = Math.Round(pendingDoc.OpenAmount, 2);
+                emittedForFile.Add(pendingDoc);
+            }
+            else
+            {
+                filteredSettledDocs++;
+            }
+            pendingDoc = null;
+        }
 
         foreach (var r in rows)
         {
-            var partyName = GetCell(r, partyCol);
-            if (string.IsNullOrWhiteSpace(partyName) || partyName.StartsWith("Total", StringComparison.OrdinalIgnoreCase)) continue;
-            if (!TryParseMoney(GetCell(r, openCol), out var openAmt, europeanComma) || openAmt == 0m) continue;
+            var rawFirst = GetCell(r, groupLabelCol);
+            var rawDoc = GetCell(r, docCol);
+            var rawType = GetCell(r, typeCol);
+            var rawDate = GetCell(r, dateCol);
+            var rawOpen = GetCell(r, openCol);
+            bool hasOpenAmt = TryParseMoney(rawOpen, out var openAmt, europeanComma) && openAmt != 0m;
+            bool hasValidDate = dateCol >= 0 && TryParseExactDate(rawDate, out _);
 
-            var docNo = GetCell(r, docCol);
-            var issue = TryParseDate(GetCell(r, dateCol), fallbackDate);
+            if (IsSummaryOrTotalLabel(rawFirst) || IsSummaryOrTotalLabel(rawDoc) || IsSummaryOrTotalLabel(GetCell(r, 0)))
+            {
+                FlushPendingDoc();
+                continue;
+            }
+
+            // Detect grouped section header row (e.g., "Client Alpha Inc." with no date and no open amount)
+            if (!hasOpenAmt && !hasValidDate && !string.IsNullOrWhiteSpace(rawFirst))
+            {
+                FlushPendingDoc();
+                // Ignore pure report divider / aging legend / footer rows
+                var cleanHeader = rawFirst.Trim();
+                var normHeader = PartyMatchingHelper.StripDiacritics(cleanHeader).ToLowerInvariant();
+                if (!cleanHeader.StartsWith('%') &&
+                    !normHeader.StartsWith("cree le", StringComparison.Ordinal) &&
+                    !normHeader.StartsWith("generated", StringComparison.Ordinal) &&
+                    !cleanHeader.All(ch => ch is '-' or '=' or '_' or ' '))
+                {
+                    currentGroupParty = cleanHeader;
+                }
+                continue;
+            }
+
+            if (!hasOpenAmt) continue;
+
+            var normType = !string.IsNullOrWhiteSpace(rawType)
+                ? PartyMatchingHelper.StripDiacritics(rawType).ToLowerInvariant().Trim()
+                : string.Empty;
+
+            bool isSettlementRow = normType is "paiement" or "payment" or "remise" or "discount" or "impute" or "applied";
+
+            if (isSettlementRow && pendingDoc != null)
+            {
+                pendingDoc.OpenAmount = Math.Round(pendingDoc.OpenAmount + openAmt, 2);
+                filteredSettlementRows++;
+                continue;
+            }
+
+            string partyName;
+            string docNo = rawDoc;
+            if (partyCol >= 0 && !string.IsNullOrWhiteSpace(rawFirst))
+            {
+                // If the same column is used as group header AND detail invoice # (e.g. col 0 = "Customer / Source"),
+                // keep currentGroupParty when docCol is absent/same and this row carries a date.
+                if (docCol < 0 && !string.IsNullOrWhiteSpace(currentGroupParty) && hasValidDate)
+                {
+                    partyName = currentGroupParty;
+                    docNo = rawFirst;
+                }
+                else
+                {
+                    partyName = rawFirst;
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(currentGroupParty))
+            {
+                partyName = currentGroupParty;
+                if (string.IsNullOrWhiteSpace(docNo) && !string.IsNullOrWhiteSpace(rawFirst) && groupLabelCol != openCol)
+                    docNo = rawFirst;
+            }
+            else
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(partyName) || IsSummaryOrTotalLabel(partyName)) continue;
+
+            var issue = TryParseDate(rawDate, fallbackDate);
             var due = dueCol >= 0 ? TryParseDate(GetCell(r, dueCol), issue.AddDays(30)) : issue.AddDays(30);
             var sub = subCol >= 0 && TryParseMoney(GetCell(r, subCol), out var sVal, europeanComma) ? sVal : openAmt;
             var tax = taxCol >= 0 && TryParseMoney(GetCell(r, taxCol), out var tVal, europeanComma) ? tVal : 0m;
@@ -759,9 +973,41 @@ public static partial class AccountingMigrationParser
                 Notes = GetCell(r, memoCol)
             };
 
-            if (isReceivable) dataset.OpenInvoices.Add(entry);
-            else dataset.OpenBills.Add(entry);
+            if (typeCol >= 0)
+            {
+                // Buffer the current invoice/bill so immediately following Paiement/Remise/Imputé rows net against it
+                FlushPendingDoc();
+                pendingDoc = entry;
+            }
+            else
+            {
+                emittedForFile.Add(entry);
+            }
         }
+
+        FlushPendingDoc();
+
+        if (isReceivable) dataset.OpenInvoices.AddRange(emittedForFile);
+        else dataset.OpenBills.AddRange(emittedForFile);
+
+        if (filteredSettlementRows > 0)
+        {
+            var openTotal = Math.Round(emittedForFile.Sum(x => x.OpenAmount), 2);
+            dataset.InformationalNotices.Add(
+                $"'{fileName}': automatically netted {filteredSettlementRows} historical payment/settlement row(s) ({filteredSettledDocs} fully paid invoice(s) filtered out), keeping {emittedForFile.Count} open item(s) totaling {openTotal:C2}.");
+        }
+    }
+
+    private static bool IsSummaryOrTotalLabel(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var norm = PartyMatchingHelper.StripDiacritics(text).ToLowerInvariant().Trim().TrimEnd(':');
+        return norm is "total" or "totaux" or "grand total" or "total general" or "sous total" or "subtotal" ||
+               norm.StartsWith("total ", StringComparison.Ordinal) ||
+               norm.StartsWith("sous-total", StringComparison.Ordinal) ||
+               norm.StartsWith("sous total", StringComparison.Ordinal) ||
+               norm.StartsWith("subtotal", StringComparison.Ordinal) ||
+               norm.StartsWith("grand total", StringComparison.Ordinal);
     }
 
     private static void ParsePayrollYtdCsvRows(
@@ -770,35 +1016,67 @@ public static partial class AccountingMigrationParser
         bool europeanComma,
         ParsedMigrationDataset dataset)
     {
-        var empCol = FindColumn(headers, "employee name", "employee", "employe", "full name", "name", "nom");
+        var empCol = FindColumn(headers, "employee name", "nom de l employe", "nom employe", "employee", "employe", "full name", "name", "nom");
         var emailCol = FindColumn(headers, "email", "courriel");
-        var grossCol = FindColumn(headers, "gross pay", "gross income", "gross", "salaire brut", "brut", "ytd gross");
-        var vacCol = FindColumn(headers, "vacation accrued", "vacation", "vacances", "vacation pay");
-        var fedTaxCol = FindColumn(headers, "federal tax", "fed tax", "impot federal", "cra tax", "income tax", "total tax");
-        var provTaxCol = FindColumn(headers, "provincial tax", "quebec tax", "qc tax", "state tax", "impot provincial", "impot qc", "impot quebec");
-        var qppEeCol = FindColumn(headers, "qpp", "rrq", "cpp", "qpp ee", "rrq ee", "cpp ee", "qpp employee");
-        var qppErCol = FindColumn(headers, "qpp er", "rrq er", "cpp er", "qpp employer", "cpp employer");
-        var qpp2EeCol = FindColumn(headers, "qpp2", "rrq2", "cpp2", "qpp 2");
-        var qpp2ErCol = FindColumn(headers, "qpp2 er", "rrq2 er", "cpp2 er");
-        var eiEeCol = FindColumn(headers, "ei", "ae", "ei ee", "ae ee", "ei employee");
-        var eiErCol = FindColumn(headers, "ei er", "ae er", "ei employer");
-        var qpipEeCol = FindColumn(headers, "qpip", "rqap", "qpip ee", "rqap ee");
-        var qpipErCol = FindColumn(headers, "qpip er", "rqap er", "qpip employer");
+        var grossCol = FindColumn(headers, "gross pay", "gross income", "gross", "revenu brut", "salaire brut", "gains bruts", "total brut", "brut", "ytd gross");
+        var vacCol = FindColumn(headers, "vacation accrued", "vacation pay", "vacation", "indemnite de vacances", "paie de vacances", "vacances");
+        var provTaxCol = FindColumn(headers, "provincial tax", "quebec tax", "qc tax", "que tax", "state tax", "impot du quebec", "impot quebec", "impot provincial", "impot qc", "impot prov");
+        var fedTaxCol = FindColumnExcluding(headers, provTaxCol, "federal tax", "fed tax", "impot federal", "impot fed", "cra tax", "income tax", "impot", "total tax");
+        var qppErCol = FindColumn(headers, "qpp er", "rrq er", "qpp employer", "rrq employeur");
+        var cppErCol = FindColumnExcluding(headers, qppErCol, "cpp er", "rpc er", "cpp employer", "rpc employeur");
+        var qppEeCol = FindColumnExcluding(headers, qppErCol, "qpp ee", "rrq ee", "qpp employee", "rrq employe", "qpp", "rrq");
+        var cppEeCol = FindColumnExcluding(headers, cppErCol, "cpp ee", "rpc ee", "cpp employee", "rpc employe", "cpp", "rpc");
+        if (cppEeCol == qppEeCol) cppEeCol = -1;
+        var qpp2ErCol = FindColumn(headers, "qpp2 er", "rrq2 er");
+        var cpp2ErCol = FindColumnExcluding(headers, qpp2ErCol, "cpp2 er", "rpc2 er");
+        var qpp2EeCol = FindColumnExcluding(headers, qpp2ErCol, "qpp2 ee", "rrq2 ee", "qpp2", "rrq2", "qpp 2", "rrq 2");
+        var cpp2EeCol = FindColumnExcluding(headers, cpp2ErCol, "cpp2 ee", "rpc2 ee", "cpp2", "rpc2", "cpp 2", "rpc 2");
+        if (cpp2EeCol == qpp2EeCol) cpp2EeCol = -1;
+        var eiErCol = FindColumn(headers, "ei er", "ae er", "a e er", "ei employer", "ae employeur");
+        var eiEeCol = FindColumnExcluding(headers, eiErCol, "ei ee", "ae ee", "a e ee", "ei employee", "ae employe", "assurance emploi", "a e", "ei", "ae");
+        var qpipErCol = FindColumn(headers, "qpip er", "rqap er", "qpip employer", "rqap employeur");
+        var qpipEeCol = FindColumnExcluding(headers, qpipErCol, "qpip ee", "rqap ee", "qpip employee", "rqap employe", "qpip", "rqap");
+
+        // Sage 50 Employee Summary / Detail exports leave col 0 header blank while putting Employee Name in col 0
+        if (empCol < 0 && grossCol > 0 && string.IsNullOrWhiteSpace(headers[0]))
+            empCol = 0;
 
         if (empCol < 0 || grossCol < 0) return;
 
+        string? currentGroupEmployee = null;
+
         foreach (var r in rows)
         {
-            var empName = GetCell(r, empCol);
-            if (string.IsNullOrWhiteSpace(empName) || empName.StartsWith("Total", StringComparison.OrdinalIgnoreCase)) continue;
-            if (!TryParseMoney(GetCell(r, grossCol), out var gross, europeanComma)) continue;
+            var rawEmp = GetCell(r, empCol);
+            var rawGross = GetCell(r, grossCol);
+
+            if (IsSummaryOrTotalLabel(rawEmp) || IsSummaryOrTotalLabel(GetCell(r, 0))) continue;
+
+            bool hasGross = TryParseMoney(rawGross, out var gross, europeanComma);
+
+            // Detect Sage 50 grouped "Détail des employés" section header row (employee name in col 0, no gross value)
+            if (!hasGross && !string.IsNullOrWhiteSpace(rawEmp))
+            {
+                var normEmp = PartyMatchingHelper.StripDiacritics(rawEmp).ToLowerInvariant();
+                if (!normEmp.StartsWith("cree le", StringComparison.Ordinal) &&
+                    !normEmp.StartsWith("generated", StringComparison.Ordinal))
+                {
+                    currentGroupEmployee = rawEmp.Trim();
+                }
+                continue;
+            }
+
+            var empName = !string.IsNullOrWhiteSpace(rawEmp) ? rawEmp : currentGroupEmployee;
+            if (string.IsNullOrWhiteSpace(empName) || !hasGross) continue;
 
             decimal ReadM(int idx) => idx >= 0 && TryParseMoney(GetCell(r, idx), out var v, europeanComma) ? Math.Max(0m, v) : 0m;
 
-            var qppEe = ReadM(qppEeCol);
-            var qppEr = qppErCol >= 0 ? ReadM(qppErCol) : qppEe;
-            var qpp2Ee = ReadM(qpp2EeCol);
-            var qpp2Er = qpp2ErCol >= 0 ? ReadM(qpp2ErCol) : qpp2Ee;
+            var qppEe = ReadM(qppEeCol) + ReadM(cppEeCol);
+            var hasExplicitQppEr = qppErCol >= 0 || cppErCol >= 0;
+            var qppEr = hasExplicitQppEr ? ReadM(qppErCol) + ReadM(cppErCol) : qppEe;
+            var qpp2Ee = ReadM(qpp2EeCol) + ReadM(cpp2EeCol);
+            var hasExplicitQpp2Er = qpp2ErCol >= 0 || cpp2ErCol >= 0;
+            var qpp2Er = hasExplicitQpp2Er ? ReadM(qpp2ErCol) + ReadM(cpp2ErCol) : qpp2Ee;
             var eiEe = ReadM(eiEeCol);
             var eiEr = eiErCol >= 0 ? ReadM(eiErCol) : Math.Round(eiEe * 1.4m, 2);
             var qpipEe = ReadM(qpipEeCol);
@@ -1226,7 +1504,7 @@ public static partial class AccountingMigrationParser
 
     private static int FindHeaderRowIndex(List<List<string>> rows)
     {
-        var limit = Math.Min(rows.Count, 12);
+        var limit = Math.Min(rows.Count, 20);
         int bestIdx = 0;
         int bestScore = -1;
 
@@ -1240,13 +1518,21 @@ public static partial class AccountingMigrationParser
             int score = 0;
             foreach (var cell in norm)
             {
-                if (cell is "debit" or "credit" or "balance" or "solde" or "account" or "code" or "name" or "nom"
-                    or "email" or "courriel" or "customer" or "client" or "vendor" or "supplier" or "fournisseur"
-                    or "employee" or "employe" or "gross" or "gross pay" or "amount" or "total" or "date" or "invoice number")
+                if (string.IsNullOrEmpty(cell)) continue;
+                if (cell is "debit" or "debits" or "credit" or "credits" or "balance" or "solde" or "account" or "compte"
+                    or "code" or "name" or "nom" or "description" or "email" or "courriel"
+                    or "customer" or "client" or "vendor" or "supplier" or "fournisseur"
+                    or "employee" or "employe" or "gross" or "gross pay" or "brut" or "revenu brut" or "salaire brut"
+                    or "amount" or "montant" or "total" or "date" or "invoice number" or "invoice" or "facture" or "source"
+                    or "courant" or "current" or "rrq" or "rqap" or "ae" or "qpp" or "cpp" or "ei" or "qpip" or "impot" or "vacances")
                 {
                     score += 3;
                 }
-                else if (cell.Contains("account") || cell.Contains("compte") || cell.Contains("balance") || cell.Contains("invoice") || cell.Contains("vendor") || cell.Contains("customer") || cell.Contains("employee") || cell.Contains("tax"))
+                else if (cell.Contains("account") || cell.Contains("compte") || cell.Contains("balance") || cell.Contains("solde")
+                    || cell.Contains("invoice") || cell.Contains("facture") || cell.Contains("echeance") || cell.Contains("due date")
+                    || cell.Contains("vendor") || cell.Contains("fournisseur") || cell.Contains("customer") || cell.Contains("client")
+                    || cell.Contains("employee") || cell.Contains("employe") || cell.Contains("tax") || cell.Contains("impot")
+                    || cell.Contains("debit") || cell.Contains("credit") || cell.Contains("brut"))
                 {
                     score += 2;
                 }
@@ -1262,22 +1548,52 @@ public static partial class AccountingMigrationParser
         return bestIdx;
     }
 
-    private static MigrationFileKind InferKindFromHeadersAndFileName(List<string> headers, string fileName)
+    private static string BuildTitleContext(List<List<string>> rows, int headerIdx)
+    {
+        if (headerIdx <= 0) return string.Empty;
+        var titleCells = rows.Take(headerIdx).SelectMany(r => r).Where(c => !string.IsNullOrWhiteSpace(c));
+        return NormalizeHeader(string.Join(' ', titleCells));
+    }
+
+    private static MigrationFileKind InferKindFromHeadersAndFileName(List<string> headers, string fileName, string titleContext = "")
     {
         var lowerName = PartyMatchingHelper.StripDiacritics(fileName).ToLowerInvariant();
         var joined = string.Join('|', headers);
+        var context = $"{titleContext} {lowerName}";
 
-        if (joined.Contains("gross") || joined.Contains("brut") || joined.Contains("qpp") || joined.Contains("rrq") || joined.Contains("cpp") || lowerName.Contains("payroll") || lowerName.Contains("paie") || lowerName.Contains("ytd"))
+        // 1. Report title banner / filename signals (strongest signal for Sage 50 Report Centre exports)
+        if (context.Contains("balance de verification") || context.Contains("trial balance"))
+            return MigrationFileKind.TrialBalance;
+
+        if (context.Contains("sommaire des employes") || context.Contains("employee summary") ||
+            context.Contains("detail des employes") || context.Contains("details des employes") || context.Contains("employee detail") ||
+            context.Contains("sommaire de la paie") || context.Contains("payroll summary"))
+            return MigrationFileKind.PayrollYtd;
+
+        if (context.Contains("chronologique") || context.Contains("anciennete") || context.Contains("aged"))
+        {
+            if (context.Contains("fournisseur") || context.Contains("vendor") || context.Contains("payable") || context.Contains("achat"))
+                return MigrationFileKind.OpenPayables;
+            if (context.Contains("client") || context.Contains("customer") || context.Contains("receivable") || context.Contains("vente"))
+                return MigrationFileKind.OpenReceivables;
+        }
+
+        // 2. Column header signals
+        if (joined.Contains("gross") || joined.Contains("brut") || joined.Contains("qpp") || joined.Contains("rrq") ||
+            joined.Contains("cpp") || joined.Contains("rqap") || joined.Contains("qpip") ||
+            lowerName.Contains("payroll") || lowerName.Contains("paie") || lowerName.Contains("ytd"))
             return MigrationFileKind.PayrollYtd;
 
         if ((joined.Contains("debit") || joined.Contains("credit") || joined.Contains("solde") || joined.Contains("balance")) &&
-            (joined.Contains("account") || joined.Contains("compte") || joined.Contains("nominal") || joined.Contains("code")))
+            (joined.Contains("account") || joined.Contains("compte") || joined.Contains("nominal") || joined.Contains("code") || joined.Contains("description")))
             return MigrationFileKind.TrialBalance;
 
-        if ((joined.Contains("invoice") || joined.Contains("bill") || joined.Contains("facture") || joined.Contains("due date") || joined.Contains("echeance")) &&
-            (joined.Contains("balance") || joined.Contains("amount") || joined.Contains("total") || joined.Contains("montant")))
+        if ((joined.Contains("invoice") || joined.Contains("bill") || joined.Contains("facture") || joined.Contains("source") ||
+             joined.Contains("due date") || joined.Contains("echeance") || joined.Contains("courant") || joined.Contains("current")) &&
+            (joined.Contains("balance") || joined.Contains("amount") || joined.Contains("total") || joined.Contains("montant") || joined.Contains("solde")))
         {
-            if (joined.Contains("vendor") || joined.Contains("supplier") || joined.Contains("fournisseur") || lowerName.Contains("ap") || lowerName.Contains("payable") || lowerName.Contains("bill") || lowerName.Contains("fournisseur"))
+            if (joined.Contains("vendor") || joined.Contains("supplier") || joined.Contains("fournisseur") ||
+                lowerName.Contains("ap") || lowerName.Contains("payable") || lowerName.Contains("bill") || lowerName.Contains("fournisseur"))
                 return MigrationFileKind.OpenPayables;
             return MigrationFileKind.OpenReceivables;
         }
@@ -1297,22 +1613,29 @@ public static partial class AccountingMigrationParser
     private static string NormalizeHeader(string header)
     {
         var clean = PartyMatchingHelper.StripDiacritics(header).ToLowerInvariant();
-        clean = clean.Replace('_', ' ').Replace('-', ' ').Replace('.', ' ').Trim();
+        clean = clean.Replace('_', ' ').Replace('-', ' ').Replace('.', ' ').Replace('\'', ' ').Replace('’', ' ').Trim();
         return Regex.Replace(clean, @"\s+", " ");
     }
 
-    private static int FindColumn(List<string> headers, params string[] aliases)
+    private static int FindColumn(List<string> headers, params string[] aliases) =>
+        FindColumnExcluding(headers, excludedIndex: -1, aliases);
+
+    private static int FindColumnExcluding(List<string> headers, int excludedIndex, params string[] aliases)
     {
         foreach (var alias in aliases)
         {
             var idx = headers.FindIndex(h => string.Equals(h, alias, StringComparison.OrdinalIgnoreCase));
-            if (idx >= 0) return idx;
+            if (idx >= 0 && idx != excludedIndex) return idx;
         }
         foreach (var alias in aliases)
         {
             if (alias.Length < 4) continue;
-            var idx = headers.FindIndex(h => h.Contains(alias, StringComparison.OrdinalIgnoreCase));
-            if (idx >= 0) return idx;
+            for (int i = 0; i < headers.Count; i++)
+            {
+                if (i == excludedIndex) continue;
+                if (headers[i].Contains(alias, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
         }
         return -1;
     }
@@ -1368,8 +1691,13 @@ public static partial class AccountingMigrationParser
         }
         else if (s.Contains(','))
         {
+            var commaCount = s.Count(c => c == ',');
             var afterComma = s.Length - s.LastIndexOf(',') - 1;
-            s = afterComma == 2 ? s.Replace(',', '.') : s.Replace(",", "");
+            // Sage 50 French Excel exports write decimal strings with 1 or 2 digits after ',' (e.g. "12345,5", "9876,07"),
+            // whereas English thousands separators always have 3 digits after each comma ("1,234").
+            s = (commaCount == 1 && (afterComma == 1 || afterComma == 2))
+                ? s.Replace(',', '.')
+                : s.Replace(",", "");
         }
 
         if (!decimal.TryParse(s, NumberStyles.Number | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var parsed))

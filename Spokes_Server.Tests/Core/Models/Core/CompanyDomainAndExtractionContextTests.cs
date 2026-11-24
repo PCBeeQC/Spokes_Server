@@ -65,7 +65,7 @@ public class CompanyDomainAndExtractionContextTests
     }
 
     [Fact]
-    public void InvoiceExtractionContext_DefaultHasNoHardcodedCompany_AndAllowsPolyRoboticsAsSupplier()
+    public void InvoiceExtractionContext_DefaultHasNoHardcodedCompany_AndAllowsExternalVendorAsSupplier()
     {
         var defaultCtx = new InvoiceExtractionContext();
         Assert.Equal(string.Empty, defaultCtx.BuyerCompanyName);
@@ -74,8 +74,8 @@ public class CompanyDomainAndExtractionContextTests
 
         var sb = new StringBuilder();
         sb.AppendLine("INVOICE");
-        sb.AppendLine("Poly-Robotics Inc. | Bill to: Northstar Manufacturing Ltd.");
-        sb.AppendLine("billing@poly-robotics.com | ap@northstar.io");
+        sb.AppendLine("Apex Automation Inc. | Bill to: Northstar Manufacturing Ltd.");
+        sb.AppendLine("billing@apex-auto.test | ap@northstar.io");
         sb.AppendLine("Total: 250.00");
 
         var buyerProfile = new CompanyProfile
@@ -92,8 +92,8 @@ public class CompanyDomainAndExtractionContextTests
         var data = new ExtractedInvoiceData();
         UniversalPartyExtractor.ExtractParties(SpatialTextDocumentTestHelper.Create(sb.ToString()), "invoice.pdf", data, ctx);
 
-        Assert.Equal("Poly-Robotics Inc.", data.SupplierName);
-        Assert.Equal("billing@poly-robotics.com", data.SupplierEmail);
+        Assert.Equal("Apex Automation Inc.", data.SupplierName);
+        Assert.Equal("billing@apex-auto.test", data.SupplierEmail);
     }
 
     [Fact]

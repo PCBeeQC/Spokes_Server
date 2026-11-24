@@ -348,8 +348,8 @@ public class CompanyBillInboxServiceTests : TestDataTestBase
         {
             Id = "acc-broken-cipher",
             IsServerManaged = true,
-            EmailAddress = "accomp@poly-robotics.com",
-            Username = "accomp@poly-robotics.com",
+            EmailAddress = "bills@acme.test",
+            Username = "bills@acme.test",
             IncomingServerConfigId = "imap-decryption-test",
             EncryptedPassword = "short-non-v2-ciphertext"
         };
@@ -375,7 +375,7 @@ public class CompanyBillInboxServiceTests : TestDataTestBase
             Id = "acc-bill-dedicated",
             IsServerManaged = true,
             Name = "AP Dedicated",
-            EmailAddress = "accomp@poly-robotics.com"
+            EmailAddress = "bills@acme.test"
         };
         _db.EmailAccounts.Save(unsharedBillAccount);
 
@@ -418,7 +418,7 @@ public class CompanyBillInboxServiceTests : TestDataTestBase
             Id = "acc-shared-webmail",
             IsServerManaged = true,
             Name = "Shared Info",
-            EmailAddress = "info@poly-robotics.com",
+            EmailAddress = "info@acme.test",
             AllowedUserIds = ["emp-1"]
         };
         _db.EmailAccounts.Save(sharedAccount);
@@ -448,5 +448,36 @@ public class CompanyBillInboxServiceTests : TestDataTestBase
         _mockCacheMaintenance.Verify(c => c.DeleteLocalMessageFilesAsync(unsharedBillAccount.Id, "msg-stale-legacy-read"), Times.Once);
         _mockCacheMaintenance.Verify(c => c.DeleteLocalMessageFilesAsync(unsharedBillAccount.Id, "msg-stale-null-status"), Times.Once);
         _mockCacheMaintenance.Verify(c => c.DeleteLocalMessageFilesAsync(unsharedBillAccount.Id, "msg-ingested-bill"), Times.Never);
+    }
+
+    [Fact]
+    public void LinkReceiptToInvoice_RejectsDraftInvoice()
+    {
+        var project = new Spokes_Server.Core.Models.Projects.Project { Id = "proj-bill-draft", Name = "Bill Draft" };
+        _db.Projects.Save(project);
+
+        var draft = new Spokes_Server.Core.Models.Accounting.Invoice
+        {
+            Id = "inv-bill-draft",
+            ProjectId = project.Id,
+            InvoiceNumber = "INV-BILL-DRAFT",
+            Status = Spokes_Server.Core.Models.Accounting.InvoiceStatus.Draft,
+            LineItems = [new Spokes_Server.Core.Models.Accounting.InvoiceLine { Quantity = 1m, UnitPrice = 250m }]
+        };
+        _db.Invoices.Save(draft);
+
+        var msg = new Spokes_Server.Core.Models.Communication.EmailMessage
+        {
+            Id = "msg-receipt-draft",
+            AccountId = "acc-receipt-draft",
+            FolderPath = "INBOX",
+            Subject = "Payment advice for INV-BILL-DRAFT"
+        };
+        _db.EmailMessages.Save(msg);
+
+        var admin = new Spokes_Server.Core.Models.HR.Employee { Id = "emp-bill-admin", IsActive = true, IsAdmin = true };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            _inboxService.LinkReceiptToInvoice(msg.Id, draft.Id, admin.Id, actor: admin));
     }
 }

@@ -19,6 +19,7 @@ public class CsvBankImportMapping
     public int? DebitWithdrawalColumnIndex { get; set; }
     public int? CreditDepositColumnIndex { get; set; }
     public int? ReferenceColumnIndex { get; set; }
+    public int? BalanceColumnIndex { get; set; }
 }
 
 /// <summary>
@@ -231,12 +232,21 @@ public class BankStatementImportService
 
         if (rows.Count == 0) return statement;
 
-        var activeMap = mapping ?? AutoDetectCsvMapping(rows[0]);
-        var startRow = activeMap.HasHeaderRow ? 1 : 0;
+        int headerRowIndex = mapping != null ? 0 : FindCsvHeaderRowIndex(rows);
+        int? detectedStatusCol = null;
+        var activeMap = mapping ?? AutoDetectCsvMapping(rows[headerRowIndex], out detectedStatusCol);
+        var startRow = activeMap.HasHeaderRow ? headerRowIndex + 1 : 0;
 
         for (int i = startRow; i < rows.Count; i++)
         {
             var row = rows[i];
+            if (mapping == null && detectedStatusCol.HasValue)
+            {
+                var statusVal = GetCell(row, detectedStatusCol.Value);
+                if (statusVal.Contains("en attente", StringComparison.OrdinalIgnoreCase) ||
+                    statusVal.Contains("pending", StringComparison.OrdinalIgnoreCase))
+                    continue;
+            }
             var dateStr = GetCell(row, activeMap.DateColumnIndex);
             if (!TryParseFlexibleDate(dateStr, out var txDate))
                 continue;
@@ -276,6 +286,15 @@ public class BankStatementImportService
             var reference = activeMap.ReferenceColumnIndex.HasValue
                 ? GetCell(row, activeMap.ReferenceColumnIndex.Value)
                 : string.Empty;
+            decimal? runningBalance = null;
+            if (activeMap.BalanceColumnIndex.HasValue)
+            {
+                var balStr = GetCell(row, activeMap.BalanceColumnIndex.Value);
+                if (TryParseDecimal(balStr, out var parsedBal))
+                {
+                    runningBalance = Math.Round(parsedBal, 2);
+                }
+            }
 
             statement.Lines.Add(new BankTransactionLine
             {
@@ -283,6 +302,7 @@ public class BankStatementImportService
                 Description = desc,
                 Payee = !string.IsNullOrWhiteSpace(payee) ? payee : desc,
                 Amount = Math.Round(amount, 2),
+                RunningBalance = runningBalance,
                 ReferenceNumber = reference,
                 ExternalFitId = !string.IsNullOrWhiteSpace(reference)
                     ? $"{txDate:yyyyMMdd}:{reference}:{amount:F2}"
@@ -290,12 +310,44 @@ public class BankStatementImportService
             });
         }
 
+        // Preserve exact intra-day chronological order when bank CSVs are exported newest-first (e.g. BNC)
+        if (statement.Lines.Count >= 2 && statement.Lines[0].Date > statement.Lines[^1].Date)
+        {
+            statement.Lines.Reverse();
+        }
+
+        var latestWithBal = statement.Lines.LastOrDefault(l => l.RunningBalance.HasValue);
+        if (latestWithBal?.RunningBalance != null)
+        {
+            statement.ClosingBalance = latestWithBal.RunningBalance.Value;
+        }
+
         FinalizeStatementDatesAndBalances(statement, null, null);
         return statement;
     }
 
-    private static CsvBankImportMapping AutoDetectCsvMapping(IReadOnlyList<string> firstRow)
+    private static int FindCsvHeaderRowIndex(List<List<string>> rows)
     {
+        int limit = Math.Min(rows.Count, 6);
+        for (int r = 0; r < limit; r++)
+        {
+            var cells = rows[r];
+            bool hasDate = cells.Any(c => c.Contains("date", StringComparison.OrdinalIgnoreCase));
+            bool hasAmt = cells.Any(c =>
+                c.Contains("montant", StringComparison.OrdinalIgnoreCase) ||
+                c.Contains("amount", StringComparison.OrdinalIgnoreCase) ||
+                c.Contains("débit", StringComparison.OrdinalIgnoreCase) ||
+                c.Contains("debit", StringComparison.OrdinalIgnoreCase) ||
+                c.Contains("crédit", StringComparison.OrdinalIgnoreCase) ||
+                c.Contains("credit", StringComparison.OrdinalIgnoreCase));
+            if (hasDate && hasAmt) return r;
+        }
+        return 0;
+    }
+
+    private static CsvBankImportMapping AutoDetectCsvMapping(IReadOnlyList<string> firstRow, out int? statusColumnIndex)
+    {
+        statusColumnIndex = null;
         var map = new CsvBankImportMapping
         {
             HasHeaderRow = !TryParseFlexibleDate(firstRow[0], out _),
@@ -309,17 +361,26 @@ public class BankStatementImportService
         int? debitIdx = null;
         int? creditIdx = null;
         int? amtIdx = null;
+        bool dateSet = false;
 
         for (int idx = 0; idx < firstRow.Count; idx++)
         {
             var h = firstRow[idx].Trim().ToLowerInvariant();
             if (h.Contains("date"))
-                map.DateColumnIndex = idx;
-            else if (h.Contains("desc") || h.Contains("memo") || h.Contains("libell") || h.Contains("détail") || h.Contains("detail"))
+            {
+                if (!dateSet)
+                {
+                    map.DateColumnIndex = idx;
+                    dateSet = true;
+                }
+            }
+            else if (h.Contains("statut") || h == "status")
+                statusColumnIndex = idx;
+            else if (h.Contains("desc") || h.Contains("memo") || h.Contains("libell"))
                 map.DescriptionColumnIndex = idx;
-            else if (h.Contains("payee") || h.Contains("bénéficiaire") || h.Contains("nom") || h.Contains("name"))
+            else if (h.Contains("contrepartie") || h.Contains("payee") || h.Contains("bénéficiaire") || h.Contains("nom") || h.Contains("name"))
                 map.PayeeColumnIndex = idx;
-            else if (h.Contains("ref") || h.Contains("check") || h.Contains("chèque") || h.Contains("id"))
+            else if (h.Contains("réf") || h.Contains("ref") || h.Contains("check") || h.Contains("chèque") || h == "id")
                 map.ReferenceColumnIndex = idx;
             else if (h.Contains("retrait") || h.Contains("withdrawal") || h == "debit" || h == "débit")
                 debitIdx = idx;
@@ -327,6 +388,8 @@ public class BankStatementImportService
                 creditIdx = idx;
             else if (h.Contains("amount") || h.Contains("montant") || h.Contains("valeur"))
                 amtIdx = idx;
+            else if (h.Contains("solde") || h.Contains("balance"))
+                map.BalanceColumnIndex = idx;
         }
 
         if (debitIdx.HasValue && creditIdx.HasValue)

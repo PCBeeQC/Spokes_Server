@@ -103,9 +103,42 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
         Assert.Equal("line-prepay-1", credit.PrepaymentLineId);
         Assert.Equal("INV-001", credit.InvoiceNumber);
         Assert.Equal(1000m, credit.OriginalAmount);
-        // Remaining should be: 1000 - 300 (used on inv-2) = 700 available to this invoice (including the 200 currently applied)
-        Assert.Equal(900m, credit.RemainingBalance);
+        // Remaining should be: 1000 - 300 (used on posted inv-2) = 700 available to this invoice
+        Assert.Equal(700m, credit.RemainingBalance);
         Assert.Equal(200m, credit.AmountToApply);
+    }
+
+    [Fact]
+    public void CalculateAvailablePrepaymentCredits_IgnoresCreditsStagedOnOtherDraftInvoices()
+    {
+        var project = new Project { Id = "proj-draft-cred-iso", Name = "Credit Iso" };
+        _db.Projects.Save(project);
+
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-prepay-iso",
+            InvoiceNumber = "INV-PRE-ISO",
+            ProjectId = project.Id,
+            Status = InvoiceStatus.Paid,
+            Date = DateTime.Today.AddDays(-10),
+            LineItems = [new InvoiceLine { Id = "line-prepay-iso", Description = "Deposit", Quantity = 1, UnitPrice = 1000m, IsPrepayment = true }]
+        });
+
+        // Another Draft invoice stages $600 of the credit — must NOT reduce remaining balance
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-other-draft",
+            InvoiceNumber = "INV-DRAFT-ISO",
+            ProjectId = project.Id,
+            Status = InvoiceStatus.Draft,
+            LineItems = [new InvoiceLine { Id = "line-draft-cred", Quantity = 1, UnitPrice = -600m, IsCreditUsed = true, SourceId = "line-prepay-iso" }]
+        });
+
+        var currentInvoice = new Invoice { Id = "inv-cur-iso", ProjectId = project.Id, Status = InvoiceStatus.Draft };
+        var credits = _orchestrator.CalculateAvailablePrepaymentCredits([project], currentInvoice);
+
+        var credit = Assert.Single(credits);
+        Assert.Equal(1000m, credit.RemainingBalance);
     }
 
     [Fact]
@@ -248,26 +281,125 @@ public class BillingOrchestrationServiceTests : TestDataTestBase
 
         _orchestrator.ProcessAndSaveInvoice(request);
 
-        // Verify timesheet was saved and split
+        // Strict Draft Isolation: saving a Draft must NOT split timesheet entries or stamp Quote milestones on disk
+        var draftSheet = _db.Timesheets.GetById("sheet-split");
+        Assert.NotNull(draftSheet);
+        Assert.Single(draftSheet.Entries);
+        Assert.Equal(8m, draftSheet.Entries[0].Hours);
+
+        var draftQuote = _db.Quotes.GetById("q-1");
+        Assert.True(string.IsNullOrEmpty(draftQuote!.PaymentTerms[0].InvoiceId));
+
+        // Verify invoice was saved with staged lines and candidate entry ID
+        var savedInvoice = _db.Invoices.GetById("inv-target");
+        Assert.NotNull(savedInvoice);
+        Assert.Contains("orig-entry", savedInvoice.BilledTimeEntryIds);
+        Assert.Equal(2, savedInvoice.LineItems.Count); // Labor + Milestone
+
+        // Re-loading unbilled labor on the Draft restores exact staged HoursToBill (5h) while showing 8h available
+        var reloadedGroups = _orchestrator.LoadUnbilledLabor([project], savedInvoice, new Dictionary<string, WorkType>
+        {
+            ["wt-1"] = new() { Id = "wt-1", Name = "Dev", DefaultRate = 100m, SubTasks = [new SubTask { Id = "sub-1", Name = "General" }] }
+        });
+        var reloadedGroup = Assert.Single(reloadedGroups);
+        Assert.Equal(8m, reloadedGroup.AvailableHours);
+        Assert.Equal(5m, reloadedGroup.HoursToBill);
+
+        // Committing finalization (Draft -> Final) performs the deferred partial split and stamps the Quote milestone
+        _orchestrator.CommitFinalization(savedInvoice, request.Actor);
+        savedInvoice.Status = InvoiceStatus.Final;
+        _db.Invoices.Save(savedInvoice);
+
         var updatedSheet = _db.Timesheets.GetById("sheet-split");
         Assert.NotNull(updatedSheet);
         Assert.Equal(2, updatedSheet.Entries.Count);
-        // Original entry reduced to 3 hours
         Assert.Equal(3m, updatedSheet.Entries.First(e => e.Id == "orig-entry").Hours);
-        // New billed entry created for 5 hours
         var splitEntry = updatedSheet.Entries.First(e => e.Id != "orig-entry");
         Assert.Equal(5m, splitEntry.Hours);
         Assert.Contains("(Billed)", splitEntry.Description);
-
-        // Verify invoice was saved and contains lines
-        var savedInvoice = _db.Invoices.GetById("inv-target");
-        Assert.NotNull(savedInvoice);
         Assert.Contains(splitEntry.Id, savedInvoice.BilledTimeEntryIds);
-        Assert.Equal(2, savedInvoice.LineItems.Count); // Labor + Milestone
+        Assert.DoesNotContain("orig-entry", savedInvoice.BilledTimeEntryIds);
 
-        // Verify quote milestone updated with InvoiceId
         var updatedQuote = _db.Quotes.GetById("q-1");
         Assert.Equal("inv-target", updatedQuote!.PaymentTerms[0].InvoiceId);
+
+        // Reverting Final -> Draft releases the Quote milestone link
+        _orchestrator.ReleaseFinalizedAllocations(savedInvoice);
+        Assert.True(string.IsNullOrEmpty(_db.Quotes.GetById("q-1")!.PaymentTerms[0].InvoiceId));
+    }
+
+    [Fact]
+    public void CommitFinalization_RejectsOverlappingDraftsForTimeMilestoneAndCredit()
+    {
+        var project = new Project { Id = "proj-overlap", Name = "Overlap Project" };
+        _db.Projects.Save(project);
+
+        var actor = new Employee
+        {
+            Id = "emp-overlap",
+            IsActive = true,
+            Permissions = [AppPermissions.Finance.AccessAccounting, AppPermissions.Finance.ApproveInvoices]
+        };
+
+        // Prepayment source
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-prepay-ov",
+            InvoiceNumber = "INV-PRE-OV",
+            ProjectId = project.Id,
+            Status = InvoiceStatus.Paid,
+            LineItems = [new InvoiceLine { Id = "line-prepay-ov", Quantity = 1m, UnitPrice = 300m, IsPrepayment = true }]
+        });
+
+        var quote = new Quote
+        {
+            Id = "q-ov",
+            ProjectId = project.Id,
+            Status = QuoteStatus.Accepted,
+            PaymentTerms = [new PaymentTerm { Id = "term-ov", Description = "Deposit", Percentage = 50, Amount = 500m }]
+        };
+        _db.Quotes.Save(quote);
+
+        // First invoice is finalized and claims time entry "te-1", milestone "term-ov", and $300 prepayment credit
+        var postedInvoice = new Invoice
+        {
+            Id = "inv-posted-ov",
+            ProjectId = project.Id,
+            Status = InvoiceStatus.Final,
+            BilledTimeEntryIds = ["te-1"],
+            LineItems =
+            [
+                new InvoiceLine { SourceType = "Milestone", SourceId = "term-ov", Quantity = 1m, UnitPrice = 500m },
+                new InvoiceLine { IsCreditUsed = true, SourceType = "Prepayment", SourceId = "line-prepay-ov", Quantity = 1m, UnitPrice = -300m }
+            ]
+        };
+        _db.Invoices.Save(postedInvoice);
+        quote.PaymentTerms[0].InvoiceId = postedInvoice.Id;
+        _db.Quotes.Save(quote);
+
+        // Overlapping Draft 1: conflicts on time entry
+        var draftTime = new Invoice { Id = "draft-ov-time", ProjectId = project.Id, Status = InvoiceStatus.Draft, BilledTimeEntryIds = ["te-1"] };
+        Assert.Throws<InvalidOperationException>(() => _orchestrator.CommitFinalization(draftTime, actor));
+
+        // Overlapping Draft 2: conflicts on milestone
+        var draftMilestone = new Invoice
+        {
+            Id = "draft-ov-ms",
+            ProjectId = project.Id,
+            Status = InvoiceStatus.Draft,
+            LineItems = [new InvoiceLine { SourceType = "Milestone", SourceId = "term-ov", Quantity = 1m, UnitPrice = 500m }]
+        };
+        Assert.Throws<InvalidOperationException>(() => _orchestrator.CommitFinalization(draftMilestone, actor));
+
+        // Overlapping Draft 3: conflicts on exhausted prepayment credit
+        var draftCredit = new Invoice
+        {
+            Id = "draft-ov-cred",
+            ProjectId = project.Id,
+            Status = InvoiceStatus.Draft,
+            LineItems = [new InvoiceLine { IsCreditUsed = true, SourceType = "Prepayment", SourceId = "line-prepay-ov", Quantity = 1m, UnitPrice = -100m }]
+        };
+        Assert.Throws<InvalidOperationException>(() => _orchestrator.CommitFinalization(draftCredit, actor));
     }
 
     [Fact]

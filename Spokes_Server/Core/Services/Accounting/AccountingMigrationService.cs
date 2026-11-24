@@ -87,10 +87,17 @@ public class AccountingMigrationService : IAccountingMigrationService
 
         // 1. Compute Spokes TB as of Cutover Date for Delta mode (and baseline visibility)
         var (spokesTb, spokesSignedByCode) = BuildSpokesSignedBalanceMap(asOf);
+        bool hasExternalTbBalances = parsed.GlRows.Any(r => r.Debit != 0m || r.Credit != 0m);
+        preview.HasExternalTrialBalanceBalances = hasExternalTbBalances;
+
+        if (parsed.GlRows.Count > 0 && !hasExternalTbBalances)
+        {
+            preview.InformationalNotices.Add("Master Data Only (Chart of Accounts) — no non-zero external Trial Balance balances were found; existing Spokes General Ledger balances will be preserved and no Opening Balance journal entry will be posted.");
+        }
 
         if (request.Mode == AccountingMigrationMode.FreshCutover &&
             spokesTb.Rows.Any(r => r.EndingBalance != 0m) &&
-            parsed.GlRows.Count > 0)
+            hasExternalTbBalances)
         {
             preview.Warnings.Add("Spokes already contains non-zero General Ledger balances. Consider switching to 'Existing Workspace Delta' mode to avoid duplicating previously posted Spokes activity.");
         }
@@ -136,8 +143,8 @@ public class AccountingMigrationService : IAccountingMigrationService
             });
         }
 
-        // In Delta mode, include any non-zero Spokes accounts absent from the external file so the delta JE captures full net difference.
-        if (request.Mode == AccountingMigrationMode.ExistingWorkspaceDelta && parsed.GlRows.Count > 0)
+        // In Delta mode, include any non-zero Spokes accounts absent from the external file ONLY when an actual Trial Balance with balances was uploaded.
+        if (request.Mode == AccountingMigrationMode.ExistingWorkspaceDelta && hasExternalTbBalances)
         {
             foreach (var tbRow in spokesTb.Rows)
             {
@@ -525,6 +532,7 @@ public class AccountingMigrationService : IAccountingMigrationService
             e.Contains("employee", StringComparison.OrdinalIgnoreCase));
 
         var activeGl = preview.GlMappings.Where(g => g.Include && g.Action != MigrationGlAction.Ignore).ToList();
+        preview.HasExternalTrialBalanceBalances = activeGl.Any(g => g.DebitAmount != 0m || g.CreditAmount != 0m);
         preview.TotalExternalDebits = Math.Round(activeGl.Sum(g => g.DebitAmount), 2);
         preview.TotalExternalCredits = Math.Round(activeGl.Sum(g => g.CreditAmount), 2);
 
@@ -532,6 +540,37 @@ public class AccountingMigrationService : IAccountingMigrationService
         var netByTarget = ComputeTargetNetDeltas(preview, spokesSignedByCode);
         preview.TotalDeltaDebits = Math.Round(netByTarget.Values.Where(v => v > 0m).Sum(), 2);
         preview.TotalDeltaCredits = Math.Round(netByTarget.Values.Where(v => v < 0m).Sum(Math.Abs), 2);
+
+        // Destructive-delta safety guard: detect when a Delta cutover would wipe out >=80% of existing non-zero Spokes GL accounts
+        preview.Warnings.RemoveAll(w => w.StartsWith("Destructive Delta Warning:", StringComparison.OrdinalIgnoreCase));
+        if (preview.Mode == AccountingMigrationMode.ExistingWorkspaceDelta &&
+            preview.HasExternalTrialBalanceBalances &&
+            spokesSignedByCode.Count > 0)
+        {
+            var nonZeroSpokes = spokesSignedByCode.Where(kv => Math.Abs(kv.Value) > 0.01m).ToList();
+            if (nonZeroSpokes.Count >= 2)
+            {
+                int zeroedOut = nonZeroSpokes.Count(kv =>
+                    Math.Abs(kv.Value + netByTarget.GetValueOrDefault(kv.Key)) <= 0.01m);
+                if ((decimal)zeroedOut / nonZeroSpokes.Count >= 0.80m)
+                {
+                    preview.RequiresDestructiveDeltaConfirmation = true;
+                    preview.Warnings.Add($"Destructive Delta Warning: This cutover would zero out {zeroedOut} of {nonZeroSpokes.Count} existing non-zero Spokes GL accounts. Verify that your external Trial Balance is complete before confirming.");
+                }
+                else
+                {
+                    preview.RequiresDestructiveDeltaConfirmation = false;
+                }
+            }
+            else
+            {
+                preview.RequiresDestructiveDeltaConfirmation = false;
+            }
+        }
+        else
+        {
+            preview.RequiresDestructiveDeltaConfirmation = false;
+        }
 
         var unmappedMissingCode = activeGl
             .Where(g => g.Action == MigrationGlAction.MapToExisting && string.IsNullOrWhiteSpace(g.TargetGlCode))
@@ -627,21 +666,37 @@ public class AccountingMigrationService : IAccountingMigrationService
         {
             foreach (var row in preview.GlMappings.Where(g => g.Include && g.Action == MigrationGlAction.CreateAccount && !g.IsSystemGeneratedSpokesOnly))
             {
-                var existing = _accounting.GlAccounts.GetByCode(row.SourceCode);
+                var targetNewCode = row.SourceCode.Trim();
+                var existing = _accounting.GlAccounts.GetByCode(targetNewCode);
                 if (existing != null)
                 {
-                    row.TargetGlCode = existing.Code;
-                    row.Action = MigrationGlAction.MapToExisting;
-                    continue;
+                    if (!string.IsNullOrEmpty(existing.SystemRole))
+                    {
+                        // Preserve the Spokes system account untouched by assigning a non-colliding suffix code for the imported account
+                        var suffix = 1;
+                        var candidateCode = $"{targetNewCode}-S";
+                        while (_accounting.GlAccounts.GetByCode(candidateCode) != null)
+                        {
+                            candidateCode = $"{targetNewCode}-S{++suffix}";
+                        }
+                        targetNewCode = candidateCode;
+                        row.SourceCode = targetNewCode;
+                    }
+                    else
+                    {
+                        row.TargetGlCode = existing.Code;
+                        row.Action = MigrationGlAction.MapToExisting;
+                        continue;
+                    }
                 }
 
                 var subType = !string.IsNullOrWhiteSpace(row.ExternalSubType)
                     ? row.ExternalSubType
-                    : InferSubType(row.SourceCode, row.SourceType);
+                    : InferSubType(targetNewCode, row.SourceType);
 
                 var newAcct = new GlAccount
                 {
-                    Code = row.SourceCode.Trim(),
+                    Code = targetNewCode,
                     Name = row.SourceName.Trim(),
                     NameFr = row.SourceName.Trim(),
                     Type = string.IsNullOrWhiteSpace(row.SourceType) ? GlAccountType.Expense : row.SourceType,
@@ -1184,6 +1239,12 @@ public class AccountingMigrationService : IAccountingMigrationService
         Dictionary<string, decimal> spokesSignedByCode)
     {
         var activeGl = preview.GlMappings.Where(g => g.Include && g.Action != MigrationGlAction.Ignore).ToList();
+        if (!activeGl.Any(g => g.DebitAmount != 0m || g.CreditAmount != 0m))
+        {
+            // Master Data Only (CoA with $0 balances): never generate delta reversals that would wipe existing Spokes GL balances.
+            return new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        }
+
         var externalByTarget = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var row in activeGl)

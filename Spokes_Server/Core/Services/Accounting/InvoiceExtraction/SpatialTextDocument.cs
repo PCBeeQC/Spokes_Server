@@ -283,6 +283,12 @@ public class SpatialTextDocument
         return null;
     }
 
+    public static SpatialTextDocument FromText(string text)
+    {
+        var normalized = text ?? string.Empty;
+        return new SpatialTextDocument([], normalized, normalized);
+    }
+
     public static SpatialTextDocument FromPdf(PdfDocument document, int maxPages = 6)
     {
         var pages = new List<SpatialPage>();

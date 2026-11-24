@@ -24,163 +24,11 @@
         }
         else
         {
-            <!-- Desktop Layout (Breakpoint.SmAndUp) -->
-            <MudHidden Breakpoint="Breakpoint.Xs">
-                <div style="max-height: 60vh; overflow-y: auto;">
-                    <MudTable Items="@_categories" Elevation="0" Outlined="true" Dense="true" Hover="true" Breakpoint="Breakpoint.None">
-                        <HeaderContent>
-                            <MudTh Style="min-width: 180px;">@Loc["Category Name"]</MudTh>
-                            <MudTh Style="min-width: 140px;">@Loc["Color"]</MudTh>
-                            <MudTh Style="width: 100px;">@Loc["Preview"]</MudTh>
-                            <MudTh Style="width: 60px; text-align: center;">@Loc["Actions"]</MudTh>
-                        </HeaderContent>
-                        <RowTemplate>
-                            <MudTd>
-                                <MudTextField @bind-Value="context.Name"
-                                              Margin="Margin.Dense"
-                                              Variant="Variant.Outlined"
-                                              Placeholder="@Loc["e.g., Deep Work"]"
-                                              Required="true" />
-                            </MudTd>
-                            <MudTd>
-                                <MudSelect @bind-Value="context.Color"
-                                           Margin="Margin.Dense"
-                                           Dense="true"
-                                           Variant="Variant.Outlined"
-                                           AnchorOrigin="Origin.BottomLeft"
-                                           TransformOrigin="Origin.TopLeft">
-                                    @foreach (var colorName in AvailableColors)
-                                    {
-                                        Color c = Color.Default;
-                                        Enum.TryParse(colorName, out c);
-                                        <MudSelectItem Value="@colorName">
-                                            <div class="d-flex align-center gap-2">
-                                                <MudIcon Icon="@Icons.Material.Filled.Circle" Color="@c" Size="Size.Small" />
-                                                <span>@colorName</span>
-                                            </div>
-                                        </MudSelectItem>
-                                    }
-                                </MudSelect>
-                            </MudTd>
-                            <MudTd>
-                                @{
-                                    Color chipColor = Color.Default;
-                                    Enum.TryParse(context.Color, out chipColor);
-                                }
-                                <MudChip T="string" Color="@chipColor" Size="Size.Small" Variant="Variant.Filled">
-                                    @(string.IsNullOrWhiteSpace(context.Name) ? Loc["Preview"].Value : context.Name)
-                                </MudChip>
-                            </MudTd>
-                            <MudTd Style="text-align: center;">
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
-                                               Color="Color.Error"
-                                               Size="Size.Small"
-                                               OnClick="@(() => RemoveCategory(context))" />
-                            </MudTd>
-                        </RowTemplate>
-                        <FooterContent>
-                            <MudTd colspan="4">
-                                <div class="d-flex justify-space-between align-center">
-                                    <MudButton StartIcon="@Icons.Material.Filled.Add"
-                                               Color="Color.Primary"
-                                               OnClick="AddCategory"
-                                               Size="Size.Small">
-                                        @Loc["Add Category"]
-                                    </MudButton>
-                                    <MudButton StartIcon="@Icons.Material.Filled.RestartAlt"
-                                               Color="Color.Secondary"
-                                               Variant="Variant.Text"
-                                               OnClick="ResetToDefaultsAsync"
-                                               Size="Size.Small">
-                                        @Loc["Reset to Server Defaults"]
-                                    </MudButton>
-                                </div>
-                            </MudTd>
-                        </FooterContent>
-                    </MudTable>
-                </div>
-            </MudHidden>
-
-            <!-- Mobile Layout (Breakpoint.Xs) -->
-            <MudHidden Breakpoint="Breakpoint.Xs" Invert="true">
-                <div class="d-flex justify-space-between align-center mb-3">
-                    <MudButton StartIcon="@Icons.Material.Filled.Add"
-                               Color="Color.Primary"
-                               Variant="Variant.Filled"
-                               OnClick="AddCategory"
-                               Size="Size.Small">
-                        @Loc["Add Category"]
-                    </MudButton>
-                    <MudButton StartIcon="@Icons.Material.Filled.RestartAlt"
-                               Color="Color.Secondary"
-                               Variant="Variant.Text"
-                               OnClick="ResetToDefaultsAsync"
-                               Size="Size.Small">
-                        @Loc["Reset Defaults"]
-                    </MudButton>
-                </div>
-
-                <div class="d-flex flex-column gap-2" style="max-height: 55vh; overflow-y: auto; overflow-x: hidden;">
-                    @if (_categories.Count == 0)
-                    {
-                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                            @Loc["No categories defined. Tap \"Add Category\" to create one."]
-                        </MudAlert>
-                    }
-                    @foreach (var cat in _categories)
-                    {
-                        Color chipColor = Color.Default;
-                        Enum.TryParse(cat.Color, out chipColor);
-
-                        <MudPaper Elevation="0" Outlined="true" Class="pa-3 rounded-lg">
-                            <!-- Top Row: Name and Delete -->
-                            <div class="d-flex align-center gap-2 mb-2">
-                                <MudTextField @bind-Value="cat.Name"
-                                              Margin="Margin.Dense"
-                                              Variant="Variant.Outlined"
-                                              Placeholder="@Loc["Category Name"]"
-                                              Label="@Loc["Category Name"]"
-                                              Required="true"
-                                              Class="flex-grow-1" />
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
-                                               Color="Color.Error"
-                                               Size="Size.Small"
-                                               OnClick="@(() => RemoveCategory(cat))"
-                                               title="@Loc["Delete Category"]" />
-                            </div>
-                            <!-- Bottom Row: Color and Live Preview -->
-                            <div class="d-flex align-center justify-space-between gap-2">
-                                <div style="flex: 1; max-width: 160px;">
-                                    <MudSelect @bind-Value="cat.Color"
-                                               Margin="Margin.Dense"
-                                               Dense="true"
-                                               Variant="Variant.Outlined"
-                                               Label="@Loc["Color"]"
-                                               AnchorOrigin="Origin.BottomLeft"
-                                               TransformOrigin="Origin.TopLeft">
-                                        @foreach (var colorName in AvailableColors)
-                                        {
-                                            Color c = Color.Default;
-                                            Enum.TryParse(colorName, out c);
-                                            <MudSelectItem Value="@colorName">
-                                                <div class="d-flex align-center gap-2">
-                                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Color="@c" Size="Size.Small" />
-                                                    <span>@colorName</span>
-                                                </div>
-                                            </MudSelectItem>
-                                        }
-                                    </MudSelect>
-                                </div>
-                                <div class="d-flex align-center justify-end" style="flex: 1;">
-                                    <MudChip T="string" Color="@chipColor" Size="Size.Small" Variant="Variant.Filled">
-                                        @(string.IsNullOrWhiteSpace(cat.Name) ? Loc["Preview"].Value : cat.Name)
-                                    </MudChip>
-                                </div>
-                            </div>
-                        </MudPaper>
-                    }
-                </div>
-            </MudHidden>
+            <CalendarCategoryListEditor Categories="@_categories"
+                                        MaxHeight="60vh"
+                                        OnAdd="AddCategory"
+                                        OnRemove="RemoveCategory"
+                                        OnReset="ResetToDefaultsAsync" />
         }
     </DialogContent>
     <DialogActions>
@@ -198,20 +46,7 @@
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
 
     private Employee? _currentUser;
-    private List<CalendarCategory> _categories = [];
-
-    private static readonly string[] AvailableColors =
-    [
-        nameof(Color.Primary),
-        nameof(Color.Secondary),
-        nameof(Color.Tertiary),
-        nameof(Color.Info),
-        nameof(Color.Success),
-        nameof(Color.Warning),
-        nameof(Color.Error),
-        nameof(Color.Dark),
-        nameof(Color.Default)
-    ];
+    private List<CalendarCategory>? _categories;
 
     protected override async Task OnInitializedAsync()
     {
@@ -227,20 +62,27 @@
                 Color = c.Color
             }).ToList();
         }
+        else
+        {
+            _categories = [];
+        }
     }
 
     private void AddCategory()
     {
+        _categories ??= [];
         _categories.Add(new CalendarCategory
         {
             Id = Guid.NewGuid().ToString(),
             Name = Loc["New Category"].Value,
-            Color = "Info"
+            Color = nameof(Color.Info)
         });
     }
 
     private async Task RemoveCategory(CalendarCategory category)
     {
+        if (_categories == null) return;
+
         var categoryName = string.IsNullOrWhiteSpace(category.Name) ? Loc["this category"].Value : $"'{category.Name}'";
         var confirmed = await DialogService.ShowMessageBoxAsync(
             Loc["Delete Category?"].Value,
@@ -272,7 +114,7 @@
 
     private void Save()
     {
-        if (_currentUser == null) return;
+        if (_currentUser == null || _categories == null) return;
 
         var result = CalendarService.UpdateUserCategories(_currentUser.Id, _categories);
         if (!result.IsSuccess)

@@ -241,10 +241,10 @@ public class LinkPreviewServiceTests : IDisposable
                 <html>
                 <head>
                     <title>Ignored Fallback Title</title>
-                    <meta property=""og:title"" content=""Poly Robotics"" />
+                    <meta property=""og:title"" content=""Acme Demo"" />
                     <meta property=""og:description"" content=""Innovative robotics solutions"" />
                     <meta property=""og:image"" content=""https://example.com/logo.png"" />
-                    <meta property=""og:site_name"" content=""PolyRobotics"" />
+                    <meta property=""og:site_name"" content=""AcmeDemo"" />
                 </head>
                 <body>Hello</body>
                 </html>";
@@ -263,10 +263,10 @@ public class LinkPreviewServiceTests : IDisposable
 
             Assert.NotNull(preview);
             Assert.False(preview.Failed);
-            Assert.Equal("Poly Robotics", preview.Title);
+            Assert.Equal("Acme Demo", preview.Title);
             Assert.Equal("Innovative robotics solutions", preview.Description);
             Assert.Equal("https://example.com/logo.png", preview.ImageUrl);
-            Assert.Equal("PolyRobotics", preview.SiteName);
+            Assert.Equal("AcmeDemo", preview.SiteName);
         }
 
         [Fact]

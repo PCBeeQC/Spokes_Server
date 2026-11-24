@@ -67,7 +67,7 @@ public static class UniversalDocumentClassifier
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private const string IncomingRemittancePattern =
-        @"remittance\s+advice|avis\s+de\s+remise|avis\s+de\s+virement|avis\s+de\s+d[eé]p[oô]t|bordereau\s+de\s+paiement|" +
+        @"remittance\s+advice|payment\s+advice|avis\s+de\s+paiement|avis\s+de\s+remise|avis\s+de\s+virement|avis\s+de\s+d[eé]p[oô]t|bordereau\s+de\s+paiement|" +
         @"interac\s*e[\-\s]?transfer|virement\s+interac|" +
         @"direct\s+deposit\s+(?:notice|advice|notification|confirmation)|d[eé]p[oô]t\s+direct|" +
         @"(?:eft|ach|wire)\s+(?:payment\s+)?(?:advice|remittance|confirmation|notification)|" +

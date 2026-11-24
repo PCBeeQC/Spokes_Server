@@ -343,24 +343,41 @@ public static partial class PartyMatchingHelper
 
         var code = sourceCode?.Trim() ?? string.Empty;
         var gifi = sourceTypeOrGifi?.Trim() ?? string.Empty;
-
-        // 1. Exact GL code match
-        var exactCode = spokesAccounts.FirstOrDefault(a => string.Equals(a.Code, code, StringComparison.OrdinalIgnoreCase));
-        if (exactCode != null)
-            return new GlAccountSuggestion(exactCode.Code, 1.00m, $"Exact code match ({exactCode.Code})");
-
-        // 2. Singleton system control accounts ONLY (do NOT merge distinct banks, credit cards, loans, or fixed assets!)
         var haystack = StripDiacritics($"{sourceName} {gifi}").ToLowerInvariant();
         string? inferredRole = InferSystemRoleFromText(haystack, code);
+        var candNorm = StripDiacritics(sourceName).ToLowerInvariant();
+
+        // 1. Singleton system control accounts FIRST (e.g., AR, AP, Retained Earnings, TPS/TVQ Collected & Recoverable)
+        // so Sage 2310/2315/2340/2345/2365 map cleanly to Spokes 2160/2165/2170/2175/2180 without code collisions.
         if (!string.IsNullOrEmpty(inferredRole) && SingletonControlRoles.Contains(inferredRole))
         {
             var byRole = spokesAccounts.FirstOrDefault(a => string.Equals(a.SystemRole, inferredRole, StringComparison.OrdinalIgnoreCase));
             if (byRole != null)
-                return new GlAccountSuggestion(byRole.Code, 0.90m, $"Matched singleton control role {inferredRole}");
+                return new GlAccountSuggestion(byRole.Code, 0.92m, $"Matched control account ({inferredRole})");
+        }
+
+        // 2. Exact GL code match — ONLY when semantically compatible with the existing Spokes account
+        // (prevents blind collisions like Sage 2160 Corporate Tax -> Spokes 2160 TPS Collected, or 5610 Accounting -> 5610 Rent)
+        var exactCode = spokesAccounts.FirstOrDefault(a => string.Equals(a.Code, code, StringComparison.OrdinalIgnoreCase));
+        if (exactCode != null)
+        {
+            var codeNameSim = Math.Max(
+                ComputeNameSimilarity(candNorm, StripDiacritics(exactCode.Name).ToLowerInvariant()),
+                ComputeNameSimilarity(candNorm, StripDiacritics(exactCode.NameFr).ToLowerInvariant()));
+
+            bool roleMatches = !string.IsNullOrEmpty(exactCode.SystemRole) &&
+                               string.Equals(exactCode.SystemRole, inferredRole, StringComparison.OrdinalIgnoreCase);
+
+            if (string.IsNullOrEmpty(exactCode.SystemRole) || roleMatches || codeNameSim >= 0.45m)
+            {
+                return new GlAccountSuggestion(exactCode.Code, 1.00m, $"Exact code match ({exactCode.Code})");
+            }
+
+            // Incompatible collision with a Spokes system account — do NOT silently map into the wrong system account
+            return new GlAccountSuggestion(null, 0m, $"Code {code} collides with Spokes '{exactCode.Name}' — creating separate account");
         }
 
         // 3. Exact or near-exact normalized name match against existing Spokes English/French names
-        var candNorm = StripDiacritics(sourceName).ToLowerInvariant();
         GlAccount? bestAcct = null;
         decimal bestSim = 0m;
         foreach (var acct in spokesAccounts)
@@ -386,7 +403,12 @@ public static partial class PartyMatchingHelper
         GlSystemRole.AccountsReceivable,
         GlSystemRole.AccountsPayable,
         GlSystemRole.OpeningBalanceEquity,
-        GlSystemRole.RetainedEarnings
+        GlSystemRole.RetainedEarnings,
+        GlSystemRole.FederalTaxCollected,
+        GlSystemRole.FederalTaxRecoverable,
+        GlSystemRole.RegionalTaxCollected,
+        GlSystemRole.RegionalTaxRecoverable,
+        GlSystemRole.SalesTaxRemittancePayable
     };
 
     private static string? InferSystemRoleFromText(string text, string code)
@@ -410,11 +432,13 @@ public static partial class PartyMatchingHelper
         if (ContainsAny(text, "prepaid", "frais payes d avance"))
             return GlSystemRole.PrepaidExpenses;
 
-        if (ContainsAny(text, "tps percu", "tps collect", "gst collect", "gst charged"))
+        if (ContainsAny(text, "tps-tvq a payer", "tps tvq a payer", "tps/tvq a payer", "remise tps", "sales tax remittance", "gst/qst payable"))
+            return GlSystemRole.SalesTaxRemittancePayable;
+        if (ContainsAny(text, "tps percu", "tps/tvh percu", "tps collect", "gst collect", "gst charged") && !ContainsAny(text, "taux 2"))
             return GlSystemRole.FederalTaxCollected;
-        if (ContainsAny(text, "cti", "itc", "tps paye", "tps a recevoir", "gst paid", "gst input"))
+        if (ContainsAny(text, "cti", "itc", "tps paye", "tps/tvh paye", "tps a recevoir", "gst paid", "gst input"))
             return GlSystemRole.FederalTaxRecoverable;
-        if (ContainsAny(text, "tvq percu", "tvq collect", "qst collect", "qst charged", "pst collect"))
+        if (ContainsAny(text, "tvq percu", "tvq collect", "qst collect", "qst charged", "pst collect") && !ContainsAny(text, "taux 2"))
             return GlSystemRole.RegionalTaxCollected;
         if (ContainsAny(text, "rti", "itr", "tvq paye", "tvq a recevoir", "qst paid", "qst input"))
             return GlSystemRole.RegionalTaxRecoverable;

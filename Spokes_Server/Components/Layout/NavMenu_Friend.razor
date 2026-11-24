@@ -12,6 +12,10 @@
 @implements IDisposable
 
 <MudNavMenu>
+    @if (StartupTimings.IsChatProfilerEnabled)
+    {
+        StartupTimings.AddChatTransition($"Server: RenderTree NavMenu_Friend (links={_availableLinks.Count})");
+    }
     @foreach (var href in _availableLinks)
     {
         var meta = GetLinkMetadata(href);

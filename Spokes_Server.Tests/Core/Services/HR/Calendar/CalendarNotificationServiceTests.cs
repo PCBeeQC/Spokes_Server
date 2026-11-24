@@ -244,7 +244,7 @@ public class CalendarNotificationServiceTests : IDisposable
         // Setup company profile
         _companyProfiles.Save(new CompanyProfile
         {
-            CompanyName = "Poly Robotics",
+            CompanyName = "Acme Demo",
             IconBase64 = "test-icon-data",
             IconVersion = 3
         });
@@ -286,7 +286,7 @@ public class CalendarNotificationServiceTests : IDisposable
         Assert.Equal("Design Review", capturedParams["Title"]);
         Assert.Equal("Room 101", capturedParams["Location"]);
         Assert.Equal("evt-99", capturedParams["EventId"]);
-        Assert.Equal("Poly Robotics", capturedParams["ServerName"]);
+        Assert.Equal("Acme Demo", capturedParams["ServerName"]);
         Assert.Equal("/spokesapi/Media/Icon?v=3", capturedParams["ServerIconUrl"]);
         Assert.Contains("Starts in 15 minutes", (string)capturedParams["TimeDescription"]);
 

@@ -20,6 +20,8 @@
 @using Spokes_Server.Core.Services.Security
 @inject Database Db
 @inject IAccountingService AccountingService
+@inject IAccountingHealthService HealthService
+@inject IBusinessOverheadService OverheadService
 @inject IPayrollCalculationEngine PayrollEngine
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -33,6 +35,26 @@
             <MudText Typo="Typo.h4">@BizLoc["Accounting & Invoicing"]</MudText>
             <MudText Typo="Typo.body2" Color="Color.Secondary">@BizLoc["Receivables, payables, payroll, bank reconciliation, tax filings, and general ledger."]</MudText>
         </div>
+        @if (_healthReport != null)
+        {
+            var badgeCount = _healthReport.CriticalCount + _healthReport.WarningCount;
+            var pillColor = _healthReport.CriticalCount > 0 ? Color.Error : (_healthReport.WarningCount > 0 ? Color.Warning : Color.Success);
+            var pillIcon = _healthReport.CriticalCount > 0 ? Icons.Material.Filled.ErrorOutline : (_healthReport.WarningCount > 0 ? Icons.Material.Filled.WarningAmber : Icons.Material.Filled.Verified);
+            <MudButton Variant="Variant.Outlined"
+                       Color="@pillColor"
+                       StartIcon="@pillIcon"
+                       Size="Size.Small"
+                       OnClick="OpenHealthDrawer">
+                @if (badgeCount > 0)
+                {
+                    @($"{BizLoc["Readiness Check"]} ({badgeCount})")
+                }
+                else
+                {
+                    @BizLoc["Books Ready"]
+                }
+            </MudButton>
+        }
     </div>
 
     <SpokesTabs ActivePanelIndex="@ActiveTabIndex"
@@ -41,16 +63,41 @@
                 Style="min-height: 0;"
                 TabPanelsClass="pa-4 flex-grow-1 overflow-auto">
         <MudTabPanel Text="@BizLoc["Receivables"]" Icon="@Icons.Material.Filled.AttachMoney">
+        @if (_pendingSuggestedPayments.Count > 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                <MudStack Spacing="1">
+                    <MudText Typo="Typo.subtitle2">
+                        <b>@BizLoc["Customer Payment Advices Detected"] (@_pendingSuggestedPayments.Count)</b>
+                    </MudText>
+                    @foreach (var sug in _pendingSuggestedPayments)
+                    {
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                            <MudText Typo="Typo.body2">
+                                <b>@sug.InvoiceNumber</b> (@sug.ClientName) · @sug.SuggestedAmount.ToString("C2") · @sug.MatchReason
+                            </MudText>
+                            <div class="d-flex gap-1">
+                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" OnClick="@(() => ApplySuggestedPayment(sug))">
+                                    @BizLoc["Record Payment"]
+                                </MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Default" OnClick="@(() => DismissSuggestedPayment(sug))">
+                                    @BizLoc["Dismiss"]
+                                </MudButton>
+                            </div>
+                        </div>
+                    }
+                </MudStack>
+            </MudAlert>
+        }
         <!-- RECEIVABLES (Money In - Invoices) -->
         <MudTable Items="@FilteredReceivableItems" Dense="true" Striped="true" Outlined="true" Elevation="0" Hover="true" Filter="new Func<AccountingItem, bool>(FilterFuncReceivables)">
             <ToolBarContent>
                 <div class="d-flex align-center gap-2 flex-wrap">
                     <MudText Typo="Typo.h6">@BizLoc["Client Invoices"]</MudText>
                     <MudChipSet T="string" SelectedValue="@receivablesStatusFilter" SelectedValueChanged="OnReceivablesFilterChanged" Variant="Variant.Filled">
-                        <MudChip Value="@("open")" Color="Color.Primary" Size="Size.Small">@BizLoc["Open"] (@Receivables.Count(r => r.Balance > 0 && r.Status != InvoiceStatus.Draft))</MudChip>
-                        <MudChip Value="@("overdue")" Color="Color.Error" Size="Size.Small">@BizLoc["Overdue"] (@Receivables.Count(r => r.Balance > 0 && r.DueDate < DateTime.Today && r.Status != InvoiceStatus.Draft))</MudChip>
-                        <MudChip Value="@("paid")" Color="Color.Success" Size="Size.Small">@BizLoc["Paid / Closed"] (@Receivables.Count(r => InvoiceStatus.IsSettled(r.Status) || (r.Balance <= 0 && r.Status != InvoiceStatus.Draft)))</MudChip>
-                        <MudChip Value="@("draft")" Color="Color.Default" Size="Size.Small">@BizLoc["Draft"] (@Receivables.Count(r => r.Status == InvoiceStatus.Draft))</MudChip>
+                        <MudChip Value="@("open")" Color="Color.Primary" Size="Size.Small">@BizLoc["Open"] (@Receivables.Count(r => r.Balance > 0))</MudChip>
+                        <MudChip Value="@("overdue")" Color="Color.Error" Size="Size.Small">@BizLoc["Overdue"] (@Receivables.Count(r => r.Balance > 0 && r.DueDate < DateTime.Today))</MudChip>
+                        <MudChip Value="@("paid")" Color="Color.Success" Size="Size.Small">@BizLoc["Paid / Closed"] (@Receivables.Count(r => InvoiceStatus.IsSettled(r.Status) || r.Balance <= 0))</MudChip>
                         <MudChip Value="@("all")" Color="Color.Info" Size="Size.Small">@BizLoc["All"] (@Receivables.Count)</MudChip>
                     </MudChipSet>
                 </div>
@@ -127,7 +174,7 @@
                 <MudTd Style="white-space: nowrap; text-align: right;">
                     <div class="d-flex align-center justify-end gap-2" style="white-space: nowrap;">
                         <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Visibility" OnClick="@(() => OpenItem(context))">@Loc["View"]</MudButton>
-                        @if (_canWriteAccounting && !InvoiceStatus.IsSettled(context.Status) && context.Status != InvoiceStatus.Draft && context.Balance > 0)
+                        @if (_canWriteAccounting && !InvoiceStatus.IsSettled(context.Status) && context.Balance > 0)
                         {
                             <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" StartIcon="@Icons.Material.Filled.PriceCheck" OnClick="@(() => MarkPaid(context))">@BizLoc["Mark Paid"]</MudButton>
                             <MudTooltip Text="@BizLoc["Close / Write Off Balance"]">
@@ -447,7 +494,7 @@
         }
 
         <MudTabPanel Text="@BizLoc["Bank Reconciliation"]" Icon="@Icons.Material.Filled.FactCheck">
-            <BankReconciliationTab />
+            <BankReconciliationTab OnOpenFullHealthDrawer="OpenHealthDrawer" />
         </MudTabPanel>
 
         <MudTabPanel Text="@BizLoc["Sales Tax Filing"]" Icon="@Icons.Material.Filled.RequestQuote">
@@ -459,7 +506,7 @@
         </MudTabPanel>
 
         <MudTabPanel Text="@BizLoc["CPA & Accountant"]" Icon="@Icons.Material.Filled.WorkHistory">
-            <AccountantCpaTab />
+            <AccountantCpaTab OnOpenFullHealthDrawer="OpenHealthDrawer" />
         </MudTabPanel>
 
         <MudTabPanel Text="@BizLoc["History"]" Icon="@Icons.Material.Filled.History">
@@ -549,6 +596,11 @@
     </SpokesTabs>
 </MudContainer>
 
+<AccountingHealthDrawer @bind-Open="_healthDrawerOpen"
+                        Report="_healthReport"
+                        OnRefreshRequested="RefreshHealthReport"
+                        OnActionSelected="HandleHealthAction" />
+
 @code {
     public class AccountingItem
     {
@@ -576,7 +628,10 @@
     private List<AccountingItem> PaidPayables = []; // History
     private List<AccountingItem> WrittenOffPayables = []; // Written Off History
     private List<AccountingItem> VoidedPayables = []; // Voided History
-    private List<AccountingItem> Receivables = []; // Invoices (Draft/Sent/Paid/WrittenOff/Partial)
+    private List<AccountingItem> Receivables = []; // Posted Invoices (Final/Sent/Partial/Paid/WrittenOff)
+    private List<SuggestedInvoicePayment> _pendingSuggestedPayments = [];
+    private AccountingHealthReport? _healthReport;
+    private bool _healthDrawerOpen;
 
     private string historyFilter = "all";
     private string receivablesStatusFilter = "open";
@@ -595,10 +650,9 @@
 
     private IEnumerable<AccountingItem> FilteredReceivableItems => receivablesStatusFilter switch
     {
-        "open" => Receivables.Where(r => r.Balance > 0 && r.Status != InvoiceStatus.Draft).OrderByDescending(r => r.Date),
-        "overdue" => Receivables.Where(r => r.Balance > 0 && r.DueDate < DateTime.Today && r.Status != InvoiceStatus.Draft).OrderBy(r => r.DueDate),
-        "paid" => Receivables.Where(r => InvoiceStatus.IsSettled(r.Status) || (r.Balance <= 0 && r.Status != InvoiceStatus.Draft)).OrderByDescending(r => r.DatePaid ?? r.Date),
-        "draft" => Receivables.Where(r => r.Status == InvoiceStatus.Draft).OrderByDescending(r => r.Date),
+        "open" => Receivables.Where(r => r.Balance > 0).OrderByDescending(r => r.Date),
+        "overdue" => Receivables.Where(r => r.Balance > 0 && r.DueDate < DateTime.Today).OrderBy(r => r.DueDate),
+        "paid" => Receivables.Where(r => InvoiceStatus.IsSettled(r.Status) || r.Balance <= 0).OrderByDescending(r => r.DatePaid ?? r.Date),
         _ => Receivables.OrderByDescending(r => r.Date)
     };
 
@@ -682,6 +736,14 @@
         WrittenOffPayables.Clear();
         VoidedPayables.Clear();
         Receivables.Clear();
+        _pendingSuggestedPayments = (Db.SuggestedInvoicePayments?.GetPending() ?? [])
+            .Where(sug =>
+            {
+                var inv = Db.Invoices.GetById(sug.InvoiceId);
+                return inv != null && InvoiceStatus.IsPosted(inv.Status) && !InvoiceStatus.IsSettled(inv.Status);
+            })
+            .ToList();
+        _healthReport = HealthService.EvaluateHealth();
 
         // 1. Expense Reports
         var reports = Db.ExpenseReports.GetAll().Where(x => x.Status != ExpenseReportStatus.Draft).ToList();
@@ -832,18 +894,16 @@
             }
         }
 
-        // 6. Invoices (Receivables)
+        // 6. Invoices (Receivables — posted invoices only; Draft and Void are excluded from Accounting)
         var invoices = Db.Invoices.GetAll();
         foreach (var inv in invoices)
         {
-            if (inv.Status == InvoiceStatus.Void) continue;
+            if (!InvoiceStatus.IsPosted(inv.Status)) continue;
 
             var proj = Db.Projects.GetById(inv.ProjectId);
-            var resolvedInvStatus = inv.Status == InvoiceStatus.Draft
-                ? InvoiceStatus.Draft
-                : (inv.BalanceDue <= 0
-                    ? (inv.AmountPaid <= 0 && inv.HasWriteOffs ? InvoiceStatus.WrittenOff : InvoiceStatus.Paid)
-                    : ((inv.AmountPaid > 0 || inv.HasWriteOffs) ? InvoiceStatus.Partial : inv.Status));
+            var resolvedInvStatus = inv.BalanceDue <= 0
+                ? (inv.AmountPaid <= 0 && inv.HasWriteOffs ? InvoiceStatus.WrittenOff : InvoiceStatus.Paid)
+                : ((inv.AmountPaid > 0 || inv.HasWriteOffs) ? InvoiceStatus.Partial : inv.Status);
 
             var invItem = new AccountingItem
             {
@@ -856,9 +916,9 @@
                 Date = inv.Date,
                 DueDate = inv.DueDate,
                 Total = inv.GrandTotal,
-                Balance = inv.Status == InvoiceStatus.Draft ? inv.GrandTotal : inv.BalanceDue,
+                Balance = inv.BalanceDue,
                 Status = resolvedInvStatus,
-                DatePaid = inv.DatePaid ?? (inv.BalanceDue <= 0 && inv.Status != InvoiceStatus.Draft
+                DatePaid = inv.DatePaid ?? (inv.BalanceDue <= 0
                     ? (inv.HasWriteOffs ? inv.WriteOffs.MaxBy(w => w.Date)?.Date : inv.Date)
                     : null),
                 HasWriteOffs = inv.HasWriteOffs,
@@ -867,7 +927,7 @@
             };
             Receivables.Add(invItem);
 
-            if (inv.Status != InvoiceStatus.Draft && inv.BalanceDue <= 0)
+            if (inv.BalanceDue <= 0)
             {
                 if (resolvedInvStatus == InvoiceStatus.WrittenOff)
                     WrittenOffPayables.Add(invItem);
@@ -1638,6 +1698,130 @@
         }
         catch (Microsoft.AspNetCore.Components.NavigationException)
         {
+        }
+    }
+
+    private void OpenHealthDrawer()
+    {
+        RefreshHealthReport();
+        _healthDrawerOpen = true;
+    }
+
+    private void RefreshHealthReport()
+    {
+        _healthReport = HealthService.EvaluateHealth();
+        StateHasChanged();
+    }
+
+    private async Task ApplySuggestedPayment(SuggestedInvoicePayment sug)
+    {
+        try
+        {
+            var actor = await UserService.GetEmployeeAsync();
+            AccountingService.ApplySuggestedInvoicePayment(sug.Id, user: actor?.FullName, actor: actor);
+            Refresh();
+            Snackbar.Add($"Recorded payment of {sug.SuggestedAmount:C2} on {sug.InvoiceNumber}.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task DismissSuggestedPayment(SuggestedInvoicePayment sug)
+    {
+        try
+        {
+            var actor = await UserService.GetEmployeeAsync();
+            AccountingService.DismissSuggestedInvoicePayment(sug.Id, user: actor?.FullName, actor: actor);
+            Refresh();
+            Snackbar.Add("Dismissed suggested payment.", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task HandleHealthAction(string actionKey)
+    {
+        var actor = await UserService.GetEmployeeAsync();
+        try
+        {
+            switch (actionKey)
+            {
+                case AccountingHealthActionKey.ResyncMissingJEs:
+                    int synced = HealthService.ResyncMissingJournalEntries(actor);
+                    Refresh();
+                    Snackbar.Add($"Re-synced {synced} missing journal entry(s).", Severity.Success);
+                    return;
+
+                case AccountingHealthActionKey.BackfillBillTaxes:
+                    var missingTaxBillIds = Db.Bills.GetAll()
+                        .Where(b => !b.IsVoid && !string.Equals(b.Status, BillStatus.Void, StringComparison.OrdinalIgnoreCase) && !b.IsTaxExempt && b.Amount > 0m && b.TaxAmount <= 0m && b.TpsAmount <= 0m && b.TvqAmount <= 0m)
+                        .Select(b => b.Id)
+                        .ToList();
+                    int updated = AccountingService.BackfillTaxSplitOnBills(missingTaxBillIds, user: actor?.FullName, actor: actor);
+                    Refresh();
+                    Snackbar.Add($"Backfilled sales tax breakdown on {updated} bill(s).", Severity.Success);
+                    return;
+
+                case AccountingHealthActionKey.GenerateDueRecurringBills:
+                    int generated = OverheadService.GenerateDueRecurringBills(upToDate: DateTime.Today, actor: actor);
+                    Refresh();
+                    Snackbar.Add($"Generated {generated} due recurring bill(s).", Severity.Success);
+                    return;
+
+                case AccountingHealthActionKey.OpenReceivables:
+                    _healthDrawerOpen = false;
+                    UpdateActiveTab("receivables");
+                    return;
+
+                case AccountingHealthActionKey.OpenPayables:
+                case AccountingHealthActionKey.OpenPayablesMissingTax:
+                    _healthDrawerOpen = false;
+                    UpdateActiveTab("payables");
+                    return;
+
+                case AccountingHealthActionKey.OpenBankReconciliation:
+                    _healthDrawerOpen = false;
+                    UpdateActiveTab("reconciliation");
+                    return;
+
+                case AccountingHealthActionKey.OpenTaxFiling:
+                    _healthDrawerOpen = false;
+                    UpdateActiveTab("taxes");
+                    return;
+
+                case AccountingHealthActionKey.OpenPayroll:
+                    _healthDrawerOpen = false;
+                    if (_canReadPayroll) UpdateActiveTab("payroll");
+                    return;
+
+                case AccountingHealthActionKey.OpenGeneralLedger:
+                    _healthDrawerOpen = false;
+                    UpdateActiveTab("ledger");
+                    return;
+
+                case AccountingHealthActionKey.OpenMigration:
+                    _healthDrawerOpen = false;
+                    Nav.NavigateTo("/admin/data-migration");
+                    return;
+
+                case AccountingHealthActionKey.OpenBusinessSettings:
+                    _healthDrawerOpen = false;
+                    Nav.NavigateTo("/business/settings");
+                    return;
+
+                case AccountingHealthActionKey.OpenRecurringExpenses:
+                    _healthDrawerOpen = false;
+                    Nav.NavigateTo("/business/operating-costs");
+                    return;
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
         }
     }
 }

@@ -431,7 +431,7 @@ public class EmailInboxServiceTests : IDisposable
             OwnerEmployeeId = admin.Id,
             IsServerManaged = true,
             Name = "Unassigned Server Mailbox",
-            EmailAddress = "info@poly-robotics.com"
+            EmailAddress = "info@acme.test"
         };
 
         // Shared Server-Managed Real Inbox (shared with admin)
@@ -441,7 +441,7 @@ public class EmailInboxServiceTests : IDisposable
             OwnerEmployeeId = admin.Id,
             IsServerManaged = true,
             Name = "Shared Server Mailbox",
-            EmailAddress = "sales@poly-robotics.com",
+            EmailAddress = "sales@acme.test",
             AllowedUserIds = [admin.Id]
         };
 
@@ -452,7 +452,7 @@ public class EmailInboxServiceTests : IDisposable
             OwnerEmployeeId = user.Id,
             IsServerManaged = false,
             Name = "User Personal Mailbox",
-            EmailAddress = "user@gmail.com"
+            EmailAddress = "user@example.test"
         };
 
         _accounts.Save(unassignedServerAccount);
@@ -479,10 +479,10 @@ public class EmailInboxServiceTests : IDisposable
     {
         var acc = new EmailAccount
         {
-            Id = "acc-gmail",
-            OwnerEmployeeId = "emp-mats",
-            Name = "Personal Gmail",
-            EmailAddress = "pcbeeinfo@gmail.com"
+            Id = "acc-personal-mail",
+            OwnerEmployeeId = "emp-alex",
+            Name = "Personal Mail",
+            EmailAddress = "owner@example.test"
         };
         _accounts.Save(acc);
 
@@ -492,16 +492,16 @@ public class EmailInboxServiceTests : IDisposable
 
         // 1. Verify MimeMessage parsing with Cloudflare headers (X-Forwarded-For and Received: for <...>)
         var mime = new MimeKit.MimeMessage();
-        mime.From.Add(new MimeKit.MailboxAddress("Alex", "alex@tabori.de"));
-        mime.To.Add(new MimeKit.MailboxAddress("Spokes Support", "support@spokes.sh"));
-        mime.Headers.Add("Delivered-To", "pcbeeinfo@gmail.com");
-        mime.Headers.Add("X-Forwarded-To", "pcbeeinfo@gmail.com");
-        mime.Headers.Add("X-Forwarded-For", "support@spokes.sh pcbeeinfo@gmail.com");
-        mime.Headers.Add("Received", "from mail.tabori.de by cloudflare-email.net (cloudflare) id EvzFMEGdkqKi for <support@spokes.sh>; Wed, 7 Oct 2026 09:59:15 +0000");
+        mime.From.Add(new MimeKit.MailboxAddress("Sender", "sender@external.test"));
+        mime.To.Add(new MimeKit.MailboxAddress("Acme Support", "support@acme.test"));
+        mime.Headers.Add("Delivered-To", "owner@example.test");
+        mime.Headers.Add("X-Forwarded-To", "owner@example.test");
+        mime.Headers.Add("X-Forwarded-For", "support@acme.test owner@example.test");
+        mime.Headers.Add("Received", "from mail.external.test by cloudflare-email.net (cloudflare) id EvzFMEGdkqKi for <support@acme.test>; Wed, 7 Oct 2026 09:59:15 +0000");
 
         var extractedReceiving = EmailSyncService.ExtractReceivingAddresses(mime);
-        Assert.Contains("support@spokes.sh", extractedReceiving);
-        Assert.Contains("pcbeeinfo@gmail.com", extractedReceiving);
+        Assert.Contains("support@acme.test", extractedReceiving);
+        Assert.Contains("owner@example.test", extractedReceiving);
 
         // Save forwarded message in INBOX
         _messages.Save(new EmailMessage
@@ -510,12 +510,12 @@ public class EmailInboxServiceTests : IDisposable
             AccountId = acc.Id,
             FolderPath = "INBOX",
             UniqueId = 1,
-            FromAddress = "alex@tabori.de",
-            ToAddresses = ["support@spokes.sh"],
+            FromAddress = "sender@external.test",
+            ToAddresses = ["support@acme.test"],
             ReceivingAddresses = extractedReceiving
         });
 
-        // Save a direct email to pcbeeinfo@gmail.com with co-recipients in To/Cc (should NOT be detected as Virtual Inbox targets)
+        // Save a direct email to owner@example.test with co-recipients in To/Cc (should NOT be detected as Virtual Inbox targets)
         _messages.Save(new EmailMessage
         {
             Id = "msg-direct-cc",
@@ -523,19 +523,19 @@ public class EmailInboxServiceTests : IDisposable
             FolderPath = "INBOX",
             UniqueId = 2,
             FromAddress = "colleague@company.com",
-            ToAddresses = ["pcbeeinfo@gmail.com", "otherperson@company.com"],
+            ToAddresses = ["owner@example.test", "otherperson@company.com"],
             CcAddresses = ["boss@company.com"],
-            ReceivingAddresses = ["pcbeeinfo@gmail.com", "otherperson@company.com", "boss@company.com"]
+            ReceivingAddresses = ["owner@example.test", "otherperson@company.com", "boss@company.com"]
         });
 
-        // Save an email sent BY pcbeeinfo@gmail.com in INBOX and All Mail (recipients should NEVER be detected)
+        // Save an email sent BY owner@example.test in INBOX and All Mail (recipients should NEVER be detected)
         _messages.Save(new EmailMessage
         {
             Id = "msg-sent-by-owner",
             AccountId = acc.Id,
             FolderPath = "INBOX",
             UniqueId = 3,
-            FromAddress = "pcbeeinfo@gmail.com",
+            FromAddress = "owner@example.test",
             ToAddresses = ["recipient-i-emailed@external.com"],
             ReceivingAddresses = ["recipient-i-emailed@external.com"]
         });
@@ -545,14 +545,14 @@ public class EmailInboxServiceTests : IDisposable
             AccountId = acc.Id,
             FolderPath = "[Gmail]/All Mail",
             UniqueId = 4,
-            FromAddress = "pcbeeinfo@gmail.com",
+            FromAddress = "owner@example.test",
             ToAddresses = ["another-sent-recipient@external.com"],
             ReceivingAddresses = ["another-sent-recipient@external.com"]
         });
 
         var detected = _service.GetDetectedAddressesForAccount(acc.Id);
         Assert.Single(detected);
-        Assert.Equal("support@spokes.sh", detected[0]);
+        Assert.Equal("support@acme.test", detected[0]);
     }
 
     [Fact]
@@ -560,29 +560,29 @@ public class EmailInboxServiceTests : IDisposable
     {
         _employees.Save(new Employee
         {
-            Id = "emp-mats",
-            FirstName = "Mats",
-            LastName = "Dallaire",
+            Id = "emp-alex",
+            FirstName = "Alex",
+            LastName = "Tremblay",
             IsActive = true
         });
 
         var acc = new EmailAccount
         {
             Id = "acc-work",
-            OwnerEmployeeId = "emp-mats",
+            OwnerEmployeeId = "emp-alex",
             Name = "My Work Mailbox (UI Label)",
-            EmailAddress = "mats@poly-robotics.com"
+            EmailAddress = "alex@acme.test"
         };
         _accounts.Save(acc);
 
-        // 1. Without explicit displayName, falls back to Employee.FullName ("Mats Dallaire") instead of UI Inbox Name
+        // 1. Without explicit displayName, falls back to Employee.FullName ("Alex Tremblay") instead of UI Inbox Name
         var identity = _service.EnsureRealInboxSendingIdentity(acc);
-        Assert.Equal("Mats Dallaire", identity.DisplayName);
+        Assert.Equal("Alex Tremblay", identity.DisplayName);
         Assert.NotEqual(acc.Name, identity.DisplayName);
 
         // 2. With explicit displayName (e.g. detected from IMAP or customized), updates DisplayName without changing UI Inbox Name
-        var updatedIdentity = _service.EnsureRealInboxSendingIdentity(acc, "Mats D. (Poly-Robotics)");
-        Assert.Equal("Mats D. (Poly-Robotics)", updatedIdentity.DisplayName);
+        var updatedIdentity = _service.EnsureRealInboxSendingIdentity(acc, "Alex T. (Acme Demo)");
+        Assert.Equal("Alex T. (Acme Demo)", updatedIdentity.DisplayName);
         Assert.Equal("My Work Mailbox (UI Label)", acc.Name);
     }
 

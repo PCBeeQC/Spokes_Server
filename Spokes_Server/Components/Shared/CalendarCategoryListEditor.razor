@@ -1,0 +1,98 @@
+@* Canonical single-layout responsive calendar category list editor (AGENTS.md §2E, §2F & §3).
+   Renders immediately on Render 1 with zero <MudHidden> viewport JS round-trips and zero eager
+   <MudSelect>/<MudPopover> mounts per row, shared by CalendarCategoryManagerDialog and CompanySettings. *@
+
+<div class="spokes-cat-editor">
+    <div class="spokes-cat-list" style="@ScrollStyle">
+        <div class="spokes-cat-header">
+            <span>@Loc["Category Name"]</span>
+            <span>@Loc["Color"]</span>
+            <span>@Loc["Preview"]</span>
+            <span class="spokes-cat-actions-col">@Loc["Actions"]</span>
+        </div>
+
+        @if (Categories.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="ma-3">
+                @EffectiveEmptyMessage
+            </MudAlert>
+        }
+        else
+        {
+            @foreach (var cat in Categories)
+            {
+                <div @key="cat.Id" class="spokes-cat-row">
+                    <div class="spokes-cat-col-name">
+                        <MudTextField @bind-Value="cat.Name"
+                                      Margin="Margin.Dense"
+                                      Variant="Variant.Outlined"
+                                      Placeholder="@EffectiveNamePlaceholder"
+                                      Required="true" />
+                    </div>
+                    <div class="spokes-cat-col-color">
+                        <ThemeColorPicker @bind-Value="cat.Color"
+                                          AvailableColors="@AvailableColors"
+                                          AriaLabel="@Loc["Color"].Value" />
+                    </div>
+                    <div class="spokes-cat-col-preview">
+                        <MudChip T="string"
+                                 Color="@ThemeColorPicker.ParseColor(cat.Color)"
+                                 Size="Size.Small"
+                                 Variant="Variant.Filled"
+                                 Class="ma-0">
+                            @(string.IsNullOrWhiteSpace(cat.Name) ? Loc["Preview"].Value : cat.Name)
+                        </MudChip>
+                    </div>
+                    <div class="spokes-cat-col-actions">
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Color="Color.Error"
+                                       Size="Size.Small"
+                                       OnClick="@(() => OnRemove.InvokeAsync(cat))"
+                                       title="@Loc["Delete Category"].Value" />
+                    </div>
+                </div>
+            }
+        }
+    </div>
+
+    <div class="spokes-cat-footer">
+        <MudButton StartIcon="@Icons.Material.Filled.Add"
+                   Color="Color.Primary"
+                   OnClick="OnAdd"
+                   Size="Size.Small">
+            @Loc["Add Category"]
+        </MudButton>
+        @if (OnReset.HasDelegate)
+        {
+            <MudButton StartIcon="@Icons.Material.Filled.RestartAlt"
+                       Color="Color.Secondary"
+                       Variant="Variant.Text"
+                       OnClick="OnReset"
+                       Size="Size.Small">
+                @Loc["Reset to Server Defaults"]
+            </MudButton>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public List<CalendarCategory> Categories { get; set; } = [];
+    [Parameter] public EventCallback OnAdd { get; set; }
+    [Parameter] public EventCallback<CalendarCategory> OnRemove { get; set; }
+    [Parameter] public EventCallback OnReset { get; set; }
+    [Parameter] public IReadOnlyList<string>? AvailableColors { get; set; }
+    [Parameter] public string? MaxHeight { get; set; }
+    [Parameter] public string? NamePlaceholder { get; set; }
+    [Parameter] public string? EmptyMessage { get; set; }
+
+    private string ScrollStyle =>
+        string.IsNullOrWhiteSpace(MaxHeight) ? string.Empty : $"max-height: {MaxHeight}; overflow-y: auto;";
+
+    private string EffectiveNamePlaceholder =>
+        string.IsNullOrWhiteSpace(NamePlaceholder) ? Loc["e.g., Deep Work"].Value : NamePlaceholder;
+
+    private string EffectiveEmptyMessage =>
+        string.IsNullOrWhiteSpace(EmptyMessage)
+            ? Loc["No categories defined. Tap \"Add Category\" to create one."].Value
+            : EmptyMessage;
+}

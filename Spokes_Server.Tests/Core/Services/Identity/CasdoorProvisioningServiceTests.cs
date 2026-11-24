@@ -122,7 +122,7 @@ public class CasdoorProvisioningServiceTests : TestDataTestBase
     {
         // Arrange: set company profile to verify custom company name propagation
         var profile = _db.CompanyProfile.Get();
-        profile.CompanyName = "PolyRobotics";
+        profile.CompanyName = "AcmeDemo";
         _db.CompanyProfile.Save(profile);
 
         // Create SQLite casdoor.db with minimal schema and pre-existing rows
@@ -184,7 +184,7 @@ public class CasdoorProvisioningServiceTests : TestDataTestBase
                 using var reader = await cmd.ExecuteReaderAsync();
                 Assert.True(await reader.ReadAsync());
                 Assert.Equal(0, reader.GetInt32(0));
-                Assert.Equal("PolyRobotics", reader.GetString(1));
+                Assert.Equal("AcmeDemo", reader.GetString(1));
                 Assert.Equal(1, reader.GetInt32(2));
                 Assert.Equal(result.ClientId, reader.GetString(3));
                 Assert.Equal(result.ClientSecret, reader.GetString(4));

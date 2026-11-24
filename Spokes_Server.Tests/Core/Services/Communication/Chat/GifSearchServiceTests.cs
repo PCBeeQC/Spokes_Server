@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -344,5 +345,253 @@ public class GifSearchServiceTests : IDisposable
         var queryVal = root.TryGetProperty("query", out var q) ? q.GetString() : root.GetProperty("Query").GetString();
 
         Assert.Equal("around the corner", queryVal);
+    }
+
+    [Fact]
+    public void ParseKlipyJson_RealV1Schema_PrefersSmWebpPreviewHdWebpFullSkipsAdsAndHonorsHasNext()
+    {
+        string json = @"{
+            ""result"": true,
+            ""data"": {
+                ""current_page"": 2,
+                ""per_page"": 20,
+                ""has_next"": false,
+                ""data"": [
+                    {
+                        ""id"": ""ad-1"",
+                        ""type"": ""ad"",
+                        ""file"": {
+                            ""hd"": { ""webp"": { ""url"": ""https://static.klipy.com/ad.webp"", ""width"": 480, ""height"": 240 } }
+                        }
+                    },
+                    {
+                        ""id"": ""gif-1"",
+                        ""type"": ""gif"",
+                        ""file"": {
+                            ""hd"": {
+                                ""gif"": { ""url"": ""https://static.klipy.com/1/hd.gif"", ""width"": 480, ""height"": 240 },
+                                ""webp"": { ""url"": ""https://static.klipy.com/1/hd.webp"", ""width"": 480, ""height"": 240 }
+                            },
+                            ""md"": {
+                                ""webp"": { ""url"": ""https://static.klipy.com/1/md.webp"", ""width"": 320, ""height"": 160 }
+                            },
+                            ""sm"": {
+                                ""gif"": { ""url"": ""https://static.klipy.com/1/sm.gif"", ""width"": 220, ""height"": 110 },
+                                ""webp"": { ""url"": ""https://static.klipy.com/1/sm.webp"", ""width"": 220, ""height"": 110 }
+                            }
+                        }
+                    },
+                    {
+                        ""id"": ""gif-2"",
+                        ""file"": {
+                            ""md"": {
+                                ""gif"": { ""url"": ""https://static.klipy.com/2/md.gif"", ""width"": 300, ""height"": 300 }
+                            },
+                            ""xs"": {
+                                ""webp"": { ""url"": ""https://static.klipy.com/2/xs.webp"", ""width"": 120, ""height"": 120 }
+                            }
+                        }
+                    }
+                ]
+            }
+        }";
+
+        var result = GifSearchService.ParseKlipyJson(json, currentOffset: 20, currentPage: 2);
+
+        Assert.Equal(2, result.Results.Count);
+        Assert.Equal("https://static.klipy.com/1/hd.webp", result.Results[0].Url);
+        Assert.Equal("https://static.klipy.com/1/sm.webp", result.Results[0].PreviewUrl);
+        Assert.Equal(2.0, result.Results[0].AspectRatio);
+
+        // Falls back cleanly when hd is absent
+        Assert.Equal("https://static.klipy.com/2/md.gif", result.Results[1].Url);
+        Assert.Equal("https://static.klipy.com/2/xs.webp", result.Results[1].PreviewUrl);
+        Assert.Equal(1.0, result.Results[1].AspectRatio);
+
+        // Honors explicit has_next=false instead of guessing from item count
+        Assert.False(result.HasMore);
+        Assert.Equal(string.Empty, result.NextCursor);
+    }
+
+    [Fact]
+    public void ParseKlipyJson_HasNextTrue_AdvancesExplicitPageCursor()
+    {
+        string json = @"{
+            ""result"": true,
+            ""data"": {
+                ""current_page"": 1,
+                ""has_next"": true,
+                ""data"": [
+                    {
+                        ""file"": {
+                            ""hd"": { ""webp"": { ""url"": ""https://static.klipy.com/a/hd.webp"", ""width"": 400, ""height"": 200 } },
+                            ""sm"": { ""webp"": { ""url"": ""https://static.klipy.com/a/sm.webp"", ""width"": 200, ""height"": 100 } }
+                        }
+                    }
+                ]
+            }
+        }";
+
+        var result = GifSearchService.ParseKlipyJson(json, currentOffset: 0, currentPage: 1);
+
+        Assert.True(result.HasMore);
+        Assert.Equal("2", result.NextCursor);
+    }
+
+    [Fact]
+    public async Task SearchGifsAsync_CachesResultsInMemory_AndAvoidsDuplicateRelayCall()
+    {
+        var profile = _profileRepo.Get();
+        profile.GifProvider = "Spokes Default Provider";
+        _profileRepo.Save(profile);
+
+        int calls = 0;
+        const string klipyJson = @"{
+            ""data"": {
+                ""current_page"": 1,
+                ""has_next"": true,
+                ""data"": [
+                    {
+                        ""file"": {
+                            ""hd"": { ""webp"": { ""url"": ""https://static.klipy.com/c/hd.webp"", ""width"": 300, ""height"": 300 } },
+                            ""sm"": { ""webp"": { ""url"": ""https://static.klipy.com/c/sm.webp"", ""width"": 150, ""height"": 150 } }
+                        }
+                    }
+                ]
+            }
+        }";
+
+        var mockHandler = new Mock<HttpMessageHandler>();
+        mockHandler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                Interlocked.Increment(ref calls);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(klipyJson, System.Text.Encoding.UTF8, "application/json")
+                };
+            });
+
+        var client = new HttpClient(mockHandler.Object);
+        var mockFactory = new Mock<IHttpClientFactory>();
+        mockFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
+
+        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+        var service = new GifSearchService(
+            mockFactory.Object,
+            new SpokesRelayClient(mockFactory.Object, Options.Create(new SpokesOptions())),
+            _profileRepo,
+            _serverConfigs,
+            _loggerMock.Object,
+            memoryCache,
+            retryDelay: TimeSpan.Zero);
+
+        var first = await service.SearchGifsAsync("happy");
+        var second = await service.SearchGifsAsync("  HAPPY  ");
+
+        Assert.Equal(1, calls);
+        Assert.Single(first.Results);
+        Assert.Single(second.Results);
+        Assert.Equal("2", second.NextCursor);
+    }
+
+    [Fact]
+    public async Task SearchGifsAsync_AppendReturns422_TreatsGracefullyAsEndOfResults()
+    {
+        var profile = _profileRepo.Get();
+        profile.GifProvider = "Spokes Default Provider";
+        _profileRepo.Save(profile);
+
+        var mockHandler = new Mock<HttpMessageHandler>();
+        mockHandler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.UnprocessableEntity));
+
+        var client = new HttpClient(mockHandler.Object);
+        var mockFactory = new Mock<IHttpClientFactory>();
+        mockFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
+
+        var service = new GifSearchService(
+            mockFactory.Object,
+            new SpokesRelayClient(mockFactory.Object, Options.Create(new SpokesOptions())),
+            _profileRepo,
+            _serverConfigs,
+            _loggerMock.Object,
+            retryDelay: TimeSpan.Zero);
+
+        var result = await service.SearchGifsAsync("deep scroll", offset: 100, cursor: "6", append: true);
+
+        Assert.Null(result.ErrorMessage);
+        Assert.False(result.HasMore);
+        Assert.Empty(result.Results);
+    }
+
+    [Fact]
+    public async Task SearchGifsAsync_Transient504Then200_RetriesAndSucceeds()
+    {
+        var profile = _profileRepo.Get();
+        profile.GifProvider = "Spokes Default Provider";
+        _profileRepo.Save(profile);
+
+        int calls = 0;
+        const string okJson = @"{ ""data"": [ { ""file"": { ""hd"": { ""webp"": { ""url"": ""https://static.klipy.com/r/hd.webp"" } }, ""sm"": { ""webp"": { ""url"": ""https://static.klipy.com/r/sm.webp"" } } } } ] }";
+
+        var mockHandler = new Mock<HttpMessageHandler>();
+        mockHandler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                if (Interlocked.Increment(ref calls) == 1)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.GatewayTimeout);
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(okJson, System.Text.Encoding.UTF8, "application/json")
+                };
+            });
+
+        var client = new HttpClient(mockHandler.Object);
+        var mockFactory = new Mock<IHttpClientFactory>();
+        mockFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
+
+        var service = new GifSearchService(
+            mockFactory.Object,
+            new SpokesRelayClient(mockFactory.Object, Options.Create(new SpokesOptions())),
+            _profileRepo,
+            _serverConfigs,
+            _loggerMock.Object,
+            retryDelay: TimeSpan.Zero);
+
+        var result = await service.SearchGifsAsync("cold start");
+
+        Assert.Equal(2, calls);
+        Assert.Null(result.ErrorMessage);
+        Assert.Single(result.Results);
+    }
+
+    [Fact]
+    public async Task SearchGifsAsync_CallerCancelled_PropagatesOperationCanceledException()
+    {
+        var profile = _profileRepo.Get();
+        profile.GifProvider = "Spokes Default Provider";
+        _profileRepo.Save(profile);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var mockFactory = new Mock<IHttpClientFactory>();
+        var service = new GifSearchService(
+            mockFactory.Object,
+            new SpokesRelayClient(mockFactory.Object, Options.Create(new SpokesOptions())),
+            _profileRepo,
+            _serverConfigs,
+            _loggerMock.Object,
+            retryDelay: TimeSpan.Zero);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.SearchGifsAsync("cancelled", cancellationToken: cts.Token));
     }
 }

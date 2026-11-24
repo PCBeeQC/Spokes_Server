@@ -782,7 +782,7 @@ public class NotificationQueueServiceTests : IDisposable
                 Sound = "custom-chime.mp3",
                 Url = "/chat/private-channel-xyz",
                 ChannelName = "Executive-Ops",
-                ServerName = "PolyRobotics-HQ"
+                ServerName = "AcmeDemo-HQ"
             };
 
             service1.Enqueue(new QueuedNotification(request));
@@ -799,7 +799,7 @@ public class NotificationQueueServiceTests : IDisposable
             Assert.DoesNotContain("Decrypted E2EE message text", rawOnDisk);
             Assert.DoesNotContain("private-channel-xyz", rawOnDisk);
             Assert.DoesNotContain("Executive-Ops", rawOnDisk);
-            Assert.DoesNotContain("PolyRobotics-HQ", rawOnDisk);
+            Assert.DoesNotContain("AcmeDemo-HQ", rawOnDisk);
             Assert.DoesNotContain("QueuedNotifications", rawOnDisk);
 
             var service2 = new NotificationQueueService(
@@ -817,7 +817,7 @@ public class NotificationQueueServiceTests : IDisposable
             Assert.Equal("custom-chime.mp3", restoredReq.Sound);
             Assert.Equal("/chat/private-channel-xyz", restoredReq.Url);
             Assert.Equal("Executive-Ops", restoredReq.ChannelName);
-            Assert.Equal("PolyRobotics-HQ", restoredReq.ServerName);
+            Assert.Equal("AcmeDemo-HQ", restoredReq.ServerName);
         }
         finally
         {

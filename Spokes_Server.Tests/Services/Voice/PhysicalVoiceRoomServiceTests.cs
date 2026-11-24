@@ -68,7 +68,7 @@ public class PhysicalVoiceRoomServiceTests : IDisposable
         SeedChatEmployee("emp-1");
         SeedChatEmployee("emp-2");
         SeedChatEmployee("emp-dad");
-        SeedChatEmployee("emp-mats");
+        SeedChatEmployee("emp-alex");
         SeedChatEmployee("emp-admin", isAdmin: true);
     }
 
@@ -246,13 +246,13 @@ public class PhysicalVoiceRoomServiceTests : IDisposable
     {
         var room = (await _service.CreateRoomAsync("Bureau", "emp-admin")).Value!;
         await _service.EnrollUserDeviceAsync(room.Id, "emp-admin", "dev-pc", "Windows PC", actorUserId: "emp-admin");
-        await _service.EnrollUserDeviceAsync(room.Id, "emp-mats", "dev-android", "Android Device", actorUserId: "emp-mats");
+        await _service.EnrollUserDeviceAsync(room.Id, "emp-alex", "dev-android", "Android Device", actorUserId: "emp-alex");
 
         _service.SaveLearnedPairCalibration(room.Id, new PhysicalRoomSavedPairCalibration
         {
             SourceEmployeeId = "emp-admin",
             SourceDeviceId = "dev-pc",
-            TargetEmployeeId = "emp-mats",
+            TargetEmployeeId = "emp-alex",
             TargetDeviceId = "dev-android",
             SourceFilterType = "rnnoise",
             TargetFilterType = "webrtc",
@@ -268,7 +268,7 @@ public class PhysicalVoiceRoomServiceTests : IDisposable
         Assert.Equal("rnnoise", persistedRoom.SavedCalibrations[0].SourceFilterType);
 
         // Removing device from room cleans up its saved calibrations
-        var removeRes = await _service.RemoveUserDeviceAsync("emp-mats", "dev-android", actorUserId: "emp-mats");
+        var removeRes = await _service.RemoveUserDeviceAsync("emp-alex", "dev-android", actorUserId: "emp-alex");
         Assert.True(removeRes.IsSuccess);
         var afterRemove = _roomRepo.GetById(room.Id);
         Assert.NotNull(afterRemove);

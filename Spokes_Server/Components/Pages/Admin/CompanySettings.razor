@@ -238,48 +238,9 @@
             <SettingsCard Title="@Loc["Default Calendar Categories"]"
                           Icon="@Icons.Material.Filled.Category"
                           Description="@Loc["Configure the default calendar categories assigned to new users upon account creation. Each user has full control to customize their own personal categories independently."]">
-                <div class="overflow-x-auto">
-                    <MudTable Items="@Profile.CalendarCategories" Breakpoint="Breakpoint.None" Dense="true" Elevation="0" Outlined="true" Bordered="true">
-                        <HeaderContent>
-                            <MudTh Style="min-width: 220px;">@Loc["Category Name"]</MudTh>
-                            <MudTh Style="min-width: 150px;">@Loc["Color"]</MudTh>
-                            <MudTh Style="width: 120px;">@Loc["Preview"]</MudTh>
-                            <MudTh Style="width: 80px;">@Loc["Actions"]</MudTh>
-                        </HeaderContent>
-                        <RowTemplate>
-                            <MudTd>
-                                <MudTextField ShrinkLabel="true" Variant="Variant.Outlined" Margin="Margin.Dense" @bind-Value="context.Name" Label="@Loc["Name"]"
-                                              Required="true" />
-                            </MudTd>
-                            <MudTd>
-                                <MudSelect ShrinkLabel="true" Variant="Variant.Outlined" @bind-Value="context.Color" Label="@Loc["Color"]" Dense="true" Margin="Margin.Dense"
-                                           Style="width: 150px;">
-                                    @foreach (var colorName in Enum.GetNames(typeof(Color)))
-                                    {
-                                        <MudSelectItem Value="@colorName">@colorName</MudSelectItem>
-                                    }
-                                </MudSelect>
-                            </MudTd>
-                            <MudTd>
-                                @{
-                                    Color chipColor = Color.Default;
-                                    Enum.TryParse(context.Color, out chipColor);
-                                }
-                                <MudChip T="string" Color="@chipColor" Size="Size.Small">@context.Name</MudChip>
-                            </MudTd>
-                            <MudTd>
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
-                                               OnClick="@(() => RemoveCategory(context))" />
-                            </MudTd>
-                        </RowTemplate>
-                        <FooterContent>
-                            <MudTd colspan="4">
-                                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddCategory"
-                                           Color="Color.Primary">@Loc["Add Category"]</MudButton>
-                            </MudTd>
-                        </FooterContent>
-                    </MudTable>
-                </div>
+                <CalendarCategoryListEditor Categories="@Profile.CalendarCategories"
+                                            OnAdd="AddCategory"
+                                            OnRemove="RemoveCategory" />
 
             </SettingsCard>
         </MudStack>
@@ -357,7 +318,7 @@
                                 @GetLocalBackupStageLabel(BackupSvc.CurrentProgress.Stage)
                             </MudText>
                             <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                @BackupSvc.CurrentProgress.FormattedProgress
+                                @BackupSvc.CurrentProgress.FormatProgress(Loc["raw"].Value)
                             </MudText>
                         </div>
                         <MudProgressLinear Color="Color.Primary" Value="@BackupSvc.CurrentProgress.Percent" Rounded="true" Size="Size.Medium" />
@@ -1724,7 +1685,7 @@
     private string GetLocalBackupStageLabel(LocalBackupStage stage) => stage switch
     {
         LocalBackupStage.Preparing => Loc["Preparing backup..."].Value,
-        LocalBackupStage.Archiving => Loc["Archiving files..."].Value,
+        LocalBackupStage.Archiving => Loc["Compressing data..."].Value,
         LocalBackupStage.Encrypting => Loc["Encrypting backup archive..."].Value,
         LocalBackupStage.Finalizing => Loc["Finalizing backup..."].Value,
         LocalBackupStage.Completed => Loc["Backup complete"].Value,

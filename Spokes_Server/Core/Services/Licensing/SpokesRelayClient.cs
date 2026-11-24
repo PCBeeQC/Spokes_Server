@@ -50,6 +50,7 @@ public sealed class SpokesRelayResponse : IDisposable
 /// </summary>
 public class SpokesRelayClient
 {
+    public const string HttpClientName = "SpokesRelay";
     public const string RelayKeyHeaderName = "X-Relay-Key";
 
     private static readonly JsonSerializerOptions CaseInsensitiveJsonOptions = new()
@@ -198,7 +199,7 @@ public class SpokesRelayClient
         CancellationToken cancellationToken,
         TimeSpan? timeout)
     {
-        var httpClient = _httpClientFactory.CreateClient();
+        var httpClient = _httpClientFactory.CreateClient(HttpClientName);
 
         using var timeoutCts = timeout.HasValue
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)

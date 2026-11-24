@@ -797,19 +797,71 @@ public class BackupServiceTests : IDisposable
 
             var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, configWithPass, _persistence, _db);
 
-            var stagesSeen = new HashSet<LocalBackupStage>();
+            var progressReports = new List<LocalBackupProgress>();
             service.OnLocalBackupProgressChanged += p =>
             {
-                stagesSeen.Add(p.Stage);
+                progressReports.Add(p);
             };
 
             var result = await service.RunBackupNowAsync();
 
             Assert.True(result.Success);
+            Assert.NotNull(result.ZipPath);
+            var stagesSeen = progressReports.Select(p => p.Stage).ToHashSet();
             Assert.Contains(LocalBackupStage.Preparing, stagesSeen);
             Assert.Contains(LocalBackupStage.Archiving, stagesSeen);
             Assert.Contains(LocalBackupStage.Encrypting, stagesSeen);
+            Assert.Contains(LocalBackupStage.Finalizing, stagesSeen);
             Assert.Contains(LocalBackupStage.Completed, stagesSeen);
+
+            var finalArchiveLength = new FileInfo(result.ZipPath!).Length;
+            var completedReport = progressReports.Last(p => p.Stage == LocalBackupStage.Completed);
+            Assert.Equal(finalArchiveLength, completedReport.TotalBytes);
+            Assert.Equal(finalArchiveLength, completedReport.BytesProcessed);
+            Assert.DoesNotContain("raw", completedReport.FormattedProgress, StringComparison.OrdinalIgnoreCase);
+
+            var encryptingReports = progressReports.Where(p => p.Stage == LocalBackupStage.Encrypting).ToList();
+            Assert.NotEmpty(encryptingReports);
+            Assert.All(encryptingReports, r => Assert.DoesNotContain("raw", r.FormattedProgress, StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public async Task RunBackupNowAsync_ArchivingFormatsRawLabel_AndFinalizingAndCompletedReportCompressedArchiveSize()
+        {
+            var testSubdir = Path.Combine(_testDataDir, "CompressibleData");
+            Directory.CreateDirectory(testSubdir);
+            var testFilePath = Path.Combine(testSubdir, "records.json");
+            // Highly compressible synthetic payload (~512 KB uncompressed -> ~2 KB compressed)
+            var syntheticPayload = string.Concat(Enumerable.Repeat("{\"id\":\"demo-001\",\"company\":\"Acme Demo Inc.\"}\n", 12000));
+            await File.WriteAllTextAsync(testFilePath, syntheticPayload);
+            long uncompressedFileLength = new FileInfo(testFilePath).Length;
+
+            var service = new BackupService(_mockLogger.Object, _db.CompanyProfile, _config, _persistence, _db);
+
+            var progressReports = new List<LocalBackupProgress>();
+            service.OnLocalBackupProgressChanged += p => progressReports.Add(p);
+
+            var result = await service.RunBackupNowAsync();
+
+            Assert.True(result.Success);
+            Assert.NotNull(result.ZipPath);
+            long finalArchiveLength = new FileInfo(result.ZipPath!).Length;
+            Assert.True(finalArchiveLength < uncompressedFileLength, "Expected compressed archive to be smaller than uncompressed input.");
+
+            var archivingReport = progressReports.Last(p => p.Stage == LocalBackupStage.Archiving);
+            Assert.True(archivingReport.TotalBytes >= uncompressedFileLength);
+            Assert.Contains(" raw (", archivingReport.FormattedProgress);
+            Assert.Contains(" brut (", archivingReport.FormatProgress("brut"));
+
+            var finalizingReport = progressReports.Last(p => p.Stage == LocalBackupStage.Finalizing);
+            Assert.Equal(finalArchiveLength, finalizingReport.TotalBytes);
+            Assert.Equal(finalArchiveLength, finalizingReport.BytesProcessed);
+            Assert.DoesNotContain("raw", finalizingReport.FormattedProgress, StringComparison.OrdinalIgnoreCase);
+
+            var completedReport = progressReports.Last(p => p.Stage == LocalBackupStage.Completed);
+            Assert.Equal(finalArchiveLength, completedReport.TotalBytes);
+            Assert.Equal(finalArchiveLength, completedReport.BytesProcessed);
+            Assert.DoesNotContain("raw", completedReport.FormattedProgress, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]

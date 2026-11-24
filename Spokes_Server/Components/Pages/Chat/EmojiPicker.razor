@@ -1,4 +1,3 @@
-@using System.Text.Json.Nodes
 @inject IJSRuntime JSRuntime
 @inject Database Db
 @inject UserService UserService
@@ -28,10 +27,21 @@
         }
 
         @* Unified Search *@
-        <MudTextField @ref="_sharedSearchField" T="string" Value="@_sharedSearchText" ValueChanged="OnSharedSearchChanged"
-            Placeholder="@(ActiveTab == "Emoji" ? Loc["Search emoji..."].Value : (_activeGifProvider == "Klipy" ? Loc["Search KLIPY"].Value : Loc["Search GIFs..."].Value))" Variant="Variant.Outlined"
-            Margin="Margin.Dense" DebounceInterval="400" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
-            Class="mb-2 flex-shrink-0" Style="font-size: 0.85rem;" />
+        <MudTextField @ref="_sharedSearchField"
+            T="string"
+            @bind-Value="_sharedSearchText"
+            DebounceInterval="250"
+            OnDebounceIntervalElapsed="OnSearchDebounced"
+            OnKeyDown="OnSearchKeyDown"
+            Clearable="true"
+            OnClearButtonClick="OnSearchCleared"
+            Placeholder="@(ActiveTab == "Emoji" ? Loc["Search emoji..."].Value : (_activeGifProvider == "Klipy" ? Loc["Search KLIPY"].Value : Loc["Search GIFs..."].Value))"
+            Variant="Variant.Outlined"
+            Margin="Margin.Dense"
+            Adornment="Adornment.Start"
+            AdornmentIcon="@Icons.Material.Filled.Search"
+            Class="mb-2 flex-shrink-0"
+            Style="font-size: 0.85rem;" />
 
         @if (ActiveTab == "Emoji")
         {
@@ -96,18 +106,23 @@
         }
         else if (ActiveTab == "Gif")
         {
-            <div style="overflow-y: auto; flex-grow: 1; scrollbar-width: thin; width: 100%; display: flex; flex-direction: column; justify-content: flex-start; min-height: 0;">
+            <div @ref="_gifScrollContainerRef" style="overflow-y: auto; flex-grow: 1; scrollbar-width: thin; width: 100%; display: flex; flex-direction: column; justify-content: flex-start; min-height: 0;">
                 @if (_isSearchingGifs && !_gifResults.Any())
                 {
                     <div class="w-100 d-flex justify-center mt-4">
                         <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary" />
                     </div>
                 }
-                else if (!string.IsNullOrEmpty(_gifError))
+                else if (!string.IsNullOrEmpty(_gifError) && !_gifResults.Any())
                 {
-                    <MudText Typo="Typo.caption" Color="Color.Error" Align="Align.Center" Class="pa-4 w-100">
-                        @_gifError
-                    </MudText>
+                    <div class="d-flex flex-column align-center pa-4 w-100 gap-2">
+                        <MudText Typo="Typo.caption" Color="Color.Error" Align="Align.Center">
+                            @_gifError
+                        </MudText>
+                        <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary" OnClick="RetryInitialGifSearchAsync">
+                            @Loc["Retry"]
+                        </MudButton>
+                    </div>
                 }
                 else if (_gifResults.Any())
                 {
@@ -116,38 +131,45 @@
                             @for (int i = 0; i < _gifResults.Count; i += 2)
                             {
                                 var gif = _gifResults[i];
-                                <div style="border-radius: 8px; @(gif.AspectRatio.HasValue ? $"aspect-ratio: {gif.AspectRatio.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)};" : "min-height: 100px;")">
-                                    <img src="@gif.PreviewUrl" @onclick="@(() => SelectGif(gif.Url, gif.AspectRatio))" alt="GIF" loading="lazy"
-                                        style="width: 100%; @(gif.AspectRatio.HasValue ? "height: 100%; object-fit: cover;" : "height: auto;") display: block; border-radius: 8px; cursor: pointer;"
+                                <div @key="gif.Url" class="gif-picker-tile" style="@(gif.AspectRatio.HasValue ? $"aspect-ratio: {gif.AspectRatio.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)};" : "min-height: 100px;")">
+                                    <img src="@gif.PreviewUrl" @onclick="@(() => SelectGif(gif.Url, gif.AspectRatio))" alt="GIF" loading="lazy" decoding="async"
+                                        style="@(gif.AspectRatio.HasValue ? "height: 100%; object-fit: cover;" : "height: auto;")"
                                         class="gif-item" />
                                 </div>
-                            }
-                            @if (_hasMoreGifs && !_isSearchingGifs)
-                            {
-                                <div class="gif-scroll-sentinel" style="height: 20px; width: 100%;"></div>
                             }
                         </div>
                         <div class="d-flex flex-column gap-1" style="flex: 1; min-width: 0;">
                             @for (int i = 1; i < _gifResults.Count; i += 2)
                             {
                                 var gif = _gifResults[i];
-                                <div style="border-radius: 8px; @(gif.AspectRatio.HasValue ? $"aspect-ratio: {gif.AspectRatio.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)};" : "min-height: 100px;")">
-                                    <img src="@gif.PreviewUrl" @onclick="@(() => SelectGif(gif.Url, gif.AspectRatio))" alt="GIF" loading="lazy"
-                                        style="width: 100%; @(gif.AspectRatio.HasValue ? "height: 100%; object-fit: cover;" : "height: auto;") display: block; border-radius: 8px; cursor: pointer;"
+                                <div @key="gif.Url" class="gif-picker-tile" style="@(gif.AspectRatio.HasValue ? $"aspect-ratio: {gif.AspectRatio.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)};" : "min-height: 100px;")">
+                                    <img src="@gif.PreviewUrl" @onclick="@(() => SelectGif(gif.Url, gif.AspectRatio))" alt="GIF" loading="lazy" decoding="async"
+                                        style="@(gif.AspectRatio.HasValue ? "height: 100%; object-fit: cover;" : "height: auto;")"
                                         class="gif-item" />
                                 </div>
-                            }
-                            @if (_hasMoreGifs && !_isSearchingGifs)
-                            {
-                                <div class="gif-scroll-sentinel" style="height: 20px; width: 100%;"></div>
                             }
                         </div>
                     </div>
                     @if (_isSearchingGifs)
                     {
-                        <div class="w-100 d-flex justify-center mt-2 mb-2">
+                        <div class="w-100 d-flex justify-center mt-2 mb-2 flex-shrink-0">
                             <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary" />
                         </div>
+                    }
+                    else if (!string.IsNullOrEmpty(_gifAppendError))
+                    {
+                        <div class="d-flex flex-column align-center py-2 px-3 w-100 gap-1 flex-shrink-0">
+                            <MudText Typo="Typo.caption" Color="Color.Error" Align="Align.Center">
+                                @_gifAppendError
+                            </MudText>
+                            <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Primary" OnClick="LoadMoreGifs">
+                                @Loc["Retry"]
+                            </MudButton>
+                        </div>
+                    }
+                    else if (_hasMoreGifs)
+                    {
+                        <div @ref="_gifSentinelRef" class="gif-scroll-sentinel" style="height: 20px; width: 100%; flex-shrink: 0;"></div>
                     }
                 }
                 else if (!string.IsNullOrWhiteSpace(_sharedSearchText))
@@ -173,9 +195,9 @@
                                         ar = parsedAr;
                                     }
                                 }
-                                <div style="@(ar.HasValue ? $"aspect-ratio: {ar.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)};" : "min-height: 100px;")">
-                                    <img src="@url" @onclick="@(() => SelectGif(url, ar))" alt="GIF" loading="lazy"
-                                        style="width: 100%; @(ar.HasValue ? "height: 100%; object-fit: cover;" : "height: auto;") display: block; border-radius: 8px; cursor: pointer;"
+                                <div @key="url" class="gif-picker-tile" style="@(ar.HasValue ? $"aspect-ratio: {ar.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)};" : "min-height: 100px;")">
+                                    <img src="@url" @onclick="@(() => SelectGif(url, ar))" alt="GIF" loading="lazy" decoding="async"
+                                        style="@(ar.HasValue ? "height: 100%; object-fit: cover;" : "height: auto;")"
                                         class="gif-item" />
                                 </div>
                             }
@@ -191,9 +213,9 @@
                                         ar = parsedAr;
                                     }
                                 }
-                                <div style="@(ar.HasValue ? $"aspect-ratio: {ar.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)};" : "min-height: 100px;")">
-                                    <img src="@url" @onclick="@(() => SelectGif(url, ar))" alt="GIF" loading="lazy"
-                                        style="width: 100%; @(ar.HasValue ? "height: 100%; object-fit: cover;" : "height: auto;") display: block; border-radius: 8px; cursor: pointer;"
+                                <div @key="url" class="gif-picker-tile" style="@(ar.HasValue ? $"aspect-ratio: {ar.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)};" : "min-height: 100px;")">
+                                    <img src="@url" @onclick="@(() => SelectGif(url, ar))" alt="GIF" loading="lazy" decoding="async"
+                                        style="@(ar.HasValue ? "height: 100%; object-fit: cover;" : "height: auto;")"
                                         class="gif-item" />
                                 </div>
                             }
@@ -248,15 +270,6 @@
         background-color: var(--mud-palette-action-default-hover);
         transform: scale(1.2);
     }
-    
-    .gif-item {
-        transition: transform 0.1s, box-shadow 0.1s;
-    }
-    
-    .gif-item:hover {
-        transform: scale(1.02);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-    }
 </style>
 
 @code {
@@ -271,7 +284,6 @@
 
     private string ActiveTab { get; set; } = "Emoji";
     private string _sharedSearchText = "";
-    private string _selectedCategory = "Smileys & Emotion";
     private List<string> _recentEmojis = [];
     private Employee? _currentEmployee;
     
@@ -285,18 +297,20 @@
     private List<string> _recentGifs = [];
     private bool _isSearchingGifs;
     private string _gifError = "";
-    private List<GifModel> _gifResults = [];
+    private string _gifAppendError = "";
+    private string _lastSearchedQuery = "";
+    private List<GifItem> _gifResults = [];
     private bool _hasMoreGifs = true;
     private int _gifOffset;
     private string _nextCursor = "";
     private DotNetObjectReference<EmojiPicker>? _objRef;
-    private bool _scriptInjected;
+    private ElementReference _gifScrollContainerRef;
+    private ElementReference _gifSentinelRef;
+    private readonly string _scrollObserverKey = $"gif-scroll-{Guid.NewGuid():N}";
+    private bool _observerAttached;
     private Guid _currentSearchId = Guid.Empty;
-    private class GifModel {
-        public string Url { get; set; } = "";
-        public string PreviewUrl { get; set; } = "";
-        public double? AspectRatio { get; set; }
-    }
+    private CancellationTokenSource? _searchCts;
+    private bool _disposed;
 
     protected override async Task OnInitializedAsync()
     {
@@ -323,31 +337,37 @@
         {
             _objRef = DotNetObjectReference.Create(this);
         }
-        
-        if (IsOpen && ActiveTab == "Gif" && _objRef != null)
+
+        bool shouldObserveSentinel = IsOpen
+            && ActiveTab == "Gif"
+            && _objRef != null
+            && _gifResults.Any()
+            && _hasMoreGifs
+            && !_isSearchingGifs
+            && string.IsNullOrEmpty(_gifAppendError);
+
+        if (shouldObserveSentinel)
         {
-            if (!_scriptInjected)
-            {
-                _scriptInjected = true;
-                await JSRuntime.InvokeVoidAsync("eval", @"
-                    window.initGifScroll = window.initGifScroll || function(dotNetHelper) {
-                        var sentinels = document.querySelectorAll('.gif-scroll-sentinel');
-                        if (sentinels.length === 0) return;
-                        if (window.gifObserver) window.gifObserver.disconnect();
-                        
-                        window.gifObserver = new IntersectionObserver((entries) => {
-                            if (entries.some(e => e.isIntersecting)) {
-                                dotNetHelper.invokeMethodAsync('LoadMoreGifs');
-                            }
-                        }, { root: null, rootMargin: '100px' });
-                        
-                        sentinels.forEach(s => window.gifObserver.observe(s));
-                    };
-                ");
-            }
             try
             {
-                await JSRuntime.InvokeVoidAsync("window.initGifScroll", _objRef);
+                await JSRuntime.InvokeVoidAsync(
+                    "spokesInfiniteScroll.observe",
+                    _scrollObserverKey,
+                    _gifScrollContainerRef,
+                    _gifSentinelRef,
+                    _objRef,
+                    nameof(LoadMoreGifs),
+                    "200px");
+                _observerAttached = true;
+            }
+            catch { }
+        }
+        else if (_observerAttached)
+        {
+            _observerAttached = false;
+            try
+            {
+                await JSRuntime.InvokeVoidAsync("spokesInfiniteScroll.disconnect", _scrollObserverKey);
             }
             catch { }
         }
@@ -360,6 +380,7 @@
         else if (!IsOpen && _wasOpen)
         {
             _wasOpen = false;
+            CancelActiveSearch();
         }
 
         if (IsOpen && ActiveTab != _previousTab)
@@ -384,90 +405,184 @@
     [JSInvokable]
     public async Task LoadMoreGifs()
     {
-        if (!_isSearchingGifs && _hasMoreGifs)
+        if (!_disposed && !_isSearchingGifs && _hasMoreGifs && _gifResults.Any())
         {
-            await SearchGifsAsync(true);
+            await SearchGifsAsync(append: true);
         }
     }
 
     public void Dispose()
     {
-        if (_objRef != null)
+        _disposed = true;
+        CancelActiveSearch();
+        if (_observerAttached)
         {
-            try { JSRuntime.InvokeVoidAsync("eval", "if(window.gifObserver) window.gifObserver.disconnect();"); } catch { }
-            _objRef.Dispose();
+            _observerAttached = false;
+            try { _ = JSRuntime.InvokeVoidAsync("spokesInfiniteScroll.disconnect", _scrollObserverKey); } catch { }
+        }
+        _objRef?.Dispose();
+        _objRef = null;
+    }
+
+    private void CancelActiveSearch()
+    {
+        var cts = _searchCts;
+        _searchCts = null;
+        if (cts != null)
+        {
+            try { cts.Cancel(); } catch { }
+            cts.Dispose();
         }
     }
 
     private async Task OnTabChanged(string newTab)
     {
-        ActiveTab = newTab;
-        if (newTab == "Gif" && !string.IsNullOrWhiteSpace(_sharedSearchText) && !_gifResults.Any())
+        if (ActiveTab == "Gif" && newTab != "Gif")
         {
-            await SearchGifsAsync(false);
+            CancelActiveSearch();
+            _isSearchingGifs = false;
+        }
+
+        ActiveTab = newTab;
+        if (newTab == "Gif")
+        {
+            var query = (_sharedSearchText ?? string.Empty).Trim();
+            _sharedSearchText = query;
+            if (!string.IsNullOrWhiteSpace(query) && (!_gifResults.Any() || !string.Equals(_lastSearchedQuery, query, StringComparison.OrdinalIgnoreCase)))
+            {
+                await SearchGifsAsync(append: false);
+            }
         }
     }
 
-    private async Task OnSharedSearchChanged(string text)
+    private async Task OnSearchDebounced(string text)
     {
-        _sharedSearchText = text;
-        
-        if (ActiveTab == "Gif")
+        _sharedSearchText = text ?? string.Empty;
+
+        if (ActiveTab != "Gif")
         {
-            if (!string.IsNullOrWhiteSpace(_sharedSearchText))
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_sharedSearchText))
+        {
+            await SearchGifsAsync(append: false);
+        }
+        else
+        {
+            ResetGifSearchState();
+        }
+    }
+
+    private async Task OnSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (ActiveTab == "Gif" && e.Key == "Enter")
+        {
+            var currentText = _sharedSearchText ?? string.Empty;
+            _sharedSearchText = currentText;
+            if (!string.IsNullOrWhiteSpace(currentText))
             {
-                await SearchGifsAsync(false);
+                await SearchGifsAsync(append: false);
             }
             else
             {
-                _gifResults.Clear();
-                _gifError = "";
+                ResetGifSearchState();
             }
         }
+    }
+
+    private void OnSearchCleared()
+    {
+        _sharedSearchText = string.Empty;
+        ResetGifSearchState();
+    }
+
+    private Task RetryInitialGifSearchAsync() => SearchGifsAsync(append: false);
+
+    private void ResetGifSearchState()
+    {
+        CancelActiveSearch();
+        _currentSearchId = Guid.NewGuid();
+        _isSearchingGifs = false;
+        _gifResults.Clear();
+        _gifError = string.Empty;
+        _gifAppendError = string.Empty;
+        _lastSearchedQuery = string.Empty;
+        _hasMoreGifs = true;
+        _gifOffset = 0;
+        _nextCursor = string.Empty;
     }
 
     private async Task SearchGifsAsync(bool append = false)
     {
-        if (string.IsNullOrWhiteSpace(_sharedSearchText))
+        var query = (_sharedSearchText ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(query))
         {
-            _gifResults.Clear();
+            ResetGifSearchState();
             StateHasChanged();
             return;
         }
 
-        var searchId = Guid.NewGuid();
+        if (append && !_hasMoreGifs)
+        {
+            return;
+        }
+
+        Guid searchId;
         if (!append)
         {
+            CancelActiveSearch();
+            searchId = Guid.NewGuid();
             _currentSearchId = searchId;
+            _lastSearchedQuery = query;
             _gifResults.Clear();
             _gifOffset = 0;
-            _nextCursor = "";
+            _nextCursor = string.Empty;
             _hasMoreGifs = true;
+            _gifError = string.Empty;
+            _gifAppendError = string.Empty;
         }
         else
         {
             searchId = _currentSearchId;
+            _gifAppendError = string.Empty;
         }
 
-        if (!_hasMoreGifs) return;
+        var cts = new CancellationTokenSource();
+        if (!append)
+        {
+            _searchCts = cts;
+        }
+        else
+        {
+            CancelActiveSearch();
+            _searchCts = cts;
+        }
 
         _isSearchingGifs = true;
-        _gifError = "";
         await InvokeAsync(StateHasChanged);
 
         try
         {
             var result = await GifSearchService.SearchGifsAsync(
-                _sharedSearchText,
+                query,
                 _gifOffset,
                 _nextCursor,
-                append);
+                append,
+                cts.Token);
 
-            if (_currentSearchId != searchId) return;
+            if (_disposed || _currentSearchId != searchId) return;
 
             if (!string.IsNullOrEmpty(result.ErrorMessage))
             {
-                _gifError = result.ErrorMessage;
+                if (append && _gifResults.Any())
+                {
+                    _gifAppendError = result.ErrorMessage;
+                }
+                else
+                {
+                    _gifError = result.ErrorMessage;
+                }
                 return;
             }
 
@@ -480,12 +595,7 @@
             {
                 if (!_gifResults.Any(g => g.Url == item.Url))
                 {
-                    _gifResults.Add(new GifModel
-                    {
-                        Url = item.Url,
-                        PreviewUrl = item.PreviewUrl,
-                        AspectRatio = item.AspectRatio
-                    });
+                    _gifResults.Add(item);
                     newlyAdded++;
                 }
             }
@@ -495,17 +605,35 @@
                 _hasMoreGifs = false;
             }
         }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer search, clear, tab switch, or component disposal.
+        }
         catch (Exception ex)
         {
-            if (_currentSearchId == searchId)
+            if (!_disposed && _currentSearchId == searchId)
             {
-                _gifError = Loc["Error fetching GIFs. Please check your connection."].Value;
+                var fallbackMsg = Loc["Error fetching GIFs. Please check your connection."].Value;
+                if (append && _gifResults.Any())
+                {
+                    _gifAppendError = fallbackMsg;
+                }
+                else
+                {
+                    _gifError = fallbackMsg;
+                }
             }
             Logger.LogError(ex, "GIF Search Error");
         }
         finally
         {
-            if (_currentSearchId == searchId)
+            if (ReferenceEquals(_searchCts, cts))
+            {
+                _searchCts = null;
+            }
+            cts.Dispose();
+
+            if (!_disposed && _currentSearchId == searchId)
             {
                 _isSearchingGifs = false;
                 await InvokeAsync(StateHasChanged);
@@ -516,17 +644,6 @@
     private async Task HandleBackdropClick()
     {
         await OnClose.InvokeAsync();
-    }
-
-    private async Task ScrollToCategory(string category)
-    {
-        _selectedCategory = category;
-        try
-        {
-            var id = $"emoji-cat-{category}";
-            await JSRuntime.InvokeVoidAsync("eval", $"var e = document.getElementById('{id}'); if(e) e.scrollIntoView({{behavior: 'smooth', block: 'start'}});");
-        }
-        catch { }
     }
 
     private async Task SelectEmoji(string emoji)
@@ -573,12 +690,8 @@
         await OnGifSelected.InvokeAsync(finalUrl);
         
         // Reset state for when picker is re-opened
-        _sharedSearchText = "";
-        _gifResults.Clear();
-        _isSearchingGifs = false;
-        _hasMoreGifs = true;
-        _gifOffset = 0;
-        _nextCursor = "";
+        _sharedSearchText = string.Empty;
+        ResetGifSearchState();
     }
 
     private class VirtualizeItem

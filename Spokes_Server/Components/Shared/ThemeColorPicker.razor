@@ -1,0 +1,158 @@
+@* Canonical lazy-mounted MudBlazor theme color picker primitive (AGENTS.md §2E & §3).
+   Avoids eager per-row <MudSelect>/<MudPopover>/<MudKeyInterceptor> mounts while closed,
+   eliminating mudPopover.connect and mudKeyInterceptor.connect JS chatter in list editors
+   such as CalendarCategoryListEditor. *@
+
+<div class="spokes-color-picker p-rel @Class" style="@Style">
+    <button type="button"
+            class="spokes-color-picker-btn"
+            disabled="@Disabled"
+            aria-haspopup="listbox"
+            aria-expanded="@(_isOpen ? "true" : "false")"
+            aria-label="@EffectiveAriaLabel"
+            @onclick="ToggleOpen">
+        <span class="spokes-color-dot" style="background-color: @GetCssColor(Value);"></span>
+        <span class="spokes-color-picker-label">@DisplayValue</span>
+        <span class="spokes-color-picker-chevron" aria-hidden="true">&#9662;</span>
+    </button>
+
+    @if (_isOpen)
+    {
+        <MudOverlay Visible="true"
+                    OnClick="Close"
+                    AutoClose="true"
+                    LockScroll="false"
+                    Style="background: transparent;"
+                    ZIndex="@(ZIndex - 1)"
+                    data-spokes-back-dismiss="menu" />
+        <MudPopover Open="true"
+                    AnchorOrigin="@AnchorOrigin"
+                    TransformOrigin="@TransformOrigin"
+                    OverflowBehavior="OverflowBehavior.FlipAlways"
+                    Paper="true"
+                    Elevation="8"
+                    Style="@($"min-width: {MinWidth}; z-index: {ZIndex};")">
+            <div class="spokes-color-picker-list" role="listbox" aria-label="@EffectiveAriaLabel">
+                @foreach (var colorName in EffectiveColors)
+                {
+                    var isSelected = string.Equals(Value, colorName, StringComparison.OrdinalIgnoreCase);
+                    <button type="button"
+                            role="option"
+                            aria-selected="@(isSelected ? "true" : "false")"
+                            class="spokes-color-picker-option @(isSelected ? "is-selected" : string.Empty)"
+                            @onclick="@(() => SelectColorAsync(colorName))">
+                        <span class="spokes-color-dot" style="background-color: @GetCssColor(colorName);"></span>
+                        <span>@colorName</span>
+                    </button>
+                }
+            </div>
+        </MudPopover>
+    }
+</div>
+@{
+    _lastFingerprint = ComputeFingerprint();
+}
+
+@code {
+    public static readonly string[] DefaultColors =
+    [
+        nameof(Color.Primary),
+        nameof(Color.Secondary),
+        nameof(Color.Tertiary),
+        nameof(Color.Info),
+        nameof(Color.Success),
+        nameof(Color.Warning),
+        nameof(Color.Error),
+        nameof(Color.Dark),
+        nameof(Color.Default)
+    ];
+
+    [Parameter] public string Value { get; set; } = nameof(Color.Default);
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public IReadOnlyList<string>? AvailableColors { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string Class { get; set; } = string.Empty;
+    [Parameter] public string Style { get; set; } = string.Empty;
+    [Parameter] public string? AriaLabel { get; set; }
+    [Parameter] public Origin AnchorOrigin { get; set; } = Origin.BottomLeft;
+    [Parameter] public Origin TransformOrigin { get; set; } = Origin.TopLeft;
+    [Parameter] public string MinWidth { get; set; } = "156px";
+    [Parameter] public int ZIndex { get; set; } = 1500;
+
+    private bool _isOpen;
+    private int _lastFingerprint;
+    private bool _hasRenderedOnce;
+
+    private IReadOnlyList<string> EffectiveColors =>
+        AvailableColors is { Count: > 0 } ? AvailableColors : DefaultColors;
+
+    private string DisplayValue =>
+        string.IsNullOrWhiteSpace(Value) ? nameof(Color.Default) : Value;
+
+    private string EffectiveAriaLabel =>
+        string.IsNullOrWhiteSpace(AriaLabel) ? Loc["Color"].Value : AriaLabel;
+
+    public static Color ParseColor(string? colorName) =>
+        Enum.TryParse<Color>(colorName, ignoreCase: true, out var parsed) ? parsed : Color.Default;
+
+    public static string GetCssColor(string? colorName) => ParseColor(colorName) switch
+    {
+        Color.Primary => "var(--mud-palette-primary)",
+        Color.Secondary => "var(--mud-palette-secondary)",
+        Color.Tertiary => "var(--mud-palette-tertiary)",
+        Color.Info => "var(--mud-palette-info)",
+        Color.Success => "var(--mud-palette-success)",
+        Color.Warning => "var(--mud-palette-warning)",
+        Color.Error => "var(--mud-palette-error)",
+        Color.Dark => "var(--mud-palette-dark)",
+        _ => "var(--mud-palette-action-default)"
+    };
+
+    private int ComputeFingerprint() => HashCode.Combine(
+        Value,
+        Disabled,
+        Class,
+        Style,
+        AriaLabel,
+        MinWidth,
+        ZIndex,
+        HashCode.Combine(AnchorOrigin, TransformOrigin, _isOpen, AvailableColors?.Count ?? 0));
+
+    protected override bool ShouldRender()
+    {
+        if (!_hasRenderedOnce)
+        {
+            _hasRenderedOnce = true;
+            return true;
+        }
+
+        if (_isOpen)
+        {
+            return true;
+        }
+
+        return ComputeFingerprint() != _lastFingerprint;
+    }
+
+    private void ToggleOpen()
+    {
+        if (Disabled) return;
+        _isOpen = !_isOpen;
+    }
+
+    private void Close()
+    {
+        if (!_isOpen) return;
+        _isOpen = false;
+    }
+
+    private async Task SelectColorAsync(string colorName)
+    {
+        _isOpen = false;
+        if (!string.Equals(Value, colorName, StringComparison.Ordinal))
+        {
+            Value = colorName;
+            await ValueChanged.InvokeAsync(colorName);
+        }
+    }
+}

@@ -18,12 +18,14 @@ public class BusinessOverheadService : IBusinessOverheadService
     private readonly ProjectsContext _projectsContext;
     private readonly HrContext _hrContext;
     private readonly AccountingContext _accountingContext;
+    private readonly ILedgerService? _ledgerService;
 
     [ActivatorUtilitiesConstructor]
     public BusinessOverheadService(
         ProjectsContext projectsContext,
         HrContext hrContext,
-        AccountingContext accountingContext)
+        AccountingContext accountingContext,
+        ILedgerService? ledgerService = null)
     {
         ArgumentNullException.ThrowIfNull(projectsContext);
         ArgumentNullException.ThrowIfNull(hrContext);
@@ -32,6 +34,7 @@ public class BusinessOverheadService : IBusinessOverheadService
         _projectsContext = projectsContext;
         _hrContext = hrContext;
         _accountingContext = accountingContext;
+        _ledgerService = ledgerService ?? (accountingContext.JournalEntries != null ? new LedgerService(accountingContext, projectsContext) : null);
     }
 
     public void NormalizeLegacyEstimates(Employee? actor = null)
@@ -1087,5 +1090,132 @@ public class BusinessOverheadService : IBusinessOverheadService
         }
 
         return (0m, 0m);
+    }
+
+    public static bool IsScheduledFrequency(string? frequency) =>
+        string.Equals(frequency, RecurringExpenseFrequency.Weekly, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(frequency, RecurringExpenseFrequency.BiWeekly, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(frequency, RecurringExpenseFrequency.Monthly, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(frequency, RecurringExpenseFrequency.Quarterly, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(frequency, RecurringExpenseFrequency.Yearly, StringComparison.OrdinalIgnoreCase);
+
+    public static DateTime AdvanceRecurringDate(DateTime current, string? frequency)
+    {
+        if (string.Equals(frequency, RecurringExpenseFrequency.Weekly, StringComparison.OrdinalIgnoreCase))
+            return current.AddDays(7);
+        if (string.Equals(frequency, RecurringExpenseFrequency.BiWeekly, StringComparison.OrdinalIgnoreCase))
+            return current.AddDays(14);
+        if (string.Equals(frequency, RecurringExpenseFrequency.Quarterly, StringComparison.OrdinalIgnoreCase))
+            return current.AddMonths(3);
+        if (string.Equals(frequency, RecurringExpenseFrequency.Yearly, StringComparison.OrdinalIgnoreCase))
+            return current.AddYears(1);
+        return current.AddMonths(1);
+    }
+
+    public List<DueRecurringOccurrence> GetOverdueRecurringOccurrences(DateTime? asOfDate = null)
+    {
+        var cutoff = (asOfDate ?? DateTime.Today).Date;
+        var results = new List<DueRecurringOccurrence>();
+
+        foreach (var profile in _accountingContext.RecurringExpenses.GetAll())
+        {
+            if (!IsScheduledFrequency(profile.Frequency)) continue;
+            if (profile.Amount <= 0m) continue;
+            if (profile.NextDueDate == default || profile.NextDueDate.Date > cutoff) continue;
+
+            int count = 0;
+            var cursor = profile.NextDueDate.Date;
+            while (cursor <= cutoff && count < 60)
+            {
+                count++;
+                cursor = AdvanceRecurringDate(cursor, profile.Frequency);
+            }
+
+            results.Add(new DueRecurringOccurrence
+            {
+                RecurringExpenseId = profile.Id,
+                Name = profile.Name,
+                Supplier = profile.Supplier,
+                Frequency = profile.Frequency,
+                Amount = profile.Amount,
+                NextDueDate = profile.NextDueDate.Date,
+                MissedPeriodsCount = count
+            });
+        }
+
+        return results.OrderBy(r => r.NextDueDate).ToList();
+    }
+
+    public int GenerateDueRecurringBills(IEnumerable<string>? expenseIds = null, DateTime? upToDate = null, Employee? actor = null)
+    {
+        if (actor != null)
+        {
+            DomainActorGuard.RequireAnyPermission(actor, "generate due recurring bills", allowSuspended: false,
+                AppPermissions.Finance.AccessAccounting, AppPermissions.Purchases.ManageBills);
+        }
+
+        var cutoff = (upToDate ?? DateTime.Today).Date;
+        var filterIds = expenseIds != null ? new HashSet<string>(expenseIds, StringComparer.OrdinalIgnoreCase) : null;
+        int generated = 0;
+
+        foreach (var profile in _accountingContext.RecurringExpenses.GetAll())
+        {
+            if (filterIds != null && !filterIds.Contains(profile.Id)) continue;
+            if (!IsScheduledFrequency(profile.Frequency)) continue;
+            if (profile.Amount <= 0m) continue;
+            if (profile.NextDueDate == default || profile.NextDueDate.Date > cutoff) continue;
+
+            profile.History ??= [];
+            var cursor = profile.NextDueDate.Date;
+            int safety = 0;
+            bool modified = false;
+
+            while (cursor <= cutoff && safety++ < 60)
+            {
+                // Avoid duplicating a record that already exists for the same billing date
+                bool existsForDate = profile.History.Any(h => Math.Abs((h.Date.Date - cursor).TotalDays) <= 3);
+                if (!existsForDate)
+                {
+                    var breakdown = FinancialCalculationEngine.CalculateFromGrandTotal(profile.Amount, profile.IsTaxExempt);
+                    profile.History.Add(new RecurringBillRecord
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        Date = cursor,
+                        DueDate = cursor,
+                        Amount = Math.Round(profile.Amount, 2, MidpointRounding.AwayFromZero),
+                        SubTotal = breakdown.SubTotal,
+                        TpsAmount = breakdown.TpsAmount,
+                        TvqAmount = breakdown.TvqAmount,
+                        TaxAmount = breakdown.TaxAmount,
+                        IsTaxExempt = profile.IsTaxExempt,
+                        GlAccountCode = profile.GlAccountCode,
+                        TaxComponents = FinancialCalculationEngine.BuildTaxComponentsFromSubTotal(
+                            breakdown.SubTotal,
+                            FinancialCalculationEngine.ActiveTemplate?.SalesTaxes,
+                            profile.IsTaxExempt,
+                            forPurchases: true),
+                        IsPaid = false
+                    });
+                    generated++;
+                    modified = true;
+                }
+
+                cursor = AdvanceRecurringDate(cursor, profile.Frequency);
+            }
+
+            if (cursor != profile.NextDueDate.Date)
+            {
+                profile.NextDueDate = cursor;
+                modified = true;
+            }
+
+            if (modified)
+            {
+                _accountingContext.RecurringExpenses.Save(profile);
+                _ledgerService?.SyncRecurringExpense(profile);
+            }
+        }
+
+        return generated;
     }
 }

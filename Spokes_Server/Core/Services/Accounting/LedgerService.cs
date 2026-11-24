@@ -165,11 +165,7 @@ public class LedgerService : ILedgerService
         if (invoice == null || _accountingContext.JournalEntries == null) return;
 
         // Draft or Void invoices do not remain on the active General Ledger
-        var isPosted = string.Equals(invoice.Status, InvoiceStatus.Final, StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(invoice.Status, InvoiceStatus.Paid, StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(invoice.Status, InvoiceStatus.WrittenOff, StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(invoice.Status, InvoiceStatus.Partial, StringComparison.OrdinalIgnoreCase) ||
-                       string.Equals(invoice.Status, InvoiceStatus.Sent, StringComparison.OrdinalIgnoreCase);
+        var isPosted = InvoiceStatus.IsPosted(invoice.Status);
 
         if (!isPosted || invoice.GrandTotal <= 0m)
         {

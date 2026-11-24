@@ -124,6 +124,21 @@ public class DocumentLifecycleStatusTests : TestDataTestBase
         Assert.Equal(expected, InvoiceStatus.CanUnlockEdit(status));
     }
 
+    [Theory]
+    [InlineData(InvoiceStatus.Draft, false)]
+    [InlineData(InvoiceStatus.Void, false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    [InlineData(InvoiceStatus.Final, true)]
+    [InlineData(InvoiceStatus.Sent, true)]
+    [InlineData(InvoiceStatus.Partial, true)]
+    [InlineData(InvoiceStatus.Paid, true)]
+    [InlineData(InvoiceStatus.WrittenOff, true)]
+    public void InvoiceStatus_IsPosted_ExcludesDraftVoidAndEmpty(string? status, bool expected)
+    {
+        Assert.Equal(expected, InvoiceStatus.IsPosted(status));
+    }
+
     [Fact]
     public void AccountingService_PaymentLifecycle_RecordsDocumentHistoryWithReasons()
     {

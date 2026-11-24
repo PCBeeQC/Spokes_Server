@@ -21,6 +21,7 @@
 @inject UserService UserService
 @inject DocumentPdfService PdfService
 @inject IAccountingService AccountingService
+@inject BillingOrchestrationService BillingOrchestrator
 @inject IJurisdictionTemplateService JurisdictionService
 @inject MarkdownSanitizerService MarkdownSanitizer
 @inject FileUrlSigner FileUrls
@@ -809,6 +810,21 @@ else
         var emp = saveAuth.Value.Actor;
         if (liveInvoice.Status == newStatus) return;
 
+        // Validate and commit billing allocations BEFORE persisting Draft -> Final
+        if (!InvoiceStatus.IsPosted(oldStatus) && InvoiceStatus.IsPosted(newStatus))
+        {
+            try
+            {
+                BillingOrchestrator.CommitFinalization(liveInvoice, emp);
+            }
+            catch (InvalidOperationException ex)
+            {
+                Snackbar.Add(ex.Message, Severity.Warning);
+                StateHasChanged();
+                return;
+            }
+        }
+
         liveInvoice.Status = newStatus;
         liveInvoice.History.Add(new DocumentHistoryEntry
         {
@@ -831,6 +847,7 @@ else
                 try { System.IO.File.Delete(Invoice.PdfPath); } catch { }
             }
             Invoice.PdfPath = "";
+            BillingOrchestrator.ReleaseFinalizedAllocations(Invoice);
             Db.Invoices.Save(Invoice);
         }
         else if (oldStatus == InvoiceStatus.Draft && newStatus == InvoiceStatus.Final)
@@ -859,7 +876,7 @@ else
             Snackbar.Add("Cannot delete a prepayment invoice while its credits are applied to other invoices.", Severity.Warning);
             return;
         }
-        var result = await DialogService.ShowMessageBoxAsync("Delete Invoice?", "Deleting this draft will release all linked time entries.", yesText: "Delete", cancelText: "Cancel");
+        var result = await DialogService.ShowMessageBoxAsync("Delete Invoice?", "Deleting this draft will permanently remove it.", yesText: "Delete", cancelText: "Cancel");
         if (result == true)
         {
             var deleteAuth = await AuthorizeInvoiceMutationAsync(requireDraft: true);
@@ -869,6 +886,7 @@ else
                 Snackbar.Add("Cannot delete a prepayment invoice while its credits are applied to other invoices.", Severity.Warning);
                 return;
             }
+            BillingOrchestrator.ReleaseFinalizedAllocations(deleteAuth.Value.Invoice);
             Db.Invoices.Delete(deleteAuth.Value.Invoice.Id);
             Snackbar.Add("Invoice deleted", Severity.Success);
             GoBack();

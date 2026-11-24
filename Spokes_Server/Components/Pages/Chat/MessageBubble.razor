@@ -51,7 +51,7 @@
     @{
         var decryptedContent = EffectiveDecryptedContent;
         var txt = decryptedContent ?? Message.Content ?? "";
-        bool isInlineMedia = txt.Contains("![") || txt.Contains(".gif") || txt.Contains("tenor.com") || txt.Contains("giphy.com");
+        bool isInlineMedia = txt.Contains("![") || txt.Contains(".gif") || txt.Contains("tenor.com") || txt.Contains("giphy.com") || txt.Contains("klipy.com");
         bool hasVisualMedia = HasMediaAttachments || _linkPreviews.Any() || isInlineMedia;
     }
     <div class="message-content-wrapper @(hasVisualMedia ? "has-media" : "")">

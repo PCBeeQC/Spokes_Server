@@ -542,9 +542,9 @@
         _allWorkTypes = Db.WorkTypes.GetAll();
         _workTypesById = _allWorkTypes.ToDictionary(w => w.Id, w => w, StringComparer.OrdinalIgnoreCase);
 
-        // Build map of billed time entry IDs from non-void invoices
+        // Build map of billed time entry IDs from posted invoices (Draft and Void invoices never lock timesheets)
         _billedEntryToInvoiceNumber.Clear();
-        foreach (var inv in Db.Invoices.GetAll().Where(i => i.Status != InvoiceStatus.Void))
+        foreach (var inv in Db.Invoices.GetAll().Where(i => InvoiceStatus.IsPosted(i.Status)))
         {
             if (inv.BilledTimeEntryIds == null) continue;
             var label = !_canManageBilledEntries

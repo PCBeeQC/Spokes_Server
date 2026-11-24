@@ -1,0 +1,296 @@
+@using Microsoft.JSInterop
+@using Spokes_Server.Core.Extensions
+@inherits SpokesComponentBase
+@inject IJSRuntime JS
+
+<div @ref="_viewportRef"
+     class="spokes-swipe-pager @Class"
+     data-page-key="@PageKeyString">
+    <div @ref="_trackRef" class="spokes-swipe-pager-track">
+        <div class="spokes-swipe-pager-pane spokes-swipe-pager-pane-prev" aria-hidden="true">
+            @PreviousContent
+        </div>
+        <div class="spokes-swipe-pager-pane spokes-swipe-pager-pane-current">
+            @CurrentContent
+        </div>
+        <div class="spokes-swipe-pager-pane spokes-swipe-pager-pane-next" aria-hidden="true">
+            @NextContent
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public RenderFragment? PreviousContent { get; set; }
+    [Parameter] public RenderFragment? CurrentContent { get; set; }
+    [Parameter] public RenderFragment? NextContent { get; set; }
+
+    /// <summary>
+    /// Identifies the currently rendered center page (e.g. DateOnly for the active month).
+    /// Updating this value after a committed swipe triggers an atomic pre-paint center reset in JS.
+    /// </summary>
+    [Parameter] public object? PageKey { get; set; }
+
+    /// <summary>
+    /// Invoked with -1 (previous) or +1 (next) when a swipe or animated navigation commits.
+    /// </summary>
+    [Parameter] public EventCallback<int> OnNavigate { get; set; }
+
+    /// <summary>
+    /// Left and right viewport edge exclusion zone in CSS pixels to avoid OS edge-swipe conflicts.
+    /// </summary>
+    [Parameter] public int EdgeGuardPx { get; set; } = 32;
+
+    /// <summary>
+    /// Smoothly interpolates the pager height when adjacent panes have different heights.
+    /// </summary>
+    [Parameter] public bool AnimateHeight { get; set; } = true;
+
+    [Parameter] public string? Class { get; set; }
+
+    private ElementReference _viewportRef;
+    private ElementReference _trackRef;
+    private IJSObjectReference? _module;
+    private IJSObjectReference? _controller;
+    private DotNetObjectReference<SpokesSwipePager>? _dotNetRef;
+    private bool _isDisposed;
+    private bool _initialized;
+    private string _lastRenderedPageKey = string.Empty;
+    private int _lastEdgeGuardPx;
+    private bool _lastAnimateHeight;
+
+    // Rapid-click / programmatic navigation state
+    private int _pendingProgrammaticDelta;
+    private long _lastRapidSnapTicks;
+    private const long RapidBurstWindowMs = 240;
+
+    private string PageKeyString => PageKey?.ToString() ?? string.Empty;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_isDisposed) return;
+
+        var currentKey = PageKeyString;
+
+        if (firstRender)
+        {
+            _lastRenderedPageKey = currentKey;
+            _lastEdgeGuardPx = EdgeGuardPx;
+            _lastAnimateHeight = AnimateHeight;
+            await InitializeJsAsync();
+            return;
+        }
+
+        if (_initialized && _controller != null)
+        {
+            if (_lastEdgeGuardPx != EdgeGuardPx || _lastAnimateHeight != AnimateHeight)
+            {
+                _lastEdgeGuardPx = EdgeGuardPx;
+                _lastAnimateHeight = AnimateHeight;
+                await InvokeControllerVoidSafeAsync("updateOptions", new
+                {
+                    edgeGuardPx = EdgeGuardPx,
+                    animateHeight = AnimateHeight
+                });
+            }
+
+            if (!string.Equals(_lastRenderedPageKey, currentKey, StringComparison.Ordinal))
+            {
+                _lastRenderedPageKey = currentKey;
+                await InvokeControllerVoidSafeAsync("notifyCommitFromBlazor", currentKey);
+            }
+        }
+    }
+
+    private async Task InitializeJsAsync()
+    {
+        if (_isDisposed || _initialized) return;
+
+        try
+        {
+            var module = await JS.InvokeAsync<IJSObjectReference>(
+                "import",
+                $"./{Assets.Bypassed("Components/Shared/SpokesSwipePager.razor.js")}");
+
+            if (_isDisposed)
+            {
+                await DisposeJsRefSafeAsync(module);
+                return;
+            }
+
+            _module = module;
+            _dotNetRef = DotNetObjectReference.Create(this);
+            _controller = await _module.InvokeAsync<IJSObjectReference>(
+                "createSwipePager",
+                _viewportRef,
+                _trackRef,
+                _dotNetRef,
+                new
+                {
+                    edgeGuardPx = EdgeGuardPx,
+                    animateHeight = AnimateHeight
+                });
+
+            if (_isDisposed)
+            {
+                await DisposeJsResourcesAsync();
+                return;
+            }
+
+            _initialized = true;
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+        {
+            // Expected during circuit teardown or fast route navigation
+        }
+    }
+
+    /// <summary>
+    /// Animates a fast horizontal slide (-1 or +1) before invoking OnNavigate.
+    /// If clicked rapidly while an animation is already in flight or within a rapid-click burst,
+    /// immediately snaps and commits without queuing animations.
+    /// </summary>
+    public async Task NavigateAsync(int delta)
+    {
+        if (_isDisposed || delta == 0) return;
+
+        var normalized = delta > 0 ? 1 : -1;
+        var nowTicks = Environment.TickCount64;
+
+        // Rapid-click burst: snap immediately and dispatch without waiting for a slide animation.
+        if (_pendingProgrammaticDelta != 0 || (nowTicks - _lastRapidSnapTicks) < RapidBurstWindowMs)
+        {
+            var combinedDelta = _pendingProgrammaticDelta + normalized;
+            _pendingProgrammaticDelta = 0;
+            _lastRapidSnapTicks = nowTicks;
+            await ResetImmediateAsync();
+            if (combinedDelta != 0 && OnNavigate.HasDelegate)
+            {
+                await OnNavigate.InvokeAsync(combinedDelta);
+            }
+            return;
+        }
+
+        if (!_initialized || _controller == null)
+        {
+            if (OnNavigate.HasDelegate)
+            {
+                await OnNavigate.InvokeAsync(normalized);
+            }
+            return;
+        }
+
+        _pendingProgrammaticDelta = normalized;
+        bool animated = false;
+        try
+        {
+            animated = await _controller.InvokeAsync<bool>("animateNavigate", normalized);
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+        {
+            animated = false;
+        }
+
+        if (_isDisposed) return;
+
+        // If a rapid second click already consumed _pendingProgrammaticDelta, nothing left to do.
+        if (_pendingProgrammaticDelta == 0)
+        {
+            return;
+        }
+
+        var deltaToApply = _pendingProgrammaticDelta;
+        _pendingProgrammaticDelta = 0;
+
+        if (!animated)
+        {
+            _lastRapidSnapTicks = Environment.TickCount64;
+        }
+
+        if (OnNavigate.HasDelegate)
+        {
+            await OnNavigate.InvokeAsync(deltaToApply);
+        }
+    }
+
+    /// <summary>
+    /// Cancels any in-flight swipe or animation and immediately resets the track to the center pane.
+    /// Use when jumping directly to a non-adjacent page (e.g., "Today").
+    /// </summary>
+    public async Task ResetImmediateAsync()
+    {
+        _pendingProgrammaticDelta = 0;
+        await InvokeControllerVoidSafeAsync("snapToCenterImmediate");
+    }
+
+    [JSInvokable]
+    public async Task HandleSwipeCommit(int delta)
+    {
+        if (_isDisposed || delta == 0) return;
+        var normalized = delta > 0 ? 1 : -1;
+        await SafeInvokeAsync(async () =>
+        {
+            if (OnNavigate.HasDelegate)
+            {
+                await OnNavigate.InvokeAsync(normalized);
+            }
+        });
+    }
+
+    private async Task InvokeControllerVoidSafeAsync(string methodName, params object?[] args)
+    {
+        if (_isDisposed || _controller == null) return;
+        try
+        {
+            await _controller.InvokeVoidAsync(methodName, args);
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+        {
+            // Ignore during circuit disconnect/teardown
+        }
+    }
+
+    private static async Task DisposeJsRefSafeAsync(IJSObjectReference? reference)
+    {
+        if (reference == null) return;
+        try
+        {
+            await reference.DisposeAsync();
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+        {
+        }
+    }
+
+    private async Task DisposeJsResourcesAsync()
+    {
+        var controller = _controller;
+        var module = _module;
+        var dotNetRef = _dotNetRef;
+        _controller = null;
+        _module = null;
+        _dotNetRef = null;
+        _initialized = false;
+
+        if (controller != null)
+        {
+            try
+            {
+                await controller.InvokeVoidAsync("destroy");
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+            {
+            }
+            await DisposeJsRefSafeAsync(controller);
+        }
+
+        await DisposeJsRefSafeAsync(module);
+        dotNetRef?.Dispose();
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        _isDisposed = true;
+        await DisposeJsResourcesAsync();
+        await base.DisposeAsync();
+    }
+}

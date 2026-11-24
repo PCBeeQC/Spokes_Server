@@ -105,7 +105,7 @@ public class UniversalInvoiceExtractorTests
     {
         var data = new ExtractedInvoiceData();
         var sb = new StringBuilder();
-        sb.AppendLine("Alumax Usinage");
+        sb.AppendLine("Usinage Delta");
         sb.AppendLine("Facture #: 1631");
         sb.AppendLine("Date: 2026-06-22");
         sb.AppendLine("Sous-total: 6 397,10 $");
@@ -309,23 +309,23 @@ public class UniversalInvoiceExtractorTests
     {
         var sb = new StringBuilder();
         sb.AppendLine("FACTURE");
-        sb.AppendLine("Alumax Usinage Inc. | Facturé à : Poly-Robotics Inc.");
+        sb.AppendLine("Usinage Delta Inc. | Facturé à : Acme Demo Inc.");
         sb.AppendLine("1200 Boul. Industriel | 500 Rue Principale");
-        sb.AppendLine("comptabilite@alumax.ca | factures@poly-robotics.com");
+        sb.AppendLine("comptabilite@usinagedelta.test | factures@acmedemo.test");
         sb.AppendLine("TPS: 123456789 RT0001");
         sb.AppendLine("TVQ: 1023456789 TQ0001");
 
         var context = new InvoiceExtractionContext
         {
-            BuyerCompanyName = "Poly-Robotics Inc.",
-            BuyerEmailDomains = ["poly-robotics.com"]
+            BuyerCompanyName = "Acme Demo Inc.",
+            BuyerEmailDomains = ["acmedemo.test"]
         };
 
         var data = new ExtractedInvoiceData();
         UniversalPartyExtractor.ExtractParties(SpatialTextDocumentTestHelper.Create(sb.ToString()), "facture.pdf", data, context);
 
-        Assert.Equal("Alumax Usinage Inc.", data.SupplierName);
-        Assert.Equal("comptabilite@alumax.ca", data.SupplierEmail);
+        Assert.Equal("Usinage Delta Inc.", data.SupplierName);
+        Assert.Equal("comptabilite@usinagedelta.test", data.SupplierEmail);
         Assert.Contains("123456789RT0001", data.SupplierTaxId);
         Assert.Contains("1023456789TQ0001", data.SupplierTaxId);
     }
@@ -412,11 +412,11 @@ public class UniversalInvoiceExtractorTests
         var sb = new StringBuilder();
         sb.AppendLine("FACTURE");
         sb.AppendLine("Destinataire : | CloudMetricsSoftwareLtd");
-        sb.AppendLine("Poly-Robotics Inc | 100 Tech Park");
-        sb.AppendLine("2889 av kepler | Dublin");
+        sb.AppendLine("Acme Demo Inc | 100 Tech Park");
+        sb.AppendLine("100 Main St | Dublin");
         sb.AppendLine("Québec | Ireland");
         sb.AppendLine("CA | N° de taxe : IE 9501858N");
-        sb.AppendLine("815256391RT0001");
+        sb.AppendLine("123456789RT0001");
         sb.AppendLine("Date : 06 octobre 2026");
         sb.AppendLine("Numéro : INV-411476-1661502");
         sb.AppendLine("Description | Devise : CAD");
@@ -430,7 +430,7 @@ public class UniversalInvoiceExtractorTests
 
         var doc = SpatialTextDocumentTestHelper.Create(sb.ToString());
         var data = new ExtractedInvoiceData();
-        var context = new InvoiceExtractionContext { BuyerCompanyName = "Poly-Robotics Inc" };
+        var context = new InvoiceExtractionContext { BuyerCompanyName = "Acme Demo Inc" };
 
         UniversalPartyExtractor.ExtractParties(doc, "facture.pdf", data, context);
         data.InvoiceNumber = UniversalMetadataExtractor.ExtractInvoiceNumber(doc, "facture.pdf");
@@ -440,7 +440,7 @@ public class UniversalInvoiceExtractorTests
 
         Assert.Equal("CloudMetrics Software Ltd", data.SupplierName);
         Assert.Equal("IE9501858N", data.SupplierTaxId);
-        Assert.DoesNotContain("815256391", data.SupplierTaxId);
+        Assert.DoesNotContain("123456789", data.SupplierTaxId);
         Assert.Equal("INV-411476-1661502", data.InvoiceNumber);
         Assert.Equal(new DateTime(2026, 10, 6), data.InvoiceDate);
         Assert.Null(data.DueDate);

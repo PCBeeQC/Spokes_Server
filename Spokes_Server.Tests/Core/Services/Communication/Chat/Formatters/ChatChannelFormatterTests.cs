@@ -10,7 +10,7 @@ public class ChatChannelFormatterTests
     private readonly Employee _currentUser = new()
     {
         Id = "user1",
-        FirstName = "Mats",
+        FirstName = "Alex",
         LastName = "Larsson"
     };
 
@@ -80,7 +80,7 @@ public class ChatChannelFormatterTests
 
         var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", LookupEmployee);
 
-        Assert.Equal("Mats Larsson (you)", displayName);
+        Assert.Equal("Alex Larsson (you)", displayName);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class ChatChannelFormatterTests
 
         var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", LookupEmployee);
 
-        Assert.Equal("Mats Larsson (you)", displayName);
+        Assert.Equal("Alex Larsson (you)", displayName);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class ChatChannelFormatterTests
 
         var displayName = ChatChannelFormatter.GetDisplayName(channel, "user2", LookupEmployee);
 
-        Assert.Equal("Mats Larsson", displayName);
+        Assert.Equal("Alex Larsson", displayName);
     }
 
     [Fact]
@@ -223,7 +223,7 @@ public class ChatChannelFormatterTests
 
         var displayName = ChatChannelFormatter.GetDisplayName(channel, "user1", employees);
 
-        Assert.Equal("Mats Larsson (you)", displayName);
+        Assert.Equal("Alex Larsson (you)", displayName);
     }
 
     [Theory]

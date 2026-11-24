@@ -4058,4 +4058,669 @@ function createBaseWindow(href) {
         Assert.Contains("explicitTargetUrl: String? = nil", appDelegateSrc);
         Assert.Contains("explicitTargetUrl: explicitTargetUrl", appDelegateSrc);
     }
+
+    [Fact]
+    public async Task SpokesSwipePager_OsGestureGuardTrackingHeightAndRapidNavContracts()
+    {
+        var pagerJsPath = Path.Combine(ServerDirectory, "Components", "Shared", "SpokesSwipePager.razor.js");
+        Assert.True(File.Exists(pagerJsPath), $"Missing {pagerJsPath}");
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"Spokes_SwipePagerTest_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var scriptPath = Path.Combine(tempDir, "swipe-pager-test.mjs");
+            var pagerModuleUrl = new Uri(Path.GetFullPath(pagerJsPath)).AbsoluteUri;
+            var testScript = $$"""
+                import assert from 'node:assert/strict';
+                import {
+                    EDGE_GUARD_DEFAULT_PX,
+                    isInEdgeGuardZone,
+                    resolveAxisLock,
+                    shouldCommitSwipe,
+                    computeInterpolatedHeight,
+                    computeSettleDurationMs,
+                    hasScrollableHorizontalAncestor,
+                    createSwipePager
+                } from '{{pagerModuleUrl}}';
+
+                // ── 1) Pure gesture policy contracts ──
+                assert.equal(EDGE_GUARD_DEFAULT_PX, 32);
+                assert.equal(isInEdgeGuardZone(0, 390, 32), true);
+                assert.equal(isInEdgeGuardZone(31, 390, 32), true);
+                assert.equal(isInEdgeGuardZone(32, 390, 32), false);
+                assert.equal(isInEdgeGuardZone(358, 390, 32), false);
+                assert.equal(isInEdgeGuardZone(359, 390, 32), true);
+
+                assert.equal(resolveAxisLock(4, 3), 'undecided');
+                assert.equal(resolveAxisLock(20, 5), 'horizontal');
+                assert.equal(resolveAxisLock(12, 11), 'vertical'); // fails 1.25x horizontal bias
+                assert.equal(resolveAxisLock(3, 18), 'vertical');
+
+                assert.equal(shouldCommitSwipe(-110, 0, 400), 1);  // > 25% left -> next (+1)
+                assert.equal(shouldCommitSwipe(110, 0, 400), -1);  // > 25% right -> prev (-1)
+                assert.equal(shouldCommitSwipe(-60, 0, 400), 0);   // < 25% slow -> snap back
+                assert.equal(shouldCommitSwipe(-35, -0.5, 400), 1); // fast left flick -> next (+1)
+                assert.equal(shouldCommitSwipe(-35, 0.5, 400), 0);  // mismatched velocity direction -> snap back
+                assert.equal(shouldCommitSwipe(-15, -0.8, 400), 0); // below min flick distance -> snap back
+
+                assert.equal(computeInterpolatedHeight(400, 480, 0.5), 440);
+                assert.equal(computeInterpolatedHeight(400, 480, 1.5), 480);
+                assert.equal(computeSettleDurationMs(200, 0, true), 0);
+                assert.ok(computeSettleDurationMs(200, 0, false) >= 110 && computeSettleDurationMs(200, 0, false) <= 210);
+
+                // ── 2) Simulated DOM + Pointer/Touch/MutationObserver harness ──
+                let activeMutationCallback = null;
+                globalThis.MutationObserver = class FakeMutationObserver {
+                    constructor(cb) { this.cb = cb; }
+                    observe() { activeMutationCallback = this.cb; }
+                    disconnect() { if (activeMutationCallback === this.cb) activeMutationCallback = null; }
+                };
+
+                function createMockEl(opts = {}) {
+                    const listeners = new Map();
+                    const classes = new Set();
+                    const captured = new Set();
+                    const el = {
+                        nodeType: 1,
+                        clientWidth: opts.clientWidth ?? 400,
+                        scrollWidth: opts.scrollWidth ?? (opts.clientWidth ?? 400),
+                        scrollLeft: opts.scrollLeft ?? 0,
+                        offsetHeight: opts.offsetHeight ?? 400,
+                        scrollHeight: opts.offsetHeight ?? 400,
+                        parentElement: opts.parentElement ?? null,
+                        children: opts.children ?? [],
+                        dataset: { ...(opts.dataset || {}) },
+                        style: { transition: '', transform: '', height: '' },
+                        overflowX: opts.overflowX ?? 'visible',
+                        classList: {
+                            add: (c) => classes.add(c),
+                            remove: (c) => classes.delete(c),
+                            contains: (c) => classes.has(c)
+                        },
+                        getBoundingClientRect: () => ({ width: el.clientWidth, height: el.offsetHeight }),
+                        setPointerCapture: (id) => captured.add(id),
+                        releasePointerCapture: (id) => captured.delete(id),
+                        hasPointerCapture: (id) => captured.has(id),
+                        addEventListener: (type, fn, captureOrOpts) => {
+                            const capture = typeof captureOrOpts === 'boolean' ? captureOrOpts : Boolean(captureOrOpts?.capture);
+                            const key = `${type}:${capture}`;
+                            if (!listeners.has(key)) listeners.set(key, new Set());
+                            listeners.get(key).add(fn);
+                        },
+                        removeEventListener: (type, fn, captureOrOpts) => {
+                            const capture = typeof captureOrOpts === 'boolean' ? captureOrOpts : Boolean(captureOrOpts?.capture);
+                            listeners.get(`${type}:${capture}`)?.delete(fn);
+                        },
+                        dispatch: (type, ev, capture = false) => {
+                            const set = listeners.get(`${type}:${capture}`);
+                            if (!set) return;
+                            for (const fn of Array.from(set)) fn(ev);
+                        }
+                    };
+                    return el;
+                }
+
+                globalThis.window = {
+                    innerWidth: 390,
+                    matchMedia: () => ({ matches: false }),
+                    getComputedStyle: (el) => ({ overflowX: el?.overflowX || 'visible' }),
+                    addEventListener: () => {},
+                    removeEventListener: () => {}
+                };
+                globalThis.document = {
+                    documentElement: { clientWidth: 390 },
+                    addEventListener: () => {},
+                    removeEventListener: () => {}
+                };
+
+                // Nested horizontal scroller check
+                {
+                    const viewport = createMockEl({ clientWidth: 390 });
+                    const innerScroller = createMockEl({ clientWidth: 300, scrollWidth: 600, scrollLeft: 100, overflowX: 'auto', parentElement: viewport });
+                    const chip = createMockEl({ clientWidth: 80, parentElement: innerScroller });
+                    assert.equal(hasScrollableHorizontalAncestor(chip, viewport, -20), true);
+                    assert.equal(hasScrollableHorizontalAncestor(chip, viewport, 20), true);
+                    innerScroller.scrollLeft = 0;
+                    assert.equal(hasScrollableHorizontalAncestor(chip, viewport, 20), false);
+                    assert.equal(hasScrollableHorizontalAncestor(chip, viewport, -20), true);
+                }
+
+                function buildPagerHarness() {
+                    const prevPane = createMockEl({ offsetHeight: 360 });
+                    const currPane = createMockEl({ offsetHeight: 400 });
+                    const nextPane = createMockEl({ offsetHeight: 480 });
+                    const track = createMockEl({ clientWidth: 400, children: [prevPane, currPane, nextPane] });
+                    const viewport = createMockEl({ clientWidth: 400, dataset: { pageKey: '2026-05-01' }, children: [track] });
+                    const commits = [];
+                    const dotNetRef = {
+                        invokeMethodAsync: (method, delta) => {
+                            commits.push({ method, delta });
+                            return Promise.resolve();
+                        }
+                    };
+                    const pager = createSwipePager(viewport, track, dotNetRef, { edgeGuardPx: 32, animateHeight: true });
+                    return { pager, viewport, track, commits };
+                }
+
+                // A) Edge dead-zone touch (left & right OS back edges) must be completely ignored
+                {
+                    const { pager, viewport, track, commits } = buildPagerHarness();
+                    let prevented = false;
+                    viewport.dispatch('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 14, clientY: 200, target: viewport });
+                    viewport.dispatch('pointermove', { pointerId: 1, pointerType: 'touch', clientX: 200, clientY: 202 });
+                    viewport.dispatch('touchmove', { touches: [{ clientX: 200 }], cancelable: true, preventDefault: () => { prevented = true; } });
+                    viewport.dispatch('pointerup', { pointerId: 1, pointerType: 'touch', clientX: 200, clientY: 202 });
+                    assert.equal(prevented, false, 'Edge touch must never call preventDefault');
+                    assert.equal(track.style.transform, '', 'Edge touch must never move track');
+                    assert.equal(commits.length, 0);
+
+                    // Right edge on 390px viewport
+                    viewport.dispatch('pointerdown', { pointerId: 2, pointerType: 'touch', clientX: 375, clientY: 200, target: viewport });
+                    viewport.dispatch('pointermove', { pointerId: 2, pointerType: 'touch', clientX: 150, clientY: 200 });
+                    viewport.dispatch('pointerup', { pointerId: 2, pointerType: 'touch', clientX: 150, clientY: 200 });
+                    assert.equal(commits.length, 0);
+                    pager.destroy();
+                }
+
+                // B) Desktop mouse pointer must be completely ignored
+                {
+                    const { pager, viewport, track, commits } = buildPagerHarness();
+                    viewport.dispatch('pointerdown', { pointerId: 1, pointerType: 'mouse', clientX: 200, clientY: 200, target: viewport });
+                    viewport.dispatch('pointermove', { pointerId: 1, pointerType: 'mouse', clientX: 40, clientY: 200 });
+                    viewport.dispatch('pointerup', { pointerId: 1, pointerType: 'mouse', clientX: 40, clientY: 200 });
+                    assert.equal(track.style.transform, '');
+                    assert.equal(commits.length, 0);
+                    pager.destroy();
+                }
+
+                // C) Vertical scroll priority locks vertical and refuses later horizontal drift
+                {
+                    const { pager, viewport, track, commits } = buildPagerHarness();
+                    let prevented = false;
+                    viewport.dispatch('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 200, clientY: 200, target: viewport });
+                    viewport.dispatch('pointermove', { pointerId: 1, pointerType: 'touch', clientX: 204, clientY: 225 });
+                    viewport.dispatch('pointermove', { pointerId: 1, pointerType: 'touch', clientX: 60, clientY: 230 });
+                    viewport.dispatch('touchmove', { touches: [{ clientX: 60 }], cancelable: true, preventDefault: () => { prevented = true; } });
+                    viewport.dispatch('pointerup', { pointerId: 1, pointerType: 'touch', clientX: 60, clientY: 230 });
+                    assert.equal(prevented, false);
+                    assert.equal(track.style.transform, '');
+                    assert.equal(commits.length, 0);
+                    pager.destroy();
+                }
+
+                // D) 1:1 finger tracking + height interpolation + commit + MutationObserver pre-paint reset + click suppression
+                {
+                    const { pager, viewport, track, commits } = buildPagerHarness();
+                    let touchPrevented = false;
+                    viewport.dispatch('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 260, clientY: 200, target: viewport });
+                    viewport.dispatch('pointermove', { pointerId: 1, pointerType: 'touch', clientX: 160, clientY: 202 });
+                    viewport.dispatch('touchmove', { touches: [{ clientX: 160 }], cancelable: true, preventDefault: () => { touchPrevented = true; } });
+                    assert.equal(touchPrevented, true, 'Locked horizontal drag must prevent vertical scroll');
+                    assert.equal(track.style.transform, 'translate3d(-100px, 0, 0)');
+                    assert.equal(viewport.style.height, '420.0px', '25% drag from 400px to 480px must interpolate height to 420px');
+
+                    // Release past 25% threshold (-150px on 400px pane) -> commits +1
+                    viewport.dispatch('pointermove', { pointerId: 1, pointerType: 'touch', clientX: 110, clientY: 202 });
+                    viewport.dispatch('pointerup', { pointerId: 1, pointerType: 'touch', clientX: 110, clientY: 202 });
+
+                    // Immediate trailing synthetic click must be suppressed
+                    let clickPrevented = false;
+                    let clickStopped = false;
+                    viewport.dispatch('click', {
+                        preventDefault: () => { clickPrevented = true; },
+                        stopPropagation: () => { clickStopped = true; }
+                    }, true);
+                    assert.equal(clickPrevented, true, 'Post-swipe synthetic click must be suppressed');
+                    assert.equal(clickStopped, true);
+
+                    await new Promise(r => setTimeout(r, 260));
+                    assert.equal(commits.length, 1);
+                    assert.deepEqual(commits[0], { method: 'HandleSwipeCommit', delta: 1 });
+                    assert.equal(pager.awaitingServerCommit, true);
+
+                    // Blazor patches data-page-key -> MutationObserver snaps back to center before paint
+                    viewport.dataset.pageKey = '2026-06-01';
+                    activeMutationCallback();
+                    assert.equal(pager.awaitingServerCommit, false);
+                    assert.equal(track.style.transform, '');
+                    assert.equal(viewport.style.height, '');
+                    pager.destroy();
+                }
+
+                // E) Multi-touch & pointercancel must abort cleanly without navigating
+                {
+                    const { pager, viewport, commits } = buildPagerHarness();
+                    viewport.dispatch('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 250, clientY: 200, target: viewport });
+                    viewport.dispatch('pointermove', { pointerId: 1, pointerType: 'touch', clientX: 120, clientY: 200 });
+                    // Second finger lands (pinch/OS gesture) -> aborts
+                    viewport.dispatch('pointerdown', { pointerId: 2, pointerType: 'touch', clientX: 200, clientY: 250, target: viewport });
+                    viewport.dispatch('pointerup', { pointerId: 1, pointerType: 'touch', clientX: 120, clientY: 200 });
+                    viewport.dispatch('pointerup', { pointerId: 2, pointerType: 'touch', clientX: 200, clientY: 250 });
+                    await new Promise(r => setTimeout(r, 240));
+                    assert.equal(commits.length, 0);
+
+                    // OS pointercancel mid-drag
+                    viewport.dispatch('pointerdown', { pointerId: 3, pointerType: 'touch', clientX: 250, clientY: 200, target: viewport });
+                    viewport.dispatch('pointermove', { pointerId: 3, pointerType: 'touch', clientX: 100, clientY: 200 });
+                    viewport.dispatch('pointercancel', { pointerId: 3, pointerType: 'touch' });
+                    await new Promise(r => setTimeout(r, 240));
+                    assert.equal(commits.length, 0);
+                    pager.destroy();
+                }
+
+                // F) Normal tap (< slop) must NOT suppress click
+                {
+                    const { pager, viewport } = buildPagerHarness();
+                    viewport.dispatch('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: 200, clientY: 200, target: viewport });
+                    viewport.dispatch('pointermove', { pointerId: 1, pointerType: 'touch', clientX: 203, clientY: 202 });
+                    viewport.dispatch('pointerup', { pointerId: 1, pointerType: 'touch', clientX: 203, clientY: 202 });
+                    let clickPrevented = false;
+                    viewport.dispatch('click', {
+                        preventDefault: () => { clickPrevented = true; },
+                        stopPropagation: () => {}
+                    }, true);
+                    assert.equal(clickPrevented, false, 'Normal tap must never be suppressed');
+                    pager.destroy();
+                }
+
+                // G) Fast programmatic chevron slide + rapid click immediate snap
+                {
+                    const { pager, viewport, track } = buildPagerHarness();
+                    const firstNav = pager.animateNavigate(1);
+                    assert.equal(pager.isAnimating, true);
+                    assert.equal(track.style.transform, 'translate3d(-400px, 0, 0)');
+
+                    // Rapid second click mid-animation snaps immediately and resolves both cleanly
+                    const secondNav = await pager.animateNavigate(1);
+                    const firstResult = await firstNav;
+                    assert.equal(secondNav, false);
+                    assert.equal(firstResult, false);
+                    assert.equal(pager.isAnimating, false);
+                    assert.equal(track.style.transform, '');
+
+                    // Calm single click completes fast slide and enters awaitingServerCommit
+                    const calmResult = await pager.animateNavigate(-1);
+                    assert.equal(calmResult, true);
+                    assert.equal(pager.awaitingServerCommit, true);
+                    assert.equal(track.style.transform, 'translate3d(400px, 0, 0)');
+                    viewport.dataset.pageKey = '2026-04-01';
+                    activeMutationCallback();
+                    assert.equal(pager.awaitingServerCommit, false);
+                    assert.equal(track.style.transform, '');
+                    pager.destroy();
+                }
+
+                console.log('SWIPE_PAGER_TEST_PASS');
+                """;
+
+            await File.WriteAllTextAsync(scriptPath, testScript);
+
+            using var proc = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "node",
+                    Arguments = $"\"{scriptPath}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            proc.Start();
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            if (!proc.WaitForExit(15000))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                Assert.Fail("SpokesSwipePager Node test timed out after 15s.");
+            }
+
+            string stdout = await stdoutTask;
+            string stderr = await stderrTask;
+            Assert.True(proc.ExitCode == 0, $"SpokesSwipePager Node test failed (exit {proc.ExitCode}):\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+            Assert.Contains("SWIPE_PAGER_TEST_PASS", stdout);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task WireProfiler_AppWideTriggersReconnectAndClockCache_AndBootRenderer1ErrorHygiene()
+    {
+        var profilerPath = Path.Combine(ServerDirectory, "wwwroot", "js", "spokes-chat-profiler.js");
+        var spokesBootPath = Path.Combine(ServerDirectory, "wwwroot", "js", "spokes-boot.js");
+        Assert.True(File.Exists(profilerPath), $"Missing {profilerPath}");
+        Assert.True(File.Exists(spokesBootPath), $"Missing {spokesBootPath}");
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"spokes_wire_profiler_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var scriptPath = Path.Combine(tempDir, "test_wire_profiler.mjs");
+            var profilerEsc = profilerPath.Replace("\\", "\\\\");
+            var bootEsc = spokesBootPath.Replace("\\", "\\\\");
+
+            var testScript = $$"""
+                import fs from 'node:fs';
+                import vm from 'node:vm';
+                import assert from 'node:assert/strict';
+
+                const profilerSrc = fs.readFileSync('{{profilerEsc}}', 'utf8');
+
+                let nowMs = 10000;
+                const logs = [];
+                const warns = [];
+                const docListeners = new Map();
+                const winListeners = new Map();
+                let intervalCbs = [];
+                let mutationCb = null;
+                let drawerOpenState = false;
+                let dialogCountState = 0;
+
+                const makeTarget = (matchesMap, props = {}) => ({
+                    tagName: props.tagName || 'BUTTON',
+                    id: props.id || '',
+                    className: props.className || '',
+                    getAttribute: (name) => (props.attrs && props.attrs[name]) || null,
+                    closest: (sel) => {
+                        for (const [key, val] of Object.entries(matchesMap)) {
+                            if (sel.includes(key)) return val;
+                        }
+                        return null;
+                    }
+                });
+
+                const dotNetCalls = [];
+                let tidCounter = 0;
+                const dotNetRef = {
+                    invokeMethodAsync: async (method, ...args) => {
+                        dotNetCalls.push({ method, args });
+                        if (method === 'SetChatProfilerEnabled') return null;
+                        if (method === 'DiagBeginTransition') return ++tidCounter;
+                        if (method === 'DiagClockPing') return nowMs + 20;
+                        if (method === 'DiagDrain') {
+                            return {
+                                transitionId: args[0],
+                                transitionName: '',
+                                entries: [{ name: `Server: Transition #${args[0]} begun`, timestampMs: nowMs + 15 }],
+                                nextCursor: 1,
+                                openSpans: 0,
+                                lastEntryAgeMs: 600,
+                                serverNowMs: nowMs + 20
+                            };
+                        }
+                        return null;
+                    }
+                };
+
+                const createSocket = () => {
+                    const sent = [];
+                    return {
+                        extensions: 'permessage-deflate',
+                        sent,
+                        send(data) { sent.push(data); }
+                    };
+                };
+                let ws1 = createSocket();
+
+                const profWin = {
+                    console: {
+                        log: (...a) => logs.push(a.join(' ')),
+                        warn: (...a) => warns.push(a.join(' ')),
+                        error: () => {}
+                    },
+                    innerWidth: 412,
+                    innerHeight: 915,
+                    SpokesBridge: { platform: 'android' },
+                    performance: { now: () => nowMs, timeOrigin: 0 },
+                    MutationObserver: class {
+                        constructor(cb) { mutationCb = cb; }
+                        observe() {}
+                        disconnect() {}
+                    },
+                    requestAnimationFrame: (cb) => cb(),
+                    setInterval: (cb, ms) => { intervalCbs.push({ cb, ms }); return intervalCbs.length; },
+                    clearInterval: () => {},
+                    addEventListener: (ev, cb) => {
+                        if (!winListeners.has(ev)) winListeners.set(ev, []);
+                        winListeners.get(ev).push(cb);
+                    },
+                    removeEventListener: (ev, cb) => {
+                        const arr = winListeners.get(ev) || [];
+                        winListeners.set(ev, arr.filter(x => x !== cb));
+                    },
+                    document: {
+                        body: {},
+                        querySelector: () => null,
+                        querySelectorAll: (sel) => sel.includes('mud-dialog') ? new Array(dialogCountState) : [],
+                        getElementById: (id) => {
+                            if (id === 'nav-drawer') {
+                                return {
+                                    classList: {
+                                        contains: (cls) => drawerOpenState && (cls === 'is-nav-drawer-open' || cls === 'mud-drawer--open')
+                                    }
+                                };
+                            }
+                            return null;
+                        },
+                        addEventListener: (ev, cb) => {
+                            if (!docListeners.has(ev)) docListeners.set(ev, []);
+                            docListeners.get(ev).push(cb);
+                        },
+                        removeEventListener: (ev, cb) => {
+                            const arr = docListeners.get(ev) || [];
+                            docListeners.set(ev, arr.filter(x => x !== cb));
+                        }
+                    },
+                    location: { pathname: '/planning/calendar' },
+                    spokesDotNetRef: dotNetRef,
+                    __spokesBlazorSocket: ws1
+                };
+                profWin.window = profWin;
+                vm.runInNewContext(profilerSrc, profWin);
+
+                const profiler = profWin.__spokesChatProfilerFactory({
+                    now: () => nowMs,
+                    pushCapped: (arr, item) => arr.push(item),
+                    getNetworkSummary: () => ({}),
+                    formatNetworkSummary: () => '4g',
+                    flushMediaBatch: () => {},
+                    setPendingMediaTapAnchorMs: () => {},
+                    setProfilerActive: () => {},
+                    setMediaHook: () => {},
+                    getSession: () => ({ longTasks: [], channelOpens: [], backNavigations: [] })
+                });
+
+                await profiler.enable(dotNetRef);
+                assert.equal(dotNetCalls[0].method, 'SetChatProfilerEnabled');
+                assert.equal(dotNetCalls[0].args[0], true);
+                assert.equal(ws1.__spokesDiagHooked, true);
+
+                // 1) Click #nav-drawer-toggle-btn on /planning/calendar
+                const clickHandlers = docListeners.get('click') || [];
+                assert.equal(clickHandlers.length, 1);
+                const drawerBtn = makeTarget({ '#nav-drawer-toggle-btn': { id: 'nav-drawer-toggle-btn' } }, { id: 'nav-drawer-toggle-btn' });
+                clickHandlers[0]({ target: drawerBtn });
+                await new Promise(r => setTimeout(r, 10));
+
+                assert.ok(logs.some(l => l.includes('[Perf] Capturing #1: DrawerToggle (Open) (/planning/calendar)')), 'Expected immediate capture log for DrawerToggle');
+
+                // Simulate outbound DispatchEvent + inbound RenderBatch + drawer DOM open
+                ws1.send('{"target":"BeginInvokeDotNetFromJS","arguments":[null,null,"DispatchEventAsync"]}');
+                profWin.__spokesWsIn('{"target":"JS.RenderBatch","arguments":[1]}');
+                drawerOpenState = true;
+                mutationCb();
+
+                // Advance past UI_QUIET_MS (900ms) and trigger tick
+                nowMs += 1000;
+                const tickEntry = intervalCbs.find(x => x.ms === 500);
+                assert.ok(tickEntry, 'Expected tick timer');
+                tickEntry.cb();
+                await new Promise(r => setTimeout(r, 20));
+
+                assert.ok(logs.some(l => l.includes('[UI TRANSITION REPORT #1] DrawerToggle (Open)')), 'Expected UI transition report header');
+                assert.ok(logs.some(l => l.includes('Tap → drawer painted')), 'Expected drawer painted summary row');
+                const pingsAfterFirst = dotNetCalls.filter(c => c.method === 'DiagClockPing').length;
+                assert.equal(pingsAfterFirst, 3, 'Expected 3 clock pings on initial sync');
+
+                // 2) Second UI tap (FAB button) within 60s should reuse cached clock offset (0 additional clock pings)
+                nowMs += 500;
+                const fabBtn = makeTarget({ '.mud-fab': { tagName: 'BUTTON', className: 'mud-button-root m-fab' } }, { tagName: 'BUTTON', className: 'mud-button-root m-fab' });
+                clickHandlers[0]({ target: fabBtn });
+                await new Promise(r => setTimeout(r, 10));
+                assert.ok(logs.some(l => l.includes('[Perf] Capturing #2: UIAction (button.mud-button-root.m-fab)')), 'Expected FAB capture');
+
+                dialogCountState = 1;
+                mutationCb();
+                nowMs += 1000;
+                tickEntry.cb();
+                await new Promise(r => setTimeout(r, 20));
+
+                assert.ok(logs.some(l => l.includes('[UI TRANSITION REPORT #2]')), 'Expected second UI report');
+                assert.ok(logs.some(l => l.includes('Tap → dialog painted')), 'Expected dialog painted summary row');
+                const pingsAfterSecond = dotNetCalls.filter(c => c.method === 'DiagClockPing').length;
+                assert.equal(pingsAfterSecond, 3, 'Expected cached clock offset to avoid extra DiagClockPing RTTs');
+
+                // 3) Text input clicks must be ignored
+                const textInput = makeTarget({ 'input:not': { tagName: 'INPUT' }, 'button': null }, { tagName: 'INPUT' });
+                const reportCountBeforeInput = profiler.reports.length;
+                clickHandlers[0]({ target: textInput });
+                assert.equal(profiler.reports.length, reportCountBeforeInput);
+                assert.ok(!logs.some(l => l.includes('[Perf] Capturing #3:')), 'Text input click must not start a transition');
+
+                // 4) Reconnect event must re-hook new socket, re-sync server flag, and invalidate clock cache
+                const ws2 = createSocket();
+                profWin.__spokesBlazorSocket = ws2;
+                const reconnectedHandlers = winListeners.get('spokes:blazor-connected') || [];
+                assert.equal(reconnectedHandlers.length, 1);
+                reconnectedHandlers[0]();
+                await new Promise(r => setTimeout(r, 10));
+                assert.equal(ws2.__spokesDiagHooked, true, 'Expected new WebSocket hooked after reconnect');
+                assert.ok(dotNetCalls.filter(c => c.method === 'SetChatProfilerEnabled' && c.args[0] === true).length >= 2, 'Expected SetChatProfilerEnabled(true) re-synced after reconnect');
+
+                // 5) Non-chat popstate must also start a UI transition and re-measure clock after cache invalidation
+                profWin.location.pathname = '/albums';
+                const popHandlers = winListeners.get('popstate') || [];
+                assert.equal(popHandlers.length, 1);
+                popHandlers[0]();
+                await new Promise(r => setTimeout(r, 10));
+                assert.ok(logs.some(l => l.includes('[Perf] Capturing #3: PopState (/albums)')), 'Expected non-chat popstate capture');
+                nowMs += 1600;
+                tickEntry.cb();
+                await new Promise(r => setTimeout(r, 20));
+                assert.equal(dotNetCalls.filter(c => c.method === 'DiagClockPing').length, 6, 'Expected clock cache invalidated on reconnect');
+
+                await profiler.disable();
+
+                // 6) Verify spokes-boot.js downgrades renderer-1 error ONLY while _blazorDisconnected === true
+                const bootSrc = fs.readFileSync('{{bootEsc}}', 'utf8');
+                const bootErrors = [];
+                const bootLogs = [];
+                const bootWinListeners = new Map();
+                const bootWin = {
+                    location: { href: 'https://example.test/', origin: 'https://example.test', host: 'example.test', protocol: 'https:', pathname: '/', search: '' },
+                    navigator: { userAgent: 'Mozilla/5.0' },
+                    console: {
+                        log: (...a) => bootLogs.push(a.join(' ')),
+                        warn: () => {},
+                        error: (...a) => bootErrors.push(a.join(' '))
+                    },
+                    document: {
+                        visibilityState: 'visible',
+                        documentElement: {},
+                        addEventListener: () => {},
+                        getElementById: () => null,
+                        querySelectorAll: () => []
+                    },
+                    sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+                    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+                    addEventListener: (ev, cb) => {
+                        if (!bootWinListeners.has(ev)) bootWinListeners.set(ev, []);
+                        bootWinListeners.get(ev).push(cb);
+                    },
+                    removeEventListener: () => {},
+                    dispatchEvent: () => {},
+                    setTimeout: () => 1,
+                    clearTimeout: () => {},
+                    setInterval: () => 1,
+                    clearInterval: () => {},
+                    fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+                    WebSocket: function() { this.addEventListener = () => {}; },
+                    CustomEvent: function(name) { this.type = name; },
+                    __spokesBootConfig: { isStaticLoginRoute: true },
+                    _blazorDisconnected: true
+                };
+                bootWin.window = bootWin;
+                vm.runInNewContext(bootSrc, bootWin);
+
+                const errHandlers = bootWinListeners.get('error') || [];
+                assert.ok(errHandlers.length >= 1, 'Expected global error listener in spokes-boot.js');
+
+                let prevented = false;
+                errHandlers[0]({
+                    message: 'Uncaught Error: No interop methods are registered for renderer 1',
+                    error: new Error('No interop methods are registered for renderer 1'),
+                    preventDefault: () => { prevented = true; }
+                });
+                assert.equal(prevented, true, 'Expected preventDefault when disconnected');
+                assert.equal(bootErrors.length, 0, 'Must not log [Global Error] while disconnected');
+                assert.ok(bootLogs.some(l => l.includes('Ignored DOM event while Blazor renderer detached during reconnect')), 'Expected downgrade log');
+
+                // When connected, renderer errors must still surface as [Global Error]
+                bootWin._blazorDisconnected = false;
+                let preventedConnected = false;
+                errHandlers[0]({
+                    message: 'Uncaught Error: No interop methods are registered for renderer 1',
+                    error: new Error('No interop methods are registered for renderer 1'),
+                    preventDefault: () => { preventedConnected = true; }
+                });
+                assert.equal(preventedConnected, false, 'Must not suppress error while connected');
+                assert.equal(bootErrors.length, 1, 'Must log [Global Error] while connected');
+
+                console.log('WIRE_PROFILER_AND_RENDERER1_TEST_PASS');
+                """;
+
+            await File.WriteAllTextAsync(scriptPath, testScript);
+
+            using var proc = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "node",
+                    Arguments = $"\"{scriptPath}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            proc.Start();
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            if (!proc.WaitForExit(15000))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                Assert.Fail("WireProfiler Node test timed out after 15s.");
+            }
+
+            string stdout = await stdoutTask;
+            string stderr = await stderrTask;
+            Assert.True(proc.ExitCode == 0, $"WireProfiler Node test failed (exit {proc.ExitCode}):\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+            Assert.Contains("WIRE_PROFILER_AND_RENDERER1_TEST_PASS", stdout);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
+        }
+    }
 }

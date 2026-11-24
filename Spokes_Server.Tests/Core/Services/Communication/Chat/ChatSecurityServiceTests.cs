@@ -557,7 +557,7 @@ public class ChatSecurityServiceTests : IDisposable
     public async Task SecureSearchMessagesAsync_WithFromAdmin_ReturnsAdminMessages()
     {
         // Arrange
-        var adminEmp = new Employee { Id = "emp-admin", FirstName = "Mats", LastName = "Dallaire", IsAdmin = true, IsActive = true };
+        var adminEmp = new Employee { Id = "emp-admin", FirstName = "Alex", LastName = "Tremblay", IsAdmin = true, IsActive = true };
         var memberEmp = new Employee { Id = "emp-member", FirstName = "Alice", LastName = "Smith", IsAdmin = false, IsActive = true };
         _employees.Save(adminEmp);
         _employees.Save(memberEmp);
@@ -837,7 +837,7 @@ public class ChatSecurityServiceTests : IDisposable
         Assert.True(ChatSecurityService.IsPotentialBase64Cipher(realCipher));
 
         // Plaintext messages must not be classified as ciphers
-        Assert.False(ChatSecurityService.IsPotentialBase64Cipher("Hello Jolain"));
+        Assert.False(ChatSecurityService.IsPotentialBase64Cipher("Hello Alice"));
         Assert.False(ChatSecurityService.IsPotentialBase64Cipher("This channel is encrypted and you are not on the access list to view its contents."));
         Assert.False(ChatSecurityService.IsPotentialBase64Cipher("Encrypted message"));
         Assert.False(ChatSecurityService.IsPotentialBase64Cipher(""));

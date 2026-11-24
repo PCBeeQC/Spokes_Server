@@ -5,6 +5,7 @@
 @inject IDialogService DialogService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject StartupTimingService StartupTimings
 
 <MudDialogProvider />
 
@@ -72,6 +73,12 @@
 
         _trackedDialogs.Add(tracked);
 
+        if (StartupTimings.IsChatProfilerEnabled)
+        {
+            var dialogName = reference.Dialog?.GetType().Name ?? "Dialog";
+            StartupTimings.EnsureTransition($"Dialog ({dialogName})", $"Server: DialogAdded ({dialogName})");
+        }
+
         _ = RegisterDialogInJsAsync(tracked);
         _ = ObserveDialogResultAsync(tracked);
 
@@ -103,6 +110,12 @@
                 source = "dialog",
                 keepUntilRemoved = true
             });
+
+        if (StartupTimings.IsChatProfilerEnabled)
+        {
+            var dialogName = tracked.Reference.Dialog?.GetType().Name ?? "Dialog";
+            StartupTimings.Mark($"Server: DialogBackStackRegistered ({dialogName})");
+        }
     }
 
     private async Task ObserveDialogResultAsync(TrackedDialog tracked)

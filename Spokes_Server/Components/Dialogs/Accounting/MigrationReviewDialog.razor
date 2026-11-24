@@ -230,6 +230,7 @@
                                 <MudTh>@BizLoc["Start Date"]</MudTh>
                                 <MudTh>@BizLoc["Matched Client"]</MudTh>
                                 <MudTh>@BizLoc["Action"]</MudTh>
+                                <MudTh>@BizLoc["Target Spokes Project"]</MudTh>
                             </HeaderContent>
                             <RowTemplate Context="pr">
                                 <MudTd>
@@ -252,6 +253,21 @@
                                         <MudSelectItem Value="MigrationProjectAction.LinkExisting">@BizLoc["Link Existing"]</MudSelectItem>
                                         <MudSelectItem Value="MigrationProjectAction.Skip">@BizLoc["Skip"]</MudSelectItem>
                                     </MudSelect>
+                                </MudTd>
+                                <MudTd>
+                                    @if (pr.Action == MigrationProjectAction.LinkExisting)
+                                    {
+                                        <MudSelect T="string" @bind-Value="pr.MatchedExistingProjectId" Clearable="true" Dense="true" Margin="Margin.Dense" Variant="Variant.Outlined" Style="min-width: 240px;">
+                                            @foreach (var ep in _existingProjects)
+                                            {
+                                                <MudSelectItem T="string" Value="@ep.Id">@ep.DisplayName</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@pr.MatchReason</MudText>
+                                    }
                                 </MudTd>
                             </RowTemplate>
                             <PagerContent><MudTablePager /></PagerContent>
@@ -402,9 +418,17 @@
     </DialogContent>
 
     <DialogActions>
-        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mr-auto ml-2">
-            @($"{Preview.PayrollYtds.Count(e => e.Include && e.Action != MigrationEmployeeAction.Skip)} {BizLoc["Employees"]} · {AllParties.Count(p => p.Include && p.Action != MigrationPartyAction.Skip)} {BizLoc["Address Book"]} · {Preview.Projects.Count(p => p.Include && p.Action != MigrationProjectAction.Skip)} {BizLoc["Projects"]} · {Preview.GlMappings.Count(g => g.Include && g.Action != MigrationGlAction.Ignore)} {BizLoc["GL Accounts"]}")
-        </MudText>
+        <div class="d-flex align-center flex-wrap gap-2 mr-auto ml-2">
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                @($"{Preview.PayrollYtds.Count(e => e.Include && e.Action != MigrationEmployeeAction.Skip)} {BizLoc["Employees"]} · {AllParties.Count(p => p.Include && p.Action != MigrationPartyAction.Skip)} {BizLoc["Address Book"]} · {Preview.Projects.Count(p => p.Include && p.Action != MigrationProjectAction.Skip)} {BizLoc["Projects"]} · {Preview.GlMappings.Count(g => g.Include && g.Action != MigrationGlAction.Ignore)} {BizLoc["GL Accounts"]}")
+            </MudText>
+            @if (Preview.RequiresDestructiveDeltaConfirmation)
+            {
+                <MudCheckBox T="bool" @bind-Value="Preview.ConfirmDestructiveDelta" Color="Color.Error" Dense="true" Size="Size.Small">
+                    <MudText Typo="Typo.caption" Color="Color.Error">@BizLoc["I understand this delta will zero out most existing GL accounts"]</MudText>
+                </MudCheckBox>
+            }
+        </div>
         <MudButton OnClick="Cancel">@Loc["Cancel"]</MudButton>
         <MudButton Variant="Variant.Filled"
                    Color="Color.Primary"
@@ -425,6 +449,7 @@
     [Parameter] public int ClockifyRecordCount { get; set; }
 
     private List<Employee> _existingEmployees = [];
+    private List<Project> _existingProjects = [];
     private string _empSearch = string.Empty;
     private string _partySearch = string.Empty;
     private string _projSearch = string.Empty;
@@ -448,6 +473,7 @@
         }
 
         _existingEmployees = Db.Employees?.GetAll().OrderBy(e => e.FullName).ToList() ?? [];
+        _existingProjects = Db.Projects?.GetAll().OrderBy(p => p.ProjectNumber).ThenBy(p => p.Name).ToList() ?? [];
         _activeCutoffYear = Preview.AsOfDate.Year - 1;
     }
 

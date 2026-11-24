@@ -9,11 +9,11 @@ public class TimesheetReportFilterHelperTests
 {
     private readonly List<TimesheetReportEntry> _sampleEntries = new()
     {
-        // Entry 1: Mats (No team, Internal Project with no group and no client)
+        // Entry 1: Alex (No team, Internal Project with no group and no client)
         new TimesheetReportEntry
         {
-            EmployeeId = "emp-mats",
-            EmployeeName = "Mats Dallaire",
+            EmployeeId = "emp-alex",
+            EmployeeName = "Alex Tremblay",
             TeamId = "", // No team
             ProjectId = "proj-internal",
             ProjectName = "Internal Admin",
@@ -61,7 +61,7 @@ public class TimesheetReportFilterHelperTests
         {
             StartDate = new DateTime(2026, 8, 1),
             EndDate = new DateTime(2026, 8, 31),
-            SelectedEmployees = new[] { "emp-mats", "emp-alice", "emp-bob" },
+            SelectedEmployees = new[] { "emp-alex", "emp-alice", "emp-bob" },
             TotalEmployeesCount = 3,
             SelectedTeams = new[] { "team-a", "team-b" },
             TotalTeamsCount = 2,
@@ -77,9 +77,9 @@ public class TimesheetReportFilterHelperTests
 
         var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
 
-        // Mats's unassigned team/client/group entry MUST be included!
+        // Alex's unassigned team/client/group entry MUST be included!
         Assert.Equal(3, results.Count);
-        Assert.Contains(results, e => e.EmployeeId == "emp-mats");
+        Assert.Contains(results, e => e.EmployeeId == "emp-alex");
         Assert.Contains(results, e => e.EmployeeId == "emp-alice");
         Assert.Contains(results, e => e.EmployeeId == "emp-bob");
     }
@@ -104,14 +104,14 @@ public class TimesheetReportFilterHelperTests
     {
         var criteria = new TimesheetReportFilterCriteria
         {
-            SelectedEmployees = new[] { "emp-mats" },
+            SelectedEmployees = new[] { "emp-alex" },
             TotalEmployeesCount = 3
         };
 
         var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
 
         Assert.Single(results);
-        Assert.Equal("emp-mats", results[0].EmployeeId);
+        Assert.Equal("emp-alex", results[0].EmployeeId);
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public class TimesheetReportFilterHelperTests
         var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
 
         Assert.Equal(2, results.Count);
-        Assert.DoesNotContain(results, e => e.EmployeeId == "emp-mats");
+        Assert.DoesNotContain(results, e => e.EmployeeId == "emp-alex");
         Assert.Contains(results, e => e.EmployeeId == "emp-alice");
         Assert.Contains(results, e => e.EmployeeId == "emp-bob");
     }
@@ -216,7 +216,7 @@ public class TimesheetReportFilterHelperTests
         var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
 
         Assert.Equal(2, results.Count);
-        Assert.Contains(results, e => e.EmployeeId == "emp-mats");
+        Assert.Contains(results, e => e.EmployeeId == "emp-alex");
         Assert.Contains(results, e => e.EmployeeId == "emp-alice");
         Assert.DoesNotContain(results, e => e.EmployeeId == "emp-bob");
     }
@@ -260,7 +260,7 @@ public class TimesheetReportFilterHelperTests
         Assert.Equal(3, results.Count);
         Assert.Equal("emp-bob", results[0].EmployeeId);    // 2026-08-25
         Assert.Equal("emp-alice", results[1].EmployeeId);  // 2026-08-20
-        Assert.Equal("emp-mats", results[2].EmployeeId);   // 2026-08-15
+        Assert.Equal("emp-alex", results[2].EmployeeId);   // 2026-08-15
     }
 
     [Fact]
@@ -309,7 +309,7 @@ public class TimesheetReportFilterHelperTests
         var criteria = new TimesheetReportFilterCriteria
         {
             // TotalEmployeesCount is 0, so SelectedEmployees filter is ignored
-            SelectedEmployees = new[] { "emp-mats" },
+            SelectedEmployees = new[] { "emp-alex" },
             TotalEmployeesCount = 0,
             // SelectedTeams count equals TotalTeamsCount, so filter is ignored
             SelectedTeams = new[] { "team-a" },
@@ -357,7 +357,7 @@ public class TimesheetReportFilterHelperTests
     [Fact]
     public void Filter_WhenEntryHasEmptyTeamOrClientOrGroup_ExcludedWhenFilteringThoseFields()
     {
-        // Mats has empty TeamId, ProjectGroupId, ClientId
+        // Alex has empty TeamId, ProjectGroupId, ClientId
         var criteria = new TimesheetReportFilterCriteria
         {
             SelectedTeams = new[] { "" }, // even if empty string is passed in SelectedTeams
@@ -366,7 +366,7 @@ public class TimesheetReportFilterHelperTests
 
         var results = TimesheetReportFilterHelper.Filter(_sampleEntries, criteria);
 
-        // Mats should not match because of !string.IsNullOrEmpty(e.TeamId) check
+        // Alex should not match because of !string.IsNullOrEmpty(e.TeamId) check
         Assert.Empty(results);
     }
 }

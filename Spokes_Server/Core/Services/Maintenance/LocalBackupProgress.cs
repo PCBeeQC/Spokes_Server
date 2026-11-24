@@ -26,5 +26,12 @@ public record LocalBackupProgress(
 {
     public static LocalBackupProgress Idle => new(LocalBackupStage.Idle, 0, 0, 0, 0, 0);
 
-    public string FormattedProgress => BackupFormatHelper.FormatTransferProgress(BytesProcessed, TotalBytes, Percent);
+    public string FormattedProgress => FormatProgress();
+
+    public string FormatProgress(string? rawUnitLabel = null) =>
+        BackupFormatHelper.FormatTransferProgress(
+            BytesProcessed,
+            TotalBytes,
+            Percent,
+            Stage == LocalBackupStage.Archiving ? (string.IsNullOrWhiteSpace(rawUnitLabel) ? "raw" : rawUnitLabel) : null);
 }

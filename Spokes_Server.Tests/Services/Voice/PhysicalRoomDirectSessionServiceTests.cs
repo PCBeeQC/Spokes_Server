@@ -388,7 +388,7 @@ public class PhysicalRoomDirectSessionServiceTests : IDisposable
         SeedEmployee("emp-charlie");
 
         var room = (await _roomService.CreateRoomAsync(
-            "Bureau Stewie",
+            "Room Alpha",
             "emp-alice",
             "dev-alice",
             "Alice Desktop",
@@ -608,7 +608,7 @@ public class PhysicalRoomDirectSessionServiceTests : IDisposable
 
         string report = AcousticRoomDiagnosticReportFormatter.FormatLiveRoomReport(
             snapshot,
-            "Bureau Stewie",
+            "Room Alpha",
             displayNames,
             configuredAudioMode: PhysicalRoomAudioMode.LowLatencyCleaned,
             directOperatingStatus: DirectRoomOperatingStatus.ActiveDirectLan,
@@ -628,7 +628,7 @@ public class PhysicalRoomDirectSessionServiceTests : IDisposable
         };
         string legacyReport = AcousticRoomDiagnosticReportFormatter.FormatLiveRoomReport(
             snapshot,
-            "Bureau Stewie",
+            "Room Alpha",
             configuredAudioMode: PhysicalRoomAudioMode.LowLatencyCleaned,
             directOperatingStatus: DirectRoomOperatingStatus.ActiveDirectLan,
             directClientTelemetry: legacyTelemetry);

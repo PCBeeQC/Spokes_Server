@@ -1,4 +1,4 @@
-// Spokes On-Demand Chat Transition & Wire Profiler (lazy-loaded only via spokesPerf.enableChatDiagnostics())
+// Spokes On-Demand UI, Chat & Wire Profiler (lazy-loaded only via spokesPerf.enableChatDiagnostics())
 // Strictly in-memory: never written to localStorage/cookies, so refreshing the page always resets it to OFF.
 (function () {
     'use strict';
@@ -13,8 +13,12 @@
         const flushMediaBatch = bridge.flushMediaBatch;
         const setPendingMediaTapAnchorMs = bridge.setPendingMediaTapAnchorMs;
 
-        const QUIET_MS = 1500, SERVER_QUIET_MS = 500, HARD_CAP_MS = 15000, PROBE_MS = 250, MAX_REPORTS = 20;
+        const CHAT_QUIET_MS = 1500, UI_QUIET_MS = 900, SERVER_QUIET_MS = 500, HARD_CAP_MS = 15000, PROBE_MS = 250, MAX_REPORTS = 20;
         const LARGE_BATCH_BYTES = 16384;
+        const XRAY_BATCH_BYTES = 4096;
+        const CLOCK_CACHE_TTL_MS = 60000;
+        const CLOCK_PING_COUNT = 3;
+        const RAPID_TAP_COALESCE_MS = 150;
 
         let active = false;
         let server = null;            // DotNetObjectReference<MainLayout>
@@ -26,18 +30,29 @@
         let lastPointerDown = null, lastPointerUp = null;
         let lastTransitionTapMs = null;
         let lastChannelOpenTapMs = null;
+        let cachedClock = null;       // { rtt, offset, measuredAt }
+        let missingServerWarned = false;
         let mutationObserver = null, longTaskObserver = null, probeTimer = null, tickTimer = null;
         let listenersAttached = false;
         const pendingJsCalls = new Map(); // asyncHandle -> { identifier, t }
 
         // ── DOM state helpers ──
-        const isAppBarHidden = () => document.querySelector('.mud-appbar')?.classList.contains('hide-appbar-mobile') || false;
-        const isMainContentChannelOpen = () => document.querySelector('.mud-main-content')?.classList.contains('chat-channel-open') || false;
-        const isSidebarHidden = () => document.querySelector('.chat-page-container > .mud-grid > .mud-grid-item:first-child')?.classList.contains('d-none') || false;
+        const isAppBarHidden = () => document.querySelector?.('.mud-appbar')?.classList?.contains('hide-appbar-mobile') || false;
+        const isMainContentChannelOpen = () => document.querySelector?.('.mud-main-content')?.classList?.contains('chat-channel-open') || false;
+        const isSidebarHidden = () => document.querySelector?.('.chat-page-container > .mud-grid > .mud-grid-item:first-child')?.classList?.contains('d-none') || false;
         const getMessagesChannelId = () => {
-            const el = document.getElementById('chat-messages-container');
+            const el = document.getElementById?.('chat-messages-container');
             return el ? (el.getAttribute('data-channel-id') || 'mounted') : null;
         };
+        const isDrawerOpen = () => {
+            const el = document.getElementById?.('nav-drawer');
+            return Boolean(el && el.classList && (el.classList.contains('is-nav-drawer-open') || el.classList.contains('mud-drawer--open')));
+        };
+        const getDialogCount = () => {
+            if (typeof document.querySelectorAll !== 'function') return 0;
+            return document.querySelectorAll('.mud-dialog-container .mud-dialog, .mud-dialog-provider .mud-dialog').length;
+        };
+        const getRoutePath = () => (window.location && typeof window.location.pathname === 'string' && window.location.pathname) ? window.location.pathname : '/';
 
         function add(report, lane, name, t) {
             if (!report) return;
@@ -45,8 +60,11 @@
             if (lane !== 'S') report.lastClientMs = Math.max(report.lastClientMs, t ?? now());
         }
 
-        function markPainted(report, label) {
-            requestAnimationFrame(() => requestAnimationFrame(() => add(report, 'P', `Painted: ${label}`)));
+        function markPainted(report, label, isUiMilestone) {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                add(report, 'P', `Painted: ${label}`);
+                if (isUiMilestone) report.hasUiPaint = true;
+            }));
         }
 
         function checkDomState() {
@@ -56,7 +74,7 @@
             if (appBar !== r.dom.appBar) {
                 r.dom.appBar = appBar;
                 add(r, 'C', appBar ? 'DOM MudAppBar .hide-appbar-mobile Added' : 'DOM MudAppBar .hide-appbar-mobile Removed');
-                markPainted(r, appBar ? 'AppBar hidden' : 'AppBar visible');
+                markPainted(r, appBar ? 'AppBar hidden' : 'AppBar visible', false);
             }
             const main = isMainContentChannelOpen();
             if (main !== r.dom.main) {
@@ -67,13 +85,33 @@
             if (sidebar !== r.dom.sidebar) {
                 r.dom.sidebar = sidebar;
                 add(r, 'C', sidebar ? 'DOM Sidebar .d-none Added (Sidebar Hidden)' : 'DOM Sidebar .d-none Removed (Sidebar Visible)');
-                if (!sidebar) markPainted(r, 'list visible');
+                if (!sidebar) markPainted(r, 'list visible', false);
             }
             const channel = getMessagesChannelId();
             if (channel !== r.dom.channel) {
                 r.dom.channel = channel;
                 add(r, 'C', channel ? `DOM #chat-messages-container Mounted (AppBarHidden=${appBar})` : `DOM #chat-messages-container Removed (AppBarHidden=${appBar})`);
-                if (channel) markPainted(r, 'channel visible');
+                if (channel) markPainted(r, 'channel visible', false);
+            }
+            const drawerOpen = isDrawerOpen();
+            if (drawerOpen !== r.dom.drawerOpen) {
+                r.dom.drawerOpen = drawerOpen;
+                add(r, 'C', drawerOpen ? 'DOM NavDrawer Opened' : 'DOM NavDrawer Closed');
+                markPainted(r, drawerOpen ? 'drawer open' : 'drawer closed', true);
+            }
+            const dialogCount = getDialogCount();
+            if (dialogCount !== r.dom.dialogCount) {
+                const opened = dialogCount > r.dom.dialogCount;
+                r.dom.dialogCount = dialogCount;
+                add(r, 'C', opened ? `DOM Dialog Mounted (count=${dialogCount})` : `DOM Dialog Removed (count=${dialogCount})`);
+                markPainted(r, opened ? 'dialog visible' : 'dialog closed', true);
+            }
+            const routePath = getRoutePath();
+            if (routePath !== r.dom.routePath) {
+                const prevPath = r.dom.routePath;
+                r.dom.routePath = routePath;
+                add(r, 'C', `DOM Route Changed (${prevPath} → ${routePath})`);
+                markPainted(r, `route ${routePath}`, true);
             }
         }
 
@@ -189,7 +227,7 @@
         function inspectLargeBatchPayload(report, batchBytes) {
             requestAnimationFrame(() => {
                 try {
-                    const container = document.getElementById('chat-messages-container');
+                    const container = document.getElementById?.('chat-messages-container');
                     const rows = container ? container.querySelectorAll('.message-row[data-message-id]') : [];
                     if (!rows || rows.length === 0) return;
                     const sizes = [];
@@ -225,7 +263,7 @@
             if (info.kind === 'batch') {
                 r.wire.batchBytes = (r.wire.batchBytes || 0) + info.size;
                 if (info.size > (r.wire.maxBatchBytes || 0)) r.wire.maxBatchBytes = info.size;
-                if (direction === 'in' && info.size >= LARGE_BATCH_BYTES) {
+                if (direction === 'in' && info.size >= XRAY_BATCH_BYTES) {
                     if (typeof window.__spokesInspectRenderBatch === 'function' && (!r.batchXRay || info.size > r.batchXRay.wireBytes)) {
                         const inspected = window.__spokesInspectRenderBatch(data);
                         if (inspected) {
@@ -233,6 +271,8 @@
                             r.batchXRay = inspected;
                         }
                     }
+                }
+                if (direction === 'in' && info.size >= LARGE_BATCH_BYTES && r.isChat) {
                     if (!r.largeBatchInspected || info.size > (r.largeBatchInspectedBytes || 0)) {
                         r.largeBatchInspected = true;
                         r.largeBatchInspectedBytes = info.size;
@@ -255,16 +295,44 @@
             if (!ws || ws.__spokesDiagHooked) return;
             ws.__spokesDiagHooked = true;
             const originalSend = ws.send;
+            if (typeof originalSend !== 'function') return;
             ws.send = function (data) {
                 if (active && current) { try { onFrame(data, 'out'); } catch (e) { } }
                 return originalSend.call(this, data);
             };
         }
 
+        async function syncServerProfilerFlag(enabled) {
+            const ref = server || window.spokesDotNetRef;
+            if (!ref || typeof ref.invokeMethodAsync !== 'function') {
+                if (enabled) {
+                    console.warn('[Perf] Wire profiler enabled on client, waiting for Blazor circuit (spokesDotNetRef) to attach.');
+                }
+                return false;
+            }
+            try {
+                await ref.invokeMethodAsync('SetChatProfilerEnabled', Boolean(enabled));
+                return true;
+            } catch (err) {
+                if (enabled) {
+                    console.warn('[Perf] Wire profiler could not sync server flag (SetChatProfilerEnabled):', err && err.message ? err.message : err);
+                }
+                return false;
+            }
+        }
+
+        function onBlazorConnected() {
+            cachedClock = null;
+            if (!active) return;
+            hookSocket();
+            server = window.spokesDotNetRef || server;
+            syncServerProfilerFlag(true);
+        }
+
         function startObservers() {
             if (!active) return;
             hookSocket();
-            if (!mutationObserver && document.body) {
+            if (!mutationObserver && document.body && typeof MutationObserver !== 'undefined') {
                 mutationObserver = new MutationObserver(checkDomState);
                 mutationObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'data-channel-id'] });
             }
@@ -341,18 +409,46 @@
             pendingJsCalls.clear();
         }
 
+        function isChatTransitionName(name, routePath) {
+            if (!name) return false;
+            if (name === 'SelectChannel' || name === 'SwitchChannel' || name === 'GoBack') return true;
+            if (name === 'NativeBack' && (routePath || '').startsWith('/chat')) return true;
+            if (name.startsWith('PopState') && name.includes('/chat')) return true;
+            return false;
+        }
+
         // ── Transition lifecycle ──
-        function startTransition(name, initialStep) {
+        function startTransition(name, initialStep, meta) {
             if (!active) return;
             server = server || window.spokesDotNetRef || null;
-            if (!server) return;
+            if (!server) {
+                if (!missingServerWarned) {
+                    missingServerWarned = true;
+                    console.warn('[Perf] Wire profiler active, but window.spokesDotNetRef is unavailable; skipping transition:', name);
+                }
+                return;
+            }
+            missingServerWarned = false;
             const t = now();
-            if ((name.startsWith('PopState') || name === 'GoBack') && current && current.name === 'NativeBack' && t - current.startedMs < 1500) {
-                add(current, 'C', `${initialStep} (${window.location.pathname})`, t);
+            const routePath = getRoutePath();
+            if (current && (current.name === 'NativeBack' || current.name === 'DialogClose (Back)' || current.name === 'DrawerClose (Back)') && (t - current.startedMs) < 1500) {
+                if (name.startsWith('PopState') || name === 'GoBack' || name.startsWith('UIAction') || name.startsWith('DrawerClose')) {
+                    add(current, 'C', `${initialStep} (${routePath})`, t);
+                    return;
+                }
+            }
+            if (meta && meta.targetEl && current && current.targetEl === meta.targetEl && (t - current.startedMs) < RAPID_TAP_COALESCE_MS) {
+                add(current, 'C', `${initialStep} (coalesced)`, t);
                 return;
             }
 
-            flushMediaBatch('nav-away');
+            const isChat = meta && typeof meta.kind === 'string'
+                ? meta.kind === 'chat'
+                : isChatTransitionName(name, routePath);
+
+            if (isChat) {
+                flushMediaBatch('nav-away');
+            }
 
             const isSelectChannel = name === 'SelectChannel' || name === 'SwitchChannel';
             const prevGapMs = lastTransitionTapMs != null ? Math.round(t - lastTransitionTapMs) : null;
@@ -364,18 +460,44 @@
             }
 
             const report = {
-                id: ++reportCounter, name, serverTid: 0, serverName: null, startedMs: t, lastClientMs: t,
+                id: ++reportCounter, name, isChat, route: routePath, targetEl: meta?.targetEl || null,
+                serverTid: 0, serverName: null, startedMs: t, lastClientMs: t, hasUiPaint: false,
                 prevGapMs, prevChannelOpenGapMs,
                 entries: [], cursor: 0, draining: false, probes: [], longTasks: [], wire: {}, jsCalls: {},
                 largeBatchInspected: false, largeBatchInfo: null, mediaLoaded: 0, mediaBytes: 0,
-                dom: { appBar: isAppBarHidden(), main: isMainContentChannelOpen(), sidebar: isSidebarHidden(), channel: getMessagesChannelId() }
+                dom: {
+                    appBar: isAppBarHidden(),
+                    main: isMainContentChannelOpen(),
+                    sidebar: isSidebarHidden(),
+                    channel: getMessagesChannelId(),
+                    drawerOpen: isDrawerOpen(),
+                    dialogCount: getDialogCount(),
+                    routePath
+                }
             };
             if (lastPointerDown && t - lastPointerDown < 3000) add(report, 'C', 'pointerdown', lastPointerDown);
             if (lastPointerUp && t - lastPointerUp < 3000) add(report, 'C', 'pointerup', lastPointerUp);
-            add(report, 'C', `${initialStep} (AppBarHidden=${report.dom.appBar})`, t);
+            const initialSuffix = isChat ? ` (AppBarHidden=${report.dom.appBar})` : ` (route=${routePath})`;
+            add(report, 'C', `${initialStep}${initialSuffix}`, t);
             current = report;
             open.push(report);
-            server.invokeMethodAsync('DiagBeginTransition', name).then(tid => { report.serverTid = tid; }).catch(() => { });
+            console.log(`[Perf] Capturing #${report.id}: ${name} (${routePath})`);
+
+            const beginOnServer = () => server.invokeMethodAsync('DiagBeginTransition', name).then(async tid => {
+                if (tid > 0) {
+                    report.serverTid = tid;
+                    return;
+                }
+                // Server profiler flag may have reset (e.g., reconnect/re-attach); resync once and retry.
+                const synced = await syncServerProfilerFlag(true);
+                if (synced && active && !report.draining) {
+                    try {
+                        const retryTid = await server.invokeMethodAsync('DiagBeginTransition', name);
+                        if (retryTid > 0) report.serverTid = retryTid;
+                    } catch (_) { }
+                }
+            }).catch(() => { });
+            beginOnServer();
             startObservers();
         }
 
@@ -388,7 +510,8 @@
                     if (age > 5000) finalize(r, false, 'no server transition id');
                     continue;
                 }
-                if (t - r.lastClientMs >= QUIET_MS || age > HARD_CAP_MS) drain(r);
+                const quietMs = (!r.isChat && ((r.wire.batch || 0) > 0 || r.hasUiPaint)) ? UI_QUIET_MS : CHAT_QUIET_MS;
+                if (t - r.lastClientMs >= quietMs || age > HARD_CAP_MS) drain(r);
             }
         }
 
@@ -411,18 +534,23 @@
             }).catch(() => finalize(r, true, 'drain failed'));
         }
 
-        async function measureClock() {
+        async function measureClock(forceFresh) {
+            if (!forceFresh && cachedClock && (now() - cachedClock.measuredAt) < CLOCK_CACHE_TTL_MS) {
+                return cachedClock;
+            }
+            if (!server || typeof server.invokeMethodAsync !== 'function') return cachedClock;
             let best = null;
-            for (let i = 0; i < 5; i++) {
+            for (let i = 0; i < CLOCK_PING_COUNT; i++) {
                 try {
                     const t0 = now();
                     const st = await server.invokeMethodAsync('DiagClockPing');
                     const t3 = now();
                     const rtt = t3 - t0;
-                    if (!best || rtt < best.rtt) best = { rtt, offset: st - (t0 + t3) / 2 };
+                    if (!best || rtt < best.rtt) best = { rtt, offset: st - (t0 + t3) / 2, measuredAt: t3 };
                 } catch (e) { break; }
             }
-            return best;
+            if (best) cachedClock = best;
+            return best || cachedClock;
         }
 
         async function finalize(r, truncated, reason) {
@@ -431,7 +559,7 @@
             if (i >= 0) open.splice(i, 1);
             if (current === r) current = null;
             stopObserversIfIdle(false);
-            const clock = (server && active) ? await measureClock() : null;
+            const clock = (server && active) ? await measureClock(false) : null;
             const offset = clock ? clock.offset : 0;
             for (const e of r.entries) {
                 if (e.lane === 'S') e.t -= offset;
@@ -482,7 +610,7 @@
                     diskMs: dbDiskMatch ? Number(dbDiskMatch[4]) : null,
                     longTaskMs: lt.reduce((a, b) => a + b, 0)
                 });
-            } else if (effectiveName.startsWith('GoBack') || effectiveName.startsWith('NativeBack')) {
+            } else if (effectiveName.startsWith('GoBack') || (effectiveName.startsWith('NativeBack') && r.isChat)) {
                 pushCapped(session.backNavigations, {
                     id: r.id,
                     name: effectiveName,
@@ -493,9 +621,10 @@
             }
 
             const wsExt = (window.__spokesBlazorSocket && window.__spokesBlazorSocket.extensions) || window.__spokesWsExtensions || '';
+            const reportHeader = r.isChat ? 'CHAT TRANSITION REPORT' : 'UI TRANSITION REPORT';
             const lines = [];
             lines.push('==================================================');
-            lines.push(`[CHAT TRANSITION REPORT #${r.id}] ${effectiveName}${truncated ? '  ** TRUNCATED **' : ''}${reason ? `  (${reason})` : ''}`);
+            lines.push(`[${reportHeader} #${r.id}] ${effectiveName}${truncated ? '  ** TRUNCATED **' : ''}${reason ? `  (${reason})` : ''}`);
             lines.push(`Platform: ${window.SpokesBridge?.platform || 'unknown'} | Viewport: ${window.innerWidth}x${window.innerHeight} | Net: ${formatNetworkSummary(getNetworkSummary())} | WS ext: ${wsExt || 'none'} | Server tid: #${r.serverTid || '-'}` +
                 (clock ? ` | Clock offset: ${Math.round(clock.offset)}ms ±${Math.round(clock.rtt / 2)}ms | Idle RTT: ${Math.round(clock.rtt)}ms` : ' | Clock: not synced'));
             lines.push('--------------------------------------------------');
@@ -503,16 +632,39 @@
             const row = (label, value) => lines.push(`  ${label.padEnd(40)}: ${value}`);
             if (r.prevGapMs != null) row('Since previous transition', `${r.prevGapMs}ms` + (r.prevChannelOpenGapMs != null ? ` (between channel opens: ${r.prevChannelOpenGapMs}ms)` : ''));
             row('Tap → server received', since(tap.t, find(r, 'S', n => n.startsWith('Server: Transition #'))));
-            row('Tap → channel painted', since(tap.t, find(r, 'P', n => n.includes('channel visible'))));
-            row('Tap → AppBar hidden painted', since(tap.t, find(r, 'P', n => n.includes('AppBar hidden'))));
-            row('Tap → list visible painted', since(tap.t, find(r, 'P', n => n.includes('list visible'))));
-            row('Tap → AppBar visible painted', since(tap.t, find(r, 'P', n => n.includes('AppBar visible'))));
-            row('Tap → composer init done', since(tap.t, find(r, 'S', n => /ChatComposer\[.*Init chain.*End/.test(n))));
-            row('Tap → 1st / newest image loaded', `${since(tap.t, find(r, 'C', n => n.includes('1st Media Loaded')))} / ${since(tap.t, find(r, 'C', n => n.includes('Newest Chat Image Loaded')))}`);
-            if (dbDiskMatch) row('Server DB (cache / disk)', `cache=${dbDiskMatch[1]}, disk=${dbDiskMatch[2]} (index ${dbDiskMatch[3]}ms, disk ${dbDiskMatch[4]}ms)`);
-            if (payloadEntry) row('Payload composition', payloadEntry.name.replace(/^Server:\s*Channel Payload Stats\s*/, ''));
-            row('Chat instances', `${chatTags.join(' → ') || 'n/a'}${chatRemount ? '  (REMOUNT: new Chat initialized)' : ''}`);
-            row('MainLayout instances', `${layoutTags.join(' → ') || 'n/a'}${layoutRemount ? '  (NEW MainLayout initialized)' : ''}`);
+
+            if (r.isChat) {
+                row('Tap → channel painted', since(tap.t, find(r, 'P', n => n.includes('channel visible'))));
+                row('Tap → AppBar hidden painted', since(tap.t, find(r, 'P', n => n.includes('AppBar hidden'))));
+                row('Tap → list visible painted', since(tap.t, find(r, 'P', n => n.includes('list visible'))));
+                row('Tap → AppBar visible painted', since(tap.t, find(r, 'P', n => n.includes('AppBar visible'))));
+                row('Tap → composer init done', since(tap.t, find(r, 'S', n => /ChatComposer\[.*Init chain.*End/.test(n))));
+                row('Tap → 1st / newest image loaded', `${since(tap.t, find(r, 'C', n => n.includes('1st Media Loaded')))} / ${since(tap.t, find(r, 'C', n => n.includes('Newest Chat Image Loaded')))}`);
+                if (dbDiskMatch) row('Server DB (cache / disk)', `cache=${dbDiskMatch[1]}, disk=${dbDiskMatch[2]} (index ${dbDiskMatch[3]}ms, disk ${dbDiskMatch[4]}ms)`);
+                if (payloadEntry) row('Payload composition', payloadEntry.name.replace(/^Server:\s*Channel Payload Stats\s*/, ''));
+                row('Chat instances', `${chatTags.join(' → ') || 'n/a'}${chatRemount ? '  (REMOUNT: new Chat initialized)' : ''}`);
+                row('MainLayout instances', `${layoutTags.join(' → ') || 'n/a'}${layoutRemount ? '  (NEW MainLayout initialized)' : ''}`);
+            } else {
+                const routeLabel = r.dom.routePath && r.dom.routePath !== r.route ? `${r.route} → ${r.dom.routePath}` : r.route;
+                row('Route', routeLabel);
+                row('Tap → first RenderBatch', since(tap.t, find(r, 'W', n => n.includes('WS ← JS.RenderBatch'))));
+                const drawerPainted = find(r, 'P', n => n.includes('drawer open') || n.includes('drawer closed'));
+                if (drawerPainted || effectiveName.startsWith('Drawer')) {
+                    row('Tap → drawer painted', since(tap.t, drawerPainted));
+                }
+                const dialogPainted = find(r, 'P', n => n.includes('dialog visible') || n.includes('dialog closed'));
+                if (dialogPainted || effectiveName.startsWith('Dialog')) {
+                    row('Tap → dialog painted', since(tap.t, dialogPainted));
+                }
+                const routePainted = find(r, 'P', n => n.includes('Painted: route '));
+                if (routePainted || effectiveName.startsWith('NavLink') || effectiveName.startsWith('PopState')) {
+                    row('Tap → route painted', since(tap.t, routePainted));
+                }
+                if (layoutTags.length > 0 || layoutRemount) {
+                    row('MainLayout instances', `${layoutTags.join(' → ') || 'n/a'}${layoutRemount ? '  (NEW MainLayout initialized)' : ''}`);
+                }
+            }
+
             row('Wire', `${w.batch || 0} render batches (${((w.batchBytes || 0) / 1024).toFixed(1)}KB, max ${((w.maxBatchBytes || 0) / 1024).toFixed(1)}KB), ${w.jscall || 0} JS calls, ${w.jsdone || 0} JS completions, ${w.ack || 0} acks`);
             if (r.batchXRay) row('RenderBatch X-Ray', r.batchXRay.summary);
             if (r.largeBatchInfo) row('Large RenderBatch DOM', r.largeBatchInfo);
@@ -568,28 +720,124 @@
             }
             lines.push('==================================================');
             lines.forEach(l => console.log(l));
-            finished.push({ id: r.id, name: r.serverName || r.name, clock, truncated, entries: r.entries.map(e => ({ lane: e.lane, name: e.name, ms: Math.round(e.t - t0) })) });
+            finished.push({ id: r.id, name: r.serverName || r.name, isChat: r.isChat, route: r.route, clock, truncated, entries: r.entries.map(e => ({ lane: e.lane, name: e.name, ms: Math.round(e.t - t0) })) });
             if (finished.length > MAX_REPORTS) finished.shift();
+        }
+
+        // ── PII-safe interactive control labeler ──
+        const GENERIC_EXCLUDED_SELECTOR = 'input:not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"], .mud-slider, .mud-range-slider';
+        const GENERIC_INTERACTIVE_SELECTOR = [
+            'button',
+            '[role="button"]',
+            '.mud-button-root',
+            '.mud-icon-button',
+            '.mud-fab',
+            '.mud-chip',
+            '.mud-menu-item',
+            'a[href]',
+            '.m-cell',
+            '.calendar-cell',
+            '.calendar-event',
+            '.agenda-row',
+            '.agenda-block'
+        ].join(', ');
+
+        function describeControl(el) {
+            if (!el) return 'control';
+            const diagLabel = typeof el.getAttribute === 'function' ? el.getAttribute('data-diag-label') : null;
+            if (diagLabel) return diagLabel.slice(0, 40);
+            if (el.id) return `#${el.id}`;
+            if (typeof el.getAttribute === 'function') {
+                const href = el.getAttribute('href');
+                if (href && href !== '#' && !href.startsWith('javascript:')) {
+                    return `link:${href.split('?')[0].slice(0, 40)}`;
+                }
+            }
+            const tag = (el.tagName || 'el').toLowerCase();
+            const cls = typeof el.className === 'string'
+                ? el.className.trim().split(/\s+/).filter(c => c && !c.startsWith('mud-ripple') && !c.startsWith('d-') && !c.startsWith('pa-') && !c.startsWith('ma-')).slice(0, 2).join('.')
+                : '';
+            return cls ? `${tag}.${cls}` : tag;
+        }
+
+        function classifyClick(target) {
+            if (!target || typeof target.closest !== 'function') return null;
+
+            // Priority 1: Chat transitions (preserves exact existing Chat diagnostics)
+            const chatBack = target.closest('#chat-mobile-back-btn, #chat-drop-zone button.d-md-none');
+            if (chatBack) {
+                return { name: 'GoBack', step: 'Client: Tap Back Button', kind: 'chat', targetEl: chatBack };
+            }
+            const channelRow = target.closest('.chat-page-container .mud-list-item-clickable');
+            if (channelRow && !target.closest('button')) {
+                const alreadyInChannel = Boolean(getMessagesChannelId());
+                return {
+                    name: alreadyInChannel ? 'SwitchChannel' : 'SelectChannel',
+                    step: 'Client: Tap Channel Item',
+                    kind: 'chat',
+                    targetEl: channelRow
+                };
+            }
+
+            // Priority 2: App shell & navigation drawer
+            const drawerBtn = target.closest('#nav-drawer-toggle-btn');
+            if (drawerBtn) {
+                const nextAction = isDrawerOpen() ? 'Close' : 'Open';
+                return {
+                    name: `DrawerToggle (${nextAction})`,
+                    step: `Client: Tap Nav Drawer Button (${nextAction})`,
+                    kind: 'ui',
+                    targetEl: drawerBtn
+                };
+            }
+            const drawerBackdrop = target.closest('.mud-overlay-drawer');
+            if (drawerBackdrop) {
+                return {
+                    name: 'DrawerClose (Backdrop)',
+                    step: 'Client: Tap Drawer Backdrop',
+                    kind: 'ui',
+                    targetEl: drawerBackdrop
+                };
+            }
+            const navLink = target.closest('#nav-drawer .mud-nav-link, #nav-drawer a[href]');
+            if (navLink) {
+                const rawHref = typeof navLink.getAttribute === 'function' ? (navLink.getAttribute('href') || '/') : '/';
+                const cleanHref = rawHref.split('?')[0] || '/';
+                return {
+                    name: `NavLink (${cleanHref})`,
+                    step: `Client: Tap Nav Link (${cleanHref})`,
+                    kind: 'ui',
+                    targetEl: navLink
+                };
+            }
+
+            // Priority 3: General interactive UI controls (FABs, buttons, dialogs, calendar cells/events, chips)
+            if (target.closest(GENERIC_EXCLUDED_SELECTOR)) return null;
+            const control = target.closest(GENERIC_INTERACTIVE_SELECTOR);
+            if (!control) return null;
+            const label = describeControl(control);
+            return {
+                name: `UIAction (${label})`,
+                step: `Client: Tap ${label}`,
+                kind: 'ui',
+                targetEl: control
+            };
         }
 
         // ── Event triggers (attached only while profiler is enabled) ──
         function onPointerDown() { if (active && server) lastPointerDown = now(); }
         function onPointerUp() { if (active && server) lastPointerUp = now(); }
         function onClick(e) {
-            if (!active || !server || !e.target || typeof e.target.closest !== 'function') return;
-            if (e.target.closest('#chat-mobile-back-btn, #chat-drop-zone button.d-md-none')) {
-                startTransition('GoBack', 'Client: Tap Back Button');
-                return;
-            }
-            if (e.target.closest('.chat-page-container .mud-list-item-clickable') && !e.target.closest('button')) {
-                const alreadyInChannel = Boolean(getMessagesChannelId());
-                startTransition(alreadyInChannel ? 'SwitchChannel' : 'SelectChannel', 'Client: Tap Channel Item');
-            }
+            if (!active || !e || !e.target) return;
+            const hit = classifyClick(e.target);
+            if (!hit) return;
+            startTransition(hit.name, hit.step, { kind: hit.kind, targetEl: hit.targetEl });
         }
         function onPopState() {
             if (!active) return;
-            if (server && window.location.pathname.startsWith('/chat')) {
-                startTransition('PopState (' + window.location.pathname + ')', 'Client: Browser PopState');
+            const path = getRoutePath();
+            if (server || window.spokesDotNetRef) {
+                startTransition(`PopState (${path})`, 'Client: Browser PopState', { kind: path.startsWith('/chat') ? 'chat' : 'ui' });
             } else {
                 flushMediaBatch('popstate');
             }
@@ -602,6 +850,7 @@
             document.addEventListener('pointerup', onPointerUp, true);
             document.addEventListener('click', onClick, true);
             window.addEventListener('popstate', onPopState);
+            window.addEventListener('spokes:blazor-connected', onBlazorConnected);
         }
 
         function detachListeners() {
@@ -611,12 +860,15 @@
             document.removeEventListener('pointerup', onPointerUp, true);
             document.removeEventListener('click', onClick, true);
             window.removeEventListener('popstate', onPopState);
+            window.removeEventListener('spokes:blazor-connected', onBlazorConnected);
         }
 
         return {
             async enable(dotNetRef) {
                 server = dotNetRef || window.spokesDotNetRef || server;
                 active = true;
+                missingServerWarned = false;
+                cachedClock = null;
                 bridge.setProfilerActive(true);
                 bridge.setMediaHook({
                     onFirstMediaLoaded: (label, ts) => { if (active && current) add(current, 'C', label, ts); },
@@ -630,26 +882,30 @@
                 });
                 attachListeners();
                 hookSocket();
-                if (server && typeof server.invokeMethodAsync === 'function') {
-                    try { await server.invokeMethodAsync('SetChatProfilerEnabled', true); } catch (_) { }
-                }
+                await syncServerProfilerFlag(true);
             },
             async disable() {
                 active = false;
                 current = null;
+                cachedClock = null;
+                missingServerWarned = false;
                 open.length = 0;
                 stopObserversIfIdle(true);
                 detachListeners();
                 window.__spokesWsIn = null;
                 bridge.setMediaHook(null);
                 bridge.setProfilerActive(false);
-                const ref = server || window.spokesDotNetRef;
-                if (ref && typeof ref.invokeMethodAsync === 'function') {
-                    try { await ref.invokeMethodAsync('SetChatProfilerEnabled', false); } catch (_) { }
-                }
+                await syncServerProfilerFlag(false);
             },
             isEnabled: () => active,
-            attachServer: (dotNetRef) => { server = dotNetRef; },
+            attachServer: (dotNetRef) => {
+                server = dotNetRef;
+                missingServerWarned = false;
+                if (active) {
+                    hookSocket();
+                    syncServerProfilerFlag(true);
+                }
+            },
             startTransition,
             mark: (name) => {
                 if (!active || !current) return;

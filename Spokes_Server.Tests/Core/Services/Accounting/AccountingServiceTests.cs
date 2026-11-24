@@ -1689,4 +1689,174 @@ public class AccountingServiceTests : TestDataTestBase
 
         Assert.Equal(750m, margin);
     }
+
+    [Fact]
+    public void CalculateProjectGrossMargin_ExcludesDraftInvoices_AndFallsBackToAcceptedQuote()
+    {
+        const string projectId = "proj-draft-inv-margin";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Draft Invoice Margin Isolation" });
+        _db.Quotes.Save(new Quote
+        {
+            Id = "q-accepted-draft-inv",
+            ProjectId = projectId,
+            Status = QuoteStatus.Accepted,
+            MaterialLineItems = [new QuoteItemRow { Quantity = 1m, UnitPrice = 2000m }]
+        });
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-draft-only",
+            ProjectId = projectId,
+            Status = InvoiceStatus.Draft,
+            LineItems = [new InvoiceLine { Description = "Unfinalized work", Quantity = 1m, UnitPrice = 9500m }]
+        });
+
+        var margin = _service.CalculateProjectGrossMargin(projectId);
+
+        // Draft invoice must be ignored, falling back cleanly to Accepted quote revenue ($2000)
+        Assert.Equal(2000m, margin);
+    }
+
+    [Fact]
+    public void EvaluateProjectCommissions_ExcludesDraftInvoices_DoesNotBlockOrInflateBase()
+    {
+        const string projectId = "proj-draft-inv-comm";
+        _db.Projects.Save(new Project
+        {
+            Id = projectId,
+            Name = "Draft Invoice Commissions",
+            Status = ProjectStatus.Completed,
+            Commissions =
+            [
+                new CommissionBeneficiary
+                {
+                    Name = "Sam Sales",
+                    Percentage = 10m,
+                    CommissionBasis = CommissionBasisTypes.Revenue
+                }
+            ]
+        });
+
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-paid-comm",
+            ProjectId = projectId,
+            Status = InvoiceStatus.Paid,
+            LineItems = [new InvoiceLine { Description = "Delivered", Quantity = 1m, UnitPrice = 5000m }]
+        });
+
+        // Unfinalized Draft invoice must neither block allPaid nor inflate revenue base
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-draft-comm",
+            ProjectId = projectId,
+            Status = InvoiceStatus.Draft,
+            LineItems = [new InvoiceLine { Description = "Draft", Quantity = 1m, UnitPrice = 15000m }]
+        });
+
+        _service.EvaluateProjectCommissions(projectId);
+
+        var records = _db.CommissionLedgerRecords.GetByProject(projectId);
+        var record = Assert.Single(records);
+        Assert.Equal(5000m, record.BaseAmount);
+        Assert.Equal(500m, record.CommissionAmount);
+    }
+
+    [Fact]
+    public void HasConsumedPrepaymentCredits_IgnoresDraftInvoices()
+    {
+        const string projectId = "proj-draft-credit";
+        var prepayInvoice = new Invoice
+        {
+            Id = "inv-prepay-src",
+            ProjectId = projectId,
+            Status = InvoiceStatus.Paid,
+            LineItems = [new InvoiceLine { Id = "prepay-line-1", Quantity = 1m, UnitPrice = 1000m, IsPrepayment = true }]
+        };
+        _db.Invoices.Save(prepayInvoice);
+
+        _db.Invoices.Save(new Invoice
+        {
+            Id = "inv-draft-consumer",
+            ProjectId = projectId,
+            Status = InvoiceStatus.Draft,
+            LineItems = [new InvoiceLine { Quantity = 1m, UnitPrice = -500m, IsCreditUsed = true, SourceId = "prepay-line-1" }]
+        });
+
+        Assert.False(_service.HasConsumedPrepaymentCredits(prepayInvoice));
+    }
+
+    [Fact]
+    public void ApplySuggestedInvoicePayment_RejectsDraftInvoice()
+    {
+        const string projectId = "proj-draft-sug";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Draft Suggestion" });
+        var draft = new Invoice
+        {
+            Id = "inv-draft-sug",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-DRAFT-1",
+            Status = InvoiceStatus.Draft,
+            LineItems = [new InvoiceLine { Quantity = 1m, UnitPrice = 500m }]
+        };
+        _db.Invoices.Save(draft);
+
+        var sug = new SuggestedInvoicePayment
+        {
+            Id = "sug-draft-1",
+            InvoiceId = draft.Id,
+            InvoiceNumber = draft.InvoiceNumber,
+            InvoiceStatus = InvoiceStatus.Draft,
+            SuggestedAmount = draft.GrandTotal,
+            Status = SuggestedInvoicePaymentStatus.Pending
+        };
+        _db.SuggestedInvoicePayments.Save(sug);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            _service.ApplySuggestedInvoicePayment(sug.Id, user: AdminActor.FullName, actor: AdminActor));
+
+        // Draft remains untouched and unfinalized
+        Assert.Equal(InvoiceStatus.Draft, _db.Invoices.GetById(draft.Id)!.Status);
+        Assert.Empty(_db.Invoices.GetById(draft.Id)!.Payments);
+    }
+
+    [Fact]
+    public void AccountingHealthService_EvaluateHealth_CompletelyIgnoresDraftInvoices()
+    {
+        const string projectId = "proj-health-draft";
+        _db.Projects.Save(new Project { Id = projectId, Name = "Health Draft Project" });
+
+        // Stale 60-day-old Draft invoice must NEVER trigger health warnings or block subledger-cleanup
+        var staleDraft = new Invoice
+        {
+            Id = "inv-stale-draft",
+            ProjectId = projectId,
+            InvoiceNumber = "INV-STALE-DRAFT",
+            Date = DateTime.Today.AddDays(-60),
+            DueDate = DateTime.Today.AddDays(-30),
+            Status = InvoiceStatus.Draft,
+            LineItems = [new InvoiceLine { Description = "Draft", Quantity = 1m, UnitPrice = 2500m }]
+        };
+        _db.Invoices.Save(staleDraft);
+
+        // Legacy pending suggestion targeting a Draft invoice must also be ignored
+        _db.SuggestedInvoicePayments.Save(new SuggestedInvoicePayment
+        {
+            Id = "sug-legacy-draft",
+            InvoiceId = staleDraft.Id,
+            InvoiceNumber = staleDraft.InvoiceNumber,
+            InvoiceStatus = InvoiceStatus.Draft,
+            SuggestedAmount = staleDraft.GrandTotal,
+            Status = SuggestedInvoicePaymentStatus.Pending
+        });
+
+        var ledger = new LedgerService(_db.AccountingContext, _db.ProjectsContext);
+        var healthService = new AccountingHealthService(_db.AccountingContext, ledger, projects: _db.ProjectsContext);
+        var report = healthService.EvaluateHealth(DateTime.Today, AdminActor);
+
+        Assert.DoesNotContain(report.Issues, i => i.Code == "AR_STALE_DRAFTS");
+        Assert.DoesNotContain(report.Issues, i => i.Code == "AR_SUGGESTED_PAYMENTS");
+        Assert.DoesNotContain(report.Issues, i => i.Code == "GL_MISSING_JES");
+        var cleanupStep = report.CloseChecklist.Single(s => s.Key == "subledger-cleanup");
+        Assert.True(cleanupStep.IsComplete);
+    }
 }

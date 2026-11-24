@@ -224,6 +224,9 @@ public sealed class AccountingMigrationPreview
     public List<string> Warnings { get; set; } = [];
     public List<string> BlockingErrors { get; set; } = [];
 
+    public bool HasExternalTrialBalanceBalances { get; set; }
+    public bool RequiresDestructiveDeltaConfirmation { get; set; }
+    public bool ConfirmDestructiveDelta { get; set; }
     public decimal TotalExternalDebits { get; set; }
     public decimal TotalExternalCredits { get; set; }
     public decimal TotalDeltaDebits { get; set; }
@@ -231,7 +234,7 @@ public sealed class AccountingMigrationPreview
     public decimal ExpectedOpenArTotal { get; set; }
     public decimal ExpectedOpenApTotal { get; set; }
     public decimal ProjectedClearing3900Residual { get; set; }
-    public bool CanExecute => BlockingErrors.Count == 0;
+    public bool CanExecute => BlockingErrors.Count == 0 && (!RequiresDestructiveDeltaConfirmation || ConfirmDestructiveDelta);
 }
 
 public sealed class AccountingMigrationResult

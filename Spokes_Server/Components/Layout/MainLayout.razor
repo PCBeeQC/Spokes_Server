@@ -46,10 +46,10 @@
 <MudLayout>
     @if (StartupTimings.IsChatProfilerEnabled)
     {
-        StartupTimings.AddChatTransition($"Server: RenderTree MainLayout[{_diagTag}] #{++_diagRenderCount} (_isChatChannelOpen={_isChatChannelOpen})");
+        StartupTimings.AddChatTransition($"Server: RenderTree MainLayout[{_diagTag}] #{++_diagRenderCount} (_isChatChannelOpen={_isChatChannelOpen}, _drawerOpen={_drawerOpen})");
     }
     <MudAppBar Class="@($"py-n2{(_isChatChannelOpen ? " hide-appbar-mobile" : "")}")" Elevation="1" Dense="true">
-        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start"
+        <MudIconButton id="nav-drawer-toggle-btn" Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start"
             OnClick="@((e) => DrawerToggle())" />
         <div class="d-flex align-center ml-1 flex-shrink-1" style="min-width: 0; overflow: hidden; cursor: pointer;" @onclick="@(() => Nav.NavigateTo("/"))">
             @if (Profile?.HasCustomLogo == true)
@@ -1069,7 +1069,7 @@
             }
             if (StartupTimings.IsChatProfilerEnabled)
             {
-                StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}] OnAfterRender #{++_diagAfterRenderCount} (_isChatChannelOpen={_isChatChannelOpen})");
+                StartupTimings.AddChatTransition($"Server: MainLayout[{_diagTag}] OnAfterRender #{++_diagAfterRenderCount} (_isChatChannelOpen={_isChatChannelOpen}, _drawerOpen={_drawerOpen})");
             }
         }
     }
@@ -1360,6 +1360,12 @@
 
     private void SetDrawerOpen(bool open)
     {
+        if (StartupTimings.IsChatProfilerEnabled)
+        {
+            StartupTimings.EnsureTransition(
+                $"DrawerToggle ({(open ? "Open" : "Close")})",
+                $"Server: MainLayout[{_diagTag}].SetDrawerOpen (open={open}, prev={_drawerOpen})");
+        }
         _drawerOpen = open;
         if (_isCapacitorApp && !_isDisposed)
         {

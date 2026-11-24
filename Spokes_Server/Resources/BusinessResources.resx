@@ -4015,9 +4015,6 @@
   <data name="Select All" xml:space="preserve">
     <value>Select All</value>
   </data>
-  <data name="Select Export Files (.txt, .imp, .csv)" xml:space="preserve">
-    <value>Select Export Files (.txt, .imp, .csv)</value>
-  </data>
   <data name="Shareholder &amp; Investor Reports" xml:space="preserve">
     <value>Shareholder &amp; Investor Reports</value>
   </data>
@@ -5013,5 +5010,95 @@
   </data>
   <data name="Standalone Line of Credit (separate account &amp; statement with transfers to/from Chequing)" xml:space="preserve">
     <value>Standalone Line of Credit (separate account &amp; statement with transfers to/from Chequing)</value>
+  </data>
+  <data name="Accounting Health &amp; Readiness" xml:space="preserve">
+    <value>Accounting Health &amp; Readiness</value>
+  </data>
+  <data name="All critical and warning checks passed. Your books are ready for reconciliation and period close." xml:space="preserve">
+    <value>All critical and warning checks passed. Your books are ready for reconciliation and period close.</value>
+  </data>
+  <data name="Books Ready" xml:space="preserve">
+    <value>Books Ready</value>
+  </data>
+  <data name="Critical" xml:space="preserve">
+    <value>Critical</value>
+  </data>
+  <data name="Customer Payment Advices Detected" xml:space="preserve">
+    <value>Customer Payment Advices Detected</value>
+  </data>
+  <data name="Detected Issues" xml:space="preserve">
+    <value>Detected Issues</value>
+  </data>
+  <data name="Guided Cutover &amp; Close Checklist" xml:space="preserve">
+    <value>Guided Cutover &amp; Close Checklist</value>
+  </data>
+  <data name="I understand this delta will zero out most existing GL accounts" xml:space="preserve">
+    <value>I understand this delta will zero out most existing GL accounts</value>
+  </data>
+  <data name="Info" xml:space="preserve">
+    <value>Info</value>
+  </data>
+  <data name="Inspect" xml:space="preserve">
+    <value>Inspect</value>
+  </data>
+  <data name="Live audit of GL integrity, taxes, subledgers, and close steps" xml:space="preserve">
+    <value>Live audit of GL integrity, taxes, subledgers, and close steps</value>
+  </data>
+  <data name="Mark Tax-Exempt" xml:space="preserve">
+    <value>Mark Tax-Exempt</value>
+  </data>
+  <data name="No sales tax breakdown recorded on this bill. Split taxes to claim input tax credits (ITC/ITR) or mark as tax-exempt." xml:space="preserve">
+    <value>No sales tax breakdown recorded on this bill. Split taxes to claim input tax credits (ITC/ITR) or mark as tax-exempt.</value>
+  </data>
+  <data name="Open Readiness Check" xml:space="preserve">
+    <value>Open Readiness Check</value>
+  </data>
+  <data name="Pre-Flight Readiness Check" xml:space="preserve">
+    <value>Pre-Flight Readiness Check</value>
+  </data>
+  <data name="Readiness Check" xml:space="preserve">
+    <value>Readiness Check</value>
+  </data>
+  <data name="Split Tax-Included Amount" xml:space="preserve">
+    <value>Split Tax-Included Amount</value>
+  </data>
+  <data name="steps complete" xml:space="preserve">
+    <value>steps complete</value>
+  </data>
+  <data name="Warnings" xml:space="preserve">
+    <value>Warnings</value>
+  </data>
+  <data name="Select Export Files (.xlsx, .csv, .txt, .imp)" xml:space="preserve">
+    <value>Select Export Files (.xlsx, .csv, .txt, .imp)</value>
+  </data>
+  <data name="Target Spokes Project" xml:space="preserve">
+    <value>Target Spokes Project</value>
+  </data>
+  <data name="Bank" xml:space="preserve">
+    <value>Bank</value>
+  </data>
+  <data name="Cutover Sanity Check" xml:space="preserve">
+    <value>Cutover Sanity Check</value>
+  </data>
+  <data name="Exclude Covered Pre-Cutover Lines" xml:space="preserve">
+    <value>Exclude Covered Pre-Cutover Lines</value>
+  </data>
+  <data name="No running balance column in CSV" xml:space="preserve">
+    <value>No running balance column in CSV</value>
+  </data>
+  <data name="Post Anyway" xml:space="preserve">
+    <value>Post Anyway</value>
+  </data>
+  <data name="Pre-Cutover Transaction Warning" xml:space="preserve">
+    <value>Pre-Cutover Transaction Warning</value>
+  </data>
+  <data name="Reassign Account" xml:space="preserve">
+    <value>Reassign Account</value>
+  </data>
+  <data name="unmatched post-cutover" xml:space="preserve">
+    <value>unmatched post-cutover</value>
+  </data>
+  <data name="unmatched pre-cutover" xml:space="preserve">
+    <value>unmatched pre-cutover</value>
   </data>
 </root>

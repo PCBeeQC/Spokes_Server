@@ -71,8 +71,7 @@ public class ProjectService : IProjectService
         // 1. Block deletion if posted financial or HR records depend on this project
         var postedInvoicesCount = _db.Invoices?.GetAll()
             .Count(i => i.ProjectId == projectId &&
-                        !string.Equals(i.Status, InvoiceStatus.Draft, StringComparison.OrdinalIgnoreCase) &&
-                        !string.Equals(i.Status, InvoiceStatus.Void, StringComparison.OrdinalIgnoreCase)) ?? 0;
+                        InvoiceStatus.IsPosted(i.Status)) ?? 0;
 
         if (postedInvoicesCount > 0)
         {

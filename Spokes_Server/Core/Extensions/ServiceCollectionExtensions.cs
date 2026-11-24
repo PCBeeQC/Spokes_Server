@@ -124,6 +124,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<FinancialReportRepository>();
         services.AddSingleton<DirectTransactionRepository>();
         services.AddSingleton<FinancialAccountRepository>();
+        services.AddSingleton<SuggestedInvoicePaymentRepository>();
         services.AddSingleton<PayRunRepository>();
         services.AddSingleton<DeviceSessionRepository>();
         services.AddSingleton<DemoConfigRepository>();
@@ -242,7 +243,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ModerationReportService>();
         services.AddSingleton<IModerationReportService>(sp => sp.GetRequiredService<ModerationReportService>());
         services.AddScoped<ChatNotificationService>();
-        services.AddScoped<IGifSearchService, GifSearchService>();
+        services.AddSingleton<IGifSearchService, GifSearchService>();
         services.AddSingleton<BoardService>();
         services.AddSingleton<ImageProcessingService>();
         services.AddSingleton<IMp4FastStartService, Mp4FastStartService>();
@@ -310,6 +311,20 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<RelayTrialTicketService>();
         services.AddSingleton<SpokesRelayClient>();
         services.AddHttpClient();
+        services.AddHttpClient(SpokesRelayClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new System.Net.Http.SocketsHttpHandler
+            {
+                AutomaticDecompression = System.Net.DecompressionMethods.All,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+            });
+        services.AddHttpClient(GifSearchService.HttpClientName, client =>
+        {
+            client.Timeout = Timeout.InfiniteTimeSpan;
+        }).ConfigurePrimaryHttpMessageHandler(() => new System.Net.Http.SocketsHttpHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.All,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+        });
         services.AddHttpClient("LinkPreview", client =>
         {
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; SpokesBot/1.0; +https://spokes.app)");
@@ -400,6 +415,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IFinancialReportService, FinancialReportService>();
         services.AddScoped<IBusinessOverheadService, BusinessOverheadService>();
         services.AddScoped<BusinessOverheadService>(sp => (BusinessOverheadService)sp.GetRequiredService<IBusinessOverheadService>());
+        services.AddScoped<IAccountingHealthService, AccountingHealthService>();
+        services.AddScoped<AccountingHealthService>(sp => (AccountingHealthService)sp.GetRequiredService<IAccountingHealthService>());
         services.AddScoped<BillingOrchestrationService>();
         services.AddSingleton<PdfInvoiceInspectionService>();
         services.AddScoped<SmartPoMatchingEngine>();

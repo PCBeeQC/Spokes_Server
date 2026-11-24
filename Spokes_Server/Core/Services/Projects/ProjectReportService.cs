@@ -281,9 +281,9 @@ public class ProjectReportService
                 .ToList();
         }
 
-        // 3. Invoices & Payments up to AsOfDate
+        // 3. Posted Invoices & Payments up to AsOfDate (Draft and Void invoices are excluded)
         var projectInvoices = _accountingContext.Invoices.GetByProject(project.Id)
-            .Where(i => !string.Equals(i.Status, InvoiceStatus.Void, StringComparison.OrdinalIgnoreCase)
+            .Where(i => InvoiceStatus.IsPosted(i.Status)
                         && i.Date.Date <= endCutoff)
             .OrderBy(i => i.Date)
             .ToList();

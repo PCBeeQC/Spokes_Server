@@ -8,6 +8,7 @@
 @using Spokes_Server.Core.Services.Accounting
 @using Spokes_Server.Core.Services.Accounting.Export
 @using Spokes_Server.Core.Services.Security
+@using Spokes_Server.Components.Shared
 @inject Database Db
 @inject ILedgerService LedgerService
 @inject IAccountantExportService AccountantExportService
@@ -15,6 +16,8 @@
 @inject IDialogService DialogService
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
+
+<AccountingHealthSummaryBanner OnOpenFullHealthDrawer="OnOpenFullHealthDrawer" />
 
 <MudGrid Spacing="3">
     @* Top Action Bar: Period Selection & 1-Click CPA Package *@
@@ -290,6 +293,8 @@
 </MudGrid>
 
 @code {
+    [Parameter] public EventCallback OnOpenFullHealthDrawer { get; set; }
+
     private DateTime? _startDate = new DateTime(DateTime.Today.Year, 1, 1);
     private DateTime? _endDate = DateTime.Today;
     private bool _includeVouchers = true;

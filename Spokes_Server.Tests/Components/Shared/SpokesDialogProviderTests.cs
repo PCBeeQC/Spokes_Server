@@ -6,6 +6,7 @@ using MudBlazor.Services;
 using Spokes_Server.Components.Dialogs.Common;
 using Spokes_Server.Components.Shared;
 using Spokes_Server.Components.UI;
+using Spokes_Server.Core.Services.Maintenance;
 using System.Text.Json;
 
 namespace Spokes_Server.Tests.Components.Shared;
@@ -18,6 +19,7 @@ public class SpokesDialogProviderTests : BunitContext
         Services.AddMudServices();
         Services.AddLocalization();
         Services.AddLogging();
+        Services.AddScoped<StartupTimingService>();
     }
 
     protected override void Dispose(bool disposing)
@@ -50,7 +52,17 @@ public class SpokesDialogProviderTests : BunitContext
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (true)
         {
-            var matches = JSInterop.Invocations.Where(predicate).ToList();
+            List<JSRuntimeInvocation> matches;
+            try
+            {
+                matches = JSInterop.Invocations.Where(predicate).ToList();
+            }
+            catch (InvalidOperationException)
+            {
+                // bUnit's JSRuntimeInvocationDictionary can be mutated concurrently on the renderer thread while polling
+                await Task.Delay(10);
+                continue;
+            }
             if (matches.Count > 0 || DateTime.UtcNow >= deadline)
             {
                 return matches;
@@ -292,5 +304,41 @@ public class SpokesDialogProviderTests : BunitContext
         Assert.NotEmpty(removeMatches);
         var removeOpts = SerializeArg(removeMatches[^1].Arguments[1]);
         Assert.False(removeOpts.GetProperty("popHistory").GetBoolean());
+    }
+
+    [Fact]
+    public async Task DialogAdded_RecordsProfilerSpansOnlyWhenEnabled()
+    {
+        var provider = RenderHost();
+        var dialogService = Services.GetRequiredService<IDialogService>();
+        var timings = Services.GetRequiredService<StartupTimingService>();
+
+        // Disabled by default: opening a dialog must create zero transitions
+        var firstRef = await provider.InvokeAsync(() =>
+            dialogService.ShowAsync<ConfirmDialog>(
+                "Silent",
+                new DialogParameters<ConfirmDialog> { { x => x.ContentText, "No profiling" } }));
+        Assert.Equal(0, timings.CurrentTransitionId);
+        await provider.InvokeAsync(() => firstRef.Close());
+
+        // Enabled: opening a dialog records DialogAdded and DialogBackStackRegistered spans
+        timings.SetChatProfilerEnabled(true);
+        var secondRef = await provider.InvokeAsync(() =>
+            dialogService.ShowAsync<ConfirmDialog>(
+                "Profiled",
+                new DialogParameters<ConfirmDialog> { { x => x.ContentText, "With profiling" } }));
+
+        var tid = timings.CurrentTransitionId;
+        Assert.True(tid > 0);
+        var expectedKey = $"dialog:{secondRef.Id:N}";
+        await WaitForJsInvocationsAsync(i =>
+            i.Identifier == "SpokesBridge.backStack.registerServerEntry" &&
+            Equals(i.Arguments[0], expectedKey));
+
+        var drained = timings.Drain(tid, 0);
+        Assert.Contains(drained.Entries, e => e.Name.Contains("Server: DialogAdded", StringComparison.Ordinal));
+        Assert.Contains(drained.Entries, e => e.Name.Contains("Server: DialogBackStackRegistered", StringComparison.Ordinal));
+
+        await provider.InvokeAsync(() => secondRef.Close());
     }
 }

@@ -69,12 +69,13 @@ public interface IBackupDestinationProvider
 
 internal static class BackupFormatHelper
 {
-    public static string FormatTransferProgress(long bytes, long totalBytes, double percent)
+    public static string FormatTransferProgress(long bytes, long totalBytes, double percent, string? unitSuffix = null)
     {
         if (totalBytes <= 0) return $"{percent:F0}%";
         var transferredMb = bytes / (1024.0 * 1024.0);
         var totalMb = totalBytes / (1024.0 * 1024.0);
-        return $"{transferredMb:F1} MB / {totalMb:F1} MB ({percent:F0}%)";
+        var suffix = string.IsNullOrWhiteSpace(unitSuffix) ? string.Empty : $" {unitSuffix}";
+        return $"{transferredMb:F1} MB / {totalMb:F1} MB{suffix} ({percent:F0}%)";
     }
 
     public static string FormatKilobyteOrMegabyteSize(long sizeBytes) => sizeBytes < 1024 * 1024

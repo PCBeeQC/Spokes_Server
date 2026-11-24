@@ -352,6 +352,26 @@
     box-shadow: none;
 }
 
+.gif-picker-tile {
+    position: relative;
+    border-radius: 8px;
+    overflow: hidden;
+    background-color: var(--mud-palette-background-grey);
+}
+
+.gif-picker-tile > img.gif-item {
+    width: 100%;
+    display: block;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.1s;
+}
+
+.gif-picker-tile > img.gif-item:hover {
+    transform: scale(1.02);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
 /* Grouped rows use py-0; give grouped cards matching 4px bottom breathing room so consecutive media/cards never touch */
 .message-row-grouped .chat-link-preview-card {
     margin-bottom: 4px;

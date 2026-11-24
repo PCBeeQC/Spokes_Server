@@ -88,6 +88,12 @@ public class BankTransactionLine
     /// </summary>
     public decimal Amount { get; set; }
 
+    /// <summary>
+    /// Optional running account balance reported by the bank after this transaction (e.g. BNC "Solde total").
+    /// Used for cutover-date sanity verification against the General Ledger.
+    /// </summary>
+    public decimal? RunningBalance { get; set; }
+
     public string ReferenceNumber { get; set; } = string.Empty;
 
     /// <summary>

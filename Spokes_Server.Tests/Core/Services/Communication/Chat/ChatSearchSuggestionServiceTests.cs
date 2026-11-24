@@ -10,7 +10,7 @@ public class ChatSearchSuggestionServiceTests
 {
     private readonly List<Employee> _employees =
     [
-        new() { Id = "emp-1", FirstName = "Mats", LastName = "Dallaire", Email = "mats@spokes.com", IsAdmin = true, IsActive = true },
+        new() { Id = "emp-1", FirstName = "Alex", LastName = "Tremblay", Email = "alex@spokes.com", IsAdmin = true, IsActive = true },
         new() { Id = "emp-2", FirstName = "Alice", LastName = "Smith", Email = "alice@spokes.com", Position = "Product Manager", IsActive = true },
         new() { Id = "emp-3", FirstName = "Bob", LastName = "Jones", Email = "bob@spokes.com", IsActive = false } // Inactive
     ];
@@ -64,7 +64,7 @@ public class ChatSearchSuggestionServiceTests
         Assert.NotEmpty(suggestions);
         Assert.Contains(suggestions, s => s.DisplayText == "from:me");
         Assert.Contains(suggestions, s => s.DisplayText == "from:admin");
-        Assert.Contains(suggestions, s => s.DisplayText == "Mats Dallaire");
+        Assert.Contains(suggestions, s => s.DisplayText == "Alex Tremblay");
         Assert.Contains(suggestions, s => s.DisplayText == "Alice Smith");
         // Bob is inactive, should not appear
         Assert.DoesNotContain(suggestions, s => s.DisplayText == "Bob Jones");
@@ -96,7 +96,7 @@ public class ChatSearchSuggestionServiceTests
 
         Assert.NotEmpty(suggestions);
         Assert.Contains(suggestions, s => s.DisplayText == "Alice Smith");
-        Assert.DoesNotContain(suggestions, s => s.DisplayText == "Mats Dallaire");
+        Assert.DoesNotContain(suggestions, s => s.DisplayText == "Alex Tremblay");
     }
 
     [Fact]

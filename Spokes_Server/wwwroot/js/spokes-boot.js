@@ -22,11 +22,11 @@ window.__signalRLogLevel = bootConfig.signalRLogLevel || '';
 window.__spokesChatProfilerUrl = bootAssets.chatProfiler || '/js/spokes-chat-profiler.js';
 window.__spokesPrintConsoleCommands = function () {
     console.log([
-        '[Spokes] Console Commands (chat profiler OFF by default; resets on page refresh):',
+        '[Spokes] Console Commands (wire profiler OFF by default; resets on page refresh):',
         '  spokesPerf.summary()                — Print session TTI & media baseline summary',
         '  spokesPerf.exportBaseline()         — Export structured JSON baseline metrics',
-        '  spokesPerf.enableChatDiagnostics()  — Enable live chat-transition & wire profiler',
-        '  spokesPerf.disableChatDiagnostics() — Disable chat-transition profiler',
+        '  spokesPerf.enableChatDiagnostics()  — Enable live UI, chat & wire profiler',
+        '  spokesPerf.disableChatDiagnostics() — Disable UI, chat & wire profiler',
         '  spokesPerf.reset()                  — Clear session performance counters',
         '  spokesPerf.help()                   — Show this command list again'
     ].join('\n'));
@@ -1655,6 +1655,11 @@ window.addEventListener('error', function(event) {
         event.message.indexOf('ResizeObserver loop completed with undelivered notifications') !== -1 ||
         event.message.indexOf('ResizeObserver loop limit exceeded') !== -1
     )) {
+        return;
+    }
+    if (window._blazorDisconnected && event.message && event.message.indexOf('No interop methods are registered for renderer') !== -1) {
+        if (typeof event.preventDefault === 'function') event.preventDefault();
+        console.log('[Resume] Ignored DOM event while Blazor renderer detached during reconnect.');
         return;
     }
     console.error('[Global Error]', event.message, event.error);

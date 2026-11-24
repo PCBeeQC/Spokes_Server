@@ -290,8 +290,8 @@
             }
         }
 
-        // 2. Invoices (Receivable)
-        var invoices = Db.Invoices.GetAll().Where(i => !InvoiceStatus.IsSettled(i.Status) && i.Status != InvoiceStatus.Void && i.BalanceDue > 0).ToList();
+        // 2. Invoices (Receivable — posted only)
+        var invoices = Db.Invoices.GetAll().Where(i => InvoiceStatus.IsPosted(i.Status) && !InvoiceStatus.IsSettled(i.Status) && i.BalanceDue > 0).ToList();
         foreach (var inv in invoices)
         {
             var d = DateOnly.FromDateTime(inv.DueDate);

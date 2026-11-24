@@ -1999,15 +1999,15 @@ public class VoiceVideoLifecycleTests : IAsyncDisposable
     {
         await using var cluster = await VoiceCallClusterSimulator.CreateAsync();
 
-        var anneSo = await cluster.CreateClientAsync("anneso-client", "anne-so", VoiceClientPlatform.DesktopElectron);
-        var mats = await cluster.CreateClientAsync("mats-client", "mats", VoiceClientPlatform.DesktopElectron);
+        var peerA = await cluster.CreateClientAsync("peera-client", "peer-a", VoiceClientPlatform.DesktopElectron);
+        var peerB = await cluster.CreateClientAsync("peerb-client", "peer-b", VoiceClientPlatform.DesktopElectron);
         var remoteCaller = await cluster.CreateClientAsync("remote-client", "remote-caller", VoiceClientPlatform.WebBrowser);
 
-        // Configure "Bureau Stewie" physical room in LowLatencyCleaned (Direct LAN + Server Cleanup for remote callers)
+        // Configure "Room Alpha" physical room in LowLatencyCleaned (Direct LAN + Server Cleanup for remote callers)
         var createRes = await cluster.PhysicalRoomService.CreateRoomAsync(
-            "Bureau Stewie",
-            "mats",
-            initialDeviceId: "dev-mats-pc",
+            "Room Alpha",
+            "peer-b",
+            initialDeviceId: "dev-peerb-pc",
             initialDeviceName: "Windows PC (Spokes Desktop)",
             muteUsersInMyRoom: false,
             audioMode: PhysicalRoomAudioMode.LowLatencyCleaned);
@@ -2016,109 +2016,109 @@ public class VoiceVideoLifecycleTests : IAsyncDisposable
 
         var enrollRes = await cluster.PhysicalRoomService.EnrollUserDeviceAsync(
             room.Id,
-            "anne-so",
-            "dev-anneso-pc",
+            "peer-a",
+            "dev-peera-pc",
             "Windows PC (Spokes Desktop)",
             muteUsersInMyRoom: false,
-            actorUserId: "anne-so");
+            actorUserId: "peer-a");
         Assert.True(enrollRes.IsSuccess);
 
-        await anneSo.ConnectToChannelAsync("ch-stewie", noiseSuppression: "rnnoise", deviceId: "dev-anneso-pc", deviceName: "Windows PC (Spokes Desktop)", voiceSessionId: "sess-anneso");
-        await mats.ConnectToChannelAsync("ch-stewie", noiseSuppression: "rnnoise", deviceId: "dev-mats-pc", deviceName: "Windows PC (Spokes Desktop)", voiceSessionId: "sess-mats");
-        await remoteCaller.ConnectToChannelAsync("ch-stewie", noiseSuppression: "webrtc", deviceId: "dev-remote-web", deviceName: "Desktop Browser", voiceSessionId: "sess-remote");
+        await peerA.ConnectToChannelAsync("ch-room-a", noiseSuppression: "rnnoise", deviceId: "dev-peera-pc", deviceName: "Windows PC (Spokes Desktop)", voiceSessionId: "sess-peera");
+        await peerB.ConnectToChannelAsync("ch-room-a", noiseSuppression: "rnnoise", deviceId: "dev-peerb-pc", deviceName: "Windows PC (Spokes Desktop)", voiceSessionId: "sess-peerb");
+        await remoteCaller.ConnectToChannelAsync("ch-room-a", noiseSuppression: "webrtc", deviceId: "dev-remote-web", deviceName: "Desktop Browser", voiceSessionId: "sess-remote");
         await cluster.SettleAsync();
 
         // 1. Both co-located roommates preserve their 'desktop' platform tag in ChatState even after JS audio telemetry reports
-        Assert.Equal("desktop", cluster.VoiceState.GetVoiceParticipantAudioTelemetry("ch-stewie", "anne-so")?.Platform);
-        Assert.Equal("desktop", cluster.VoiceState.GetVoiceParticipantAudioTelemetry("ch-stewie", "mats")?.Platform);
-        Assert.Equal(DirectRoomOperatingStatus.ActiveDirectLan, anneSo.VoiceService.GetPhysicalRoomDirectStatus(room.Id));
-        Assert.Equal(DirectRoomOperatingStatus.ActiveDirectLan, mats.VoiceService.GetPhysicalRoomDirectStatus(room.Id));
+        Assert.Equal("desktop", cluster.VoiceState.GetVoiceParticipantAudioTelemetry("ch-room-a", "peer-a")?.Platform);
+        Assert.Equal("desktop", cluster.VoiceState.GetVoiceParticipantAudioTelemetry("ch-room-a", "peer-b")?.Platform);
+        Assert.Equal(DirectRoomOperatingStatus.ActiveDirectLan, peerA.VoiceService.GetPhysicalRoomDirectStatus(room.Id));
+        Assert.Equal(DirectRoomOperatingStatus.ActiveDirectLan, peerB.VoiceService.GetPhysicalRoomDirectStatus(room.Id));
 
         // 2. Verify stationaryRoomMode is enabled on both co-located roommates' RNNoise processors,
-        // and Direct LAN mode suppresses WebRTC tracks between anne-so and mats so neither hears a faint self-echo
-        var anneSoRouting = await anneSo.GetAudioRoutingSnapshotAsync();
-        var matsRouting = await mats.GetAudioRoutingSnapshotAsync();
-        Assert.True(anneSoRouting.StationaryRoomMode);
-        Assert.True(matsRouting.StationaryRoomMode);
-        Assert.Contains("mats", anneSoRouting.DirectLanPeerUserIds);
-        Assert.Contains("anne-so", matsRouting.DirectLanPeerUserIds);
-        Assert.False(anneSoRouting.RemoteUsers["mats"].RawMicSubscribed);
-        Assert.False(anneSoRouting.RemoteUsers["mats"].RawMicAttached);
-        Assert.False(matsRouting.RemoteUsers["anne-so"].RawMicSubscribed);
-        Assert.False(matsRouting.RemoteUsers["anne-so"].RawMicAttached);
+        // and Direct LAN mode suppresses WebRTC tracks between peer-a and peer-b so neither hears a faint self-echo
+        var peerARouting = await peerA.GetAudioRoutingSnapshotAsync();
+        var peerBRouting = await peerB.GetAudioRoutingSnapshotAsync();
+        Assert.True(peerARouting.StationaryRoomMode);
+        Assert.True(peerBRouting.StationaryRoomMode);
+        Assert.Contains("peer-b", peerARouting.DirectLanPeerUserIds);
+        Assert.Contains("peer-a", peerBRouting.DirectLanPeerUserIds);
+        Assert.False(peerARouting.RemoteUsers["peer-b"].RawMicSubscribed);
+        Assert.False(peerARouting.RemoteUsers["peer-b"].RawMicAttached);
+        Assert.False(peerBRouting.RemoteUsers["peer-a"].RawMicSubscribed);
+        Assert.False(peerBRouting.RemoteUsers["peer-a"].RawMicAttached);
 
         // 2b. Event-driven transition push + pull-on-demand telemetry:
         // Repeated bridge status ticks with unchanged activePeerTokens must emit ZERO SignalR callbacks,
         // while RefreshDirectRoomTelemetryAsync() pulls fresh live metrics on demand (e.g. when VoiceSettingsDialog opens).
-        int callbacksBeforeTicks = anneSo.DirectRoomStatusCallbackCount;
-        await anneSo.EmitSimulatedDirectRoomStatusAsync(estimatedEndToEndMs: 12.8, txPacketCount: 420);
-        await anneSo.EmitSimulatedDirectRoomStatusAsync(estimatedEndToEndMs: 13.4, txPacketCount: 840);
+        int callbacksBeforeTicks = peerA.DirectRoomStatusCallbackCount;
+        await peerA.EmitSimulatedDirectRoomStatusAsync(estimatedEndToEndMs: 12.8, txPacketCount: 420);
+        await peerA.EmitSimulatedDirectRoomStatusAsync(estimatedEndToEndMs: 13.4, txPacketCount: 840);
         await cluster.SettleAsync();
-        Assert.Equal(callbacksBeforeTicks, anneSo.DirectRoomStatusCallbackCount);
+        Assert.Equal(callbacksBeforeTicks, peerA.DirectRoomStatusCallbackCount);
 
-        var pulledTelemetry = await anneSo.VoiceService.RefreshDirectRoomTelemetryAsync();
+        var pulledTelemetry = await peerA.VoiceService.RefreshDirectRoomTelemetryAsync();
         Assert.NotNull(pulledTelemetry);
         Assert.Equal(room.Id, pulledTelemetry!.RoomId);
         Assert.Equal(13.4, pulledTelemetry.EstimatedEndToEndMs, precision: 1);
         Assert.Equal(840, pulledTelemetry.TxPacketCount);
-        Assert.Equal(13.4, anneSo.VoiceService.DirectRoomTelemetry!.EstimatedEndToEndMs, precision: 1);
+        Assert.Equal(13.4, peerA.VoiceService.DirectRoomTelemetry!.EstimatedEndToEndMs, precision: 1);
 
-        // 3. Before the server bot publishes processed-mic tracks, remote-caller hears BOTH anne-so and mats via raw-mic
+        // 3. Before the server bot publishes processed-mic tracks, remote-caller hears BOTH peer-a and peer-b via raw-mic
         var remoteInitialRouting = await remoteCaller.GetAudioRoutingSnapshotAsync();
-        Assert.True(remoteInitialRouting.RemoteUsers["anne-so"].RawMicSubscribed);
-        Assert.True(remoteInitialRouting.RemoteUsers["anne-so"].RawMicAttached);
-        Assert.True(remoteInitialRouting.RemoteUsers["mats"].RawMicSubscribed);
-        Assert.True(remoteInitialRouting.RemoteUsers["mats"].RawMicAttached);
+        Assert.True(remoteInitialRouting.RemoteUsers["peer-a"].RawMicSubscribed);
+        Assert.True(remoteInitialRouting.RemoteUsers["peer-a"].RawMicAttached);
+        Assert.True(remoteInitialRouting.RemoteUsers["peer-b"].RawMicSubscribed);
+        Assert.True(remoteInitialRouting.RemoteUsers["peer-b"].RawMicAttached);
 
-        // 4. Server bot publishes processed-mic:anne-so in pending-subscription state (subscribeReady: false, pub.track == null).
-        // Readiness-gated handoff MUST keep anne-so's raw-mic subscribed & attached until processed-mic has a live MediaStreamTrack!
-        await cluster.PublishBotProcessedAudioTrackAsync("ch-stewie", "anne-so", subscribeReady: false);
+        // 4. Server bot publishes processed-mic:peer-a in pending-subscription state (subscribeReady: false, pub.track == null).
+        // Readiness-gated handoff MUST keep peer-a's raw-mic subscribed & attached until processed-mic has a live MediaStreamTrack!
+        await cluster.PublishBotProcessedAudioTrackAsync("ch-room-a", "peer-a", subscribeReady: false);
         await cluster.SettleAsync();
 
         var remotePendingRouting = await remoteCaller.GetAudioRoutingSnapshotAsync();
-        Assert.True(remotePendingRouting.RemoteUsers["anne-so"].ProcessedMicPublished);
-        Assert.False(remotePendingRouting.RemoteUsers["anne-so"].ProcessedMicHasTrack);
-        Assert.True(remotePendingRouting.RemoteUsers["anne-so"].RawMicSubscribed);
-        Assert.True(remotePendingRouting.RemoteUsers["anne-so"].RawMicAttached);
-        Assert.True(remotePendingRouting.RemoteUsers["mats"].RawMicSubscribed);
-        Assert.True(remotePendingRouting.RemoteUsers["mats"].RawMicAttached);
+        Assert.True(remotePendingRouting.RemoteUsers["peer-a"].ProcessedMicPublished);
+        Assert.False(remotePendingRouting.RemoteUsers["peer-a"].ProcessedMicHasTrack);
+        Assert.True(remotePendingRouting.RemoteUsers["peer-a"].RawMicSubscribed);
+        Assert.True(remotePendingRouting.RemoteUsers["peer-a"].RawMicAttached);
+        Assert.True(remotePendingRouting.RemoteUsers["peer-b"].RawMicSubscribed);
+        Assert.True(remotePendingRouting.RemoteUsers["peer-b"].RawMicAttached);
 
-        // 5. Once processed-mic:anne-so and processed-mic:mats complete track subscription, remote-caller seamlessly
+        // 5. Once processed-mic:peer-a and processed-mic:peer-b complete track subscription, remote-caller seamlessly
         // switches to processed-mic for both roommates and detaches their raw-mic tracks (while roommates keep both suppressed!)
-        await cluster.CompleteBotProcessedAudioSubscriptionAsync("ch-stewie", "anne-so");
-        await cluster.PublishBotProcessedAudioTrackAsync("ch-stewie", "mats", subscribeReady: true);
+        await cluster.CompleteBotProcessedAudioSubscriptionAsync("ch-room-a", "peer-a");
+        await cluster.PublishBotProcessedAudioTrackAsync("ch-room-a", "peer-b", subscribeReady: true);
         await cluster.SettleAsync();
 
         var remoteReadyRouting = await remoteCaller.GetAudioRoutingSnapshotAsync();
-        Assert.True(remoteReadyRouting.RemoteUsers["anne-so"].ProcessedMicSubscribed);
-        Assert.True(remoteReadyRouting.RemoteUsers["anne-so"].ProcessedMicAttached);
-        Assert.False(remoteReadyRouting.RemoteUsers["anne-so"].RawMicSubscribed);
-        Assert.False(remoteReadyRouting.RemoteUsers["anne-so"].RawMicAttached);
-        Assert.True(remoteReadyRouting.RemoteUsers["mats"].ProcessedMicSubscribed);
-        Assert.True(remoteReadyRouting.RemoteUsers["mats"].ProcessedMicAttached);
-        Assert.False(remoteReadyRouting.RemoteUsers["mats"].RawMicSubscribed);
-        Assert.False(remoteReadyRouting.RemoteUsers["mats"].RawMicAttached);
+        Assert.True(remoteReadyRouting.RemoteUsers["peer-a"].ProcessedMicSubscribed);
+        Assert.True(remoteReadyRouting.RemoteUsers["peer-a"].ProcessedMicAttached);
+        Assert.False(remoteReadyRouting.RemoteUsers["peer-a"].RawMicSubscribed);
+        Assert.False(remoteReadyRouting.RemoteUsers["peer-a"].RawMicAttached);
+        Assert.True(remoteReadyRouting.RemoteUsers["peer-b"].ProcessedMicSubscribed);
+        Assert.True(remoteReadyRouting.RemoteUsers["peer-b"].ProcessedMicAttached);
+        Assert.False(remoteReadyRouting.RemoteUsers["peer-b"].RawMicSubscribed);
+        Assert.False(remoteReadyRouting.RemoteUsers["peer-b"].RawMicAttached);
 
         // Roommates in Direct LAN mode must ALSO suppress the bot's processed-mic tracks for each other and themselves
-        var anneSoAfterBotRouting = await anneSo.GetAudioRoutingSnapshotAsync();
-        Assert.False(anneSoAfterBotRouting.RemoteUsers["anne-so"].ProcessedMicSubscribed);
-        Assert.False(anneSoAfterBotRouting.RemoteUsers["anne-so"].ProcessedMicAttached);
-        Assert.False(anneSoAfterBotRouting.RemoteUsers["mats"].ProcessedMicSubscribed);
-        Assert.False(anneSoAfterBotRouting.RemoteUsers["mats"].ProcessedMicAttached);
+        var peerAAfterBotRouting = await peerA.GetAudioRoutingSnapshotAsync();
+        Assert.False(peerAAfterBotRouting.RemoteUsers["peer-a"].ProcessedMicSubscribed);
+        Assert.False(peerAAfterBotRouting.RemoteUsers["peer-a"].ProcessedMicAttached);
+        Assert.False(peerAAfterBotRouting.RemoteUsers["peer-b"].ProcessedMicSubscribed);
+        Assert.False(peerAAfterBotRouting.RemoteUsers["peer-b"].ProcessedMicAttached);
 
-        // 6. When anne-so disconnects and the bot unpublishes processed-mic:anne-so, mats is now solo in "Bureau Stewie"
-        // so remote-caller cleanly detaches anne-so and seamlessly hands mats back to low-latency raw-mic
-        await anneSo.DisconnectFromChannelAsync();
-        await cluster.UnpublishBotProcessedAudioTrackAsync("ch-stewie", "anne-so");
+        // 6. When peer-a disconnects and the bot unpublishes processed-mic:peer-a, peer-b is now solo in "Room Alpha"
+        // so remote-caller cleanly detaches peer-a and seamlessly hands peer-b back to low-latency raw-mic
+        await peerA.DisconnectFromChannelAsync();
+        await cluster.UnpublishBotProcessedAudioTrackAsync("ch-room-a", "peer-a");
         await cluster.SettleAsync();
 
-        Assert.DoesNotContain("anne-so", cluster.VoiceState.GetVoiceParticipants("ch-stewie"));
-        Assert.DoesNotContain("anne-so", remoteCaller.VoiceService.CallParticipants);
+        Assert.DoesNotContain("peer-a", cluster.VoiceState.GetVoiceParticipants("ch-room-a"));
+        Assert.DoesNotContain("peer-a", remoteCaller.VoiceService.CallParticipants);
         var remoteAfterLeaveRouting = await remoteCaller.GetAudioRoutingSnapshotAsync();
-        Assert.True(remoteAfterLeaveRouting.RemoteUsers["mats"].RawMicSubscribed);
-        Assert.True(remoteAfterLeaveRouting.RemoteUsers["mats"].RawMicAttached);
-        Assert.False(remoteAfterLeaveRouting.RemoteUsers["mats"].ProcessedMicSubscribed);
-        Assert.False(remoteAfterLeaveRouting.RemoteUsers["mats"].ProcessedMicAttached);
+        Assert.True(remoteAfterLeaveRouting.RemoteUsers["peer-b"].RawMicSubscribed);
+        Assert.True(remoteAfterLeaveRouting.RemoteUsers["peer-b"].RawMicAttached);
+        Assert.False(remoteAfterLeaveRouting.RemoteUsers["peer-b"].ProcessedMicSubscribed);
+        Assert.False(remoteAfterLeaveRouting.RemoteUsers["peer-b"].ProcessedMicAttached);
     }
 
     [Fact]

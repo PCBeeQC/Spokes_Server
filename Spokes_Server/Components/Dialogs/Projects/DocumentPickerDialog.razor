@@ -172,7 +172,7 @@
                                        emp.HasPermission(AppPermissions.Finance.AccessAccounting) ||
                                        emp.HasPermission(AppPermissions.Finance.ApproveInvoices);
         Invoices = Db.Invoices.GetAll()
-            .Where(i => i.Status != InvoiceStatus.Draft &&
+            .Where(i => InvoiceStatus.IsPosted(i.Status) &&
                         !string.IsNullOrEmpty(i.PdfPath) &&
                         File.Exists(i.PdfPath) &&
                         CanAccessInvoice(emp, i, canAccountingInvoiceRead, allProjects))

@@ -76,14 +76,10 @@ public class TaxRemittanceService : ITaxRemittanceService
         decimal totalSalesSubTotal = 0m;
         decimal totalPurchasesSubTotal = 0m;
 
-        // 1. Sales Invoices (Final, Paid, Written Off, Partial, or Sent in period — excluding pre-cutover opening balances)
+        // 1. Sales Invoices (Posted in period — excluding pre-cutover opening balances, Drafts, and Voids)
         var invoices = _accountingContext.Invoices?.GetAll()
             .Where(i => !i.IsOpeningBalance &&
-                        (string.Equals(i.Status, InvoiceStatus.Final, StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(i.Status, InvoiceStatus.Paid, StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(i.Status, InvoiceStatus.WrittenOff, StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(i.Status, InvoiceStatus.Partial, StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(i.Status, InvoiceStatus.Sent, StringComparison.OrdinalIgnoreCase)) &&
+                        InvoiceStatus.IsPosted(i.Status) &&
                         i.Date.Date >= s && i.Date.Date <= e)
             .ToList() ?? [];
 

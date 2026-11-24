@@ -46,7 +46,7 @@ public class AccountingService : IAccountingService
     {
         var quotes = _projects.Quotes.GetByProject(projectId);
         var quoteRevenue = quotes.Where(q => q.Status == QuoteStatus.Accepted).Sum(q => q.GrandTotal);
-        var invoices = _accounting.Invoices.GetByProject(projectId).Where(i => i.Status != InvoiceStatus.Void && !i.IsOpeningBalance).ToList();
+        var invoices = _accounting.Invoices.GetByProject(projectId).Where(i => InvoiceStatus.IsPosted(i.Status) && !i.IsOpeningBalance).ToList();
         var directSummary = _accounting.DirectTransactions?.SummarizeForProject(projectId);
         var directIncome = directSummary?.DirectIncomeSubTotal ?? 0m;
         var directExpense = directSummary?.DirectExpenseTotal ?? 0m;
@@ -81,7 +81,7 @@ public class AccountingService : IAccountingService
             ? (currentStatusConfig.SystemMapping == SystemStatusMappings.Completed || currentStatusConfig.SystemMapping == SystemStatusMappings.Archived)
             : (string.Equals(project.Status, "Completed", StringComparison.OrdinalIgnoreCase) || string.Equals(project.Status, "Archived", StringComparison.OrdinalIgnoreCase));
 
-        var projectInvoices = _accounting.Invoices.GetByProject(projectId).Where(i => i.Status != InvoiceStatus.Void && !i.IsOpeningBalance).ToList();
+        var projectInvoices = _accounting.Invoices.GetByProject(projectId).Where(i => InvoiceStatus.IsPosted(i.Status) && !i.IsOpeningBalance).ToList();
         if (projectInvoices.Count == 0 && !project.Commissions.Any()) return;
         bool allPaid = projectInvoices.All(i => InvoiceStatus.IsSettled(i.Status));
 
@@ -208,7 +208,7 @@ public class AccountingService : IAccountingService
         if (prepayLineIds.Count == 0) return false;
 
         return _accounting.Invoices.GetAll()
-            .Where(i => i.Id != invoice.Id && i.Status != InvoiceStatus.Void)
+            .Where(i => i.Id != invoice.Id && InvoiceStatus.IsPosted(i.Status))
             .SelectMany(i => i.LineItems)
             .Any(l => l.IsCreditUsed && !string.IsNullOrEmpty(l.SourceId) && prepayLineIds.Contains(l.SourceId));
     }
@@ -342,8 +342,7 @@ public class AccountingService : IAccountingService
             AppPermissions.Finance.AccessAccounting,
             AppPermissions.Finance.ApproveInvoices);
 
-        if (string.Equals(invoice.Status, InvoiceStatus.Draft, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(invoice.Status, InvoiceStatus.Void, StringComparison.OrdinalIgnoreCase))
+        if (!InvoiceStatus.IsPosted(invoice.Status))
         {
             throw new InvalidOperationException($"Cannot write off balance on a {invoice.Status} invoice.");
         }
@@ -1332,5 +1331,108 @@ public class AccountingService : IAccountingService
         {
             ValidatePoProjectsAccessible(normalizedNew);
         }
+    }
+
+    public int BackfillTaxSplitOnBills(IEnumerable<string> billIds, string? user = null, Employee? actor = null)
+    {
+        ArgumentNullException.ThrowIfNull(billIds);
+        if (actor != null)
+        {
+            DomainActorGuard.RequireAnyPermission(actor, "backfill tax splits on bills", allowSuspended: false,
+                AppPermissions.Purchases.ManageBills, AppPermissions.Purchases.ApproveBills, AppPermissions.Finance.AccessAccounting);
+        }
+
+        if (FinancialCalculationEngine.ActiveCombinedTaxRate <= 0m) return 0;
+
+        var periodLock = _accounting.GetAccountingConfig().PeriodLockDate;
+        int updated = 0;
+
+        foreach (var id in billIds.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var bill = _accounting.Bills.GetById(id);
+            if (bill == null) continue;
+            if (bill.IsVoid || string.Equals(bill.Status, BillStatus.Void, StringComparison.OrdinalIgnoreCase)) continue;
+            if (bill.IsTaxExempt || bill.Amount <= 0m || bill.TaxAmount > 0m || bill.TpsAmount > 0m || bill.TvqAmount > 0m) continue;
+            if (periodLock.HasValue && bill.Date.Date <= periodLock.Value.Date) continue;
+
+            var breakdown = FinancialCalculationEngine.CalculateFromGrandTotal(bill.Amount, isTaxExempt: false);
+            bill.SubTotal = breakdown.SubTotal;
+            bill.TpsAmount = breakdown.TpsAmount;
+            bill.TvqAmount = breakdown.TvqAmount;
+            bill.TaxAmount = breakdown.TaxAmount;
+            bill.TaxComponents = FinancialCalculationEngine.BuildTaxComponentsFromSubTotal(
+                breakdown.SubTotal,
+                FinancialCalculationEngine.ActiveTemplate?.SalesTaxes,
+                isTaxExempt: false,
+                forPurchases: true);
+
+            bill.History ??= [];
+            bill.History.Add(new DocumentHistoryEntry
+            {
+                Timestamp = DateTime.UtcNow,
+                ChangedBy = string.IsNullOrWhiteSpace(user) ? (actor?.FullName ?? "System") : user,
+                Action = DocumentHistoryActions.Edited,
+                Summary = $"Tax split backfilled: {bill.Amount:C2} -> SubTotal {bill.SubTotal:C2} + Tax {bill.TaxAmount:C2}."
+            });
+
+            _accounting.Bills.Save(bill);
+            _ledgerService?.SyncBill(bill);
+            updated++;
+        }
+
+        return updated;
+    }
+
+    public void ApplySuggestedInvoicePayment(string suggestionId, string? user = null, Employee? actor = null)
+    {
+        if (string.IsNullOrWhiteSpace(suggestionId) || _accounting.SuggestedInvoicePayments == null) return;
+        if (actor != null)
+        {
+            DomainActorGuard.RequireAnyPermission(actor, "apply suggested invoice payments", allowSuspended: false,
+                AppPermissions.Finance.ApproveInvoices, AppPermissions.Finance.AccessAccounting);
+        }
+
+        var suggestion = _accounting.SuggestedInvoicePayments.GetById(suggestionId)
+            ?? throw new InvalidOperationException("Suggested invoice payment not found.");
+        if (!string.Equals(suggestion.Status, SuggestedInvoicePaymentStatus.Pending, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var invoice = _accounting.Invoices.GetById(suggestion.InvoiceId)
+            ?? throw new InvalidOperationException($"Invoice '{suggestion.InvoiceNumber}' was not found.");
+
+        var actorName = string.IsNullOrWhiteSpace(user) ? (actor?.FullName ?? "System") : user;
+        if (!InvoiceStatus.IsPosted(invoice.Status))
+        {
+            throw new InvalidOperationException($"Invoice {invoice.InvoiceNumber} is not finalized ({invoice.Status}). Finalize it in the project before recording payment.");
+        }
+
+        var payment = new PaymentRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            Date = suggestion.PaymentDate,
+            Amount = suggestion.SuggestedAmount,
+            Method = "EFT / Wire",
+            Reference = !string.IsNullOrWhiteSpace(suggestion.SourceEmailSubject) ? suggestion.SourceEmailSubject : $"Payment advice ({suggestion.InvoiceNumber})",
+            Notes = $"Applied from Bill Inbox payment advice ({suggestion.SourceSenderEmail})"
+        };
+
+        RecordInvoicePayment(invoice, payment, actorName, actor);
+
+        suggestion.Status = SuggestedInvoicePaymentStatus.Applied;
+        suggestion.ResolvedAtUtc = DateTime.UtcNow;
+        suggestion.ResolvedBy = actorName;
+        _accounting.SuggestedInvoicePayments.Save(suggestion);
+    }
+
+    public void DismissSuggestedInvoicePayment(string suggestionId, string? user = null, Employee? actor = null)
+    {
+        if (string.IsNullOrWhiteSpace(suggestionId) || _accounting.SuggestedInvoicePayments == null) return;
+        var suggestion = _accounting.SuggestedInvoicePayments.GetById(suggestionId);
+        if (suggestion == null) return;
+
+        suggestion.Status = SuggestedInvoicePaymentStatus.Dismissed;
+        suggestion.ResolvedAtUtc = DateTime.UtcNow;
+        suggestion.ResolvedBy = string.IsNullOrWhiteSpace(user) ? (actor?.FullName ?? "System") : user;
+        _accounting.SuggestedInvoicePayments.Save(suggestion);
     }
 }

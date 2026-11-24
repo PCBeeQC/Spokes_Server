@@ -221,9 +221,9 @@ public class BillingOrchestrationService
             .SelectMany(i => i.LineItems.Where(l => l.IsPrepayment).Select(l => new { Invoice = i, Line = l }))
             .ToList();
 
-        // Find all used credits
+        // Find all used credits from OTHER posted invoices (Draft and Void invoices never consume credits)
         var usedCredits = allInvoices
-            .Where(i => i.Status != InvoiceStatus.Void)
+            .Where(i => i.Id != invoice.Id && InvoiceStatus.IsPosted(i.Status))
             .SelectMany(i => i.LineItems.Where(l => l.IsCreditUsed))
             .ToList();
 
@@ -239,7 +239,7 @@ public class BillingOrchestrationService
         {
             decimal original = prepay.Line.Total;
 
-            // Subtract linked used credits
+            // Subtract linked used credits from other posted invoices
             decimal linkedUsed = usedCredits
                 .Where(l => l.SourceId == prepay.Line.Id)
                 .Sum(l => Math.Abs(l.Total));
@@ -254,13 +254,12 @@ public class BillingOrchestrationService
                 unlinkedCreditUsed -= amountToDeduct;
             }
 
-            // Also check if THIS current invoice already applied some of this specific credit
+            remaining = Math.Max(0m, remaining);
+
+            // Check if THIS current invoice already staged/applied some of this specific credit
             decimal currentlyApplied = invoice.LineItems
                 .Where(l => l.IsCreditUsed && l.SourceId == prepay.Line.Id)
                 .Sum(l => Math.Abs(l.Total));
-
-            // When editing, add back what this invoice currently applied to the remaining balance
-            remaining += currentlyApplied;
 
             if (remaining > 0 || currentlyApplied > 0)
             {
@@ -271,7 +270,7 @@ public class BillingOrchestrationService
                     Description = prepay.Line.Description,
                     OriginalAmount = original,
                     RemainingBalance = remaining,
-                    AmountToApply = currentlyApplied
+                    AmountToApply = Math.Min(currentlyApplied, remaining)
                 });
             }
         }
@@ -333,9 +332,39 @@ public class BillingOrchestrationService
         }
 
         var result = new List<BillingLaborGroup>();
+        var timeLines = invoice.LineItems
+            .Where(l => string.Equals(l.SourceType, "Time", StringComparison.OrdinalIgnoreCase))
+            .ToList();
         foreach (var g in rawGroups.Values)
         {
             g.Entries = g.Entries.OrderBy(x => x.Entry.Date).ToList();
+
+            // Prefer staged/saved line quantity when matching by ProjectId (or single-project invoice),
+            // so partial-hour drafts restore their exact HoursToBill without splitting TimeEntries on disk.
+            var exactProjectLineHours = timeLines
+                .Where(l => !string.IsNullOrEmpty(l.ProjectId) &&
+                            string.Equals(l.ProjectId, g.ProjectId, StringComparison.OrdinalIgnoreCase) &&
+                            string.Equals(l.WorkTypeId ?? "", g.WorkTypeId ?? "", StringComparison.OrdinalIgnoreCase) &&
+                            string.Equals(l.SubTaskId ?? "", g.SubTaskId ?? "", StringComparison.OrdinalIgnoreCase))
+                .Sum(l => l.Quantity);
+
+            if (exactProjectLineHours > 0m)
+            {
+                g.HoursToBill = Math.Min(g.AvailableHours, exactProjectLineHours);
+            }
+            else if (projectIds.Count == 1)
+            {
+                var legacyLineHours = timeLines
+                    .Where(l => string.IsNullOrEmpty(l.ProjectId) &&
+                                string.Equals(l.WorkTypeId ?? "", g.WorkTypeId ?? "", StringComparison.OrdinalIgnoreCase) &&
+                                string.Equals(l.SubTaskId ?? "", g.SubTaskId ?? "", StringComparison.OrdinalIgnoreCase))
+                    .Sum(l => l.Quantity);
+                if (legacyLineHours > 0m)
+                {
+                    g.HoursToBill = Math.Min(g.AvailableHours, legacyLineHours);
+                }
+            }
+
             result.Add(g);
         }
         return result;
@@ -437,7 +466,7 @@ public class BillingOrchestrationService
             {
                 foreach (var term in quote.PaymentTerms)
                 {
-                    if (!term.IsInvoiced || term.InvoiceId == invoice.Id)
+                    if (!IsMilestoneClaimedByOtherPostedInvoice(term, invoice.Id))
                     {
                         var existingLine = invoice.LineItems.FirstOrDefault(l => l.SourceType == "Milestone" && l.SourceId == term.Id);
                         var vm = new BillingMilestoneSelection
@@ -650,7 +679,7 @@ public class BillingOrchestrationService
             }
 
             var liveTerm = liveQuote.PaymentTerms.FirstOrDefault(t => string.Equals(t.Id, milestone.Term.Id, StringComparison.Ordinal));
-            if (liveTerm == null || (liveTerm.IsInvoiced && !string.Equals(liveTerm.InvoiceId, invoice.Id, StringComparison.Ordinal)))
+            if (liveTerm == null || IsMilestoneClaimedByOtherPostedInvoice(liveTerm, invoice.Id))
             {
                 throw new InvalidOperationException("Referenced milestone payment term is invalid or already invoiced.");
             }
@@ -695,6 +724,8 @@ public class BillingOrchestrationService
             ?? (!string.IsNullOrEmpty(invoice.TemplateId) ? _core.DocumentTemplates.GetById(invoice.TemplateId) : null)
             ?? _core.DocumentTemplates.GetDefault();
 
+        bool isPostedTarget = InvoiceStatus.IsPosted(invoice.Status);
+
         // 1. Labor Groups (Unbilled)
         foreach (var (group, resolvedEntries) in resolvedLaborGroups)
         {
@@ -705,6 +736,7 @@ public class BillingOrchestrationService
             invoice.LineItems.Add(new InvoiceLine
             {
                 Description = lineDescription,
+                ProjectId = group.ProjectId,
                 WorkTypeId = group.WorkTypeId,
                 SubTaskId = group.SubTaskId,
                 Quantity = group.HoursToBill,
@@ -722,7 +754,7 @@ public class BillingOrchestrationService
                     invoice.BilledTimeEntryIds.Add(entry.Id);
                     remainingToBill -= entry.Hours;
                 }
-                else
+                else if (isPostedTarget)
                 {
                     var billedEntry = new TimeEntry
                     {
@@ -740,6 +772,12 @@ public class BillingOrchestrationService
                     _hr.Timesheets.Save(sheet);
                     remainingToBill = 0;
                 }
+                else
+                {
+                    // Drafts never mutate Timesheets on disk; record the candidate entry ID and defer any partial split until finalization.
+                    invoice.BilledTimeEntryIds.Add(entry.Id);
+                    remainingToBill = 0;
+                }
             }
         }
 
@@ -753,6 +791,7 @@ public class BillingOrchestrationService
             invoice.LineItems.Add(new InvoiceLine
             {
                 Description = $"{item.ProjectName} - {item.Description}",
+                ProjectId = item.ProjectId,
                 Quantity = item.Quantity,
                 UnitPrice = item.UnitCost * (1 + markupRate),
                 OriginalUnitCost = item.UnitCost,
@@ -766,19 +805,34 @@ public class BillingOrchestrationService
             else invoice.BilledExpenseItemIds.Add(item.Id);
         }
 
-        // 3. Milestones & Quotes
+        // 3. Milestones & Quotes (Drafts never stamp Quote.PaymentTerms[].InvoiceId; only posted invoices claim milestones)
         foreach (var quote in request.AcceptedQuotes)
         {
             var liveQuote = liveQuotesById[quote.Id];
+            bool quoteChanged = false;
             foreach (var term in liveQuote.PaymentTerms)
             {
                 var milestone = request.SelectedMilestones.FirstOrDefault(v => v.Term.Id == term.Id);
                 if (milestone != null && availableMilestoneTermIds.Contains(term.Id))
                 {
-                    term.InvoiceId = invoice.Id;
+                    if (isPostedTarget)
+                    {
+                        if (!string.Equals(term.InvoiceId, invoice.Id, StringComparison.Ordinal))
+                        {
+                            term.InvoiceId = invoice.Id;
+                            quoteChanged = true;
+                        }
+                    }
+                    else if (string.Equals(term.InvoiceId, invoice.Id, StringComparison.Ordinal))
+                    {
+                        term.InvoiceId = "";
+                        quoteChanged = true;
+                    }
+
                     invoice.LineItems.Add(new InvoiceLine
                     {
                         Description = milestone.InvoiceDescription,
+                        ProjectId = liveQuote.ProjectId,
                         Quantity = 1,
                         UnitPrice = milestone.PreTaxAmount,
                         Type = "General",
@@ -786,12 +840,16 @@ public class BillingOrchestrationService
                         SourceType = "Milestone"
                     });
                 }
-                else if (term.InvoiceId == invoice.Id)
+                else if (string.Equals(term.InvoiceId, invoice.Id, StringComparison.Ordinal))
                 {
                     term.InvoiceId = "";
+                    quoteChanged = true;
                 }
             }
-            _projects.Quotes.Save(liveQuote);
+            if (quoteChanged)
+            {
+                _projects.Quotes.Save(liveQuote);
+            }
         }
 
         // 4. Quote Labor & Items
@@ -908,6 +966,291 @@ public class BillingOrchestrationService
         _accounting.Invoices.Save(invoice);
     }
 
+    /// <summary>
+    /// Validates a Draft invoice before finalization against all other posted invoices
+    /// (preventing double-billed time entries, PO/expense items, quote milestones, or over-consumed prepayment credits),
+    /// then commits deferred partial timesheet splits and Quote milestone links.
+    /// Throws <see cref="InvalidOperationException"/> without mutating state if any conflict is detected.
+    /// </summary>
+    public void CommitFinalization(Invoice invoice, Employee? actor = null)
+    {
+        ArgumentNullException.ThrowIfNull(invoice);
+
+        var invoiceProjects = ResolveInvoiceProjects(invoice);
+        var invoiceProjectIds = invoiceProjects
+            .Select(p => p.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (invoiceProjectIds.Count == 0 && !string.IsNullOrWhiteSpace(invoice.ProjectId))
+        {
+            invoiceProjectIds.Add(invoice.ProjectId);
+        }
+
+        // 1. Validate no double-billing against other POSTED invoices
+        var billedElsewhereTimeIds = GetBilledIds(invoiceProjectIds, invoice, i => i.BilledTimeEntryIds);
+        if (invoice.BilledTimeEntryIds.Any(billedElsewhereTimeIds.Contains))
+        {
+            throw new InvalidOperationException(
+                "Cannot finalize invoice: one or more time entries have already been billed on another finalized invoice. Edit the draft to refresh unbilled items.");
+        }
+
+        var billedElsewherePoIds = GetBilledIds(invoiceProjectIds, invoice, i => i.BilledPoItemIds);
+        if (invoice.BilledPoItemIds.Any(billedElsewherePoIds.Contains))
+        {
+            throw new InvalidOperationException(
+                "Cannot finalize invoice: one or more purchase order items have already been billed on another finalized invoice. Edit the draft to refresh unbilled items.");
+        }
+
+        var billedElsewhereExpenseIds = GetBilledIds(invoiceProjectIds, invoice, i => i.BilledExpenseItemIds);
+        if (invoice.BilledExpenseItemIds.Any(billedElsewhereExpenseIds.Contains))
+        {
+            throw new InvalidOperationException(
+                "Cannot finalize invoice: one or more expense items have already been billed on another finalized invoice. Edit the draft to refresh unbilled items.");
+        }
+
+        // 2. Validate Quote milestones referenced by this invoice
+        var milestonesToStamp = new List<(Quote Quote, PaymentTerm Term)>();
+        var milestoneSourceIds = invoice.LineItems
+            .Where(l => string.Equals(l.SourceType, "Milestone", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(l.SourceId))
+            .Select(l => l.SourceId!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (milestoneSourceIds.Count > 0)
+        {
+            var projectQuotes = invoiceProjectIds
+                .SelectMany(pid => _projects.Quotes.GetByProject(pid))
+                .DistinctBy(q => q.Id)
+                .ToList();
+
+            foreach (var termId in milestoneSourceIds)
+            {
+                foreach (var quote in projectQuotes)
+                {
+                    var liveTerm = quote.PaymentTerms.FirstOrDefault(t => string.Equals(t.Id, termId, StringComparison.Ordinal));
+                    if (liveTerm == null) continue;
+
+                    if (IsMilestoneClaimedByOtherPostedInvoice(liveTerm, invoice.Id))
+                    {
+                        throw new InvalidOperationException(
+                            $"Cannot finalize invoice: milestone '{liveTerm.Description}' has already been invoiced on another finalized invoice.");
+                    }
+
+                    milestonesToStamp.Add((quote, liveTerm));
+                    break;
+                }
+            }
+        }
+
+        // 3. Validate applied prepayment credits do not exceed remaining posted balance
+        var appliedCreditBySource = invoice.LineItems
+            .Where(l => l.IsCreditUsed && !string.IsNullOrWhiteSpace(l.SourceId))
+            .GroupBy(l => l.SourceId!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Sum(l => Math.Abs(l.Total)), StringComparer.OrdinalIgnoreCase);
+
+        if (appliedCreditBySource.Count > 0 && invoiceProjects.Count > 0)
+        {
+            var availableCreditsById = CalculateAvailablePrepaymentCredits(invoiceProjects, invoice, actor)
+                .ToDictionary(c => c.PrepaymentLineId, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (prepayLineId, requestedAmount) in appliedCreditBySource)
+            {
+                if (!availableCreditsById.TryGetValue(prepayLineId, out var available) ||
+                    requestedAmount > available.RemainingBalance + 0.01m)
+                {
+                    throw new InvalidOperationException(
+                        "Cannot finalize invoice: applied prepayment credit exceeds the remaining available credit balance. Edit the draft to adjust credits.");
+                }
+            }
+        }
+
+        // --- All validations passed; commit deferred allocations ---
+
+        // 4. Perform any deferred partial TimeEntry splits so BilledTimeEntryIds match exact billed hours on disk
+        if (invoice.BilledTimeEntryIds.Count > 0 && _hr?.Timesheets != null)
+        {
+            var stagedEntryIds = invoice.BilledTimeEntryIds.ToHashSet(StringComparer.Ordinal);
+            var entryLookup = new Dictionary<string, (Timesheet Sheet, TimeEntry Entry)>(StringComparer.Ordinal);
+            foreach (var sheet in _hr.Timesheets.GetAll())
+            {
+                foreach (var entry in sheet.Entries)
+                {
+                    if (stagedEntryIds.Contains(entry.Id))
+                    {
+                        entryLookup[entry.Id] = (sheet, entry);
+                    }
+                }
+            }
+
+            var timeLines = invoice.LineItems
+                .Where(l => string.Equals(l.SourceType, "Time", StringComparison.OrdinalIgnoreCase) && l.Quantity > 0m)
+                .ToList();
+
+            if (timeLines.Count > 0 && entryLookup.Count > 0)
+            {
+                var updatedBilledIds = new List<string>();
+                var handledEntryIds = new HashSet<string>(StringComparer.Ordinal);
+                var modifiedSheets = new Dictionary<string, Timesheet>(StringComparer.Ordinal);
+
+                foreach (var line in timeLines)
+                {
+                    var targetProjectId = !string.IsNullOrWhiteSpace(line.ProjectId) ? line.ProjectId : invoice.ProjectId;
+                    var matchingEntries = entryLookup.Values
+                        .Where(x => !handledEntryIds.Contains(x.Entry.Id) &&
+                                    (string.IsNullOrWhiteSpace(targetProjectId) ||
+                                     string.Equals(x.Entry.ProjectId, targetProjectId, StringComparison.OrdinalIgnoreCase)) &&
+                                    string.Equals(x.Entry.WorkTypeId ?? "", line.WorkTypeId ?? "", StringComparison.OrdinalIgnoreCase) &&
+                                    string.Equals(x.Entry.SubTaskId ?? "", line.SubTaskId ?? "", StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(x => x.Entry.Date)
+                        .ToList();
+
+                    decimal remainingToBill = line.Quantity;
+                    foreach (var (sheet, entry) in matchingEntries)
+                    {
+                        handledEntryIds.Add(entry.Id);
+                        if (remainingToBill <= 0m) continue;
+
+                        if (entry.Hours <= remainingToBill + 0.0001m)
+                        {
+                            updatedBilledIds.Add(entry.Id);
+                            remainingToBill = Math.Max(0m, remainingToBill - entry.Hours);
+                        }
+                        else
+                        {
+                            var billedEntry = new TimeEntry
+                            {
+                                ProjectId = entry.ProjectId,
+                                WorkTypeId = entry.WorkTypeId,
+                                SubTaskId = entry.SubTaskId,
+                                Date = entry.Date,
+                                Description = entry.Description + " (Billed)",
+                                Hours = remainingToBill,
+                                Id = Guid.NewGuid().ToString()
+                            };
+                            entry.Hours -= remainingToBill;
+                            sheet.Entries.Add(billedEntry);
+                            modifiedSheets[sheet.Id] = sheet;
+                            updatedBilledIds.Add(billedEntry.Id);
+                            remainingToBill = 0m;
+                        }
+                    }
+                }
+
+                // Preserve any billed time entry IDs that weren't matched to a specific Time line
+                foreach (var origId in invoice.BilledTimeEntryIds)
+                {
+                    if (!handledEntryIds.Contains(origId) && !updatedBilledIds.Contains(origId))
+                    {
+                        updatedBilledIds.Add(origId);
+                    }
+                }
+
+                foreach (var sheet in modifiedSheets.Values)
+                {
+                    _hr.Timesheets.Save(sheet);
+                }
+
+                invoice.BilledTimeEntryIds = updatedBilledIds;
+            }
+        }
+
+        // 5. Stamp Quote milestone links
+        var modifiedQuotes = new Dictionary<string, Quote>(StringComparer.Ordinal);
+        foreach (var (quote, term) in milestonesToStamp)
+        {
+            if (!string.Equals(term.InvoiceId, invoice.Id, StringComparison.Ordinal))
+            {
+                term.InvoiceId = invoice.Id;
+                modifiedQuotes[quote.Id] = quote;
+            }
+        }
+        foreach (var quote in modifiedQuotes.Values)
+        {
+            _projects.Quotes.Save(quote);
+        }
+    }
+
+    /// <summary>
+    /// Releases external Quote milestone links owned by an invoice when reverting Final -> Draft
+    /// or deleting a legacy draft.
+    /// </summary>
+    public void ReleaseFinalizedAllocations(Invoice invoice)
+    {
+        if (invoice == null || string.IsNullOrWhiteSpace(invoice.Id)) return;
+
+        var projectIds = ResolveInvoiceProjects(invoice)
+            .Select(p => p.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(invoice.ProjectId))
+        {
+            projectIds.Add(invoice.ProjectId);
+        }
+
+        var quotes = projectIds.Count > 0
+            ? projectIds.SelectMany(pid => _projects.Quotes.GetByProject(pid)).DistinctBy(q => q.Id).ToList()
+            : _projects.Quotes.GetAll();
+
+        foreach (var quote in quotes)
+        {
+            bool changed = false;
+            foreach (var term in quote.PaymentTerms)
+            {
+                if (string.Equals(term.InvoiceId, invoice.Id, StringComparison.Ordinal))
+                {
+                    term.InvoiceId = "";
+                    changed = true;
+                }
+            }
+            if (changed)
+            {
+                _projects.Quotes.Save(quote);
+            }
+        }
+    }
+
+    private List<Project> ResolveInvoiceProjects(Invoice invoice)
+    {
+        var projects = new List<Project>();
+        if (!string.IsNullOrEmpty(invoice.ProjectGroupId))
+        {
+            var group = _projects.ProjectGroups.GetById(invoice.ProjectGroupId);
+            if (group != null)
+            {
+                foreach (var pid in group.ProjectIds)
+                {
+                    var p = _projects.Projects.GetById(pid);
+                    if (p != null && !projects.Any(x => x.Id == p.Id))
+                    {
+                        projects.Add(p);
+                    }
+                }
+            }
+        }
+        if (!string.IsNullOrEmpty(invoice.ProjectId))
+        {
+            var p = _projects.Projects.GetById(invoice.ProjectId);
+            if (p != null && !projects.Any(x => x.Id == p.Id))
+            {
+                projects.Add(p);
+            }
+        }
+        return projects;
+    }
+
+    private bool IsMilestoneClaimedByOtherPostedInvoice(PaymentTerm term, string currentInvoiceId)
+    {
+        if (string.IsNullOrWhiteSpace(term.InvoiceId) ||
+            string.Equals(term.InvoiceId, currentInvoiceId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var owner = _accounting.Invoices.GetById(term.InvoiceId);
+        return owner != null && InvoiceStatus.IsPosted(owner.Status);
+    }
+
     private HashSet<string> GetBilledIds(
         IEnumerable<string> projectIds,
         Invoice currentInvoice,
@@ -917,14 +1260,14 @@ public class BillingOrchestrationService
         foreach (var projectId in projectIds)
         {
             var projectInvoices = _accounting.Invoices.GetByProject(projectId)
-                .Where(i => i.Id != currentInvoice.Id && i.Status != InvoiceStatus.Void);
+                .Where(i => i.Id != currentInvoice.Id && InvoiceStatus.IsPosted(i.Status));
             billedIds.UnionWith(projectInvoices.SelectMany(selector));
         }
 
         if (!string.IsNullOrEmpty(currentInvoice.ProjectGroupId))
         {
             var groupInvoices = _accounting.Invoices.GetByProjectGroup(currentInvoice.ProjectGroupId)
-                .Where(i => i.Id != currentInvoice.Id && i.Status != InvoiceStatus.Void);
+                .Where(i => i.Id != currentInvoice.Id && InvoiceStatus.IsPosted(i.Status));
             billedIds.UnionWith(groupInvoices.SelectMany(selector));
         }
 
