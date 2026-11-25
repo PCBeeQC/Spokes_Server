@@ -901,20 +901,82 @@ window.pushNotifications = {
         }
     },
 
-    // Setup listener for service worker messages to report push results
+    // Setup listener for service worker messages to report push results (single deduplicated listener slot)
+    _messageListenerDotNetRef: null,
+    _messageListenerAttached: false,
+
     setupMessageListener: function (dotNetRef) {
-        if (!('serviceWorker' in navigator)) return;
+        this._messageListenerDotNetRef = dotNetRef || null;
+        if (!('serviceWorker' in navigator) || this._messageListenerAttached) return;
+        this._messageListenerAttached = true;
         navigator.serviceWorker.addEventListener('message', event => {
-            if (event.data && event.data.type === 'TEST_PUSH_RESULT') {
-                dotNetRef.invokeMethodAsync('OnTestPushResult', {
+            const target = this._messageListenerDotNetRef;
+            if (target && event.data && event.data.type === 'TEST_PUSH_RESULT') {
+                target.invokeMethodAsync('OnTestPushResult', {
                     success: !!event.data.success,
                     fallbackUsed: !!event.data.fallbackUsed,
                     error: event.data.error || null,
                     category: event.data.category || 'chat',
                     sound: event.data.sound || null
-                });
+                }).catch(() => {});
             }
         });
+    },
+
+    clearMessageListener: function (dotNetRef) {
+        if (!dotNetRef || this._messageListenerDotNetRef === dotNetRef) {
+            this._messageListenerDotNetRef = null;
+        }
+    },
+
+    // Single batched snapshot for UserSettingsDialog (replaces 9 sequential JS interop round-trips)
+    getDeviceSettingsSnapshot: async function (dotNetRef, options) {
+        const opts = options || {};
+        this.setupMessageListener(dotNetRef);
+
+        const isSupported = Boolean(this.isSupported());
+        const unsupportedReason = isSupported ? '' : (this.getSupportReason() || '');
+        let isDesktopApp = false;
+        let requiresPushRelay = false;
+        let deviceType = '';
+        let deviceName = '';
+
+        if (isSupported) {
+            try {
+                isDesktopApp = Boolean(this.isDesktopApp());
+                requiresPushRelay = Boolean(this.requiresPushRelay());
+            } catch (e) {}
+
+            if (typeof opts.serverPushDisabled === 'boolean') {
+                try {
+                    this.setServerPushDisabled(opts.serverPushDisabled);
+                } catch (e) {}
+            }
+
+            try { deviceType = this.detectDeviceType() || ''; } catch (e) {}
+            try { deviceName = this.detectDeviceName() || ''; } catch (e) {}
+        }
+
+        const subscriptionPromise = (isSupported && opts.checkSubscription)
+            ? this.getExistingSubscription({ allowNativeTokenFetch: Boolean(opts.allowNativeTokenFetch) }).catch(() => null)
+            : Promise.resolve(null);
+
+        const mediaCachePromise = (window.spokesMediaLoader && typeof window.spokesMediaLoader.getCacheStatsAsync === 'function')
+            ? window.spokesMediaLoader.getCacheStatsAsync().catch(() => null)
+            : Promise.resolve(null);
+
+        const [subscription, mediaCache] = await Promise.all([subscriptionPromise, mediaCachePromise]);
+
+        return {
+            isSupported: isSupported,
+            unsupportedReason: unsupportedReason,
+            isDesktopApp: isDesktopApp,
+            requiresPushRelay: requiresPushRelay,
+            subscription: subscription,
+            deviceType: deviceType,
+            deviceName: deviceName,
+            mediaCache: mediaCache
+        };
     },
 
     // Check if the user has already been prompted for push notifications on this device/server

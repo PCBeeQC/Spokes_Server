@@ -79,6 +79,11 @@ public interface IBankReconciliationService
     void ReassignAccountAndMatchLine(BankStatement statement, string lineId, string journalEntryId, Employee? actor = null);
     JournalEntry? SettleOpenDocumentAndMatchLine(BankStatement statement, string lineId, OpenDocumentBankCandidate candidate, IAccountingService accountingService, Employee? actor = null);
     JournalEntry? MatchLineToRecurringExpense(BankStatement statement, string lineId, string recurringExpenseId, bool splitTaxIncluded = true, Employee? actor = null);
+    List<BankRule> GetBankRules(Employee? actor = null);
+    BankRule SaveBankRule(BankRule rule, Employee? actor = null);
+    void DeleteBankRule(string ruleId, Employee? actor = null);
+    BankRule? MatchRuleForLine(BankStatement statement, BankTransactionLine line);
+    int ApplyBankRulesToStatement(BankStatement statement, bool autoPostOnly = false, Employee? actor = null);
     JournalEntry CategorizeUnmatchedLineDirect(
         BankStatement statement,
         string lineId,
@@ -135,6 +140,7 @@ public class BankReconciliationService : IBankReconciliationService
         }
 
         AutoMatchStatement(statement, actor);
+        ApplyBankRulesToStatement(statement, autoPostOnly: true, actor: actor);
         _accountingContext.BankStatements?.Save(statement);
         return statement;
     }
@@ -992,5 +998,127 @@ public class BankReconciliationService : IBankReconciliationService
         }
 
         return paymentJe;
+    }
+
+    public List<BankRule> GetBankRules(Employee? actor = null)
+    {
+        if (actor != null) RequireInteractiveAccounting(actor, "view bank rules");
+        return _accountingContext.BankRules?.GetOrderedAll() ?? [];
+    }
+
+    public BankRule SaveBankRule(BankRule rule, Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "save bank rules");
+        ArgumentNullException.ThrowIfNull(rule);
+        if (string.IsNullOrWhiteSpace(rule.Keywords))
+            throw new ArgumentException("Bank rule must specify at least one keyword.", nameof(rule));
+        if (string.Equals(rule.Action, BankRuleAction.CategorizeToAccount, StringComparison.OrdinalIgnoreCase) &&
+            string.IsNullOrWhiteSpace(rule.TargetGlAccountCode))
+            throw new ArgumentException("Categorize rule must specify a target GL account.", nameof(rule));
+
+        if (string.IsNullOrWhiteSpace(rule.Name))
+            rule.Name = rule.Keywords.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? "Bank Rule";
+
+        rule.UpdatedAtUtc = DateTime.UtcNow;
+        _accountingContext.BankRules?.Save(rule);
+        return rule;
+    }
+
+    public void DeleteBankRule(string ruleId, Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "delete bank rules");
+        if (string.IsNullOrWhiteSpace(ruleId)) return;
+        _accountingContext.BankRules?.Delete(ruleId);
+    }
+
+    public BankRule? MatchRuleForLine(BankStatement statement, BankTransactionLine line)
+    {
+        ArgumentNullException.ThrowIfNull(statement);
+        ArgumentNullException.ThrowIfNull(line);
+        var rules = _accountingContext.BankRules?.GetOrderedActive();
+        if (rules == null || rules.Count == 0) return null;
+
+        var haystack = PartyMatchingHelper.StripDiacritics($"{line.Description} {line.Payee}").ToLowerInvariant();
+
+        foreach (var rule in rules)
+        {
+            if (!string.IsNullOrWhiteSpace(rule.BankGlAccountCode) &&
+                !string.Equals(rule.BankGlAccountCode.Trim(), statement.GlAccountCode, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (string.Equals(rule.Direction, BankRuleDirection.MoneyOut, StringComparison.OrdinalIgnoreCase) && line.Amount >= 0m)
+                continue;
+            if (string.Equals(rule.Direction, BankRuleDirection.MoneyIn, StringComparison.OrdinalIgnoreCase) && line.Amount <= 0m)
+                continue;
+
+            var keywords = rule.Keywords
+                .Split([',', ';', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(k => PartyMatchingHelper.StripDiacritics(k).ToLowerInvariant())
+                .Where(k => k.Length >= 2);
+
+            if (keywords.Any(k => haystack.Contains(k, StringComparison.OrdinalIgnoreCase)))
+                return rule;
+        }
+
+        return null;
+    }
+
+    public int ApplyBankRulesToStatement(BankStatement statement, bool autoPostOnly = false, Employee? actor = null)
+    {
+        RequireInteractiveAccounting(actor, "apply bank rules");
+        ArgumentNullException.ThrowIfNull(statement);
+        if (_accountingContext.BankRules == null) return 0;
+
+        // Resolve latest Applied migration cutover date so Bank Rules NEVER double-post pre-cutover lines
+        var cutoverDate = (_accountingContext.MigrationBatches?.GetAll() ?? [])
+            .Where(b => string.Equals(b.Status, AccountingMigrationBatchStatus.Applied, StringComparison.OrdinalIgnoreCase) &&
+                        b.AsOfDate != default)
+            .OrderByDescending(b => b.AsOfDate)
+            .Select(b => (DateTime?)b.AsOfDate.Date)
+            .FirstOrDefault();
+
+        int applied = 0;
+        bool statementDirty = false;
+
+        foreach (var line in statement.Lines)
+        {
+            if (line.IsMatchedOrCategorized || string.Equals(line.MatchStatus, BankLineMatchStatus.Excluded, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var rule = MatchRuleForLine(statement, line);
+            if (rule == null) continue;
+            if (autoPostOnly && !rule.AutoPostOnImport) continue;
+
+            if (string.Equals(rule.Action, BankRuleAction.Exclude, StringComparison.OrdinalIgnoreCase))
+            {
+                line.MatchStatus = BankLineMatchStatus.Excluded;
+                line.MatchedDocumentSummary = $"Excluded by rule: {rule.Name}";
+                applied++;
+                statementDirty = true;
+            }
+            else if (string.Equals(rule.Action, BankRuleAction.CategorizeToAccount, StringComparison.OrdinalIgnoreCase) &&
+                     !string.IsNullOrWhiteSpace(rule.TargetGlAccountCode))
+            {
+                // Cutover Safety Invariant: never auto-post or bulk-post pre-cutover lines (already in Opening Balance TB)
+                if (cutoverDate.HasValue && line.Date.Date <= cutoverDate.Value)
+                    continue;
+
+                CategorizeUnmatchedLineDirect(
+                    statement,
+                    line.Id,
+                    rule.TargetGlAccountCode,
+                    memo: $"{rule.Name}: {line.Description}",
+                    includeSalesTaxes: rule.IncludeSalesTax,
+                    actor: actor);
+                applied++;
+            }
+        }
+
+        if (statementDirty)
+        {
+            _accountingContext.BankStatements?.Save(statement);
+        }
+
+        return applied;
     }
 }

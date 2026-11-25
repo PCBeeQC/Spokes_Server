@@ -56,11 +56,14 @@ public class BankStatement : IDataEntity, IHasAssociatedFiles
     public decimal TotalNetMovement =>
         Math.Round(Lines.Where(l => !string.Equals(l.MatchStatus, BankLineMatchStatus.Excluded, StringComparison.OrdinalIgnoreCase)).Sum(l => l.Amount), 2);
 
+    public decimal ExcludedNetMovement =>
+        Math.Round(Lines.Where(l => string.Equals(l.MatchStatus, BankLineMatchStatus.Excluded, StringComparison.OrdinalIgnoreCase)).Sum(l => l.Amount), 2);
+
     public decimal ClearedNetMovement =>
         Math.Round(Lines.Where(l => l.IsMatchedOrCategorized).Sum(l => l.Amount), 2);
 
     public decimal CalculatedClearedEndingBalance =>
-        Math.Round(OpeningBalance + ClearedNetMovement, 2);
+        Math.Round(OpeningBalance + ExcludedNetMovement + ClearedNetMovement, 2);
 
     public decimal OutOfBalanceDifference =>
         Math.Round(ClosingBalance - CalculatedClearedEndingBalance, 2);

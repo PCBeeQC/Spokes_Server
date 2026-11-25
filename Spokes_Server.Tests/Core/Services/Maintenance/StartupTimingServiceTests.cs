@@ -194,4 +194,51 @@ public class StartupTimingServiceTests
             Assert.Contains(firstResult.Entries, e => e.Name.StartsWith("Server: Chain End"));
             Assert.DoesNotContain(service.Drain(second, 0).Entries, e => e.Name.StartsWith("Server: Chain"));
         }
+
+        [Theory]
+        [InlineData("NavLink (/albums)", true)]
+        [InlineData("PopState (/chat)", true)]
+        [InlineData("DrawerToggle (Close)", true)]
+        [InlineData("DrawerClose (Backdrop)", true)]
+        [InlineData("DialogClose (Back)", true)]
+        [InlineData("OverlayClose (Back)", true)]
+        [InlineData("UIAction (Settings)", false)]
+        [InlineData("SelectChannel", false)]
+        [InlineData("SwitchChannel", false)]
+        [InlineData("", false)]
+        [InlineData(null, false)]
+        public void ShouldPreserveClientTransitionName_DistinguishesSpecificAndGenericLabels(string? label, bool expected)
+        {
+            Assert.Equal(expected, StartupTimingService.ShouldPreserveClientTransitionName(label));
+        }
+
+        [Fact]
+        public void ChatTransition_SpecificClientTransitionName_IsNotOverwrittenByEnsureTransition()
+        {
+            var service = new StartupTimingService();
+            service.SetChatProfilerEnabled(true);
+
+            var clientName = "NavLink (/albums)";
+            var clientTid = service.BeginTransition(clientName, isNamed: StartupTimingService.ShouldPreserveClientTransitionName(clientName));
+            var serverTid = service.EnsureTransition("DrawerToggle (Close)", "Server: Drawer Closed");
+
+            Assert.Equal(clientTid, serverTid);
+            var drained = service.Drain(clientTid, 0);
+            Assert.Equal("NavLink (/albums)", drained.TransitionName);
+            Assert.Contains(drained.Entries, e => e.Name == "Server: Drawer Closed");
+        }
+
+        [Fact]
+        public void ChatTransition_GenericClientTransitionName_IsEnrichedByEnsureTransition()
+        {
+            var service = new StartupTimingService();
+            service.SetChatProfilerEnabled(true);
+
+            var clientName = "UIAction (Settings)";
+            var clientTid = service.BeginTransition(clientName, isNamed: StartupTimingService.ShouldPreserveClientTransitionName(clientName));
+            var serverTid = service.EnsureTransition("Dialog (UserSettingsDialog)", "Server: Dialog Opened");
+
+            Assert.Equal(clientTid, serverTid);
+            Assert.Equal("Dialog (UserSettingsDialog)", service.Drain(clientTid, 0).TransitionName);
+        }
     }

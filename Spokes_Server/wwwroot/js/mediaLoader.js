@@ -684,7 +684,7 @@
             const isCoarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
             const isMobileUa = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
             if (isCoarse || isMobileUa) {
-                return 2;
+                return 4;
             }
         } catch (_) { }
 

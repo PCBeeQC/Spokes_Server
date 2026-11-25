@@ -286,16 +286,15 @@ public class BlazorStartupTransportTests : IClassFixture<SpokesTestWebApplicatio
             var negotiateBody = await negotiateRes.Content.ReadAsStringAsync();
             Assert.Contains("connectionToken", negotiateBody);
 
-            // 4. Backup restore POST endpoint reaches SetupApiController without redirect or 503 block
-            using var emptyMultipart = new MultipartFormDataContent();
-            emptyMultipart.Add(new StringContent("1"), "probe");
-            var restoreRes = await client.PostAsync("/setup/api/restore-backup", emptyMultipart);
+            // 4. Chunked backup restore init POST endpoint reaches SetupApiController without redirect or 503 block
+            using var invalidInitBody = new StringContent("{\"fileName\":\"\",\"totalBytes\":0}", System.Text.Encoding.UTF8, "application/json");
+            var restoreRes = await client.PostAsync("/setup/api/restore-upload/init", invalidInitBody);
             Assert.Equal(HttpStatusCode.BadRequest, restoreRes.StatusCode);
             var restoreJson = await restoreRes.Content.ReadAsStringAsync();
             using (var restoreDoc = System.Text.Json.JsonDocument.Parse(restoreJson))
             {
                 Assert.False(restoreDoc.RootElement.GetProperty("isSuccess").GetBoolean());
-                Assert.Contains("No backup file provided", restoreDoc.RootElement.GetProperty("error").GetString());
+                Assert.Equal("INVALID_FILENAME", restoreDoc.RootElement.GetProperty("code").GetString());
             }
 
             // 5. Public branding (logo/icon) and Manifest endpoints remain reachable during local pre-internet setup

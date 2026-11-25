@@ -3,12 +3,6 @@ set -e
 
 # Dynamic Port Configurations (Host Mode Compatibility)
 Spokes_HOST_PORT=${Spokes_Host_Port:-8080}
-VOICE_PORT=${Spokes_Voice_Port:-7880}
-FALLBACK_PORT=${Spokes_Voice_Fallback_Port:-7881}
-
-PORT_COUNT=${Spokes_VOICE_UDP_PORT_COUNT:-500}
-START_PORT=${Spokes_Voice_UDP_Start_Port:-30000}
-END_PORT=$((START_PORT + PORT_COUNT - 1))
 
 # Dynamically set the .NET web server binding port
 export ASPNETCORE_URLS="http://+:$Spokes_HOST_PORT"

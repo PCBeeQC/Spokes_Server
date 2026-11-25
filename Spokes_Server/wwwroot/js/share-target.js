@@ -140,16 +140,38 @@
     };
 
     // --- Shortcut Manager Integration ---
+    const _shortcutIconCache = new Map();
+    const _pushedDirectShareShortcuts = new Map();
 
-    window.spokesPushDirectShareShortcut = async (serverUrl, channelId, channelName, iconBase64) => {
+    window.spokesPushDirectShareShortcut = async (serverUrl, channelId, channelName, iconBase64, iconCacheKey) => {
         if (window.Capacitor?.Plugins?.ShortcutManager) {
             try {
+                let resolvedIcon = iconBase64 || '';
+                if (iconCacheKey) {
+                    if (resolvedIcon) {
+                        _shortcutIconCache.set(iconCacheKey, resolvedIcon);
+                        if (_shortcutIconCache.size > 64) {
+                            const oldestKey = _shortcutIconCache.keys().next().value;
+                            _shortcutIconCache.delete(oldestKey);
+                        }
+                    } else if (_shortcutIconCache.has(iconCacheKey)) {
+                        resolvedIcon = _shortcutIconCache.get(iconCacheKey) || '';
+                    }
+                }
+
+                const dedupeKey = `${serverUrl || ''}|${channelId || ''}`;
+                const signature = `${channelName || ''}|${iconCacheKey || resolvedIcon.length}`;
+                if (_pushedDirectShareShortcuts.get(dedupeKey) === signature) {
+                    return;
+                }
+
                 await window.Capacitor.Plugins.ShortcutManager.pushDirectShareShortcut({
                     serverUrl: serverUrl,
                     id: channelId,
                     name: channelName,
-                    icon: iconBase64 || ''
+                    icon: resolvedIcon
                 });
+                _pushedDirectShareShortcuts.set(dedupeKey, signature);
             } catch (e) {
                 console.error('[Shortcuts] Failed to push direct share shortcut', e);
             }

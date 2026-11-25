@@ -507,4 +507,188 @@ public class VoiceBotServiceTests : IDisposable
         var ex2 = await Record.ExceptionAsync(() => botService.StopRingingAsync("test-channel"));
         Assert.Null(ex2);
     }
+
+    [Fact]
+    public async Task RunSelfTestAsync_WhenApiKeysMissing_ReturnsFailWithConfigurationStep()
+    {
+        var loggerMock = new Mock<ILogger<VoiceBotService>>();
+        var config = _systemConfigs.Get();
+        config.LiveKitApiKey = "";
+        config.LiveKitApiSecret = "";
+        _systemConfigs.Save(config);
+
+        await using var botService = new VoiceBotService(_systemConfigs, loggerMock.Object, null, _config);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        var result = await botService.RunSelfTestAsync(cts.Token);
+
+        Assert.Equal(VoiceBotSelfTestStatus.Fail, result.Status);
+        Assert.Contains(result.Steps, s => s.Name == "Configuration & Sounds" && s.Status == VoiceBotSelfTestStatus.Fail);
+    }
+
+    [Fact]
+    public async Task RunSelfTestAsync_WhenApiSecretTooShort_ReturnsFailGracefully()
+    {
+        var loggerMock = new Mock<ILogger<VoiceBotService>>();
+        var config = _systemConfigs.Get();
+        config.LiveKitApiKey = "test-key";
+        config.LiveKitApiSecret = "short-secret";
+        _systemConfigs.Save(config);
+
+        await using var botService = new VoiceBotService(_systemConfigs, loggerMock.Object, null, _config);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        var result = await botService.RunSelfTestAsync(cts.Token);
+
+        Assert.Equal(VoiceBotSelfTestStatus.Fail, result.Status);
+        Assert.Contains(result.Steps, s => s.Name == "Signaling & Room Join" && s.Status == VoiceBotSelfTestStatus.Fail);
+    }
+
+    [Fact]
+    public async Task RunSelfTestAsync_WhenDaemonUnreachable_ReturnsFailGracefully()
+    {
+        var loggerMock = new Mock<ILogger<VoiceBotService>>();
+        var config = _systemConfigs.Get();
+        config.LiveKitApiKey = "test-key";
+        config.LiveKitApiSecret = "synthetic-test-secret-key-at-least-32-chars-long";
+        _systemConfigs.Save(config);
+
+        await using var botService = new VoiceBotService(_systemConfigs, loggerMock.Object, null, _config);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        var result = await botService.RunSelfTestAsync(cts.Token);
+
+        Assert.Equal(VoiceBotSelfTestStatus.Fail, result.Status);
+        Assert.Contains(result.Steps, s => s.Name == "Signaling & Room Join" && s.Status == VoiceBotSelfTestStatus.Fail);
+    }
+
+    [Fact]
+    public void ExtractTransportStats_WithNominatedUdpCandidatePair_ReturnsUdpEndpointRttAndRtpCounts()
+    {
+        var stats = new List<LiveKit.Proto.RtcStats>
+        {
+            new()
+            {
+                Transport = new LiveKit.Proto.RtcStats.Types.Transport
+                {
+                    Rtc = new LiveKit.Proto.RtcStatsData { Id = "T01" },
+                    Transport_ = new LiveKit.Proto.TransportStats
+                    {
+                        SelectedCandidatePairId = "CP01",
+                        PacketsSent = 12,
+                        BytesSent = 2400
+                    }
+                }
+            },
+            new()
+            {
+                CandidatePair = new LiveKit.Proto.RtcStats.Types.CandidatePair
+                {
+                    Rtc = new LiveKit.Proto.RtcStatsData { Id = "CP01" },
+                    CandidatePair_ = new LiveKit.Proto.CandidatePairStats
+                    {
+                        LocalCandidateId = "LC01",
+                        RemoteCandidateId = "RC01",
+                        Nominated = true,
+                        CurrentRoundTripTime = 0.0025
+                    }
+                }
+            },
+            new()
+            {
+                LocalCandidate = new LiveKit.Proto.RtcStats.Types.LocalCandidate
+                {
+                    Rtc = new LiveKit.Proto.RtcStatsData { Id = "LC01" },
+                    Candidate = new LiveKit.Proto.IceCandidateStats
+                    {
+                        Protocol = "udp",
+                        Address = "127.0.0.1",
+                        Port = 51234
+                    }
+                }
+            },
+            new()
+            {
+                RemoteCandidate = new LiveKit.Proto.RtcStats.Types.RemoteCandidate
+                {
+                    Rtc = new LiveKit.Proto.RtcStatsData { Id = "RC01" },
+                    Candidate = new LiveKit.Proto.IceCandidateStats
+                    {
+                        Protocol = "udp",
+                        Address = "172.17.0.2",
+                        Port = 30000
+                    }
+                }
+            },
+            new()
+            {
+                OutboundRtp = new LiveKit.Proto.RtcStats.Types.OutboundRtp
+                {
+                    Rtc = new LiveKit.Proto.RtcStatsData { Id = "OR01" },
+                    Sent = new LiveKit.Proto.SentRtpStreamStats
+                    {
+                        PacketsSent = 10,
+                        BytesSent = 1600
+                    }
+                }
+            }
+        };
+
+        var snapshot = VoiceBotService.ExtractTransportStats(stats);
+
+        Assert.Equal("udp", snapshot.TransportProtocol);
+        Assert.Equal("127.0.0.1:51234", snapshot.LocalEndpoint);
+        Assert.Equal("172.17.0.2:30000", snapshot.RemoteEndpoint);
+        Assert.Equal(2.5, snapshot.RoundTripTimeMs);
+        Assert.Equal(10UL, snapshot.OutboundPacketsSent);
+        Assert.Equal(1600UL, snapshot.OutboundBytesSent);
+    }
+
+    [Fact]
+    public void ExtractTransportStats_WithTcpFallbackCandidate_DetectsTcpTransport()
+    {
+        var stats = new List<LiveKit.Proto.RtcStats>
+        {
+            new()
+            {
+                CandidatePair = new LiveKit.Proto.RtcStats.Types.CandidatePair
+                {
+                    Rtc = new LiveKit.Proto.RtcStatsData { Id = "CP_TCP" },
+                    CandidatePair_ = new LiveKit.Proto.CandidatePairStats
+                    {
+                        LocalCandidateId = "LC_TCP",
+                        RemoteCandidateId = "RC_TCP",
+                        Nominated = true
+                    }
+                }
+            },
+            new()
+            {
+                RemoteCandidate = new LiveKit.Proto.RtcStats.Types.RemoteCandidate
+                {
+                    Rtc = new LiveKit.Proto.RtcStatsData { Id = "RC_TCP" },
+                    Candidate = new LiveKit.Proto.IceCandidateStats
+                    {
+                        Protocol = "TCP",
+                        Address = "172.17.0.2",
+                        Port = 7881
+                    }
+                }
+            }
+        };
+
+        var snapshot = VoiceBotService.ExtractTransportStats(stats);
+
+        Assert.Equal("tcp", snapshot.TransportProtocol);
+        Assert.Equal("172.17.0.2:7881", snapshot.RemoteEndpoint);
+    }
+
+    [Fact]
+    public void ExtractTransportStats_NullOrEmpty_ReturnsUnknown()
+    {
+        var snapshot = VoiceBotService.ExtractTransportStats((IEnumerable<LiveKit.Proto.RtcStats>?)null);
+
+        Assert.Equal("unknown", snapshot.TransportProtocol);
+        Assert.Equal(0UL, snapshot.OutboundPacketsSent);
+    }
 }

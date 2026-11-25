@@ -167,7 +167,8 @@ public class LedgerService : ILedgerService
         // Draft or Void invoices do not remain on the active General Ledger
         var isPosted = InvoiceStatus.IsPosted(invoice.Status);
 
-        if (!isPosted || invoice.GrandTotal <= 0m)
+        var isNegativeObCredit = invoice.IsOpeningBalance && invoice.GrandTotal < 0m;
+        if (!isPosted || (invoice.GrandTotal <= 0m && !isNegativeObCredit))
         {
             RemoveEntriesForSource(JournalSourceType.Invoice, invoice.Id);
             CleanupStalePrefixEntries(JournalSourceType.InvoicePayment, $"{invoice.Id}:");
@@ -190,16 +191,26 @@ public class LedgerService : ILedgerService
         var matRevCode = ResolveAccountCodeByRole(GlSystemRole.MaterialRevenue, "4100");
 
         var lines = new List<JournalLine>();
-        var totalArFunctional = Round(invoice.GrandTotal * rate);
+        var totalArFunctional = Round(Math.Abs(invoice.GrandTotal) * rate);
 
-        // 1. Debit Accounts Receivable
-        lines.Add(CreateLine(arCode, totalArFunctional, 0m, $"Invoice {invoice.InvoiceNumber}", invoice.ProjectId));
+        // 1. Debit Accounts Receivable (or Credit AR for a negative Opening Balance credit note)
+        lines.Add(CreateLine(
+            arCode,
+            isNegativeObCredit ? 0m : totalArFunctional,
+            isNegativeObCredit ? totalArFunctional : 0m,
+            $"Invoice {invoice.InvoiceNumber}",
+            invoice.ProjectId));
 
         if (invoice.IsOpeningBalance)
         {
             // Pre-cutover open receivable clears through Opening Balance Equity (3900) so revenue & sales tax are not double-counted against the Trial Balance.
             var contraCode = ResolveAccountCodeByRole(GlSystemRole.OpeningBalanceEquity, "3900");
-            lines.Add(CreateLine(contraCode, 0m, totalArFunctional, $"Opening Balance Equity Clearing — {invoice.InvoiceNumber}", invoice.ProjectId));
+            lines.Add(CreateLine(
+                contraCode,
+                isNegativeObCredit ? totalArFunctional : 0m,
+                isNegativeObCredit ? 0m : totalArFunctional,
+                $"Opening Balance Equity Clearing — {invoice.InvoiceNumber}",
+                invoice.ProjectId));
         }
         else
         {

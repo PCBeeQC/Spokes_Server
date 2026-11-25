@@ -125,6 +125,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<DirectTransactionRepository>();
         services.AddSingleton<FinancialAccountRepository>();
         services.AddSingleton<SuggestedInvoicePaymentRepository>();
+        services.AddSingleton<BankRuleRepository>();
         services.AddSingleton<PayRunRepository>();
         services.AddSingleton<DeviceSessionRepository>();
         services.AddSingleton<DemoConfigRepository>();
@@ -165,7 +166,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<HrContext>(),
             sp.GetRequiredService<AccountingContext>(),
             sp.GetRequiredService<CommunicationContext>(),
-            sp.GetRequiredService<CoreContext>()));
+            sp.GetRequiredService<CoreContext>(),
+            sp.GetRequiredService<SequenceService>()));
         services.AddSingleton<DatabaseRelationshipCoordinator>();
         services.AddHostedService(sp => sp.GetRequiredService<DatabaseRelationshipCoordinator>());
 
@@ -287,6 +289,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<TimeProvider>(sp => sp.GetRequiredService<SpokesClockService>());
         services.AddHostedService(sp => sp.GetRequiredService<SpokesClockService>());
         services.AddSingleton<BackupService>();
+        services.AddSingleton<BackupRestoreUploadService>();
         services.AddHostedService(sp => sp.GetRequiredService<BackupService>());
         services.AddHostedService<DemoResetService>();
         services.AddSingleton<NotificationQueueService>();
@@ -446,6 +449,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.EmployeeChannelOrderMigrationStep>();
         services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.LegacyChatAttachmentRouteMigrationStep>();
         services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.PushSubscriptionsCaseFixMigrationStep>();
+        services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationStep, Spokes_Server.Core.Services.Migrations.LiveKitUdpMuxMigrationStep>();
 
         services.AddSingleton<Spokes_Server.Core.Services.Migrations.IMigrationRunner>(sp => 
             new Spokes_Server.Core.Services.Migrations.MigrationRunnerService(

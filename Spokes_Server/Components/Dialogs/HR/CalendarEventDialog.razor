@@ -10,6 +10,7 @@
 @inject AppLabelService AppLabels
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject UserCircuitContext CircuitContext
 
 <MudDialog DefaultFocus="DefaultFocus.None" Class="@($"calendar-dialog-cat-{_selectedCategoryId}")" Style="width: 100%; max-width: 600px;">
     <TitleContent>
@@ -650,154 +651,186 @@
 
                 <!-- Card 3: Participants & Visibility -->
                 <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                    <div class="d-flex align-center justify-space-between ps-4 pe-3 py-2" style="min-height: 44px;">
+                    <div class="d-flex align-center justify-space-between ps-4 pe-3 py-2 cursor-pointer"
+                         style="min-height: 44px;"
+                         role="button"
+                         data-diag-label="toggle-calendar-participants"
+                         @onclick="@(() => _participantsExpanded = !_participantsExpanded)">
                         <div class="d-flex align-center min-w-0 mr-2">
                             <MudIcon Icon="@Icons.Material.Filled.People" Size="Size.Small" Class="mr-2 flex-shrink-0" />
                             <MudText Typo="Typo.subtitle2">@Loc["Participants & Visibility"]</MudText>
+                            @{
+                                var participantCount = (_workingEvent.Attendees?.Count ?? 0) + (_workingEvent.InvitedTeamIds?.Count ?? 0);
+                            }
+                            @if (participantCount > 0)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" Class="ma-0 ml-2" Style="height: 20px;">@participantCount</MudChip>
+                            }
                         </div>
                         <div class="d-flex align-center gap-2 flex-shrink-0">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 500;">@string.Format(Loc["{0}-Wide"].Value, AppLabels.Company)</MudText>
-                            @if (_canCreateCompanyWideEvents)
-                            {
-                                <MudSwitch @bind-Value="_workingEvent.IsCompanyWide" Color="Color.Info" Size="Size.Small" Class="ma-0" />
-                            }
-                            else
-                            {
-                                <MudTooltip Text="@string.Format(Loc["{0}-wide events are restricted to administrators by server privacy policy."].Value, AppLabels.Company)">
-                                    <MudSwitch T="bool" Value="false" Disabled="true" Color="Color.Info" Size="Size.Small" Class="ma-0" />
-                                </MudTooltip>
-                            }
+                            <div class="d-flex align-center gap-2" @onclick:stopPropagation="true">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="font-weight: 500;">@string.Format(Loc["{0}-Wide"].Value, AppLabels.Company)</MudText>
+                                @if (_canCreateCompanyWideEvents)
+                                {
+                                    <MudSwitch Value="_workingEvent.IsCompanyWide" ValueChanged="@((bool v) => { _workingEvent.IsCompanyWide = v; if (v) _participantsExpanded = true; })" T="bool" Color="Color.Info" Size="Size.Small" Class="ma-0" />
+                                }
+                                else
+                                {
+                                    <MudTooltip Text="@string.Format(Loc["{0}-wide events are restricted to administrators by server privacy policy."].Value, AppLabels.Company)">
+                                        <MudSwitch T="bool" Value="false" Disabled="true" Color="Color.Info" Size="Size.Small" Class="ma-0" />
+                                    </MudTooltip>
+                                }
+                            </div>
+                            <MudIcon Icon="@(_participantsExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" Size="Size.Small" Color="Color.Secondary" />
                         </div>
                     </div>
-                    <MudDivider />
-                    <div class="pa-4 d-flex flex-column gap-3">
-                        @if (_workingEvent.IsCompanyWide)
-                        {
-                            <MudAlert Severity="Severity.Info" Dense="true">
-                                @((MarkupString)string.Format(Loc["This event is marked <strong>{0}-Wide</strong> and will appear on all {0} calendars. You can still tag specific attendees or {1} below."].Value, System.Net.WebUtility.HtmlEncode(AppLabels.Company), System.Net.WebUtility.HtmlEncode(AppLabels.Teams)))
-                            </MudAlert>
-                        }
+                    @if (_participantsExpanded)
+                    {
+                        <MudDivider />
+                        <div class="pa-4 d-flex flex-column gap-3">
+                            @if (_workingEvent.IsCompanyWide)
+                            {
+                                <MudAlert Severity="Severity.Info" Dense="true">
+                                    @((MarkupString)string.Format(Loc["This event is marked <strong>{0}-Wide</strong> and will appear on all {0} calendars. You can still tag specific attendees or {1} below."].Value, System.Net.WebUtility.HtmlEncode(AppLabels.Company), System.Net.WebUtility.HtmlEncode(AppLabels.Teams)))
+                                </MudAlert>
+                            }
 
-                        <MudGrid Spacing="3">
-                            <MudItem xs="12" sm="6">
-                                <EmployeeMultiPicker Label="@Loc["Add Attendee"]"
-                                                     @bind-SelectedUserIds="_workingEvent.Attendees"
-                                                     Employees="@_allEmployees"
-                                                     ExcludeCurrentUser="true"
-                                                     CurrentUserId="@(_workingEvent.EmployeeId ?? _currentUser?.Id)"
+                            <MudGrid Spacing="3">
+                                <MudItem xs="12" sm="6">
+                                    <EmployeeMultiPicker Label="@Loc["Add Attendee"]"
+                                                         @bind-SelectedUserIds="_workingEvent.Attendees"
+                                                         Employees="@_allEmployees"
+                                                         ExcludeCurrentUser="true"
+                                                         CurrentUserId="@(_workingEvent.EmployeeId ?? _currentUser?.Id)"
+                                                         Disabled="@(!_canEdit)" />
+                                </MudItem>
+                                <MudItem xs="12" sm="6">
+                                    <TeamMultiPicker Label="@string.Format(Loc["Share with {0}"].Value, AppLabels.Team)"
+                                                     @bind-SelectedTeamIds="_workingEvent.InvitedTeamIds"
+                                                     Teams="@_teams"
                                                      Disabled="@(!_canEdit)" />
-                            </MudItem>
-                            <MudItem xs="12" sm="6">
-                                <TeamMultiPicker Label="@string.Format(Loc["Share with {0}"].Value, AppLabels.Team)"
-                                                 @bind-SelectedTeamIds="_workingEvent.InvitedTeamIds"
-                                                 Teams="@_teams"
-                                                 Disabled="@(!_canEdit)" />
-                            </MudItem>
-                        </MudGrid>
+                                </MudItem>
+                            </MudGrid>
 
-                        @if (!_workingEvent.IsCompanyWide && !(_workingEvent.InvitedTeamIds?.Any() ?? false) && !_workingEvent.Attendees.Any())
-                        {
-                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
-                                @string.Format(Loc["Only you will see this event unless shared with {0} or other people."].Value, AppLabels.Teams)
-                            </MudText>
-                        }
-                    </div>
+                            @if (!_workingEvent.IsCompanyWide && !(_workingEvent.InvitedTeamIds?.Any() ?? false) && !(_workingEvent.Attendees?.Any() ?? false))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
+                                    @string.Format(Loc["Only you will see this event unless shared with {0} or other people."].Value, AppLabels.Teams)
+                                </MudText>
+                            }
+                        </div>
+                    }
                 </MudPaper>
 
                 <!-- Card 4: Reminders & Alerts (Edit / New Mode) -->
                 <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden flex-shrink-0">
-                    <div class="d-flex align-center justify-space-between ps-4 pe-3 py-2" style="min-height: 44px;">
+                    <div class="d-flex align-center justify-space-between ps-4 pe-3 py-2 cursor-pointer"
+                         style="min-height: 44px;"
+                         role="button"
+                         data-diag-label="toggle-calendar-reminders"
+                         @onclick="@(() => _remindersExpanded = !_remindersExpanded)">
                         <div class="d-flex align-center min-w-0 mr-2">
                             <MudIcon Icon="@Icons.Material.Filled.NotificationsNone" Size="Size.Small" Class="mr-2 flex-shrink-0" />
                             <MudText Typo="Typo.subtitle2">@Loc["Reminders & Alerts"]</MudText>
+                            @{
+                                var totalReminders = _workingEvent.Reminders.Count + _currentUserPersonalReminders.Count;
+                            }
+                            @if (totalReminders > 0)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" Class="ma-0 ml-2" Style="height: 20px;">@totalReminders</MudChip>
+                            }
                         </div>
+                        <MudIcon Icon="@(_remindersExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" Size="Size.Small" Color="Color.Secondary" />
                     </div>
-                    <MudDivider />
-                    <div class="pa-3 pa-sm-4 d-flex flex-column gap-4">
-                        <!-- Section 1: Shared Event Reminders -->
-                        <div class="d-flex flex-column gap-2">
-                            <div class="d-flex align-center justify-space-between flex-wrap gap-2">
-                                <div class="d-flex align-center gap-2">
-                                    <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Color="Color.Primary" />
-                                    <MudText Typo="Typo.subtitle2">@Loc["Event Reminders"]</MudText>
-                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" Class="ma-0">@Loc["Shared with others"]</MudChip>
-                                </div>
-                                <MudButton StartIcon="@Icons.Material.Filled.Add"
-                                           Size="Size.Small"
-                                           Variant="Variant.Text"
-                                           Color="Color.Primary"
-                                           OnClick="AddEventReminder">
-                                    @Loc["Add shared reminder"]
-                                </MudButton>
-                            </div>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                @Loc["These reminders will also ping anyone with whom this event is shared."]
-                            </MudText>
-
-                            @if (_workingEvent.Reminders.Count == 0)
-                            {
-                                <div class="d-flex align-center gap-2 py-1">
-                                    <MudIcon Icon="@Icons.Material.Filled.NotificationsOff" Size="Size.Small" Color="Color.Default" />
-                                    <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["No shared reminders set."]</MudText>
-                                </div>
-                            }
-                            else
-                            {
-                                <div class="d-flex flex-column gap-2">
-                                    @foreach (var reminder in _workingEvent.Reminders)
-                                    {
-                                        <CalendarReminderRow Reminder="@reminder"
-                                                             Icon="@Icons.Material.Filled.NotificationsActive"
-                                                             IconColor="Color.Primary"
-                                                             OnRemove="@(() => RemoveEventReminder(reminder))" />
-                                    }
-                                </div>
-                            }
-                        </div>
-
+                    @if (_remindersExpanded)
+                    {
                         <MudDivider />
-
-                        <!-- Section 2: My Reminders (Personal) -->
-                        <div class="d-flex flex-column gap-2">
-                            <div class="d-flex align-center justify-space-between flex-wrap gap-2">
-                                <div class="d-flex align-center gap-2">
-                                    <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Color="Color.Secondary" />
-                                    <MudText Typo="Typo.subtitle2">@Loc["My Reminders"]</MudText>
-                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary" Class="ma-0">@Loc["Only for you"]</MudChip>
+                        <div class="pa-3 pa-sm-4 d-flex flex-column gap-4">
+                            <!-- Section 1: Shared Event Reminders -->
+                            <div class="d-flex flex-column gap-2">
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudIcon Icon="@Icons.Material.Filled.Campaign" Size="Size.Small" Color="Color.Primary" />
+                                        <MudText Typo="Typo.subtitle2">@Loc["Event Reminders"]</MudText>
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" Class="ma-0">@Loc["Shared with others"]</MudChip>
+                                    </div>
+                                    <MudButton StartIcon="@Icons.Material.Filled.Add"
+                                               Size="Size.Small"
+                                               Variant="Variant.Text"
+                                               Color="Color.Primary"
+                                               OnClick="AddEventReminder">
+                                        @Loc["Add shared reminder"]
+                                    </MudButton>
                                 </div>
-                                <MudButton StartIcon="@Icons.Material.Filled.Add"
-                                           Size="Size.Small"
-                                           Variant="Variant.Text"
-                                           Color="Color.Secondary"
-                                           OnClick="AddCurrentUserPersonalReminder">
-                                    @Loc["Add personal reminder"]
-                                </MudButton>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @Loc["These reminders will also ping anyone with whom this event is shared."]
+                                </MudText>
+
+                                @if (_workingEvent.Reminders.Count == 0)
+                                {
+                                    <div class="d-flex align-center gap-2 py-1">
+                                        <MudIcon Icon="@Icons.Material.Filled.NotificationsOff" Size="Size.Small" Color="Color.Default" />
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["No shared reminders set."]</MudText>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="d-flex flex-column gap-2">
+                                        @foreach (var reminder in _workingEvent.Reminders)
+                                        {
+                                            <CalendarReminderRow Reminder="@reminder"
+                                                                 Icon="@Icons.Material.Filled.NotificationsActive"
+                                                                 IconColor="Color.Primary"
+                                                                 OnRemove="@(() => RemoveEventReminder(reminder))" />
+                                        }
+                                    </div>
+                                }
                             </div>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                @Loc["Personal alerts. Other participants will not see or receive these."]
-                            </MudText>
 
-                            @if (_currentUserPersonalReminders.Count == 0)
-                            {
-                                <div class="d-flex align-center gap-2 py-1">
-                                    <MudIcon Icon="@Icons.Material.Filled.NotificationsNone" Size="Size.Small" Color="Color.Default" />
-                                    <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["No personal alerts set."]</MudText>
+                            <MudDivider />
+
+                            <!-- Section 2: My Reminders (Personal) -->
+                            <div class="d-flex flex-column gap-2">
+                                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Color="Color.Secondary" />
+                                        <MudText Typo="Typo.subtitle2">@Loc["My Reminders"]</MudText>
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary" Class="ma-0">@Loc["Only for you"]</MudChip>
+                                    </div>
+                                    <MudButton StartIcon="@Icons.Material.Filled.Add"
+                                               Size="Size.Small"
+                                               Variant="Variant.Text"
+                                               Color="Color.Secondary"
+                                               OnClick="AddCurrentUserPersonalReminder">
+                                        @Loc["Add personal reminder"]
+                                    </MudButton>
                                 </div>
-                            }
-                            else
-                            {
-                                <div class="d-flex flex-column gap-2">
-                                    @foreach (var reminder in _currentUserPersonalReminders)
-                                    {
-                                        <CalendarReminderRow Reminder="@reminder"
-                                                             Icon="@Icons.Material.Filled.Alarm"
-                                                             IconColor="Color.Secondary"
-                                                             OnRemove="@(() => RemoveCurrentUserPersonalReminder(reminder))" />
-                                    }
-                                </div>
-                            }
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @Loc["Personal alerts. Other participants will not see or receive these."]
+                                </MudText>
+
+                                @if (_currentUserPersonalReminders.Count == 0)
+                                {
+                                    <div class="d-flex align-center gap-2 py-1">
+                                        <MudIcon Icon="@Icons.Material.Filled.NotificationsNone" Size="Size.Small" Color="Color.Default" />
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["No personal alerts set."]</MudText>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="d-flex flex-column gap-2">
+                                        @foreach (var reminder in _currentUserPersonalReminders)
+                                        {
+                                            <CalendarReminderRow Reminder="@reminder"
+                                                                 Icon="@Icons.Material.Filled.Alarm"
+                                                                 IconColor="Color.Secondary"
+                                                                 OnRemove="@(() => RemoveCurrentUserPersonalReminder(reminder))" />
+                                        }
+                                    </div>
+                                }
+                            </div>
                         </div>
-                    </div>
+                    }
                 </MudPaper>
             }
         </div>
@@ -873,6 +906,8 @@
     private Project? _selectedProject;
     private string _selectedCategoryId = "";
     private MudTextField<string>? _titleField;
+    private bool _participantsExpanded;
+    private bool _remindersExpanded;
 
     private bool _canEdit;
     private bool _canCreateCompanyWideEvents = true;
@@ -889,7 +924,7 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && (IsNew || !_viewMode))
+        if (firstRender && !CircuitContext.IsMobileViewport && (IsNew || !_viewMode))
         {
             await Task.Yield();
             await Task.Delay(100);
@@ -1008,6 +1043,14 @@
         {
             _currentUserPersonalReminders = [];
         }
+
+        _participantsExpanded = !IsNew
+            || source.IsCompanyWide
+            || (source.Attendees?.Count ?? 0) > 0
+            || (source.InvitedTeamIds?.Count ?? 0) > 0;
+        _remindersExpanded = !IsNew
+            || (source.Reminders?.Count ?? 0) > 0
+            || _currentUserPersonalReminders.Count > 0;
     }
 
     private CalendarEvent CloneEvent(CalendarEvent source)
@@ -1260,11 +1303,14 @@
         InitFormFromEvent(_workingEvent);
         _viewMode = false;
         MudDialog?.StateHasChanged();
-        await Task.Yield();
-        await Task.Delay(100);
-        if (_titleField != null)
+        if (!CircuitContext.IsMobileViewport)
         {
-            await _titleField.FocusAsync();
+            await Task.Yield();
+            await Task.Delay(100);
+            if (_titleField != null)
+            {
+                await _titleField.FocusAsync();
+            }
         }
     }
 

@@ -54,22 +54,6 @@ public sealed class UploadCompletionVerifier
             return new UploadVerificationResult(false, [], "Upload completed but server returned no file data.");
         }
 
-        // Explicit pre-setup exception: initial backup restore before setup completes has no authenticated user.
-        if (string.Equals(uploadUrl, "/setup/api/restore-backup", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(expectedCategory, "setup", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(expectedContextId, "restore", StringComparison.OrdinalIgnoreCase) &&
-            !_systemConfigs.Get().IsSetupComplete)
-        {
-            foreach (var item in items)
-            {
-                item.Category = "setup";
-                item.ContextId = "restore";
-                item.FileName = FileHelper.SanitizeDisplayFileName(item.FileName);
-            }
-
-            return new UploadVerificationResult(true, items, null);
-        }
-
         if (string.IsNullOrWhiteSpace(expectedCategory) || string.IsNullOrWhiteSpace(expectedContextId))
         {
             return new UploadVerificationResult(false, [], "Upload context is invalid.");

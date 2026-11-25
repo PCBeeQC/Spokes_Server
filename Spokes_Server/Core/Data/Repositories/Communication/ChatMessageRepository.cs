@@ -358,6 +358,9 @@ public class ChatMessageRepository : JsonRepository<ChatMessage>, IChatMessageLo
         {
             if (!Directory.Exists(_basePath))
             {
+                RawCache.Clear();
+                _cacheService.Clear();
+                _indexService.Clear();
                 _isLoaded = true;
                 return;
             }

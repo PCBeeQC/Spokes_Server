@@ -1,0 +1,209 @@
+@using Spokes_Server.Core.Models.Accounting
+@using Spokes_Server.Core.Models.HR
+@using Spokes_Server.Core.Services.Accounting
+@using Spokes_Server.Components.Shared
+@inject IBankReconciliationService ReconciliationService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Rule" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">@BizLoc["Bank Categorization Rules"]</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudPaper Outlined="true" Class="pa-3">
+                <MudText Typo="Typo.subtitle2" Class="mb-2">
+                    @(string.IsNullOrEmpty(_editingRule.Id) || !_rules.Any(r => r.Id == _editingRule.Id) ? BizLoc["Add Bank Rule"] : BizLoc["Edit Bank Rule"])
+                </MudText>
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="_editingRule.Name"
+                                      Label="@BizLoc["Rule Name"]"
+                                      Placeholder="e.g., BNC Credit Line Sweep"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="_editingRule.Keywords"
+                                      Label="@BizLoc["Description Keywords (comma-separated)"]"
+                                      Placeholder="e.g., DEBOURSE MCR, REMB. MCR"
+                                      Required="true"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudSelect T="string" @bind-Value="_editingRule.Direction" Label="@BizLoc["Direction"]" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true">
+                            <MudSelectItem Value="@BankRuleDirection.Any">@BizLoc["Any (In or Out)"]</MudSelectItem>
+                            <MudSelectItem Value="@BankRuleDirection.MoneyOut">@BizLoc["Money Out (Withdrawal)"]</MudSelectItem>
+                            <MudSelectItem Value="@BankRuleDirection.MoneyIn">@BizLoc["Money In (Deposit)"]</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudSelect T="string" @bind-Value="_editingRule.Action" Label="@BizLoc["Action"]" Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true">
+                            <MudSelectItem Value="@BankRuleAction.CategorizeToAccount">@BizLoc["Assign Account"]</MudSelectItem>
+                            <MudSelectItem Value="@BankRuleAction.Exclude">@BizLoc["Exclude Line"]</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int" @bind-Value="_editingRule.Priority" Label="@BizLoc["Priority"]" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" Max="999" />
+                    </MudItem>
+                    @if (_editingRule.Action == BankRuleAction.CategorizeToAccount)
+                    {
+                        <MudItem xs="12" sm="8">
+                            <GlAccountSelect @bind-Value="_editingRule.TargetGlAccountCode"
+                                             Label="@BizLoc["Target Account"]"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4" Class="d-flex align-center">
+                            <MudCheckBox T="bool" @bind-Value="_editingRule.IncludeSalesTax" Label="@BizLoc["Extract Sales Tax"]" Dense="true" />
+                        </MudItem>
+                    }
+                    <MudItem xs="12" sm="8">
+                        <MudCheckBox T="bool" @bind-Value="_editingRule.AutoPostOnImport" Label="@BizLoc["Auto-Post on Import (post-cutover lines only)"]" Dense="true" Color="Color.Primary" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4" Class="d-flex justify-end align-center gap-2">
+                        @if (_rules.Any(r => r.Id == _editingRule.Id))
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ResetEditor">@Loc["Cancel"]</MudButton>
+                        }
+                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" OnClick="SaveRule">
+                            @BizLoc["Save Rule"]
+                        </MudButton>
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+
+            @if (_rules.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined">
+                    @BizLoc["No bank rules configured yet. Create a rule above or click the bookmark icon on any bank statement line."]
+                </MudAlert>
+            }
+            else
+            {
+                <MudTable Items="_rules" Dense="true" Hover="true" Outlined="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh>@BizLoc["Rule"]</MudTh>
+                        <MudTh>@BizLoc["Keywords"]</MudTh>
+                        <MudTh>@BizLoc["Action"]</MudTh>
+                        <MudTh>@BizLoc["Auto-Post"]</MudTh>
+                        <MudTh Style="text-align:right;">@Loc["Actions"]</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            <MudText Typo="Typo.body2"><b>@context.Name</b></MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Direction</MudText>
+                        </MudTd>
+                        <MudTd><MudText Typo="Typo.caption">@context.Keywords</MudText></MudTd>
+                        <MudTd>
+                            @if (context.Action == BankRuleAction.Exclude)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default">@BizLoc["Exclude"]</MudChip>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">@context.TargetGlAccountCode</MudChip>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <MudSwitch T="bool" Value="@context.AutoPostOnImport" ValueChanged="@(v => ToggleAutoPost(context, v))" Color="Color.Primary" Size="Size.Small" />
+                        </MudTd>
+                        <MudTd Style="text-align:right; white-space:nowrap;">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => EditRule(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => DeleteRule(context))" />
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => MudDialog.Close(DialogResult.Ok(true)))" Variant="Variant.Filled" Color="Color.Primary">@Loc["Close"]</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public Employee? Actor { get; set; }
+    [Parameter] public BankRule? PrefillRule { get; set; }
+
+    private List<BankRule> _rules = [];
+    private BankRule _editingRule = new();
+
+    protected override void OnInitialized()
+    {
+        LoadRules();
+        if (PrefillRule != null)
+        {
+            _editingRule = new BankRule
+            {
+                Name = PrefillRule.Name,
+                Keywords = PrefillRule.Keywords,
+                Direction = PrefillRule.Direction,
+                BankGlAccountCode = PrefillRule.BankGlAccountCode,
+                Action = PrefillRule.Action,
+                TargetGlAccountCode = PrefillRule.TargetGlAccountCode,
+                IncludeSalesTax = PrefillRule.IncludeSalesTax,
+                AutoPostOnImport = PrefillRule.AutoPostOnImport
+            };
+        }
+    }
+
+    private void LoadRules()
+    {
+        _rules = ReconciliationService.GetBankRules(Actor);
+    }
+
+    private void EditRule(BankRule rule)
+    {
+        _editingRule = new BankRule
+        {
+            Id = rule.Id,
+            Name = rule.Name,
+            Keywords = rule.Keywords,
+            Direction = rule.Direction,
+            BankGlAccountCode = rule.BankGlAccountCode,
+            Action = rule.Action,
+            TargetGlAccountCode = rule.TargetGlAccountCode,
+            IncludeSalesTax = rule.IncludeSalesTax,
+            AutoPostOnImport = rule.AutoPostOnImport,
+            Priority = rule.Priority,
+            IsActive = rule.IsActive
+        };
+    }
+
+    private void ResetEditor() => _editingRule = new BankRule();
+
+    private void SaveRule()
+    {
+        try
+        {
+            ReconciliationService.SaveBankRule(_editingRule, Actor);
+            LoadRules();
+            ResetEditor();
+            Snackbar.Add(BizLoc["Bank rule saved."].Value, Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private void ToggleAutoPost(BankRule rule, bool value)
+    {
+        rule.AutoPostOnImport = value;
+        ReconciliationService.SaveBankRule(rule, Actor);
+        LoadRules();
+    }
+
+    private void DeleteRule(BankRule rule)
+    {
+        ReconciliationService.DeleteBankRule(rule.Id, Actor);
+        LoadRules();
+        Snackbar.Add(BizLoc["Bank rule deleted."].Value, Severity.Info);
+    }
+}

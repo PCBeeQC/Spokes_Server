@@ -2,7 +2,8 @@
 @using Spokes_Server.Core.Services.Accounting
 @inject IAccountingHealthService HealthService
 
-<MudDrawer @bind-Open="@Open"
+<MudDrawer Open="@Open"
+           OpenChanged="OnDrawerOpenChanged"
            Anchor="Anchor.End"
            Elevation="4"
            Variant="DrawerVariant.Temporary"
@@ -17,7 +18,7 @@
         </div>
         <div class="d-flex align-center gap-1">
             <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="RefreshReport" title="@Loc["Refresh"]" />
-            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => OpenChanged.InvokeAsync(false))" title="@Loc["Close"]" />
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => OnDrawerOpenChanged(false))" title="@Loc["Close"]" />
         </div>
     </MudDrawerHeader>
 
@@ -133,6 +134,11 @@
     [Parameter] public AccountingHealthReport? Report { get; set; }
     [Parameter] public EventCallback OnRefreshRequested { get; set; }
     [Parameter] public EventCallback<string> OnActionSelected { get; set; }
+
+    private Task OnDrawerOpenChanged(bool open)
+    {
+        return OpenChanged.InvokeAsync(open);
+    }
 
     private async Task RefreshReport()
     {

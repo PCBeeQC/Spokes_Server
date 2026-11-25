@@ -23,6 +23,7 @@
 @inject AppLabelService AppLabels
 @inject ServerUpdateService ServerUpdateService
 @inject LiveKitService LiveKitService
+@inject IVoiceBotService VoiceBotService
 @inject ICompanyBrandingService BrandingService
 @inject ISpokesClock SpokesClock
 @inject UserService UserService
@@ -337,15 +338,17 @@
                     <b>@Loc["WARNING:"]</b> @Loc["Restoring a backup will overwrite all current data. Encrypted .spkbackup archives will be decrypted using the server's configured master password."]
                 </MudAlert>
 
-                <MudFileUpload T="IBrowserFile" Accept=".zip,.spkbackup" FilesChanged="UploadAndRestoreBackup">
-                    <CustomContent>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" OnClick="@context.OpenFilePickerAsync" 
-                                    StartIcon="@Icons.Material.Filled.RestorePage">
-                            @Loc["Upload & Restore"]
-                        </MudButton>
-                    </CustomContent>
-                    <SelectedTemplate></SelectedTemplate>
-                </MudFileUpload>
+                <input type="file"
+                       id="@_backupRestoreInputId"
+                       accept=".zip,.spkbackup"
+                       style="position: absolute; width: 0; height: 0; opacity: 0; overflow: hidden; z-index: -1;" />
+                <MudButton HtmlTag="label"
+                           for="@_backupRestoreInputId"
+                           Variant="Variant.Outlined"
+                           Color="Color.Warning"
+                           StartIcon="@Icons.Material.Filled.RestorePage">
+                    @Loc["Upload & Restore"]
+                </MudButton>
             </SettingsCard>
 
             @* --- Card 4: Existing Backups --- *@
@@ -1178,6 +1181,112 @@
                             <MudNumericField ShrinkLabel="true" @bind-Value="_systemConfig.LiveKitUdpEndPort" Margin="Margin.Dense" Label="@Loc["UDP End Port"]" Variant="Variant.Outlined" />
                         </MudItem>
                     </MudGrid>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
+                        @Loc["LiveKit multiplexes all voice and video traffic across these UDP ports (8 ports recommended, e.g. 30000-30007). Set Start and End to the same number to use a single UDP port."]
+                    </MudText>
+                }
+
+                <MudDivider Class="my-3" />
+                <div class="d-flex flex-column flex-sm-row align-start align-sm-center justify-space-between gap-2">
+                    <div>
+                        <MudText Typo="Typo.subtitle2">@Loc["Voice Bot Self-Test"]</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @Loc["Verifies that the internal LiveKit voice bot connects over UDP, publishes audio frames, and loads built-in chime sounds without disrupting active channels."]
+                        </MudText>
+                    </div>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.GraphicEq"
+                               Disabled="@_isTestingVoiceBot"
+                               OnClick="RunVoiceBotSelfTest"
+                               Class="flex-shrink-0">
+                        @if (_isTestingVoiceBot)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                            @Loc["Testing..."]
+                        }
+                        else
+                        {
+                            @Loc["Test Voice Bot"]
+                        }
+                    </MudButton>
+                </div>
+
+                @if (HasUnsavedLiveKitPortChanges)
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                        @Loc["You have unsaved LiveKit port changes. Save your settings first if you want to test the new port configuration."]
+                    </MudAlert>
+                }
+
+                @if (_voiceBotTestResult != null)
+                {
+                    var alertSeverity = _voiceBotTestResult.Status switch
+                    {
+                        VoiceBotSelfTestStatus.Pass => Severity.Success,
+                        VoiceBotSelfTestStatus.Warning => Severity.Warning,
+                        _ => Severity.Error
+                    };
+
+                    <MudPaper Outlined="true" Class="pa-3 mt-3">
+                        <MudAlert Severity="@alertSeverity" Dense="true" Class="mb-3">
+                            @($"{_voiceBotTestResult.Summary} ({_voiceBotTestResult.TotalDurationMs} ms)")
+                        </MudAlert>
+
+                        <div class="d-flex flex-wrap gap-2 mb-3">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                     Color="@(string.Equals(_voiceBotTestResult.TransportProtocol, "udp", StringComparison.OrdinalIgnoreCase) ? Color.Success : (string.Equals(_voiceBotTestResult.TransportProtocol, "tcp", StringComparison.OrdinalIgnoreCase) ? Color.Warning : Color.Default))">
+                                @($"{Loc["Transport"].Value}: {_voiceBotTestResult.TransportProtocol.ToUpperInvariant()}")
+                            </MudChip>
+                            @if (!string.IsNullOrWhiteSpace(_voiceBotTestResult.RemoteEndpoint))
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                    @($"{Loc["Endpoint"].Value}: {_voiceBotTestResult.RemoteEndpoint}")
+                                </MudChip>
+                            }
+                            @if (_voiceBotTestResult.RoundTripTimeMs.HasValue)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                    @($"RTT: {_voiceBotTestResult.RoundTripTimeMs.Value:F1} ms")
+                                </MudChip>
+                            }
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                @($"{Loc["RTP Packets"].Value}: {_voiceBotTestResult.OutboundPacketsSent}")
+                            </MudChip>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                     Color="@(_voiceBotTestResult.LoadedSoundCount == 2 ? Color.Success : Color.Warning)">
+                                @($"{Loc["Chimes"].Value}: {_voiceBotTestResult.LoadedSoundCount}/2")
+                            </MudChip>
+                        </div>
+
+                        <MudStack Spacing="1">
+                            @foreach (var step in _voiceBotTestResult.Steps)
+                            {
+                                var stepIcon = step.Status switch
+                                {
+                                    VoiceBotSelfTestStatus.Pass => Icons.Material.Filled.CheckCircle,
+                                    VoiceBotSelfTestStatus.Warning => Icons.Material.Filled.Warning,
+                                    _ => Icons.Material.Filled.Error
+                                };
+                                var stepColor = step.Status switch
+                                {
+                                    VoiceBotSelfTestStatus.Pass => Color.Success,
+                                    VoiceBotSelfTestStatus.Warning => Color.Warning,
+                                    _ => Color.Error
+                                };
+                                <div class="d-flex align-start gap-2">
+                                    <MudIcon Icon="@stepIcon" Color="@stepColor" Size="Size.Small" Class="mt-1 flex-shrink-0" />
+                                    <div>
+                                        <MudText Typo="Typo.body2">
+                                            <strong>@step.Name</strong>
+                                            <MudText Inline="true" Typo="Typo.caption" Color="Color.Secondary" Class="ml-1">@($"({step.DurationMs} ms)")</MudText>
+                                        </MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@step.Detail</MudText>
+                                    </div>
+                                </div>
+                            }
+                        </MudStack>
+                    </MudPaper>
                 }
             </SettingsCard>
 
@@ -1634,6 +1743,8 @@
     }
 
     private bool _isDisposed;
+    private readonly string _backupRestoreInputId = $"spokes-backup-restore-{Guid.NewGuid():N}";
+    private DotNetObjectReference<CompanySettings>? _backupPickerDotNetRef;
 
     public void Dispose()
     {
@@ -1641,6 +1752,7 @@
         BackupSvc.OnLocalBackupStateChanged -= HandleLocalBackupStateChanged;
         Db.CompanyProfile.OnSaved -= HandleCompanyProfileUpdated;
         Db.CompanyProfile.OnLoaded -= HandleCompanyProfileLoaded;
+        _backupPickerDotNetRef?.Dispose();
     }
 
     private void HandleCompanyProfileUpdated(CompanyProfile updated)
@@ -1850,6 +1962,17 @@
             });
             Nav.NavigateTo(uri, forceLoad: false, replace: true);
         }
+        if (IsEffectiveAdmin)
+        {
+            try
+            {
+                _backupPickerDotNetRef ??= DotNetObjectReference.Create(this);
+                await JS.InvokeVoidAsync("window.spokesUpload.chunked.initPicker", _backupRestoreInputId, _backupPickerDotNetRef, new { onSelectedMethod = nameof(OnBackupFileSelected) });
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+            {
+            }
+        }
     }
 
     private async Task TriggerManualUpdate()
@@ -1929,6 +2052,78 @@
         LiveKitService.ApplyPortConfiguration(_systemConfig);
         Snackbar.Add(Loc["LiveKit log level updated and reloaded."].Value, Severity.Success);
         return Task.CompletedTask;
+    }
+
+    private bool _isTestingVoiceBot;
+    private VoiceBotSelfTestResult? _voiceBotTestResult;
+
+    private bool HasUnsavedLiveKitPortChanges =>
+        _systemConfig.LiveKitFallbackPort != _initialSystemConfig.LiveKitFallbackPort ||
+        _systemConfig.LiveKitUdpStartPort != _initialSystemConfig.LiveKitUdpStartPort ||
+        _systemConfig.LiveKitUdpEndPort != _initialSystemConfig.LiveKitUdpEndPort;
+
+    private string? ValidateLiveKitSettingsPorts()
+    {
+        if (_systemConfig.LiveKitFallbackPort < LiveKitService.MinValidPort ||
+            _systemConfig.LiveKitFallbackPort > LiveKitService.MaxValidPort)
+        {
+            return Loc["TCP Fallback Port must be between 1024 and 65535."].Value;
+        }
+
+        return LiveKitService.ValidateUdpMuxRange(_systemConfig.LiveKitUdpStartPort, _systemConfig.LiveKitUdpEndPort) switch
+        {
+            UdpPortRangeValidationError.InvalidStartPort => Loc["UDP Start Port must be between 1024 and 65535."].Value,
+            UdpPortRangeValidationError.InvalidEndPort => Loc["UDP End Port must be between 1024 and 65535."].Value,
+            UdpPortRangeValidationError.EndBeforeStart => Loc["UDP End Port must be greater than or equal to UDP Start Port."].Value,
+            UdpPortRangeValidationError.ExceedsMaxMuxPorts => string.Format(Loc["UDP Mux supports between 1 and {0} ports."].Value, LiveKitService.MaxUdpMuxPortCount),
+            _ => null
+        };
+    }
+
+    private async Task RunVoiceBotSelfTest()
+    {
+        var liveUser = await UserService.GetEmployeeAsync();
+        _currentUser = liveUser;
+        if (liveUser is not { IsActiveUnsuspended: true } ||
+            (!liveUser.IsEffectiveAdmin && !liveUser.HasPermission(AppPermissions.Admin.ManageSettings)))
+        {
+            Snackbar.Add(Loc["You do not have permission to run voice diagnostics."].Value, Severity.Error);
+            return;
+        }
+
+        if (_isTestingVoiceBot) return;
+
+        _isTestingVoiceBot = true;
+        _voiceBotTestResult = null;
+        StateHasChanged();
+
+        try
+        {
+            _voiceBotTestResult = await VoiceBotService.RunSelfTestAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[CompanySettings] Voice Bot self-test failed unexpectedly");
+            _voiceBotTestResult = new VoiceBotSelfTestResult(
+                VoiceBotSelfTestStatus.Fail,
+                ex.Message,
+                0,
+                DateTime.UtcNow,
+                "unknown",
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                null,
+                0,
+                0,
+                0,
+                []);
+        }
+        finally
+        {
+            _isTestingVoiceBot = false;
+            StateHasChanged();
+        }
     }
 
     // --- Backup Logic ---
@@ -2023,12 +2218,23 @@
         }
     }
 
-    private async Task UploadAndRestoreBackup(IBrowserFile file)
+    [JSInvokable]
+    public async Task OnBackupFileSelected(string fileToken, string fileName, long fileSizeBytes)
     {
-        if (!await RequireEffectiveAdminAsync()) return;
-        var parameters = new DialogParameters { ["File"] = file };
+        if (_isDisposed || !await RequireEffectiveAdminAsync())
+        {
+            try { await JS.InvokeVoidAsync("window.spokesUpload.chunked.releaseFile", fileToken); } catch { }
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            [nameof(RestoreBackupDialog.PendingFileToken)] = fileToken,
+            [nameof(RestoreBackupDialog.PendingFileName)] = fileName,
+            [nameof(RestoreBackupDialog.PendingFileSizeBytes)] = fileSizeBytes
+        };
         var dialog = await DialogService.ShowAsync<RestoreBackupDialog>("", parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, BackdropClick = false });
-        
+
         var result = await dialog.Result;
         if (result != null && !result.Canceled)
         {
@@ -2657,6 +2863,16 @@
         bool livekitChanged = _systemConfig.LiveKitFallbackPort != _initialSystemConfig.LiveKitFallbackPort ||
                               _systemConfig.LiveKitUdpStartPort != _initialSystemConfig.LiveKitUdpStartPort ||
                               _systemConfig.LiveKitUdpEndPort != _initialSystemConfig.LiveKitUdpEndPort;
+
+        if (livekitChanged && Environment.GetEnvironmentVariable("SPOKES_HOSTING_PROVIDER") != "digitalocean")
+        {
+            var portError = ValidateLiveKitSettingsPorts();
+            if (!string.IsNullOrEmpty(portError))
+            {
+                Snackbar.Add(portError, Severity.Error);
+                return;
+            }
+        }
 
         bool publicUrlChanged = _systemConfig.ServerPublicUrl != _initialSystemConfig.ServerPublicUrl;
 

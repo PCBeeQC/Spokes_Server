@@ -72,4 +72,32 @@ public class DocumentTemplateHelperTests
         Assert.Equal("Loyer, électricité et services publics", line.GetLocalizedName(true));
         Assert.Equal("Rent, Electricity & Utilities", line.GetLocalizedName(false));
     }
+
+    [Fact]
+    public void DocumentTemplate_DeserializesLegacyJsonContainingRemovedTaxRate_Safely()
+    {
+        const string legacyJson = """
+            {
+              "Id": "tmpl-legacy-fr",
+              "Name": "Standard Français",
+              "LanguageCode": "fr-CA",
+              "TaxRate": 0.14975,
+              "BankName": "Banque Demo",
+              "BankAccountNumber": "000123456",
+              "TaxRegistrationLabelsByCode": {
+                "TPS": "No de TPS",
+                "TVQ": "No de TVQ"
+              }
+            }
+            """;
+
+        var deserialized = System.Text.Json.JsonSerializer.Deserialize<DocumentTemplate>(legacyJson);
+
+        Assert.NotNull(deserialized);
+        Assert.Equal("tmpl-legacy-fr", deserialized!.Id);
+        Assert.Equal("Banque Demo", deserialized.BankName);
+        Assert.Equal("000123456", deserialized.BankAccountNumber);
+        Assert.Equal("No de TPS", deserialized.TaxRegistrationLabelsByCode["TPS"]);
+        Assert.Equal("No de TVQ", deserialized.TaxRegistrationLabelsByCode["TVQ"]);
+    }
 }

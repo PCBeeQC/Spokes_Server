@@ -19,7 +19,6 @@ public class DocumentTemplate : IDataEntity
     public bool IsDefault { get; set; }
 
     // --- FINANCIALS (New) ---
-    public decimal TaxRate { get; set; } = 0.14975m; // Default to QC, but editable per template
     public string CurrencySymbol { get; set; } = "$";
     public bool CurrencySymbolAfter { get; set; }
     public string DateFormat { get; set; } = "yyyy-MM-dd";
@@ -58,6 +57,13 @@ public class DocumentTemplate : IDataEntity
     public string Label_BankName { get; set; } = "Bank";
     public string Label_BankAccount { get; set; } = "Account";
     public string Label_SwiftCode { get; set; } = "Swift / Transit";
+
+    /// <summary>
+    /// Optional per-template translated labels for company tax registration numbers,
+    /// keyed by <see cref="Core.Models.Accounting.SalesTaxRule.Code"/> (e.g. "TPS" -> "No de TPS", "TVQ" -> "No de TVQ").
+    /// Falls back to the active jurisdiction's RegistrationNumberLabel when blank.
+    /// </summary>
+    public Dictionary<string, string> TaxRegistrationLabelsByCode { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public string Label_ProjectManager { get; set; } = "Project Manager";
     public string Label_ItemLaborTag { get; set; } = "(Labor)";

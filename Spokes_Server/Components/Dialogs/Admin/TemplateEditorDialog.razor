@@ -1,11 +1,13 @@
 @using Spokes_Server.Core.Data.Repositories.Core
 @using Spokes_Server.Core.Models.Documents
 @using Spokes_Server.Aggregate
+@using Spokes_Server.Core.Services.Accounting
 @using Spokes_Server.Core.Services.Content
 @using Spokes_Server.Core.Services.Security
 @inject CompanyProfileRepository CompanyProfile
 @inject Database Db
 @inject IDialogService DialogService
+@inject IJurisdictionTemplateService JurisdictionService
 @inject ISnackbar Snackbar
 @inject MarkdownSanitizerService MarkdownSanitizer
 @inject UserService UserService
@@ -53,23 +55,19 @@
 
                         <MudItem xs="12">
                             <MudDivider Class="my-2" />
-                            <MudText Typo="Typo.subtitle2">Financials & Tax</MudText>
+                            <MudText Typo="Typo.subtitle2">@BizLoc["Formatting & Currency"]</MudText>
                         </MudItem>
 
-                        <MudItem xs="4">
-                            <MudNumericField @bind-Value="Template.TaxRate" Label="Tax Rate %" Format="P4" Step="0.0001M"
-                                Max="1.0M" />
-                        </MudItem>
-                        <MudItem xs="4">
+                        <MudItem xs="6">
                              <MudSwitch @bind-Value="Template.CurrencySymbolAfter" Label="Symbol After Number" Color="Color.Primary" />
                         </MudItem>
-                        <MudItem xs="4">
+                        <MudItem xs="6">
                             <MudTextField @bind-Value="Template.CurrencySymbol" Label="Currency Symbol" />
                         </MudItem>
 
                         <MudItem xs="12">
                             <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-1">
-                                @BizLoc["Company Tax Registration Numbers (printed on invoices) are configured per jurisdiction in Business Settings → Accounting, Tax & Jurisdiction."]
+                                @BizLoc["Default sales tax rates and company tax registration numbers are configured per jurisdiction in Business Settings → Accounting, Tax & Jurisdiction. Customize the printed registration labels under Labels / Translations."]
                             </MudAlert>
                         </MudItem>
 
@@ -183,6 +181,26 @@
                         <MudItem xs="6">
                             <MudTextField @bind-Value="Template.Label_BankAccount" Label="Label: Account #" />
                         </MudItem>
+
+                        @if (_taxRegistrationFields.Count > 0)
+                        {
+                            <MudItem xs="12">
+                                <MudDivider Class="my-2" />
+                                <MudText Typo="Typo.caption">@BizLoc["Tax Registration Number Labels"]</MudText>
+                            </MudItem>
+                            @foreach (var taxField in _taxRegistrationFields)
+                            {
+                                var code = taxField.Code;
+                                <MudItem xs="6">
+                                    <MudTextField T="string"
+                                                  Value="@GetTaxRegistrationLabel(code)"
+                                                  ValueChanged="@((string v) => SetTaxRegistrationLabel(code, v))"
+                                                  Label="@($"Label: {code} Registration #")"
+                                                  Placeholder="@taxField.DefaultLabel"
+                                                  HelperText="@($"Leave blank to use default: {taxField.DefaultLabel}")" />
+                                </MudItem>
+                            }
+                        }
 
                         <MudItem xs="12">
                             <MudDivider Class="my-2" />
@@ -654,6 +672,7 @@
     
     private List<string> TaskLanguages = [];
     private List<TermsAndConditions> AvailableTerms = [];
+    private List<(string Code, string DefaultLabel)> _taxRegistrationFields = [];
 
     private TermsAndConditions? SelectedTerms =>
         AvailableTerms.FirstOrDefault(t => t.Id == Template.DefaultTermsAndConditionsId);
@@ -663,6 +682,7 @@
         var profile = CompanyProfile.Get();
         TaskLanguages = profile?.TaskTranslationLanguages ?? [];
         AvailableTerms = Db.TermsAndConditions.GetAll().OrderBy(t => t.Name).ToList();
+        BuildTaxRegistrationFields(profile);
 
         if (string.IsNullOrEmpty(Template.DefaultTermsAndConditionsId) && !string.IsNullOrEmpty(Template.DefaultTermsAndConditions))
         {
@@ -672,6 +692,76 @@
                 Template.DefaultTermsAndConditionsId = match.Id;
             }
         }
+    }
+
+    private void BuildTaxRegistrationFields(Spokes_Server.Core.Models.Core.CompanyProfile? profile)
+    {
+        _taxRegistrationFields.Clear();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var activeTemplate = JurisdictionService.GetActiveTemplate();
+        if (activeTemplate.SalesTaxes != null)
+        {
+            foreach (var tax in activeTemplate.SalesTaxes)
+            {
+                if (string.IsNullOrWhiteSpace(tax.Code) || !seen.Add(tax.Code)) continue;
+                var defaultLabel = !string.IsNullOrWhiteSpace(tax.RegistrationNumberLabel)
+                    ? tax.RegistrationNumberLabel
+                    : tax.Code;
+                _taxRegistrationFields.Add((tax.Code, defaultLabel));
+            }
+        }
+
+        if (profile?.Accounting?.TaxRegistrationNumbersByCode != null)
+        {
+            foreach (var code in profile.Accounting.TaxRegistrationNumbersByCode.Keys)
+            {
+                if (!string.IsNullOrWhiteSpace(code) && seen.Add(code))
+                    _taxRegistrationFields.Add((code, code));
+            }
+        }
+
+        if (Template.TaxRegistrationLabelsByCode != null)
+        {
+            foreach (var code in Template.TaxRegistrationLabelsByCode.Keys)
+            {
+                if (!string.IsNullOrWhiteSpace(code) && seen.Add(code))
+                    _taxRegistrationFields.Add((code, code));
+            }
+        }
+    }
+
+    private string GetTaxRegistrationLabel(string code)
+    {
+        var labels = Template.TaxRegistrationLabelsByCode;
+        if (labels == null || labels.Count == 0 || string.IsNullOrWhiteSpace(code))
+            return string.Empty;
+
+        if (labels.TryGetValue(code, out var exact))
+            return exact ?? string.Empty;
+
+        foreach (var kvp in labels)
+        {
+            if (string.Equals(kvp.Key, code, StringComparison.OrdinalIgnoreCase))
+                return kvp.Value ?? string.Empty;
+        }
+
+        return string.Empty;
+    }
+
+    private void SetTaxRegistrationLabel(string code, string? value)
+    {
+        Template.TaxRegistrationLabelsByCode ??= new(StringComparer.OrdinalIgnoreCase);
+        var staleKeys = Template.TaxRegistrationLabelsByCode.Keys
+            .Where(k => string.Equals(k, code, StringComparison.OrdinalIgnoreCase) && !string.Equals(k, code, StringComparison.Ordinal))
+            .ToList();
+        foreach (var staleKey in staleKeys)
+            Template.TaxRegistrationLabelsByCode.Remove(staleKey);
+
+        if (string.IsNullOrWhiteSpace(value))
+            Template.TaxRegistrationLabelsByCode.Remove(code);
+        else
+            Template.TaxRegistrationLabelsByCode[code] = value.Trim();
     }
 
     private async Task<bool> AuthorizeSettingsMutationAsync()

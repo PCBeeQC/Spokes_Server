@@ -963,6 +963,11 @@ public class BillingOrchestrationService
             invoice.PdfPath = string.Empty;
         }
 
+        if (invoice.TaxRate <= 0m && invoice.TaxComponents.Count > 0)
+        {
+            invoice.TaxComponents.Clear();
+        }
+
         _accounting.Invoices.Save(invoice);
     }
 

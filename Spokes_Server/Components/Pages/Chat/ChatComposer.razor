@@ -689,11 +689,11 @@ else
     {
         _autoFocusEmojiSearch = false;
         _showEmojiPicker = !_showEmojiPicker;
-        if (_showEmojiPicker)
+        if (_showEmojiPicker && _jsModule != null)
         {
             try
             {
-                await JS.InvokeVoidAsync("eval", $"document.getElementById('chat-message-input-{IdSuffix}')?.blur();");
+                await _jsModule.InvokeVoidAsync("blurComposerInput", $"chat-message-input-{IdSuffix}");
             }
             catch { }
         }

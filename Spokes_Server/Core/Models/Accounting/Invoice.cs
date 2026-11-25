@@ -51,7 +51,7 @@ public class Invoice : IDataEntity, IHasDocumentHistory, IHasAssociatedFiles
     public List<string> BilledExpenseItemIds { get; set; } = [];
 
     // Financials
-    public decimal TaxRate { get; set; } = FinancialCalculationEngine.QuebecCombinedTaxRate;
+    public decimal TaxRate { get; set; } = FinancialCalculationEngine.ActiveCombinedTaxRate;
     public decimal SubTotal => FinancialCalculationEngine.RoundCurrency(LineItems.Sum(l => l.Total));
     public decimal TotalCost => LineItems.Sum(l => l.Quantity * l.OriginalUnitCost);
     public decimal GrossMargin => SubTotal - TotalCost;

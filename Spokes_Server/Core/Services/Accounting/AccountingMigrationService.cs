@@ -68,6 +68,9 @@ public class AccountingMigrationService : IAccountingMigrationService
 
         var parsed = AccountingMigrationParser.ParseFiles(request.Files, request.Format, asOf, defaultCurrency);
         var spokesAccounts = _accounting.GlAccounts?.GetAll().OrderBy(a => a.Code).ToList() ?? [];
+        var existingFinancialAccounts = _accounting.FinancialAccounts?.GetAll()
+            .Where(f => f.IsActive && !string.IsNullOrWhiteSpace(f.LinkedGlAccountCode))
+            .ToList() ?? [];
         var existingSuppliers = _accounting.Suppliers?.GetAll().ToList() ?? [];
         var existingProjects = _projects?.Projects.GetAll().ToList() ?? [];
         var existingEmployees = _hr?.Employees.GetAll().ToList() ?? [];
@@ -104,9 +107,40 @@ public class AccountingMigrationService : IAccountingMigrationService
 
         // 2. Match / Suggest Chart of Accounts & Trial Balance Rows
         var matchedTargetCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var row in parsed.GlRows)
+        var claimedFinancialAccountGlCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Process non-zero rows first when claiming FinancialAccounts so active accounts (e.g. 1060 BNC CAD) win over dormant $0 accounts
+        var orderedGlRows = parsed.GlRows
+            .Select((row, idx) => (row, idx))
+            .OrderByDescending(x => (x.row.Debit != 0m || x.row.Credit != 0m) ? 1 : 0)
+            .ThenBy(x => x.idx)
+            .ToList();
+
+        var suggestionsByIdx = new Dictionary<int, GlAccountSuggestion>();
+        foreach (var (row, idx) in orderedGlRows)
         {
-            var suggestion = PartyMatchingHelper.SuggestGlAccount(row.Code, row.Name, row.StandardTaxCode, spokesAccounts);
+            var availableFinAccounts = existingFinancialAccounts
+                .Where(f => !claimedFinancialAccountGlCodes.Contains(f.LinkedGlAccountCode))
+                .ToList();
+            var suggestion = PartyMatchingHelper.SuggestGlAccount(
+                row.Code,
+                row.Name,
+                row.StandardTaxCode,
+                spokesAccounts,
+                availableFinAccounts,
+                hasBalance: row.Debit != 0m || row.Credit != 0m);
+
+            if (!string.IsNullOrWhiteSpace(suggestion.SuggestedCode) &&
+                existingFinancialAccounts.Any(f => string.Equals(f.LinkedGlAccountCode, suggestion.SuggestedCode, StringComparison.OrdinalIgnoreCase)))
+            {
+                claimedFinancialAccountGlCodes.Add(suggestion.SuggestedCode);
+            }
+            suggestionsByIdx[idx] = suggestion;
+        }
+
+        for (int idx = 0; idx < parsed.GlRows.Count; idx++)
+        {
+            var row = parsed.GlRows[idx];
+            var suggestion = suggestionsByIdx[idx];
             var action = !string.IsNullOrWhiteSpace(suggestion.SuggestedCode)
                 ? MigrationGlAction.MapToExisting
                 : MigrationGlAction.CreateAccount;
@@ -268,14 +302,34 @@ public class AccountingMigrationService : IAccountingMigrationService
             }
         }
 
-        // 4B. Match Parsed Projects -> Real Projects linked to Clients (with Year Cutoff defaults)
+        // 4B. Match Parsed Projects -> Real Projects linked to Clients (with normalized project-code matching: "ABB 005" == "ABB005")
         var activeCutoffYear = asOf.Year - 1; // e.g., 2024+ stays active around 2025/2026 cutover
         foreach (var proj in parsed.Projects)
         {
+            var normExtractedCode = PartyMatchingHelper.NormalizeIdentifier(proj.ExtractedCode);
+            var normCleanName = PartyMatchingHelper.NormalizeCompanyName(proj.CleanName);
+
             var existingMatch = existingProjects.FirstOrDefault(p =>
-                (!string.IsNullOrWhiteSpace(proj.ExtractedCode) &&
-                 string.Equals(p.ProjectNumber.Trim(), proj.ExtractedCode.Trim(), StringComparison.OrdinalIgnoreCase)) ||
-                string.Equals(PartyMatchingHelper.NormalizeCompanyName(p.Name), PartyMatchingHelper.NormalizeCompanyName(proj.CleanName), StringComparison.OrdinalIgnoreCase));
+            {
+                var normProjNum = PartyMatchingHelper.NormalizeIdentifier(p.ProjectNumber);
+                if (!string.IsNullOrEmpty(normExtractedCode) && !string.IsNullOrEmpty(normProjNum) &&
+                    string.Equals(normProjNum, normExtractedCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                // Fallback: Spokes project name starts with the same normalized alphanumeric code (e.g. "ABB005 - DART")
+                if (!string.IsNullOrEmpty(normExtractedCode) && normExtractedCode.Length >= 5 &&
+                    normExtractedCode.Any(char.IsLetter) && normExtractedCode.Any(char.IsDigit))
+                {
+                    var normProjNameId = PartyMatchingHelper.NormalizeIdentifier(p.Name);
+                    if (normProjNameId.StartsWith(normExtractedCode, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+
+                return !string.IsNullOrEmpty(normCleanName) &&
+                       string.Equals(PartyMatchingHelper.NormalizeCompanyName(p.Name), normCleanName, StringComparison.OrdinalIgnoreCase);
+            });
 
             var (clientSupId, clientName) = PartyMatchingHelper.MatchProjectToClient(
                 proj.RawName,
@@ -670,9 +724,17 @@ public class AccountingMigrationService : IAccountingMigrationService
                 var existing = _accounting.GlAccounts.GetByCode(targetNewCode);
                 if (existing != null)
                 {
-                    if (!string.IsNullOrEmpty(existing.SystemRole))
+                    var nameSim = Math.Max(
+                        PartyMatchingHelper.ComputeNameSimilarity(
+                            PartyMatchingHelper.StripDiacritics(row.SourceName).ToLowerInvariant(),
+                            PartyMatchingHelper.StripDiacritics(existing.Name).ToLowerInvariant()),
+                        PartyMatchingHelper.ComputeNameSimilarity(
+                            PartyMatchingHelper.StripDiacritics(row.SourceName).ToLowerInvariant(),
+                            PartyMatchingHelper.StripDiacritics(existing.NameFr).ToLowerInvariant()));
+
+                    if (existing.IsSystemAccount || !string.IsNullOrEmpty(existing.SystemRole) || nameSim < 0.45m)
                     {
-                        // Preserve the Spokes system account untouched by assigning a non-colliding suffix code for the imported account
+                        // Preserve the existing Spokes account untouched by assigning a non-colliding suffix code
                         var suffix = 1;
                         var candidateCode = $"{targetNewCode}-S";
                         while (_accounting.GlAccounts.GetByCode(candidateCode) != null)
@@ -836,6 +898,14 @@ public class AccountingMigrationService : IAccountingMigrationService
             }
         }
 
+        // Snapshot existing Spokes Trial Balance BEFORE posting Opening AR/AP subledger documents so Step 6 computes exact deltas and clears 3900 to $0.00.
+        var preObFiscalStart = _ledger.GetFiscalYearStart(preview.AsOfDate);
+        var preObSpokesTb = _ledger.CalculateTrialBalance(preObFiscalStart, preview.AsOfDate, includeZeroAccounts: false);
+        var preObSpokesSignedByCode = preObSpokesTb.Rows.ToDictionary(
+            r => r.AccountCode,
+            r => r.IsDebitNormal ? r.EndingBalance : -r.EndingBalance,
+            StringComparer.OrdinalIgnoreCase);
+
         // 4. Open AR Invoices (cleared through 3900 Opening Balance Equity via LedgerService.SyncInvoice)
         var includedInvoices = preview.OpenInvoices.Where(i => i.Include && i.OpenAmount != 0m).ToList();
         if (_accounting.Invoices != null && includedInvoices.Count > 0)
@@ -933,27 +1003,20 @@ public class AccountingMigrationService : IAccountingMigrationService
         // 6. Post Balanced Opening Balance / Delta Journal Entry
         if (preview.GlMappings.Any(g => g.Action != MigrationGlAction.Ignore))
         {
-            var fiscalStart = _ledger.GetFiscalYearStart(preview.AsOfDate);
-            var spokesTb = _ledger.CalculateTrialBalance(fiscalStart, preview.AsOfDate, includeZeroAccounts: false);
-            var spokesSignedByCode = spokesTb.Rows.ToDictionary(
-                r => r.AccountCode,
-                r => r.IsDebitNormal ? r.EndingBalance : -r.EndingBalance,
-                StringComparer.OrdinalIgnoreCase);
+            var netByTarget = ComputeTargetNetDeltas(preview, preObSpokesSignedByCode);
 
-            var netByTarget = ComputeTargetNetDeltas(preview, spokesSignedByCode);
-
-            // Re-route AR and AP TB control lines through 3900 OpeningBalanceEquity when open subledger items are imported
+            // Offset AR/AP lines by the exact Opening AR/AP subledger totals already posted through 3900 in Steps 4 & 5 so 3900 always clears to $0.00.
             var arCode = _ledger.ResolveAccountCodeByRole(GlSystemRole.AccountsReceivable, "1200");
             var apCode = _ledger.ResolveAccountCodeByRole(GlSystemRole.AccountsPayable, "2100");
-            if (includedInvoices.Count > 0 && netByTarget.TryGetValue(arCode, out var arDelta) && arDelta != 0m)
+            if (batch.TotalOpenArImported != 0m)
             {
-                netByTarget.Remove(arCode);
-                netByTarget[obAccount.Code] = netByTarget.GetValueOrDefault(obAccount.Code) + arDelta;
+                netByTarget[arCode] = Math.Round(netByTarget.GetValueOrDefault(arCode) - batch.TotalOpenArImported, 2);
+                netByTarget[obAccount.Code] = Math.Round(netByTarget.GetValueOrDefault(obAccount.Code) + batch.TotalOpenArImported, 2);
             }
-            if (includedBills.Count > 0 && netByTarget.TryGetValue(apCode, out var apDelta) && apDelta != 0m)
+            if (batch.TotalOpenApImported != 0m)
             {
-                netByTarget.Remove(apCode);
-                netByTarget[obAccount.Code] = netByTarget.GetValueOrDefault(obAccount.Code) + apDelta;
+                netByTarget[apCode] = Math.Round(netByTarget.GetValueOrDefault(apCode) + batch.TotalOpenApImported, 2);
+                netByTarget[obAccount.Code] = Math.Round(netByTarget.GetValueOrDefault(obAccount.Code) - batch.TotalOpenApImported, 2);
             }
 
             var jeLines = new List<JournalLine>();

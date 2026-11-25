@@ -727,6 +727,7 @@
         // ── PII-safe interactive control labeler ──
         const GENERIC_EXCLUDED_SELECTOR = 'input:not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"], .mud-slider, .mud-range-slider';
         const GENERIC_INTERACTIVE_SELECTOR = [
+            '[data-diag-label]',
             'button',
             '[role="button"]',
             '.mud-button-root',
@@ -735,6 +736,7 @@
             '.mud-chip',
             '.mud-menu-item',
             'a[href]',
+            '.album-card',
             '.m-cell',
             '.calendar-cell',
             '.calendar-event',

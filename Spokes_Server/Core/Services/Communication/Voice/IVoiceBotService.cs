@@ -55,4 +55,25 @@ public interface IVoiceBotService : IAsyncDisposable
     /// When <paramref name="channelId"/> is null, notifies all active channel sessions.
     /// </summary>
     Task NotifyRoomConfigurationChangedAsync(string? channelId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    /// <summary>
+    /// Runs an isolated server-side self-test verifying that the Voice Bot can connect to the local
+    /// LiveKit daemon, publish audio frames, establish WebRTC transport (checking UDP vs TCP fallback),
+    /// and verify built-in chime sound assets without affecting any active voice channels.
+    /// </summary>
+    Task<VoiceBotSelfTestResult> RunSelfTestAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new VoiceBotSelfTestResult(
+            VoiceBotSelfTestStatus.Fail,
+            "Voice Bot self-test is not supported by this implementation.",
+            0,
+            DateTime.UtcNow,
+            "unknown",
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            null,
+            0,
+            0,
+            0,
+            []));
 }

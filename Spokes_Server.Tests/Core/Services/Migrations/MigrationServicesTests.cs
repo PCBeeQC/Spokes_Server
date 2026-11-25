@@ -376,7 +376,7 @@ public class MigrationServicesTests : TestDataTestBase
     }
 
     [Fact]
-    public void MigrationAssembly_ContainsOnlyTheSixRetainedFamilyMigrationSteps()
+    public void MigrationAssembly_ContainsOnlyTheRetainedFamilyMigrationSteps()
     {
         var migrationStepTypes = typeof(IMigrationStep).Assembly
             .GetTypes()
@@ -391,6 +391,7 @@ public class MigrationServicesTests : TestDataTestBase
                 "EmployeeChannelOrderMigrationStep",
                 "LegacyChatAttachmentRouteMigrationStep",
                 "LegacyOidcSubMigrationStep",
+                "LiveKitUdpMuxMigrationStep",
                 "PushDeviceSessionMigrationStep",
                 "PushSubscriptionsCaseFixMigrationStep"
             ],

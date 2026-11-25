@@ -281,6 +281,13 @@ public class AccountingReadinessAndSafetyTests : TestDataTestBase
         var acctFees = PartyMatchingHelper.SuggestGlAccount("5610", "Frais comptables & judiciaires", "8862", spokesAccounts);
         Assert.Null(acctFees.SuggestedCode);
 
+        // French words containing "rti"/"cti" substrings (amortissement, actif, actionnaire, portion, articles) MUST NOT match 2165/2175
+        Assert.Null(PartyMatchingHelper.SuggestGlAccount("1815", "Amortissement cumulé Amél.locatives", "", spokesAccounts).SuggestedCode);
+        Assert.Null(PartyMatchingHelper.SuggestGlAccount("1920", "Actif disponible à la location", "2012", spokesAccounts).SuggestedCode);
+        Assert.Null(PartyMatchingHelper.SuggestGlAccount("2630", "Dû actionnaire Jolain", "3141", spokesAccounts).SuggestedCode);
+        Assert.Null(PartyMatchingHelper.SuggestGlAccount("3350", "Actions ordinaires", "3500", spokesAccounts).SuggestedCode);
+        Assert.Null(PartyMatchingHelper.SuggestGlAccount("5630", "Interet long terme", "9271", spokesAccounts).SuggestedCode);
+
         // French Sage 50 sales tax accounts MUST map cleanly to Spokes 2160/2165/2170/2175/2180
         Assert.Equal("2160", PartyMatchingHelper.SuggestGlAccount("2310", "TPS/TVH perçue sur les ventes", "2680", spokesAccounts).SuggestedCode);
         Assert.Equal("2165", PartyMatchingHelper.SuggestGlAccount("2315", "TPS/TVH payée sur les achats", "2680", spokesAccounts).SuggestedCode);
@@ -412,5 +419,216 @@ public class AccountingReadinessAndSafetyTests : TestDataTestBase
         Assert.NotNull(payJe);
         Assert.Equal(InvoiceStatus.Paid, _db.Invoices.GetById(draftInv.Id)!.Status);
         Assert.True(nov10Line.IsMatchedOrCategorized);
+    }
+
+    [Fact]
+    public void Migration_AutoLinksProjectsByNormalizedCode_AndMatchesConfiguredFinancialAccounts()
+    {
+        // Seed existing Spokes projects without spaces in ProjectNumber
+        var proj005 = new Spokes_Server.Core.Models.Projects.Project
+        {
+            Id = "proj-005",
+            ProjectNumber = "ABB005",
+            Name = "Client Alpha 005"
+        };
+        var proj035 = new Spokes_Server.Core.Models.Projects.Project
+        {
+            Id = "proj-035",
+            ProjectNumber = "ABB035",
+            Name = "Completely Different Name"
+        };
+        _db.Projects.Save(proj005);
+        _db.Projects.Save(proj035);
+
+        // Seed FinancialAccounts & backing GL accounts
+        _db.GlAccounts.Save(new GlAccount { Code = "1021", Name = "Compte BNC USD", Type = GlAccountType.Asset, SubType = GlAccountSubType.Bank, Currency = "USD" });
+        _db.GlAccounts.Save(new GlAccount { Code = "2121", Name = "MasterCard 1", Type = GlAccountType.Liability, SubType = GlAccountSubType.CreditCard, Currency = "CAD" });
+        _db.FinancialAccounts.Save(new FinancialAccount { Name = "Operating Bank Account (Chequing)", AccountType = FinancialAccountType.Chequing, Currency = "CAD", LinkedGlAccountCode = "1020", IsDefaultOperating = true });
+        _db.FinancialAccounts.Save(new FinancialAccount { Name = "Compte BNC USD", AccountType = FinancialAccountType.Chequing, Currency = "USD", InstitutionName = "BNC", LinkedGlAccountCode = "1021" });
+        _db.FinancialAccounts.Save(new FinancialAccount { Name = "MasterCard 1", AccountType = FinancialAccountType.CreditCard, Currency = "CAD", InstitutionName = "BNC", LinkedGlAccountCode = "2121", IsDefaultCreditCard = true });
+
+        var sageProjects = "33002,3,Project\n\"ABB 005 Client Alpha\",3/30/2015,\n\"ABB 035 Unrelated Sage Title\",5/1/2018,\n";
+        var tbCsv = """
+            AccountNumber,AccountName,Type,Debit,Credit
+            1060,Compte courant canadien BNC,Asset,0,1000.00
+            1067,Compte courant $E.-U. BNC (USD),Asset,60.45,0
+            1068,Conversion devise BNC US,Asset,21.53,0
+            1071,Compte courant canadien Scotia,Asset,0,0
+            2134,MasterCard BNC à payer,Liability,0,500.00
+            3600,Retained Earnings,Equity,1418.02,0
+            """;
+
+        var preview = _migration.BuildPreview(new AccountingMigrationPreviewRequest
+        {
+            Mode = AccountingMigrationMode.FreshCutover,
+            AsOfDate = new DateTime(2026, 10, 31),
+            Files =
+            [
+                new MigrationUploadedFile { FileName = "projects.txt", Content = Encoding.UTF8.GetBytes(sageProjects) },
+                new MigrationUploadedFile { FileName = "tb.csv", Content = Encoding.UTF8.GetBytes(tbCsv), ExplicitKind = MigrationFileKind.TrialBalance }
+            ]
+        }, AdminActor);
+
+        // Normalized project code matching: "ABB 005" -> "ABB005", "ABB 035" -> "ABB035"
+        var m005 = Assert.Single(preview.Projects, p => p.ExtractedCode == "ABB 005");
+        Assert.Equal(MigrationProjectAction.LinkExisting, m005.Action);
+        Assert.Equal("proj-005", m005.MatchedExistingProjectId);
+
+        var m035 = Assert.Single(preview.Projects, p => p.ExtractedCode == "ABB 035");
+        Assert.Equal(MigrationProjectAction.LinkExisting, m035.Action);
+        Assert.Equal("proj-035", m035.MatchedExistingProjectId);
+
+        // Smart FinancialAccount auto-mapping
+        Assert.Equal("1020", preview.GlMappings.First(g => g.SourceCode == "1060").TargetGlCode);
+        Assert.Equal("1021", preview.GlMappings.First(g => g.SourceCode == "1067").TargetGlCode);
+        Assert.Equal("2121", preview.GlMappings.First(g => g.SourceCode == "2134").TargetGlCode);
+        // FX conversion account & dormant Scotia account must NOT hijack BNC accounts
+        Assert.Equal(MigrationGlAction.CreateAccount, preview.GlMappings.First(g => g.SourceCode == "1068").Action);
+        Assert.Equal(MigrationGlAction.CreateAccount, preview.GlMappings.First(g => g.SourceCode == "1071").Action);
+    }
+
+    [Fact]
+    public void BankRules_AutoPostOnlyPostCutoverLines_AndHealthSurfacesCutoverCluesAndSkipsObBillTaxes()
+    {
+        // Seed Line of Credit GL account & Applied migration batch as of 2026-10-31
+        _db.GlAccounts.Save(new GlAccount { Code = "2127", Name = "Marge de crédit BNC", Type = GlAccountType.Liability, SubType = GlAccountSubType.LineOfCredit });
+        var obJe = _ledger.SaveManualJournalEntry(new JournalEntry
+        {
+            Date = new DateTime(2026, 10, 31),
+            Description = "Cutover opening bank",
+            SourceType = JournalSourceType.OpeningBalance,
+            Lines =
+            [
+                new JournalLine { GlAccountCode = "1020", GlAccountName = "Operating Bank", Debit = 0m, Credit = 100000.00m },
+                new JournalLine { GlAccountCode = "3600", GlAccountName = "Retained Earnings", Debit = 100000.00m, Credit = 0m }
+            ]
+        });
+        _db.MigrationBatches.Save(new AccountingMigrationBatch
+        {
+            BatchNumber = "MIG-2610-0002",
+            AsOfDate = new DateTime(2026, 10, 31),
+            Status = AccountingMigrationBatchStatus.Applied,
+            OpeningTotalDebits = 100000.00m,
+            OpeningTotalCredits = 100000.00m,
+            CreatedJournalEntryIds = [obJe.Id]
+        });
+
+        // Seed an OpeningBalance bill with $0 tax -> must NOT trigger TAX_BILLS_MISSING_SPLIT
+        _db.Bills.Save(new Bill
+        {
+            Id = "ob-bill-1",
+            SupplierName = "Legacy Vendor",
+            Date = new DateTime(2026, 5, 1),
+            Amount = 500m,
+            IsOpeningBalance = true,
+            Status = BillStatus.Unpaid
+        });
+
+        // Create a universal BankRule for credit-line sweeps with AutoPostOnImport = true
+        _reconciliation.SaveBankRule(new BankRule
+        {
+            Name = "BNC Credit Line Sweep",
+            Keywords = "DEBOURSE MCR, REMB. MCR",
+            Direction = BankRuleDirection.Any,
+            Action = BankRuleAction.CategorizeToAccount,
+            TargetGlAccountCode = "2127",
+            AutoPostOnImport = true
+        }, AdminActor);
+
+        var csv = """
+            ACME DEMO INC.,ACME DEMO INC,0006-00001-0000001,CAD
+            Date,Description,Référence,Autres détails,Contrepartie,Transit émetteur,Débit,Crédit,Solde total
+            2026-11-05,DEBOURSE MCR,,,,,0,5000.00,4920.15
+            2026-10-30,DEBOURSE MCR,,,,,0,2000.00,-79.85
+            """;
+
+        var stmt = _reconciliation.ImportAndAutoMatch(csv, "bnc_mcr.csv", "1020", actor: AdminActor);
+
+        // Post-cutover line (Nov 5) MUST be auto-posted to 2127; Pre-cutover line (Oct 30) MUST remain Unmatched!
+        var novLine = stmt.Lines.First(l => l.Date == new DateTime(2026, 11, 5));
+        var octLine = stmt.Lines.First(l => l.Date == new DateTime(2026, 10, 30));
+        Assert.Equal(BankLineMatchStatus.CategorizedDirect, novLine.MatchStatus);
+        Assert.Equal("2127", novLine.DirectGlAccountCode);
+        Assert.Equal(BankLineMatchStatus.Unmatched, octLine.MatchStatus);
+
+        // Health Check must skip OB bill from TAX_BILLS_MISSING_SPLIT and flag BANK_CUTOVER_DISCREPANCY with MCR clue
+        var healthReport = _health.EvaluateHealth(new DateTime(2026, 11, 24), AdminActor);
+        Assert.DoesNotContain(healthReport.Issues, i => i.Code == "TAX_BILLS_MISSING_SPLIT");
+        var cutoverIssue = Assert.Single(healthReport.Issues, i => i.Code == "BANK_CUTOVER_DISCREPANCY");
+        Assert.Contains("MCR/LOC", cutoverIssue.Details);
+
+        // Excluding pre-cutover line must leave statement balanced and ready to lock
+        Assert.Equal(1, _reconciliation.ExcludePreCutoverUnmatchedLines(stmt, new DateTime(2026, 10, 31), AdminActor));
+        Assert.Equal(0m, stmt.OutOfBalanceDifference);
+        Assert.True(stmt.IsReadyToReconcile);
+        _reconciliation.ReconcileAndLockStatement(stmt, "Tester", AdminActor);
+        Assert.Equal(BankStatementStatus.Reconciled, stmt.Status);
+    }
+
+    [Fact]
+    public void Migration_DeltaMode_Clears3900ToZero_AndHealthHandlesCreditNotes_AndBncDetailsParsed()
+    {
+        // Pre-existing Spokes bill before cutover
+        var preBill = new Bill
+        {
+            SupplierName = "Acme Pre-Cutover Vendor",
+            Date = new DateTime(2026, 10, 10),
+            Amount = 200m,
+            SubTotal = 200m,
+            IsTaxExempt = true,
+            Status = BillStatus.Approved
+        };
+        _db.Bills.Save(preBill);
+        _ledger.SyncBill(preBill);
+
+        // Seed offsetting normal bill + credit note bill (+100 and -100) to verify Health AP subledger handles credit notes
+        var cnBill = new Bill
+        {
+            SupplierName = "Acme Credit Vendor",
+            Date = new DateTime(2026, 10, 15),
+            Amount = 100m,
+            SubTotal = 100m,
+            IsTaxExempt = true,
+            IsCreditNote = true,
+            Status = BillStatus.Approved
+        };
+        _db.Bills.Save(cnBill);
+        _ledger.SyncBill(cnBill);
+
+        var tbCsv = """
+            AccountNumber,AccountName,Type,Debit,Credit
+            1020,Operating Bank,Asset,500.00,0
+            1200,Accounts Receivable,Asset,400.00,0
+            2100,Accounts Payable,Liability,0,150.00
+            3600,Retained Earnings,Equity,0,750.00
+            """;
+        var preview = _migration.BuildPreview(new AccountingMigrationPreviewRequest
+        {
+            Mode = AccountingMigrationMode.ExistingWorkspaceDelta,
+            AsOfDate = new DateTime(2026, 10, 31),
+            Files = [new MigrationUploadedFile { FileName = "tb.csv", Content = Encoding.UTF8.GetBytes(tbCsv), ExplicitKind = MigrationFileKind.TrialBalance }]
+        }, AdminActor);
+        preview.OpenInvoices.Add(new OpenSubledgerMigrationRow { Include = true, IsReceivable = true, DocumentNumber = "INV-OB-1", PartyName = "Client Alpha Inc.", IssueDate = new DateTime(2026, 9, 1), DueDate = new DateTime(2026, 10, 1), OpenAmount = 500m });
+        preview.OpenInvoices.Add(new OpenSubledgerMigrationRow { Include = true, IsReceivable = true, DocumentNumber = "CN-OB-1", PartyName = "Client Alpha Inc.", IssueDate = new DateTime(2026, 9, 5), DueDate = new DateTime(2026, 10, 5), OpenAmount = -100m });
+        preview.OpenBills.Add(new OpenSubledgerMigrationRow { Include = true, IsReceivable = false, DocumentNumber = "BILL-OB-1", PartyName = "Vendor Beta Inc.", IssueDate = new DateTime(2026, 9, 10), DueDate = new DateTime(2026, 10, 10), OpenAmount = 150m });
+
+        _migration.ExecuteMigration(preview, AdminActor.Id, AdminActor.FullName, AdminActor);
+        var tb = _ledger.CalculateTrialBalance(new DateTime(2026, 1, 1), new DateTime(2026, 10, 31), includeZeroAccounts: true);
+        Assert.Equal(0m, tb.Rows.FirstOrDefault(r => r.AccountCode == "3900")?.EndingBalance ?? 0m);
+
+        // Verify BNC "Autres détails" column is preserved into Description & Payee
+        var bncCsv = """
+            ACME DEMO INC.,ACME DEMO INC,0006-00001-0000001,CAD
+            Date,Description,Référence,Autres détails,Contrepartie,Transit émetteur,Débit,Crédit,Solde total
+            2026-11-05,DPA ENTREPRISE,,BDC DEMO,,,500.00,,1000.00
+            """;
+        var parsed = new BankStatementImportService().ParseCsv(bncCsv, "bnc.csv", "1020");
+        var line = Assert.Single(parsed.Lines);
+        Assert.Contains("BDC DEMO", line.Description);
+        Assert.Equal("BDC DEMO", line.Payee);
+
+        // Verify Health does not report false AP credit-note drift when GL matches subledger
+        var report = _health.EvaluateHealth(new DateTime(2026, 10, 31), AdminActor);
+        Assert.DoesNotContain(report.Issues, i => i.Code == "GL_3900_RESIDUAL");
     }
 }

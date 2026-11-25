@@ -1,15 +1,10 @@
-using System;
-using System.IO;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spokes_Server.Aggregate;
-using Spokes_Server.Components.Shared;
 using Spokes_Server.Core.Services.Maintenance;
 
 namespace Spokes_Server.Controllers;
@@ -21,29 +16,20 @@ namespace Spokes_Server.Controllers;
 public class SetupApiController : SpokesControllerBase
 {
     private readonly Database _db;
-    private readonly BackupService _backupService;
+    private readonly BackupRestoreUploadService _uploadService;
     private readonly ILogger<SetupApiController> _logger;
-    private readonly IConfiguration? _config;
-    private readonly IBackupEncryptionService? _encryptionService;
 
     public SetupApiController(
         Database db,
-        BackupService backupService,
-        ILogger<SetupApiController> logger,
-        IConfiguration? config = null,
-        IBackupEncryptionService? encryptionService = null)
+        BackupRestoreUploadService uploadService,
+        ILogger<SetupApiController> logger)
     {
         _db = db;
-        _backupService = backupService;
+        _uploadService = uploadService;
         _logger = logger;
-        _config = config;
-        _encryptionService = encryptionService;
     }
 
-    [HttpPost("restore-backup")]
-    [DisableRequestSizeLimit]
-    [RequestFormLimits(MultipartBodyLengthLimit = long.MaxValue)]
-    public async Task<IActionResult> RestoreBackup([FromForm] IFormFileCollection? files, CancellationToken ct)
+    private IActionResult? EnsureSetupIncomplete()
     {
         var config = _db.SystemConfigs.Get();
         if (config.IsSetupComplete)
@@ -51,107 +37,90 @@ public class SetupApiController : SpokesControllerBase
             return ForbiddenError("Setup is already complete.", "SETUP_ALREADY_COMPLETE");
         }
 
-        var file = files?.FirstOrDefault() ?? (Request.HasFormContentType ? Request.Form.Files.FirstOrDefault() : null);
-        if (file == null || file.Length == 0)
-        {
-            return BadRequestError("No backup file provided.");
-        }
-
-        var configuredMasterPassword = _config?["SPOKES_MASTER_PASSWORD"]
-            ?? Environment.GetEnvironmentVariable("SPOKES_MASTER_PASSWORD");
-
-        // Pre-validate encrypted backup password match before saving or extracting the archive on disk
-        bool verifiedOnUploadStream = false;
-        if (_encryptionService != null)
-        {
-            await using var uploadInspectionStream = file.OpenReadStream();
-            if (uploadInspectionStream.CanSeek)
-            {
-                var preValidationError = ValidateEncryptedBackupStream(uploadInspectionStream, configuredMasterPassword);
-                if (preValidationError != null)
-                {
-                    return preValidationError;
-                }
-                verifiedOnUploadStream = true;
-            }
-        }
-
-        var dataPath = _config?["DataPath"] ?? "Data";
-        var stagingDir = !string.IsNullOrWhiteSpace(dataPath)
-            ? Path.Combine(dataPath, "Backups", ".staging")
-            : Path.GetTempPath();
-        Directory.CreateDirectory(stagingDir);
-
-        var tempFile = Path.Combine(stagingDir, $"spokes_setup_restore_{Guid.NewGuid():N}_{Path.GetFileName(file.FileName)}");
-        try
-        {
-            await using (var fs = System.IO.File.Create(tempFile))
-            {
-                await file.CopyToAsync(fs, ct);
-            }
-
-            if (_encryptionService != null && !verifiedOnUploadStream)
-            {
-                await using var fileVerifyStream = System.IO.File.OpenRead(tempFile);
-                var validationError = ValidateEncryptedBackupStream(fileVerifyStream, configuredMasterPassword);
-                if (validationError != null)
-                {
-                    return validationError;
-                }
-            }
-
-            var result = await _backupService.RestoreBackupAsync(tempFile, _logger, ct);
-            if (result.Success)
-            {
-                return Ok(new[]
-                {
-                    new ApiFileUpload.UploadResult
-                    {
-                        FileName = file.FileName,
-                        FilePath = "/setup/restored",
-                        FileSizeBytes = file.Length
-                    }
-                });
-            }
-
-            return BadRequestError(result.ErrorMessage ?? "Failed to restore backup archive.");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Setup restore backup failed.");
-            return BadRequestError(ex.Message);
-        }
-        finally
-        {
-            try
-            {
-                if (System.IO.File.Exists(tempFile))
-                {
-                    System.IO.File.Delete(tempFile);
-                }
-            }
-            catch { }
-        }
+        return null;
     }
 
-    private IActionResult? ValidateEncryptedBackupStream(Stream stream, string? configuredMasterPassword)
+    private IActionResult MapUploadError(string? message, string? code) => code switch
     {
-        if (_encryptionService == null) return null;
+        "SESSION_NOT_FOUND" => NotFoundError(message ?? "Upload session not found.", code),
+        "SESSION_FORBIDDEN" => ForbiddenError(message ?? "Upload session forbidden.", code),
+        "INSUFFICIENT_STORAGE" => StatusCodeError(StatusCodes.Status507InsufficientStorage, message ?? "Insufficient storage.", code),
+        "TOO_MANY_UPLOADS" => StatusCodeError(StatusCodes.Status429TooManyRequests, message ?? "Another upload is already in progress.", code),
+        _ => BadRequestError(message ?? "Backup upload failed.", code)
+    };
 
-        bool isEncrypted = _encryptionService.IsEncryptedArchive(stream);
-        stream.Position = 0;
-        if (!isEncrypted) return null;
+    [HttpPost("restore-upload/init")]
+    public IActionResult InitRestoreUpload([FromBody] BackupUploadInitRequest? request)
+    {
+        var setupError = EnsureSetupIncomplete();
+        if (setupError != null) return setupError;
+        if (request == null) return BadRequestError("Upload initialization payload is required.");
 
-        if (string.IsNullOrWhiteSpace(configuredMasterPassword))
+        var result = _uploadService.InitSession(request.FileName, request.TotalBytes, request.ChunkSizeBytes, BackupUploadScope.Setup, null);
+        if (!result.Success) return MapUploadError(result.ErrorMessage, result.ErrorCode);
+
+        return Ok(new
         {
-            return BadRequestError("Backup archive is encrypted, but SPOKES_MASTER_PASSWORD is not configured on this server.");
+            uploadId = result.UploadId,
+            chunkSizeBytes = result.ChunkSizeBytes,
+            totalChunks = result.TotalChunks
+        });
+    }
+
+    [HttpPut("restore-upload/{uploadId}/chunks/{chunkIndex:int}")]
+    [RequestSizeLimit(BackupRestoreUploadService.MaxChunkSizeBytes + 1024 * 1024)]
+    public async Task<IActionResult> UploadRestoreChunk(string uploadId, int chunkIndex, CancellationToken ct)
+    {
+        var setupError = EnsureSetupIncomplete();
+        if (setupError != null) return setupError;
+
+        var result = await _uploadService.AppendChunkAsync(
+            uploadId,
+            chunkIndex,
+            Request.Body,
+            Request.ContentLength,
+            BackupUploadScope.Setup,
+            null,
+            ct);
+
+        if (!result.Success)
+        {
+            _logger.LogWarning("Setup chunked restore upload {UploadId} chunk {ChunkIndex} rejected: {Error}", uploadId, chunkIndex, result.ErrorMessage);
+            return MapUploadError(result.ErrorMessage, result.ErrorCode);
         }
 
-        if (!_encryptionService.VerifyMasterPassword(stream, configuredMasterPassword))
+        return Ok(new
         {
-            return BadRequestError("Backup master password does not match SPOKES_MASTER_PASSWORD.");
-        }
+            chunkIndex = result.ChunkIndex,
+            bytesReceived = result.BytesReceived,
+            expectedTotalBytes = result.ExpectedTotalBytes
+        });
+    }
 
-        return null;
+    [HttpPost("restore-upload/{uploadId}/complete")]
+    public async Task<IActionResult> CompleteRestoreUpload(string uploadId, CancellationToken ct)
+    {
+        var setupError = EnsureSetupIncomplete();
+        if (setupError != null) return setupError;
+
+        var result = await _uploadService.CompleteSessionAsync(uploadId, BackupUploadScope.Setup, null, ct);
+        if (!result.Success) return MapUploadError(result.ErrorMessage, result.ErrorCode);
+
+        return Ok(new
+        {
+            uploadId = result.UploadId,
+            fileName = result.FileName,
+            fileSizeBytes = result.FileSizeBytes
+        });
+    }
+
+    [HttpDelete("restore-upload/{uploadId}")]
+    public async Task<IActionResult> CancelRestoreUpload(string uploadId)
+    {
+        var setupError = EnsureSetupIncomplete();
+        if (setupError != null) return setupError;
+
+        await _uploadService.CancelSessionAsync(uploadId, BackupUploadScope.Setup, null);
+        return Ok();
     }
 }

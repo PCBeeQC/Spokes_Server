@@ -175,7 +175,7 @@ public class StorageUploadReceiptAndFileAccessTests : TestDataTestBase
     }
 
     [Fact]
-    public async Task UploadCompletionVerifier_SetupRestoreException_OnlyAllowedBeforeSetupComplete()
+    public async Task UploadCompletionVerifier_AnonymousSetupCallbackWithoutReceipt_IsAlwaysRejected()
     {
         var fileService = new FileService(_config, NullLogger<FileService>.Instance, _mockCrypto.Object);
         var mockAuthProvider = new Mock<AuthenticationStateProvider>();
@@ -196,12 +196,14 @@ public class StorageUploadReceiptAndFileAccessTests : TestDataTestBase
             _systemConfigs,
             NullLogger<UploadCompletionVerifier>.Instance);
 
+        // Pre-setup backup restores use the dedicated chunked /setup/api/restore-upload endpoints;
+        // UploadCompletionVerifier must never bypass authentication/receipt checks.
         var preSetup = await verifier.VerifyAndNormalizeAsync(
             [new ApiFileUpload.UploadResult { FilePath = "/spokesapi/files/setup/restore/backup.spkbackup" }],
             "setup",
             "restore",
-            "/setup/api/restore-backup");
-        Assert.True(preSetup.IsSuccess);
+            "/setup/api/restore-upload/init");
+        Assert.False(preSetup.IsSuccess);
 
         cfg.IsSetupComplete = true;
         _systemConfigs.Save(cfg);
@@ -210,7 +212,7 @@ public class StorageUploadReceiptAndFileAccessTests : TestDataTestBase
             [new ApiFileUpload.UploadResult { FilePath = "/spokesapi/files/setup/restore/backup.spkbackup" }],
             "setup",
             "restore",
-            "/setup/api/restore-backup");
+            "/setup/api/restore-upload/init");
         Assert.False(postSetup.IsSuccess);
     }
 

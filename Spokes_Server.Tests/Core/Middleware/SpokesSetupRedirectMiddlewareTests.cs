@@ -116,7 +116,10 @@ public class SpokesSetupRedirectMiddlewareTests : TestDataTestBase
     }
 
     [Theory]
-    [InlineData("POST", "/setup/api/restore-backup")]
+    [InlineData("POST", "/setup/api/restore-upload/init")]
+    [InlineData("PUT", "/setup/api/restore-upload/test-id/chunks/0")]
+    [InlineData("POST", "/setup/api/restore-upload/test-id/complete")]
+    [InlineData("DELETE", "/setup/api/restore-upload/test-id")]
     [InlineData("POST", "/_blazor/negotiate")]
     [InlineData("POST", "/_blazor")]
     [InlineData("GET", "/_blazor")]
@@ -278,7 +281,7 @@ public class SpokesSetupRedirectMiddlewareTests : TestDataTestBase
 
         var context = new DefaultHttpContext();
         context.Request.Method = HttpMethods.Post;
-        context.Request.Path = "/setup/api/restore-backup";
+        context.Request.Path = "/setup/api/restore-upload/init";
         context.RequestServices = _serviceProvider;
 
         // Act

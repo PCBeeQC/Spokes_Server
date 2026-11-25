@@ -189,45 +189,60 @@
 
                             @if (_scheduleEnabled)
                             {
-                                <div class="px-4 pb-4">
-                                    <MudGrid Spacing="2">
-                                        @foreach (var day in _schedule)
-                                        {
-                                            <MudItem xs="12" sm="6" md="6">
-                                                <MudCard Elevation="0" Outlined="true" Class="h-100 device-card" Style="border-radius: 8px;">
-                                                    <MudCardContent Class="pa-3">
-                                                        <div class="d-flex justify-space-between align-center mb-2">
-                                                            <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@day.Day.ToString()</MudText>
-                                                            <MudSwitch T="bool" Value="day.IsEnabled"
-                                                                ValueChanged="@(v => OnDayToggleChanged(day.Day, v))"
-                                                                Color="Color.Primary" Class="ma-0" />
-                                                        </div>
-                                                        <div class="d-flex gap-2">
-                                                            <MudSelect T="int" Value="day.StartHour" Dense="true" Margin="Margin.Dense"
-                                                                Variant="Variant.Outlined" Disabled="!day.IsEnabled" Label="@Loc["From"]"
-                                                                ValueChanged="@(v => OnStartHourChanged(day.Day, v))">
-                                                                @for (int h = 0; h < 24; h++)
-                                                                {
-                                                                    var hour = h;
-                                                                    <MudSelectItem T="int" Value="hour">@FormatHour(hour)</MudSelectItem>
-                                                                }
-                                                            </MudSelect>
-                                                            <MudSelect T="int" Value="day.EndHour" Dense="true" Margin="Margin.Dense"
-                                                                Variant="Variant.Outlined" Disabled="!day.IsEnabled" Label="@Loc["To"]"
-                                                                ValueChanged="@(v => OnEndHourChanged(day.Day, v))">
-                                                                @for (int h = 0; h < 24; h++)
-                                                                {
-                                                                    var hour = h;
-                                                                    <MudSelectItem T="int" Value="hour">@FormatHour(hour)</MudSelectItem>
-                                                                }
-                                                            </MudSelect>
-                                                        </div>
-                                                    </MudCardContent>
-                                                </MudCard>
-                                            </MudItem>
-                                        }
-                                    </MudGrid>
+                                var enabledDaysCount = _schedule.Count(d => d.IsEnabled);
+                                <MudDivider />
+                                <div class="d-flex align-center justify-space-between px-4 py-2 cursor-pointer"
+                                     role="button"
+                                     data-diag-label="toggle-quiet-hours-schedule"
+                                     @onclick="@(() => _quietHoursSectionExpanded = !_quietHoursSectionExpanded)">
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                        @string.Format(Loc["{0} of 7 days active"].Value, enabledDaysCount)
+                                    </MudText>
+                                    <MudIcon Icon="@(_quietHoursSectionExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" Size="Size.Small" Color="Color.Secondary" />
                                 </div>
+
+                                @if (_quietHoursSectionExpanded)
+                                {
+                                    <div class="px-4 pb-4 pt-2">
+                                        <MudGrid Spacing="2">
+                                            @foreach (var day in _schedule)
+                                            {
+                                                <MudItem xs="12" sm="6" md="6">
+                                                    <MudCard Elevation="0" Outlined="true" Class="h-100 device-card" Style="border-radius: 8px;">
+                                                        <MudCardContent Class="pa-3">
+                                                            <div class="d-flex justify-space-between align-center mb-2">
+                                                                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">@day.Day.ToString()</MudText>
+                                                                <MudSwitch T="bool" Value="day.IsEnabled"
+                                                                    ValueChanged="@(v => OnDayToggleChanged(day.Day, v))"
+                                                                    Color="Color.Primary" Class="ma-0" />
+                                                            </div>
+                                                            <div class="d-flex gap-2">
+                                                                <MudSelect T="int" Value="day.StartHour" Dense="true" Margin="Margin.Dense"
+                                                                    Variant="Variant.Outlined" Disabled="!day.IsEnabled" Label="@Loc["From"]"
+                                                                    ValueChanged="@(v => OnStartHourChanged(day.Day, v))">
+                                                                    @for (int h = 0; h < 24; h++)
+                                                                    {
+                                                                        var hour = h;
+                                                                        <MudSelectItem T="int" Value="hour">@FormatHour(hour)</MudSelectItem>
+                                                                    }
+                                                                </MudSelect>
+                                                                <MudSelect T="int" Value="day.EndHour" Dense="true" Margin="Margin.Dense"
+                                                                    Variant="Variant.Outlined" Disabled="!day.IsEnabled" Label="@Loc["To"]"
+                                                                    ValueChanged="@(v => OnEndHourChanged(day.Day, v))">
+                                                                    @for (int h = 0; h < 24; h++)
+                                                                    {
+                                                                        var hour = h;
+                                                                        <MudSelectItem T="int" Value="hour">@FormatHour(hour)</MudSelectItem>
+                                                                    }
+                                                                </MudSelect>
+                                                            </div>
+                                                        </MudCardContent>
+                                                    </MudCard>
+                                                </MudItem>
+                                            }
+                                        </MudGrid>
+                                    </div>
+                                }
                             }
                         </MudPaper>
                     </div>
@@ -416,121 +431,139 @@
                 </div>
             </div>
 
-            @* --- Registered Devices --- *@
+            @* --- Registered Devices (lazy-mounted on expand) --- *@
             @if (_devices.Any())
             {
                 <MudDivider Class="mt-5 mb-3" />
-                <MudText Typo="Typo.h6" Class="ml-4 mb-2">@Loc["Registered Devices"]</MudText>
+                <MudPaper Elevation="0" Outlined="true" Class="rounded-lg overflow-hidden">
+                    <div class="d-flex align-center justify-space-between px-4 py-3 cursor-pointer"
+                         role="button"
+                         data-diag-label="toggle-registered-devices"
+                         @onclick="@(() => _registeredDevicesExpanded = !_registeredDevicesExpanded)">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Devices" Size="Size.Small" />
+                            <MudText Typo="Typo.h6">@Loc["Registered Devices"]</MudText>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" Class="ma-0" Style="height: 22px;">@_devices.Count</MudChip>
+                        </div>
+                        <MudIcon Icon="@(_registeredDevicesExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" Color="Color.Secondary" />
+                    </div>
 
-                <MudGrid Spacing="3">
-                    @foreach (var device in _devices)
+                    @if (_registeredDevicesExpanded)
                     {
-                        <MudItem xs="12" sm="6" md="6">
-                            <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column device-card" Style="border-radius: 16px;">
-                                <MudCardContent Class="pa-4 flex-grow-1">
-                                    <div class="d-flex align-center justify-space-between mb-2">
-                                        <div class="d-flex align-center gap-2 flex-grow-1" style="min-width: 0; max-width: 100%;">
-                                            <MudIcon Icon="@(device.DeviceType == Spokes_Server.Core.Models.Core.DeviceType.Mobile || device.IsCapacitor ? Icons.Material.Filled.PhoneAndroid : Icons.Material.Filled.Computer)" Size="Size.Small" Color="Color.Default" Class="flex-shrink-0" />
-                                            
-                                            @if (_editingDeviceId == device.Id)
-                                            {
-                                                <div class="d-flex align-center flex-grow-1 gap-1" style="min-width: 0;">
-                                                    <MudTextField Value="_editingDeviceName" ValueChanged="@((string v) => _editingDeviceName = v)" Variant="Variant.Text"
-                                                        Margin="Margin.Dense" FullWidth="true" Class="flex-grow-1" Style="margin-top: -8px;"
-                                                        OnKeyDown="@(e => { if (e.Key == "Enter") SaveDeviceName(device.Id); })"
-                                                        Immediate="true" T="string" />
-                                                    <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Primary"
-                                                        OnClick="@(() => SaveDeviceName(device.Id))" Class="flex-shrink-0" />
+                        <MudDivider />
+                        <div class="pa-3">
+                            <MudGrid Spacing="3">
+                                @foreach (var device in _devices)
+                                {
+                                    <MudItem xs="12" sm="6" md="6">
+                                        <MudCard Elevation="0" Outlined="true" Class="h-100 d-flex flex-column device-card" Style="border-radius: 16px;">
+                                            <MudCardContent Class="pa-4 flex-grow-1">
+                                                <div class="d-flex align-center justify-space-between mb-2">
+                                                    <div class="d-flex align-center gap-2 flex-grow-1" style="min-width: 0; max-width: 100%;">
+                                                        <MudIcon Icon="@(device.DeviceType == Spokes_Server.Core.Models.Core.DeviceType.Mobile || device.IsCapacitor ? Icons.Material.Filled.PhoneAndroid : Icons.Material.Filled.Computer)" Size="Size.Small" Color="Color.Default" Class="flex-shrink-0" />
+                                                        
+                                                        @if (_editingDeviceId == device.Id)
+                                                        {
+                                                            <div class="d-flex align-center flex-grow-1 gap-1" style="min-width: 0;">
+                                                                <MudTextField Value="_editingDeviceName" ValueChanged="@((string v) => _editingDeviceName = v)" Variant="Variant.Text"
+                                                                    Margin="Margin.Dense" FullWidth="true" Class="flex-grow-1" Style="margin-top: -8px;"
+                                                                    OnKeyDown="@(e => { if (e.Key == "Enter") SaveDeviceName(device.Id); })"
+                                                                    Immediate="true" T="string" />
+                                                                <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Primary"
+                                                                    OnClick="@(() => SaveDeviceName(device.Id))" Class="flex-shrink-0" />
+                                                            </div>
+                                                        }
+                                                        else
+                                                        {
+                                                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="@device.DeviceName">
+                                                                @(string.IsNullOrEmpty(device.DeviceName) ? Loc["(unnamed)"].Value : device.DeviceName)
+                                                            </MudText>
+                                                            
+                                                            @if (!string.IsNullOrEmpty(device.DeviceName) ? true : device.HasPush)
+                                                            {
+                                                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                                               OnClick="@(() => StartEditDeviceName(device))" Class="flex-shrink-0 pa-1 ml-n1" />
+                                                            }
+                                                        }
+                                                    </div>
                                                 </div>
-                                            }
-                                            else
-                                            {
-                                                <MudText Typo="Typo.subtitle1" Style="font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="@device.DeviceName">
-                                                    @(string.IsNullOrEmpty(device.DeviceName) ? Loc["(unnamed)"].Value : device.DeviceName)
-                                                </MudText>
                                                 
-                                                @if (!string.IsNullOrEmpty(device.DeviceName) ? true : device.HasPush)
-                                                {
-                                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
-                                                                   OnClick="@(() => StartEditDeviceName(device))" Class="flex-shrink-0 pa-1 ml-n1" />
-                                                }
-                                            }
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="d-flex align-center mb-1 ml-1">
-                                        @if (device.Id == _currentSessionId)
-                                        {
-
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Text" Class="ml-n2"
-                                                     Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">@Loc["This Device"]</MudChip>
-                                        
-                                        }
-
-                                        @if (PresenceState.GetOnlineSessions().Contains(device.Id))
-                                        {
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="ml-2"
-                                                     Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">@Loc["Online"]</MudChip>
-                                        }
-
-                                        @if (device.HasVaultCookie)
-                                        {
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled" Class="ml-2"
-                                                     Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">@Loc["Secure Chat"]</MudChip>
-                                        }
-                                    </div>
-
-                                    @if (device.LastSeenAt.HasValue)
-                                    {
-                                        <div class="d-flex align-center mb-3 ml-1">
-                                            <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Last seen:"] @device.LastSeenAt.Value.ToLocalTime().ToString("g")</MudText>
-                                        </div>
-                                    }
-
-                                    @if (device.HasPush)
-                                    {
-                                        var isDeviceRelay = device.PushSubscriptionType == Spokes_Server.Core.Models.Core.PushSubscriptionType.NativeRelay || device.IsCapacitor;
-                                        var isPushBlockedForDevice = isDeviceRelay && !_isNativePushLicensed;
-
-                                        <MudDivider Class="mb-3" />
-                                        <div class="d-flex flex-column gap-2 ml-1">
-                                            <div class="d-flex justify-space-between align-center">
-                                                <div class="d-flex align-center gap-2">
-                                                    <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Push Notifications"]</MudText>
-                                                    @if (isPushBlockedForDevice)
+                                                <div class="d-flex align-center mb-1 ml-1">
+                                                    @if (device.Id == _currentSessionId)
                                                     {
-                                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" Style="font-size: 0.65rem; height: 18px; padding: 0 4px;">@Loc["Pass Required"]</MudChip>
+
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Text" Class="ml-n2"
+                                                                 Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">@Loc["This Device"]</MudChip>
+                                                    
+                                                    }
+
+                                                    @if (PresenceState.GetOnlineSessions().Contains(device.Id))
+                                                    {
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="ml-2"
+                                                                 Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">@Loc["Online"]</MudChip>
+                                                    }
+
+                                                    @if (device.HasVaultCookie)
+                                                    {
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled" Class="ml-2"
+                                                                 Style="font-size: 0.7rem; padding: 0 4px; height: 20px;">@Loc["Secure Chat"]</MudChip>
                                                     }
                                                 </div>
-                                                <MudSwitch T="bool" Value="device.IsEnabled" Class="ma-0"
-                                                    Disabled="@isPushBlockedForDevice"
-                                                    ValueChanged="@(v => ToggleDeviceEnabled(device.Id, v))"
-                                                    Color="Color.Primary" Size="Size.Small" />
-                                            </div>
+
+                                                @if (device.LastSeenAt.HasValue)
+                                                {
+                                                    <div class="d-flex align-center mb-3 ml-1">
+                                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Last seen:"] @device.LastSeenAt.Value.ToLocalTime().ToString("g")</MudText>
+                                                    </div>
+                                                }
+
+                                                @if (device.HasPush)
+                                                {
+                                                    var isDeviceRelay = device.PushSubscriptionType == Spokes_Server.Core.Models.Core.PushSubscriptionType.NativeRelay || device.IsCapacitor;
+                                                    var isPushBlockedForDevice = isDeviceRelay && !_isNativePushLicensed;
+
+                                                    <MudDivider Class="mb-3" />
+                                                    <div class="d-flex flex-column gap-2 ml-1">
+                                                        <div class="d-flex justify-space-between align-center">
+                                                            <div class="d-flex align-center gap-2">
+                                                                <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Push Notifications"]</MudText>
+                                                                @if (isPushBlockedForDevice)
+                                                                {
+                                                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" Style="font-size: 0.65rem; height: 18px; padding: 0 4px;">@Loc["Pass Required"]</MudChip>
+                                                                }
+                                                            </div>
+                                                            <MudSwitch T="bool" Value="device.IsEnabled" Class="ma-0"
+                                                                Disabled="@isPushBlockedForDevice"
+                                                                ValueChanged="@(v => ToggleDeviceEnabled(device.Id, v))"
+                                                                Color="Color.Primary" Size="Size.Small" />
+                                                        </div>
+                                                        
+                                                        <div class="d-flex justify-space-between align-center mt-n1">
+                                                            <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Test Notification"]</MudText>
+                                                            <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" Class="px-2" Style="min-width: unset; height: 28px;"
+                                                                       OnClick="@(() => TestDevice(device.Id))" Disabled="@(_isTesting || isPushBlockedForDevice)">@Loc["Send"]</MudButton>
+                                                        </div>
+                                                        
+                                                        <div class="d-flex justify-space-between align-center mt-n1">
+                                                            <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Remove Push"]</MudText>
+                                                            <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" Class="px-2" Style="min-width: unset; height: 28px;"
+                                                                       OnClick="@(() => DeleteDevice(device.Id))">@Loc["Remove"]</MudButton>
+                                                        </div>
+                                                    </div>
+                                                }
+                                            </MudCardContent>
                                             
-                                            <div class="d-flex justify-space-between align-center mt-n1">
-                                                <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Test Notification"]</MudText>
-                                                <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small" Class="px-2" Style="min-width: unset; height: 28px;"
-                                                           OnClick="@(() => TestDevice(device.Id))" Disabled="@(_isTesting || isPushBlockedForDevice)">@Loc["Send"]</MudButton>
-                                            </div>
-                                            
-                                            <div class="d-flex justify-space-between align-center mt-n1">
-                                                <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Remove Push"]</MudText>
-                                                <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" Class="px-2" Style="min-width: unset; height: 28px;"
-                                                           OnClick="@(() => DeleteDevice(device.Id))">@Loc["Remove"]</MudButton>
-                                            </div>
-                                        </div>
-                                    }
-                                </MudCardContent>
-                                
-                                <MudCardActions Class="px-4 pb-3 pt-0 d-flex justify-end align-center">
-                                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" StartIcon="@Icons.Material.Filled.Logout"
-                                        OnClick="@(() => RevokeSession(device.Id))">@Loc["Log Out"]</MudButton>
-                                </MudCardActions>
-                            </MudCard>
-                        </MudItem>
+                                            <MudCardActions Class="px-4 pb-3 pt-0 d-flex justify-end align-center">
+                                                <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" StartIcon="@Icons.Material.Filled.Logout"
+                                                    OnClick="@(() => RevokeSession(device.Id))">@Loc["Log Out"]</MudButton>
+                                            </MudCardActions>
+                                        </MudCard>
+                                    </MudItem>
+                                }
+                            </MudGrid>
+                        </div>
                     }
-                </MudGrid>
+                </MudPaper>
             }
 
             @if (IsFriendEdition)
@@ -650,6 +683,8 @@
 
     // Schedule
     private bool _scheduleEnabled = false;
+    private bool _quietHoursSectionExpanded = false;
+    private bool _registeredDevicesExpanded = false;
     private List<DaySchedule> _schedule = Enumerable.Range(0, 7)
         .Select(i => new DaySchedule { Day = (DayOfWeek)i }).ToList();
 
@@ -745,7 +780,13 @@
 
     public void Dispose()
     {
-        _objRef?.Dispose();
+        var objRef = _objRef;
+        _objRef = null;
+        if (objRef != null)
+        {
+            try { _ = JS.InvokeVoidAsync("pushNotifications.clearMessageListener", objRef); } catch { }
+            objRef.Dispose();
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -753,95 +794,128 @@
         if (firstRender)
         {
             await LoadClientDeviceStateAsync();
-            await LoadMediaCacheStatsAsync();
-            if (_objRef != null)
-            {
-                try
-                {
-                    await JS.InvokeVoidAsync("pushNotifications.setupMessageListener", _objRef);
-                }
-                catch { }
-            }
             _isDeviceStatusLoading = false;
+            _isLoadingMediaCacheStats = false;
             StateHasChanged();
         }
     }
 
     private async Task LoadClientDeviceStateAsync()
     {
-        // Load push support status
         try
         {
-            IsSupported = await JS.InvokeAsync<bool>("pushNotifications.isSupported");
-            if (!IsSupported)
+            var currentConfig = Db.ServerConfigs.GetOrCreateGlobalConfig();
+            var profile = Db.CompanyProfile.Get();
+            var licenseResult = LicenseValidationService.ValidateLicense(profile?.LicensePayload, currentConfig);
+            _isNativePushLicensed = licenseResult.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock &&
+                                    licenseResult.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
+
+            IsConfigured = !string.IsNullOrEmpty(profile?.VapidPublicKey);
+
+            bool? serverPushDisabled = null;
+            bool allowNativeTokenFetch = false;
+            DeviceInfo? currentDeviceForPush = null;
+
+            if (IsConfigured)
             {
-                UnsupportedReason = await JS.InvokeAsync<string>("pushNotifications.getSupportReason");
+                var currentSessionForPush = !string.IsNullOrEmpty(_currentSessionId)
+                    ? Db.DeviceSessions.GetById(_currentSessionId)
+                    : null;
+                currentDeviceForPush = _devices.FirstOrDefault(d => d.Id == _currentSessionId);
+                bool serverHasActivePush = currentDeviceForPush?.HasPush == true && currentSessionForPush?.PushExplicitlyDisabled != true;
+
+                if (currentSessionForPush?.PushExplicitlyDisabled == true)
+                {
+                    serverPushDisabled = true;
+                }
+                else if (serverHasActivePush)
+                {
+                    serverPushDisabled = false;
+                }
+
+                allowNativeTokenFetch = serverHasActivePush;
             }
-            if (IsSupported)
+
+            var snapshot = await JS.InvokeAsync<DeviceSettingsSnapshotDto>(
+                "pushNotifications.getDeviceSettingsSnapshot",
+                _objRef,
+                new
+                {
+                    checkSubscription = IsConfigured,
+                    serverPushDisabled = serverPushDisabled,
+                    allowNativeTokenFetch = allowNativeTokenFetch
+                });
+
+            if (snapshot != null)
             {
-                try
+                IsSupported = snapshot.IsSupported;
+                UnsupportedReason = snapshot.UnsupportedReason ?? "";
+                _isDesktopApp = snapshot.IsDesktopApp;
+                _requiresRelay = snapshot.RequiresPushRelay;
+
+                if (IsSupported)
                 {
-                    _isDesktopApp = await JS.InvokeAsync<bool>("pushNotifications.isDesktopApp");
-                    _requiresRelay = await JS.InvokeAsync<bool>("pushNotifications.requiresPushRelay");
-                }
-                catch { }
-
-                var currentConfig = Db.ServerConfigs.GetOrCreateGlobalConfig();
-                var profile = Db.CompanyProfile.Get();
-                var licenseResult = LicenseValidationService.ValidateLicense(profile?.LicensePayload, currentConfig);
-                _isNativePushLicensed = licenseResult.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.HardLock &&
-                                        licenseResult.Status != Spokes_Server.Core.Services.Licensing.LicenseStatus.Expired;
-
-                IsConfigured = !string.IsNullOrEmpty(profile?.VapidPublicKey);
-
-                if (IsConfigured)
-                {
-                    var currentSessionForPush = !string.IsNullOrEmpty(_currentSessionId)
-                        ? Db.DeviceSessions.GetById(_currentSessionId)
-                        : null;
-                    var currentDeviceForPush = _devices.FirstOrDefault(d => d.Id == _currentSessionId);
-                    bool serverHasActivePush = currentDeviceForPush?.HasPush == true && currentSessionForPush?.PushExplicitlyDisabled != true;
-
-                    if (currentSessionForPush?.PushExplicitlyDisabled == true)
+                    if (IsConfigured)
                     {
-                        try { await JS.InvokeVoidAsync("pushNotifications.setServerPushDisabled", true); } catch { }
-                    }
-                    else if (serverHasActivePush)
-                    {
-                        try { await JS.InvokeVoidAsync("pushNotifications.setServerPushDisabled", false); } catch { }
+                        var existingSub = snapshot.Subscription;
+                        if (existingSub != null && existingSub.TryGetValue("endpoint", out var epObj))
+                        {
+                            _currentEndpoint = epObj?.ToString();
+                        }
+                        if (existingSub != null && existingSub.TryGetValue("subscriptionType", out var subTypeObj) && subTypeObj?.ToString() == "NativeRelay")
+                        {
+                            _requiresRelay = true;
+                        }
+
+                        // Keep IsSubscribed strictly server-authoritative from current session in _devices
+                        if (!string.IsNullOrEmpty(_currentSessionId))
+                        {
+                            IsSubscribed = currentDeviceForPush?.HasPush == true && currentDeviceForPush.IsEnabled;
+                        }
                     }
 
-                    var existingSub = await JS.InvokeAsync<Dictionary<string, object>?>("pushNotifications.getExistingSubscription", new
+                    if (!string.IsNullOrEmpty(snapshot.DeviceType))
                     {
-                        allowNativeTokenFetch = serverHasActivePush
-                    });
-                    if (existingSub != null && existingSub.TryGetValue("endpoint", out var epObj))
-                    {
-                        _currentEndpoint = epObj?.ToString();
+                        _newDeviceType = snapshot.DeviceType;
                     }
-                    if (existingSub != null && existingSub.TryGetValue("subscriptionType", out var subTypeObj) && subTypeObj?.ToString() == "NativeRelay")
+                    if (!string.IsNullOrEmpty(snapshot.DeviceName))
                     {
-                        _requiresRelay = true;
-                    }
-
-                    // Keep IsSubscribed strictly server-authoritative from current session in _devices
-                    if (!string.IsNullOrEmpty(_currentSessionId))
-                    {
-                        IsSubscribed = currentDeviceForPush?.HasPush == true && currentDeviceForPush.IsEnabled;
+                        _newDeviceName = snapshot.DeviceName;
                     }
                 }
 
-                // Auto-detect device type
-                _newDeviceType = await JS.InvokeAsync<string>("pushNotifications.detectDeviceType");
-                _newDeviceName = await JS.InvokeAsync<string>("pushNotifications.detectDeviceName");
+                if (snapshot.MediaCache != null)
+                {
+                    _mediaCacheBytes = Math.Max(0, snapshot.MediaCache.TotalBytes);
+                    _mediaCacheEntries = Math.Max(0, snapshot.MediaCache.TotalEntries);
+                }
+                else
+                {
+                    _mediaCacheBytes = 0;
+                    _mediaCacheEntries = 0;
+                }
             }
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error loading push status");
+            _mediaCacheBytes = 0;
+            _mediaCacheEntries = 0;
         }
 
         // Vault HasVaultCookie state is server-controlled by VaultController and SessionService.
+    }
+
+    private sealed class DeviceSettingsSnapshotDto
+    {
+        public bool IsSupported { get; set; }
+        public string? UnsupportedReason { get; set; }
+        public bool IsDesktopApp { get; set; }
+        public bool RequiresPushRelay { get; set; }
+        public Dictionary<string, object>? Subscription { get; set; }
+        public string? DeviceType { get; set; }
+        public string? DeviceName { get; set; }
+        public MediaCacheStatsDto? MediaCache { get; set; }
     }
 
     private bool IsReadOnlyOrRestricted => _currentUser == null || !_currentUser.IsActive || _currentUser.IsBanned || _currentUser.IsSuspended;
@@ -933,9 +1007,7 @@
             {
                 // Force logout immediately if revoking the current session
                 try { await JS.InvokeVoidAsync("spokesMediaLoader.clearAllCache"); } catch { }
-                bool isCapacitor = false;
-                try { isCapacitor = await JS.InvokeAsync<bool>("eval", "!!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())"); } catch { }
-                var suffix = isCapacitor ? "?client=mobile" : "";
+                var suffix = CircuitContext.IsCapacitorApp ? "?client=mobile" : "";
                 Nav.NavigateTo($"/spokesapi/auth/force-logout{suffix}", forceLoad: true);
                 return;
             }
@@ -1037,6 +1109,10 @@
     private async Task OnScheduleToggleChanged(bool value)
     {
         _scheduleEnabled = value;
+        if (value)
+        {
+            _quietHoursSectionExpanded = true;
+        }
         await SavePreferences();
     }
 

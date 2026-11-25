@@ -234,7 +234,8 @@ public class BankStatementImportService
 
         int headerRowIndex = mapping != null ? 0 : FindCsvHeaderRowIndex(rows);
         int? detectedStatusCol = null;
-        var activeMap = mapping ?? AutoDetectCsvMapping(rows[headerRowIndex], out detectedStatusCol);
+        int? detectedDetailsCol = null;
+        var activeMap = mapping ?? AutoDetectCsvMapping(rows[headerRowIndex], out detectedStatusCol, out detectedDetailsCol);
         var startRow = activeMap.HasHeaderRow ? headerRowIndex + 1 : 0;
 
         for (int i = startRow; i < rows.Count; i++)
@@ -280,9 +281,17 @@ public class BankStatementImportService
             if (!hasAmount || amount == 0m) continue;
 
             var desc = GetCell(row, activeMap.DescriptionColumnIndex);
-            var payee = activeMap.PayeeColumnIndex.HasValue
+            var details = detectedDetailsCol.HasValue ? GetCell(row, detectedDetailsCol.Value) : string.Empty;
+            var rawPayee = activeMap.PayeeColumnIndex.HasValue
                 ? GetCell(row, activeMap.PayeeColumnIndex.Value)
-                : desc;
+                : string.Empty;
+            if (!string.IsNullOrWhiteSpace(details) && !desc.Contains(details, StringComparison.OrdinalIgnoreCase))
+            {
+                desc = string.IsNullOrWhiteSpace(desc) ? details : $"{desc} — {details}";
+            }
+            var payee = !string.IsNullOrWhiteSpace(rawPayee)
+                ? rawPayee
+                : (!string.IsNullOrWhiteSpace(details) ? details : desc);
             var reference = activeMap.ReferenceColumnIndex.HasValue
                 ? GetCell(row, activeMap.ReferenceColumnIndex.Value)
                 : string.Empty;
@@ -345,9 +354,10 @@ public class BankStatementImportService
         return 0;
     }
 
-    private static CsvBankImportMapping AutoDetectCsvMapping(IReadOnlyList<string> firstRow, out int? statusColumnIndex)
+    private static CsvBankImportMapping AutoDetectCsvMapping(IReadOnlyList<string> firstRow, out int? statusColumnIndex, out int? detailsColumnIndex)
     {
         statusColumnIndex = null;
+        detailsColumnIndex = null;
         var map = new CsvBankImportMapping
         {
             HasHeaderRow = !TryParseFlexibleDate(firstRow[0], out _),
@@ -378,6 +388,8 @@ public class BankStatementImportService
                 statusColumnIndex = idx;
             else if (h.Contains("desc") || h.Contains("memo") || h.Contains("libell"))
                 map.DescriptionColumnIndex = idx;
+            else if (h.Contains("détail") || h.Contains("detail"))
+                detailsColumnIndex = idx;
             else if (h.Contains("contrepartie") || h.Contains("payee") || h.Contains("bénéficiaire") || h.Contains("nom") || h.Contains("name"))
                 map.PayeeColumnIndex = idx;
             else if (h.Contains("réf") || h.Contains("ref") || h.Contains("check") || h.Contains("chèque") || h == "id")

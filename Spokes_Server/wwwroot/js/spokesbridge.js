@@ -501,6 +501,13 @@
                 const action = 'dismiss-' + (top.source || 'overlay');
                 const detail = top.key;
 
+                if (window.spokesChatDiagnostics?.isEnabled?.()) {
+                    const label = top.source === 'dialog' ? 'DialogClose (Back)' : 'OverlayClose (Back)';
+                    try {
+                        window.spokesChatDiagnostics.startTransition(label, `Client: Native Back (${action})`, { kind: 'ui' });
+                    } catch (e) {}
+                }
+
                 if (top.keepUntilRemoved) {
                     top.dismissing = true;
                     clearDismissTimer(top);

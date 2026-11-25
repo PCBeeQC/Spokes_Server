@@ -9,6 +9,7 @@ using Spokes_Server.Aggregate;
 using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Models.Documents;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Accounting;
 using Xunit;
@@ -134,5 +135,43 @@ public class JurisdictionTemplateTests : TestDataTestBase
 
         _templateService.ActivateTemplate("CA-QC", syncChartOfAccounts: false, actor: authorizedAdmin);
         Assert.Equal("CA-QC", _templateService.GetActiveTemplate().JurisdictionId);
+    }
+
+    [Fact]
+    public void GetCompanyTaxRegistrations_UsesTemplateLabelOverrides_NormalizesColons_AndFallsBackToJurisdictionDefaults()
+    {
+        var admin = new Employee { Id = "jt-reg-admin", IsActive = true, IsAdmin = true };
+        _templateService.ActivateTemplate("CA-QC", syncChartOfAccounts: false, actor: admin);
+
+        var profile = _db.CompanyProfile.Get();
+        profile.Accounting.TaxRegistrationNumbersByCode = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TPS"] = "123456789 RT0001",
+            ["TVQ"] = "0987654321 TQ0001"
+        };
+        _db.CompanyProfile.Save(profile);
+
+        // Without template -> jurisdiction defaults
+        var defaultRegs = _templateService.GetCompanyTaxRegistrations();
+        Assert.Equal(2, defaultRegs.Count);
+        Assert.Equal(("GST / TPS Registration #:", "123456789 RT0001"), defaultRegs[0]);
+        Assert.Equal(("QST / TVQ Registration #:", "0987654321 TQ0001"), defaultRegs[1]);
+
+        // Round-trip through System.Text.Json (which produces an ordinal dictionary) + lowercase key + trailing colon
+        var rawTemplate = new DocumentTemplate
+        {
+            TaxRegistrationLabelsByCode = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["tps"] = "No de TPS :",
+                ["TVQ"] = "   " // blank override should fall back to jurisdiction default
+            }
+        };
+        var json = System.Text.Json.JsonSerializer.Serialize(rawTemplate);
+        var roundTrippedTemplate = System.Text.Json.JsonSerializer.Deserialize<DocumentTemplate>(json)!;
+
+        var localizedRegs = _templateService.GetCompanyTaxRegistrations(roundTrippedTemplate);
+        Assert.Equal(2, localizedRegs.Count);
+        Assert.Equal(("No de TPS:", "123456789 RT0001"), localizedRegs[0]);
+        Assert.Equal(("QST / TVQ Registration #:", "0987654321 TQ0001"), localizedRegs[1]);
     }
 }

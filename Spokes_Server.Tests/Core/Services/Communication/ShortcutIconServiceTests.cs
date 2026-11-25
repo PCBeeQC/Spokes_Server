@@ -256,5 +256,67 @@ public class ShortcutIconServiceTests : TestDataTestBase
         Assert.Equal(firstResult, cachedValue);
     }
 
+    [Fact]
+    public void GetShortcutIconBase64_DefaultSize_ResizesTo128Px()
+    {
+        var employee = new Employee
+        {
+            Id = "emp-128-avatar",
+            FirstName = "Alex",
+            LastName = "Tremblay",
+            AvatarFile = "avatar256.png",
+            AvatarVersion = 4
+        };
+
+        var empDir = Path.Combine(_testDataPath, "Employees", employee.Id);
+        Directory.CreateDirectory(empDir);
+        File.WriteAllBytes(Path.Combine(empDir, employee.AvatarFile), CreateTestPng(256, 256));
+
+        var dataUri = _service.GetShortcutIconBase64(employee);
+        Assert.StartsWith("data:image/png;base64,", dataUri);
+
+        var bytes = Convert.FromBase64String(dataUri["data:image/png;base64,".Length..]);
+        using var decoded = SKBitmap.Decode(bytes);
+        Assert.NotNull(decoded);
+        Assert.Equal(ShortcutIconService.DefaultShortcutIconSize, decoded.Width);
+        Assert.Equal(ShortcutIconService.DefaultShortcutIconSize, decoded.Height);
+    }
+
+    [Fact]
+    public void GetCompanyLogoBase64_DefaultSize_ResizesTo128Px()
+    {
+        var rawBase64 = Convert.ToBase64String(CreateTestPng(256, 256));
+
+        var dataUri = _service.GetCompanyLogoBase64(rawBase64);
+        Assert.StartsWith("data:image/png;base64,", dataUri);
+
+        var bytes = Convert.FromBase64String(dataUri["data:image/png;base64,".Length..]);
+        using var decoded = SKBitmap.Decode(bytes);
+        Assert.NotNull(decoded);
+        Assert.Equal(ShortcutIconService.DefaultShortcutIconSize, decoded.Width);
+        Assert.Equal(ShortcutIconService.DefaultShortcutIconSize, decoded.Height);
+    }
+
+    [Fact]
+    public void CacheKeyHelpers_ReturnStableVersionedKeys()
+    {
+        Assert.Equal(string.Empty, ShortcutIconService.GetEmployeeIconCacheKey(null));
+        Assert.Equal(string.Empty, ShortcutIconService.GetCompanyLogoCacheKey(null));
+        Assert.Equal(string.Empty, ShortcutIconService.GetCompanyLogoCacheKey(string.Empty));
+
+        var emp = new Employee { Id = "emp-key-1", AvatarVersion = 2 };
+        var empKeyV2 = ShortcutIconService.GetEmployeeIconCacheKey(emp);
+        emp.AvatarVersion = 3;
+        var empKeyV3 = ShortcutIconService.GetEmployeeIconCacheKey(emp);
+
+        Assert.Equal("emp:emp-key-1:2", empKeyV2);
+        Assert.Equal("emp:emp-key-1:3", empKeyV3);
+
+        var logoKeyV1 = ShortcutIconService.GetCompanyLogoCacheKey("sample-logo-data", 1);
+        var logoKeyV2 = ShortcutIconService.GetCompanyLogoCacheKey("sample-logo-data", 2);
+        Assert.NotEmpty(logoKeyV1);
+        Assert.NotEqual(logoKeyV1, logoKeyV2);
+    }
+
     #endregion
 }

@@ -3,7 +3,7 @@ Business Source License 1.1
 Parameters
 
 Licensor:             Logiciel PCBee inc.
-Licensed Work:        Spokes Server 2026.11.2
+Licensed Work:        Spokes Server 2026.11.3
                       The Licensed Work is (c) Logiciel PCBee inc.
 Additional Use Grant: You may make production use of the Licensed Work for any internal, personal, or commercial purpose, provided that you do not:
                       (a) offer the Licensed Work to third parties as a managed service or Software-as-a-Service (SaaS); or

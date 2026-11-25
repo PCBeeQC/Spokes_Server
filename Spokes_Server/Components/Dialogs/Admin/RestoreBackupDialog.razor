@@ -1,5 +1,8 @@
 @implements IBackDismissHandler
+@implements IDisposable
 @inject BackupService BackupSvc
+@inject BackupRestoreUploadService BackupUploadSvc
+@inject IJSRuntime JS
 @inject ILogger<RestoreBackupDialog> Logger
 @inject Spokes_Server.Core.Services.Identity.UserService UserService
 
@@ -19,6 +22,12 @@
                         @Loc["Size:"] @FileHelper.FormatBytes(ExistingBackup.SizeBytes) • @Loc["Created:"] @ExistingBackup.CreatedAt.ToString("g")
                     </MudText>
                 }
+                else if (PendingFileSizeBytes > 0)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                        @Loc["Size:"] @FileHelper.FormatBytes(PendingFileSizeBytes)
+                    </MudText>
+                }
                 <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-2">
                     <b>@Loc["WARNING:"]</b> @Loc["All current data will be overwritten and lost. This action cannot be undone."]
                 </MudAlert>
@@ -28,7 +37,13 @@
                 <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Color="Color.Primary" Style="font-size: 64px;" Class="mb-4" />
                 <MudText Typo="Typo.h5" GutterBottom="true">@Loc["Uploading Backup"]</MudText>
                 <MudProgressLinear Color="Color.Primary" Value="@UploadProgress" Class="my-4" Size="Size.Large" />
-                <MudText Typo="Typo.h6" Color="Color.Primary">@UploadProgress%</MudText>
+                <MudText Typo="Typo.h6" Color="Color.Primary">@Math.Round(UploadProgress)%</MudText>
+                @if (UploadTotalBytes > 0)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
+                        @FileHelper.FormatBytes(UploadedBytes) / @FileHelper.FormatBytes(UploadTotalBytes)
+                    </MudText>
+                }
             }
             else if (CurrentState == State.Restoring)
             {
@@ -57,6 +72,10 @@
             <MudButton OnClick="Close" Variant="Variant.Text">@Loc["Close"]</MudButton>
             <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="StartRestore">@Loc["I Understand, Restore"]</MudButton>
         }
+        else if (CurrentState == State.Uploading)
+        {
+            <MudButton OnClick="CancelUploadAsync" Color="Color.Default" Variant="Variant.Text">@Loc["Cancel Upload"]</MudButton>
+        }
         else if (CurrentState == State.Error)
         {
             <MudButton OnClick="Close" Color="Color.Primary" Variant="Variant.Filled">@Loc["Close"]</MudButton>
@@ -66,19 +85,26 @@
 
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
-    [Parameter] public IBrowserFile? File { get; set; }
+    [Parameter] public string? PendingFileToken { get; set; }
+    [Parameter] public string? PendingFileName { get; set; }
+    [Parameter] public long PendingFileSizeBytes { get; set; }
     [Parameter] public BackupFileInfo? ExistingBackup { get; set; }
 
     private enum State { Confirming, Uploading, Restoring, Error }
     private State CurrentState = State.Confirming;
-    private int UploadProgress = 0;
+    private double UploadProgress = 0;
+    private long UploadedBytes = 0;
+    private long UploadTotalBytes = 0;
     private int RestoreProgress = 0;
     private string RestoreStage = "Preparing...";
     private string? RestoreDetail;
     private string ErrorMessage = "";
+    private string? _authorizedAdminId;
+    private bool _isDisposed;
+    private DotNetObjectReference<RestoreBackupDialog>? _dotNetRef;
 
     private string EffectiveBackupName =>
-        File?.Name ?? ExistingBackup?.FileName ?? "backup";
+        !string.IsNullOrWhiteSpace(PendingFileName) ? PendingFileName! : ExistingBackup?.FileName ?? "backup";
 
     public Task<BackDismissAction> OnBackRequestedAsync() =>
         Task.FromResult(CurrentState is State.Uploading or State.Restoring
@@ -90,6 +116,7 @@
         var caller = await UserService.GetEmployeeAsync();
         if (caller is { IsActiveUnsuspended: true } && caller.IsEffectiveAdmin)
         {
+            _authorizedAdminId = caller.Id;
             return true;
         }
 
@@ -100,10 +127,33 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _dotNetRef = DotNetObjectReference.Create(this);
         await EnsureAuthorizedAdminAsync();
     }
 
-    private void Close() => MudDialog.Cancel();
+    private async Task Close()
+    {
+        await ReleasePendingFileAsync();
+        MudDialog.Cancel();
+    }
+
+    private async Task ReleasePendingFileAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(PendingFileToken))
+        {
+            var token = PendingFileToken;
+            PendingFileToken = null;
+            try { await JS.InvokeVoidAsync("window.spokesUpload.chunked.releaseFile", token); } catch { }
+        }
+    }
+
+    private async Task CancelUploadAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(PendingFileToken))
+        {
+            try { await JS.InvokeVoidAsync("window.spokesUpload.chunked.cancelUpload", PendingFileToken); } catch { }
+        }
+    }
 
     private async Task StartRestore()
     {
@@ -113,74 +163,109 @@
             return;
         }
 
-        string? targetFilePath = null;
-        bool isTempFile = false;
-
-        try
+        if (!string.IsNullOrWhiteSpace(PendingFileToken))
         {
-            if (File != null)
+            CurrentState = State.Uploading;
+            UploadProgress = 0;
+            UploadedBytes = 0;
+            UploadTotalBytes = PendingFileSizeBytes;
+            StateHasChanged();
+
+            try
             {
-                CurrentState = State.Uploading;
-                StateHasChanged();
-
-                var uploadExt = Path.GetExtension(File.Name);
-                targetFilePath = BackupSvc.CreateRestoreUploadStagingPath(string.IsNullOrWhiteSpace(uploadExt) ? ".spkbackup" : uploadExt);
-                isTempFile = true;
-
-                await using (var fs = new FileStream(targetFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
-                await using (var stream = File.OpenReadStream(long.MaxValue))
-                {
-                    var buffer = new byte[81920]; // 80KB chunks
-                    int bytesRead;
-                    long totalRead = 0;
-                    long totalSize = File.Size;
-
-                    while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) != 0)
-                    {
-                        await fs.WriteAsync(buffer.AsMemory(0, bytesRead));
-                        totalRead += bytesRead;
-                        int newProgress = totalSize > 0 ? (int)(totalRead * 100 / totalSize) : 0;
-
-                        if (newProgress > UploadProgress)
-                        {
-                            UploadProgress = newProgress;
-                            StateHasChanged();
-                        }
-                    }
-                } // Stream is safely disposed and closed before restore begins!
+                await JS.InvokeVoidAsync(
+                    "window.spokesUpload.chunked.startUpload",
+                    PendingFileToken,
+                    "/spokesapi/backups/restore-upload",
+                    _dotNetRef,
+                    new { chunkSizeBytes = BackupRestoreUploadService.DefaultChunkSizeBytes });
             }
-            else
+            catch (Exception ex)
             {
-                targetFilePath = ExistingBackup?.FilePath;
-            }
-
-            if (string.IsNullOrEmpty(targetFilePath) || !System.IO.File.Exists(targetFilePath))
-            {
-                ErrorMessage = Loc["Backup file not found."].Value;
+                ErrorMessage = ex.Message;
                 CurrentState = State.Error;
                 StateHasChanged();
-                return;
             }
+            return;
+        }
 
+        var targetFilePath = ExistingBackup?.FilePath;
+        if (string.IsNullOrEmpty(targetFilePath) || !System.IO.File.Exists(targetFilePath))
+        {
+            ErrorMessage = Loc["Backup file not found."].Value;
+            CurrentState = State.Error;
+            StateHasChanged();
+            return;
+        }
+
+        await ExecuteRestoreAsync(progress => BackupSvc.RestoreBackupAsync(targetFilePath, Logger, progress: progress));
+    }
+
+    [JSInvokable]
+    public void OnChunkedUploadProgress(double percent, long uploadedBytes, long totalBytes)
+    {
+        if (_isDisposed || CurrentState != State.Uploading) return;
+        UploadProgress = percent;
+        UploadedBytes = uploadedBytes;
+        UploadTotalBytes = totalBytes;
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public async Task OnChunkedUploadCompleted(string uploadId)
+    {
+        if (_isDisposed) return;
+        PendingFileToken = null;
+
+        if (!await EnsureAuthorizedAdminAsync())
+        {
+            StateHasChanged();
+            return;
+        }
+
+        await ExecuteRestoreAsync(progress =>
+            BackupUploadSvc.RestoreStagedUploadAsync(uploadId, BackupUploadScope.Admin, _authorizedAdminId, Logger, progress: progress));
+    }
+
+    [JSInvokable]
+    public void OnChunkedUploadCancelled()
+    {
+        if (_isDisposed) return;
+        PendingFileToken = null;
+        MudDialog.Cancel();
+    }
+
+    [JSInvokable]
+    public void OnChunkedUploadError(string errorMessage)
+    {
+        if (_isDisposed) return;
+        PendingFileToken = null;
+        ErrorMessage = string.IsNullOrWhiteSpace(errorMessage) ? Loc["Failed to restore backup."].Value : errorMessage;
+        CurrentState = State.Error;
+        StateHasChanged();
+    }
+
+    private async Task ExecuteRestoreAsync(Func<IProgress<BackupRestoreProgress>, Task<BackupRestoreResult>> restoreAction)
+    {
+        try
+        {
             CurrentState = State.Restoring;
             RestoreStage = Loc["Initializing restore..."].Value;
             RestoreProgress = 0;
+            RestoreDetail = null;
             StateHasChanged();
 
             var progress = new Progress<BackupRestoreProgress>(p =>
             {
+                if (_isDisposed) return;
                 RestoreStage = p.Stage;
                 RestoreProgress = p.Percentage;
                 RestoreDetail = p.Detail;
-                InvokeAsync(StateHasChanged);
+                _ = InvokeAsync(StateHasChanged);
             });
 
-            var restoreResult = await BackupSvc.RestoreBackupAsync(targetFilePath, Logger, progress: progress);
-
-            if (isTempFile && targetFilePath != null)
-            {
-                try { System.IO.File.Delete(targetFilePath); } catch { }
-            }
+            var restoreResult = await restoreAction(progress);
+            if (_isDisposed) return;
 
             if (restoreResult.Success)
             {
@@ -195,13 +280,16 @@
         }
         catch (Exception ex)
         {
-            if (isTempFile && targetFilePath != null)
-            {
-                try { System.IO.File.Delete(targetFilePath); } catch { }
-            }
+            if (_isDisposed) return;
             ErrorMessage = ex.Message;
             CurrentState = State.Error;
             StateHasChanged();
         }
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        _dotNetRef?.Dispose();
     }
 }

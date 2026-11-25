@@ -132,14 +132,14 @@ public class LiveKitServiceTests : IDisposable
     }
 
     [Fact]
-    public void BuildConfigurationYaml_DefaultInfoLevel_EmitsSampledInfoWithApiWarn()
+    public void BuildConfigurationYaml_DefaultInfoLevel_EmitsUdpMuxAndSampledInfoWithApiWarn()
     {
         var systemConfig = new SystemConfig
         {
             IsSetupComplete = true,
             LiveKitFallbackPort = 7881,
             LiveKitUdpStartPort = 30000,
-            LiveKitUdpEndPort = 30499,
+            LiveKitUdpEndPort = 30007,
             LiveKitApiKey = "devkey",
             LiveKitApiSecret = "devsecret",
             LiveKitLogLevel = "info"
@@ -147,12 +147,98 @@ public class LiveKitServiceTests : IDisposable
 
         var yaml = _service.BuildConfigurationYaml(systemConfig);
 
+        Assert.Contains("udp_port: 30000-30007", yaml);
+        Assert.DoesNotContain("port_range_start", yaml);
+        Assert.DoesNotContain("port_range_end", yaml);
         Assert.Contains("level: info", yaml);
         Assert.Contains("pion_level: error", yaml);
         Assert.Contains("sample: true", yaml);
         Assert.Contains("component_levels:", yaml);
         Assert.Contains("api: warn", yaml);
         Assert.DoesNotContain("room: debug", yaml);
+    }
+
+    [Fact]
+    public void BuildConfigurationYaml_SinglePortUdpMux_EmitsSinglePortWithoutHyphen()
+    {
+        var systemConfig = new SystemConfig
+        {
+            IsSetupComplete = true,
+            LiveKitFallbackPort = 7881,
+            LiveKitUdpStartPort = 30000,
+            LiveKitUdpEndPort = 30000,
+            LiveKitApiKey = "devkey",
+            LiveKitApiSecret = "devsecret"
+        };
+
+        var yaml = _service.BuildConfigurationYaml(systemConfig);
+
+        Assert.Contains("udp_port: 30000\n", yaml.Replace("\r\n", "\n"));
+        Assert.DoesNotContain("udp_port: 30000-30000", yaml);
+        Assert.DoesNotContain("port_range_start", yaml);
+    }
+
+    [Fact]
+    public void BuildConfigurationYaml_CustomValidMuxRange_EmitsExactRange()
+    {
+        var systemConfig = new SystemConfig
+        {
+            IsSetupComplete = true,
+            LiveKitFallbackPort = 7881,
+            LiveKitUdpStartPort = 40000,
+            LiveKitUdpEndPort = 40015,
+            LiveKitApiKey = "devkey",
+            LiveKitApiSecret = "devsecret"
+        };
+
+        var yaml = _service.BuildConfigurationYaml(systemConfig);
+
+        Assert.Contains("udp_port: 40000-40015", yaml);
+    }
+
+    [Fact]
+    public void BuildConfigurationYaml_OversizedLegacyRangeOrEnvCount_ClampsToEightPortsPreservingCustomStart()
+    {
+        var legacyRestoredConfig = new SystemConfig
+        {
+            IsSetupComplete = true,
+            LiveKitUdpStartPort = 50000,
+            LiveKitUdpEndPort = 50499,
+            LiveKitApiKey = "devkey",
+            LiveKitApiSecret = "devsecret"
+        };
+
+        var restoredYaml = _service.BuildConfigurationYaml(legacyRestoredConfig);
+        Assert.Contains("udp_port: 50000-50007", restoredYaml);
+
+        var envConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Spokes_Voice_UDP_Start_Port"] = "45000",
+            ["Spokes_VOICE_UDP_PORT_COUNT"] = "500"
+        }).Build();
+        var envService = new LiveKitService(_loggerMock.Object, envConfig);
+        var preSetupConfig = new SystemConfig
+        {
+            IsSetupComplete = false,
+            LiveKitApiKey = "devkey",
+            LiveKitApiSecret = "devsecret"
+        };
+
+        var envYaml = envService.BuildConfigurationYaml(preSetupConfig);
+        Assert.Contains("udp_port: 45000-45007", envYaml);
+    }
+
+    [Theory]
+    [InlineData(30000, 30007, UdpPortRangeValidationError.None)]
+    [InlineData(30000, 30000, UdpPortRangeValidationError.None)]
+    [InlineData(40000, 40063, UdpPortRangeValidationError.None)]
+    [InlineData(80, 87, UdpPortRangeValidationError.InvalidStartPort)]
+    [InlineData(30000, 70000, UdpPortRangeValidationError.InvalidEndPort)]
+    [InlineData(30010, 30005, UdpPortRangeValidationError.EndBeforeStart)]
+    [InlineData(30000, 30064, UdpPortRangeValidationError.ExceedsMaxMuxPorts)]
+    public void ValidateUdpMuxRange_ValidatesBoundsAndMaxPortCount(int start, int end, UdpPortRangeValidationError expected)
+    {
+        Assert.Equal(expected, LiveKitService.ValidateUdpMuxRange(start, end));
     }
 
     [Fact]
@@ -163,7 +249,7 @@ public class LiveKitServiceTests : IDisposable
             IsSetupComplete = true,
             LiveKitFallbackPort = 7881,
             LiveKitUdpStartPort = 30000,
-            LiveKitUdpEndPort = 30499,
+            LiveKitUdpEndPort = 30007,
             LiveKitApiKey = "devkey",
             LiveKitApiSecret = "devsecret",
             LiveKitLogLevel = "debug"

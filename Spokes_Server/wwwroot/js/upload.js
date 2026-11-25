@@ -879,5 +879,296 @@ window.spokesUpload = {
                 });
             }
         });
+    },
+
+    /**
+     * Reusable chunked HTTP file upload primitive (File.slice + sequential PUT chunks with automatic retry).
+     * Keeps multi-GB uploads (such as backup archives) completely off the Blazor SignalR circuit and safely
+     * below reverse-proxy/Cloudflare per-request body size limits.
+     */
+    chunked: {
+        DEFAULT_CHUNK_SIZE_BYTES: 8 * 1024 * 1024, // 8 MB
+        MAX_RETRIES_PER_CHUNK: 3,
+        _pendingFiles: {},
+        _dotNetRefs: {},
+        _activeUploads: {},
+
+        initPicker: function(inputId, dotNetRef, options = {}) {
+            const self = window.spokesUpload.chunked;
+            self._dotNetRefs[inputId] = { dotNetRef, options };
+            const input = document.getElementById(inputId);
+            if (!input) return;
+
+            if (input.dataset.chunkedInitialized === 'true') return;
+            input.dataset.chunkedInitialized = 'true';
+
+            input.addEventListener('change', () => {
+                if (!input.files || input.files.length === 0) return;
+                const file = input.files[0];
+                input.value = '';
+                self._notifyFileSelected(inputId, file);
+            });
+        },
+
+        openPicker: function(inputId) {
+            if (document.activeElement && document.activeElement !== document.body) {
+                document.activeElement.blur();
+            }
+            const input = document.getElementById(inputId);
+            if (input) {
+                input.click();
+            }
+        },
+
+        handleDrop: function(event, inputId) {
+            event.preventDefault();
+            const files = event.dataTransfer?.files;
+            if (!files || files.length === 0) return;
+            window.spokesUpload.chunked._notifyFileSelected(inputId, files[0]);
+        },
+
+        _notifyFileSelected: function(inputId, file) {
+            const self = window.spokesUpload.chunked;
+            const reg = self._dotNetRefs[inputId];
+            if (!reg || !reg.dotNetRef || !file) return;
+
+            const fileToken = (crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+            self._pendingFiles[fileToken] = file;
+            const callbackName = reg.options?.onSelectedMethod || 'OnChunkedFileSelected';
+            reg.dotNetRef.invokeMethodAsync(callbackName, fileToken, file.name, file.size).catch((e) => {
+                console.error('[spokesUpload.chunked] Failed invoking file selected callback', e);
+                delete self._pendingFiles[fileToken];
+            });
+        },
+
+        releaseFile: function(fileToken) {
+            if (!fileToken) return;
+            delete window.spokesUpload.chunked._pendingFiles[fileToken];
+        },
+
+        _getAuthHeaders: async function() {
+            if (window.spokesAuth?.getHeaders) {
+                try {
+                    return (await window.spokesAuth.getHeaders()) || {};
+                } catch {
+                    return {};
+                }
+            }
+            return {};
+        },
+
+        _extractErrorMessage: function(text, status) {
+            if (text) {
+                try {
+                    const parsed = JSON.parse(text);
+                    if (parsed.error) return parsed.error;
+                    if (parsed.message) return parsed.message;
+                    if (parsed.ErrorMessage) return parsed.ErrorMessage;
+                } catch {
+                    if (text.length < 300) return text;
+                }
+            }
+            return `Upload failed (HTTP ${status || 'network error'}).`;
+        },
+
+        _sendChunkXhr: function(url, blob, headers, activeState, onChunkProgress) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                activeState.xhr = xhr;
+                xhr.open('PUT', url, true);
+                xhr.withCredentials = true;
+                xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+                for (const [k, v] of Object.entries(headers || {})) {
+                    if (v != null && k.toLowerCase() !== 'content-type') {
+                        xhr.setRequestHeader(k, v);
+                    }
+                }
+
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable && onChunkProgress) {
+                        onChunkProgress(e.loaded);
+                    }
+                });
+
+                xhr.addEventListener('load', () => {
+                    activeState.xhr = null;
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve({ status: xhr.status, text: xhr.responseText });
+                    } else {
+                        const err = new Error(window.spokesUpload.chunked._extractErrorMessage(xhr.responseText, xhr.status));
+                        err.status = xhr.status;
+                        err.retryable = xhr.status >= 500 || xhr.status === 408 || xhr.status === 429;
+                        reject(err);
+                    }
+                });
+
+                xhr.addEventListener('error', () => {
+                    activeState.xhr = null;
+                    const err = new Error('Network error while uploading backup chunk.');
+                    err.retryable = true;
+                    reject(err);
+                });
+
+                xhr.addEventListener('abort', () => {
+                    activeState.xhr = null;
+                    const err = new Error('Upload cancelled.');
+                    err.aborted = true;
+                    err.retryable = false;
+                    reject(err);
+                });
+
+                xhr.send(blob);
+            });
+        },
+
+        startUpload: async function(fileToken, baseUrl, dotNetRef, options = {}) {
+            const self = window.spokesUpload.chunked;
+            const file = self._pendingFiles[fileToken];
+            if (!file) {
+                await window.spokesUpload.robustInvoke(dotNetRef, 'OnChunkedUploadError', ['Selected file is no longer available. Please choose the file again.'], 5).catch(() => {});
+                return;
+            }
+            if (!file.size || file.size <= 0) {
+                delete self._pendingFiles[fileToken];
+                await window.spokesUpload.robustInvoke(dotNetRef, 'OnChunkedUploadError', [`File "${file.name}" is empty (0 bytes).`], 5).catch(() => {});
+                return;
+            }
+
+            const normalizedBase = baseUrl.replace(/\/+$/, '');
+            const activeState = { cancelled: false, uploadId: null, baseUrl: normalizedBase, xhr: null };
+            self._activeUploads[fileToken] = activeState;
+
+            try {
+                const headers = await self._getAuthHeaders();
+                const requestedChunkSize = options.chunkSizeBytes || self.DEFAULT_CHUNK_SIZE_BYTES;
+
+                const initRes = await fetch(`${normalizedBase}/init`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { ...headers, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        fileName: file.name,
+                        totalBytes: file.size,
+                        chunkSizeBytes: requestedChunkSize
+                    })
+                });
+
+                const initText = await initRes.text();
+                if (!initRes.ok) {
+                    throw new Error(self._extractErrorMessage(initText, initRes.status));
+                }
+
+                const initData = JSON.parse(initText);
+                const uploadId = initData.uploadId;
+                const chunkSize = initData.chunkSizeBytes || requestedChunkSize;
+                const totalChunks = initData.totalChunks || Math.ceil(file.size / chunkSize);
+                activeState.uploadId = uploadId;
+
+                let lastProgressSent = 0;
+                const emitProgress = (uploadedBytes, force = false) => {
+                    const now = performance.now();
+                    if (!force && now - lastProgressSent < 200) return;
+                    lastProgressSent = now;
+                    const clamped = Math.min(uploadedBytes, file.size);
+                    const pct = Math.min(99.9, (clamped / file.size) * 100);
+                    dotNetRef.invokeMethodAsync('OnChunkedUploadProgress', pct, clamped, file.size).catch(() => {});
+                };
+
+                emitProgress(0, true);
+
+                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                    if (activeState.cancelled) {
+                        throw Object.assign(new Error('Upload cancelled.'), { aborted: true });
+                    }
+
+                    const start = chunkIndex * chunkSize;
+                    const end = Math.min(file.size, start + chunkSize);
+                    const chunkBlob = file.slice(start, end);
+                    const chunkUrl = `${normalizedBase}/${encodeURIComponent(uploadId)}/chunks/${chunkIndex}`;
+
+                    let attempt = 0;
+                    while (true) {
+                        try {
+                            const chunkHeaders = await self._getAuthHeaders();
+                            await self._sendChunkXhr(chunkUrl, chunkBlob, chunkHeaders, activeState, (loadedInChunk) => {
+                                emitProgress(start + loadedInChunk, false);
+                            });
+                            emitProgress(end, chunkIndex === totalChunks - 1);
+                            break;
+                        } catch (err) {
+                            if (activeState.cancelled || err.aborted) {
+                                throw err;
+                            }
+                            attempt++;
+                            if (!err.retryable || attempt > self.MAX_RETRIES_PER_CHUNK) {
+                                throw err;
+                            }
+                            const delayMs = 800 * Math.pow(2, attempt - 1);
+                            console.warn(`[spokesUpload.chunked] Retrying chunk ${chunkIndex} (attempt ${attempt}/${self.MAX_RETRIES_PER_CHUNK}) in ${delayMs}ms:`, err.message);
+                            await new Promise(r => setTimeout(r, delayMs));
+                        }
+                    }
+                }
+
+                if (activeState.cancelled) {
+                    throw Object.assign(new Error('Upload cancelled.'), { aborted: true });
+                }
+
+                const completeHeaders = await self._getAuthHeaders();
+                const completeRes = await fetch(`${normalizedBase}/${encodeURIComponent(uploadId)}/complete`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: completeHeaders
+                });
+
+                const completeText = await completeRes.text();
+                if (!completeRes.ok) {
+                    throw new Error(self._extractErrorMessage(completeText, completeRes.status));
+                }
+
+                delete self._pendingFiles[fileToken];
+                delete self._activeUploads[fileToken];
+
+                dotNetRef.invokeMethodAsync('OnChunkedUploadProgress', 100, file.size, file.size).catch(() => {});
+                await window.spokesUpload.robustInvoke(dotNetRef, 'OnChunkedUploadCompleted', [uploadId], 60);
+            } catch (err) {
+                delete self._activeUploads[fileToken];
+                if (activeState.uploadId) {
+                    const cancelHeaders = await self._getAuthHeaders();
+                    fetch(`${normalizedBase}/${encodeURIComponent(activeState.uploadId)}`, {
+                        method: 'DELETE',
+                        credentials: 'include',
+                        headers: cancelHeaders
+                    }).catch(() => {});
+                }
+                delete self._pendingFiles[fileToken];
+                if (activeState.cancelled || err?.aborted) {
+                    await window.spokesUpload.robustInvoke(dotNetRef, 'OnChunkedUploadCancelled', [], 10).catch(() => {});
+                } else {
+                    await window.spokesUpload.robustInvoke(dotNetRef, 'OnChunkedUploadError', [err?.message || 'Backup upload failed.'], 30).catch(() => {});
+                }
+            }
+        },
+
+        cancelUpload: async function(fileToken) {
+            const self = window.spokesUpload.chunked;
+            const active = self._activeUploads[fileToken];
+            if (active) {
+                active.cancelled = true;
+                if (active.xhr) {
+                    try { active.xhr.abort(); } catch {}
+                }
+                if (active.uploadId && active.baseUrl) {
+                    const headers = await self._getAuthHeaders();
+                    fetch(`${active.baseUrl}/${encodeURIComponent(active.uploadId)}`, {
+                        method: 'DELETE',
+                        credentials: 'include',
+                        headers: headers
+                    }).catch(() => {});
+                }
+                delete self._activeUploads[fileToken];
+            }
+            delete self._pendingFiles[fileToken];
+        }
     }
 };

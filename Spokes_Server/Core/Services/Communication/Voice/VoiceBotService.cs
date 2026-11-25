@@ -30,6 +30,7 @@ public class VoiceBotService : IVoiceBotService
     private readonly ILogger<VoiceBotService> _logger;
     private readonly IWebHostEnvironment? _webHostEnvironment;
     private readonly IConfiguration? _configuration;
+    private readonly LiveKitService? _liveKitService;
     private readonly List<IVoiceRoomPipelineStage> _pipelineStages = [];
     private readonly object _stagesLock = new();
 
@@ -37,6 +38,7 @@ public class VoiceBotService : IVoiceBotService
     private readonly ConcurrentDictionary<string, PendingBotJoin> _pendingJoins = new();
     private readonly ConcurrentDictionary<string, List<AudioFrame>> _soundCache = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _ringingTokens = new();
+    private readonly SemaphoreSlim _selfTestLock = new(1, 1);
     private readonly CancellationTokenSource _shutdownCts = new();
     private bool _soundsLoaded;
     private readonly object _soundLock = new();
@@ -48,12 +50,14 @@ public class VoiceBotService : IVoiceBotService
         ILogger<VoiceBotService> logger,
         IWebHostEnvironment? webHostEnvironment = null,
         IConfiguration? configuration = null,
-        IEnumerable<IVoiceRoomPipelineStage>? pipelineStages = null)
+        IEnumerable<IVoiceRoomPipelineStage>? pipelineStages = null,
+        LiveKitService? liveKitService = null)
     {
         _systemConfigs = systemConfigs ?? throw new ArgumentNullException(nameof(systemConfigs));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _webHostEnvironment = webHostEnvironment;
         _configuration = configuration;
+        _liveKitService = liveKitService;
 
         if (pipelineStages != null)
         {
@@ -703,6 +707,566 @@ public class VoiceBotService : IVoiceBotService
             }
         }
         _shutdownCts.Dispose();
+        _selfTestLock.Dispose();
+    }
+
+    public virtual async Task<VoiceBotSelfTestResult> RunSelfTestAsync(CancellationToken cancellationToken = default)
+    {
+        var testedAtUtc = DateTime.UtcNow;
+        var totalSw = System.Diagnostics.Stopwatch.StartNew();
+        var steps = new List<VoiceBotSelfTestStep>();
+
+        if (_shutdownCts.IsCancellationRequested)
+        {
+            return new VoiceBotSelfTestResult(
+                VoiceBotSelfTestStatus.Fail,
+                "Server is shutting down.",
+                totalSw.ElapsedMilliseconds,
+                testedAtUtc,
+                "unknown",
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                null,
+                0,
+                0,
+                0,
+                steps);
+        }
+
+        if (!await _selfTestLock.WaitAsync(0, cancellationToken))
+        {
+            return new VoiceBotSelfTestResult(
+                VoiceBotSelfTestStatus.Warning,
+                "A Voice Bot self-test is already in progress.",
+                totalSw.ElapsedMilliseconds,
+                testedAtUtc,
+                "unknown",
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                null,
+                0,
+                0,
+                0,
+                steps);
+        }
+
+        Room? room = null;
+        AudioSource? audioSource = null;
+        string? diagRoomName = null;
+        string apiKey = string.Empty;
+        string apiSecret = string.Empty;
+        int loadedSoundCount = 0;
+
+        try
+        {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, cancellationToken);
+            linkedCts.CancelAfter(TimeSpan.FromSeconds(12));
+            var ct = linkedCts.Token;
+
+            // Step 1: Configuration & built-in chime sound assets
+            var stepSw = System.Diagnostics.Stopwatch.StartNew();
+            var config = _systemConfigs.Get();
+            apiKey = config.LiveKitApiKey ?? string.Empty;
+            apiSecret = config.LiveKitApiSecret ?? string.Empty;
+
+            EnsureSoundsLoaded();
+            bool hasJoinSound = _soundCache.TryGetValue("channel_join", out var joinFrames) && joinFrames.Count > 0;
+            bool hasLeaveSound = _soundCache.TryGetValue("channel_leave", out var leaveFrames) && leaveFrames.Count > 0;
+            loadedSoundCount = (hasJoinSound ? 1 : 0) + (hasLeaveSound ? 1 : 0);
+
+            if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(apiSecret))
+            {
+                steps.Add(new VoiceBotSelfTestStep(
+                    "Configuration & Sounds",
+                    VoiceBotSelfTestStatus.Fail,
+                    stepSw.ElapsedMilliseconds,
+                    "LiveKit API key or secret is missing in SystemConfig."));
+
+                return new VoiceBotSelfTestResult(
+                    VoiceBotSelfTestStatus.Fail,
+                    "LiveKit credentials are not configured.",
+                    totalSw.ElapsedMilliseconds,
+                    testedAtUtc,
+                    "unknown",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    null,
+                    0,
+                    0,
+                    loadedSoundCount,
+                    steps);
+            }
+
+            if (loadedSoundCount == 2)
+            {
+                steps.Add(new VoiceBotSelfTestStep(
+                    "Configuration & Sounds",
+                    VoiceBotSelfTestStatus.Pass,
+                    stepSw.ElapsedMilliseconds,
+                    "Credentials configured; join and leave chime WAV files loaded (48 kHz)."));
+            }
+            else
+            {
+                steps.Add(new VoiceBotSelfTestStep(
+                    "Configuration & Sounds",
+                    VoiceBotSelfTestStatus.Warning,
+                    stepSw.ElapsedMilliseconds,
+                    $"Credentials configured, but only {loadedSoundCount}/2 built-in chime WAV files loaded from wwwroot/sounds."));
+            }
+
+            // Step 2: Connect to isolated diagnostic room (non-channel prefix so webhooks & active channel lists ignore it)
+            stepSw.Restart();
+            diagRoomName = $"spokes-diag-voicebot-{Guid.NewGuid():N}";
+            var voicePort = GetVoicePort();
+            var liveKitUrl = $"ws://127.0.0.1:{voicePort}";
+
+            string jwt;
+            try
+            {
+                var token = new AccessToken(apiKey, apiSecret)
+                    .WithIdentity("bot:spokes-selftest")
+                    .WithName("Spokes Voice Bot Self-Test");
+
+                token.WithGrants(new VideoGrants
+                {
+                    RoomJoin = true,
+                    Room = diagRoomName,
+                    CanPublish = true,
+                    CanPublishData = false,
+                    CanSubscribe = false,
+                    Hidden = true
+                });
+
+                jwt = token.ToJwt();
+            }
+            catch (Exception ex)
+            {
+                steps.Add(new VoiceBotSelfTestStep(
+                    "Signaling & Room Join",
+                    VoiceBotSelfTestStatus.Fail,
+                    stepSw.ElapsedMilliseconds,
+                    $"Failed to generate LiveKit access token: {ex.Message}"));
+
+                return new VoiceBotSelfTestResult(
+                    VoiceBotSelfTestStatus.Fail,
+                    "LiveKit API credentials are invalid.",
+                    totalSw.ElapsedMilliseconds,
+                    testedAtUtc,
+                    "unknown",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    null,
+                    0,
+                    0,
+                    loadedSoundCount,
+                    steps);
+            }
+
+            room = new Room();
+            try
+            {
+                await room.ConnectAsync(liveKitUrl, jwt, new RoomOptions { AutoSubscribe = false }, ct);
+            }
+            catch (Exception ex)
+            {
+                steps.Add(new VoiceBotSelfTestStep(
+                    "Signaling & Room Join",
+                    VoiceBotSelfTestStatus.Fail,
+                    stepSw.ElapsedMilliseconds,
+                    $"Failed to connect to {liveKitUrl}: {ex.Message}"));
+
+                return new VoiceBotSelfTestResult(
+                    VoiceBotSelfTestStatus.Fail,
+                    $"Voice Bot could not reach LiveKit at {liveKitUrl}.",
+                    totalSw.ElapsedMilliseconds,
+                    testedAtUtc,
+                    "unknown",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    null,
+                    0,
+                    0,
+                    loadedSoundCount,
+                    steps);
+            }
+
+            if (!room.IsConnected || room.LocalParticipant == null)
+            {
+                steps.Add(new VoiceBotSelfTestStep(
+                    "Signaling & Room Join",
+                    VoiceBotSelfTestStatus.Fail,
+                    stepSw.ElapsedMilliseconds,
+                    $"Connected to {liveKitUrl}, but room did not enter a connected state."));
+
+                return new VoiceBotSelfTestResult(
+                    VoiceBotSelfTestStatus.Fail,
+                    "Voice Bot failed to initialize LiveKit room session.",
+                    totalSw.ElapsedMilliseconds,
+                    testedAtUtc,
+                    "unknown",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    null,
+                    0,
+                    0,
+                    loadedSoundCount,
+                    steps);
+            }
+
+            steps.Add(new VoiceBotSelfTestStep(
+                "Signaling & Room Join",
+                VoiceBotSelfTestStatus.Pass,
+                stepSw.ElapsedMilliseconds,
+                $"Joined isolated diagnostic room via {liveKitUrl}."));
+
+            // Step 3: Publish audio track & stream short PCM burst to exercise media pipeline
+            stepSw.Restart();
+            audioSource = new AudioSource(sampleRate: 48000, numChannels: 2, queueSizeMs: 500);
+            var audioTrack = audioSource.CreateTrack("spokes-selftest-audio");
+            var publishOptions = new TrackPublishOptions
+            {
+                AudioEncoding = new AudioEncodingOptions
+                {
+                    MaxBitrate = 64000
+                }
+            };
+
+            try
+            {
+                await room.LocalParticipant.PublishTrackAsync(audioTrack, publishOptions, ct);
+
+                const int testFrameCount = 10; // 200ms at 20ms per frame
+                byte[] silentPcm = new byte[960 * 2 * 2]; // 960 samples * 2ch * 16-bit
+                var frameSw = System.Diagnostics.Stopwatch.StartNew();
+                for (int i = 0; i < testFrameCount; i++)
+                {
+                    var frame = hasJoinSound && joinFrames != null && i < joinFrames.Count
+                        ? joinFrames[i]
+                        : new AudioFrame(silentPcm, 48000, 2, 960, null);
+                    await audioSource.CaptureFrameAsync(frame, ct);
+                    int remainingMs = ((i + 1) * 20) - (int)frameSw.ElapsedMilliseconds;
+                    if (remainingMs > 1)
+                    {
+                        await Task.Delay(remainingMs, ct);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                steps.Add(new VoiceBotSelfTestStep(
+                    "Audio Publish & Stream",
+                    VoiceBotSelfTestStatus.Fail,
+                    stepSw.ElapsedMilliseconds,
+                    $"Failed to publish or stream test audio frames: {ex.Message}"));
+
+                return new VoiceBotSelfTestResult(
+                    VoiceBotSelfTestStatus.Fail,
+                    "Voice Bot failed to publish audio track to LiveKit.",
+                    totalSw.ElapsedMilliseconds,
+                    testedAtUtc,
+                    "unknown",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    null,
+                    0,
+                    0,
+                    loadedSoundCount,
+                    steps);
+            }
+
+            steps.Add(new VoiceBotSelfTestStep(
+                "Audio Publish & Stream",
+                VoiceBotSelfTestStatus.Pass,
+                stepSw.ElapsedMilliseconds,
+                "Published 48 kHz stereo audio track and streamed 200 ms test burst."));
+
+            // Step 4: Inspect WebRTC transport & outbound RTP stats
+            stepSw.Restart();
+            VoiceBotTransportStatsSnapshot transport = new("unknown", string.Empty, string.Empty, string.Empty, null, 0, 0);
+            try
+            {
+                for (int attempt = 0; attempt < 6; attempt++)
+                {
+                    var rtcStats = await room.GetRtcStatsAsync();
+                    var candidateStats = ExtractTransportStats(rtcStats);
+                    if (!string.Equals(candidateStats.TransportProtocol, "unknown", StringComparison.OrdinalIgnoreCase) ||
+                        candidateStats.OutboundPacketsSent > transport.OutboundPacketsSent)
+                    {
+                        transport = candidateStats;
+                    }
+
+                    if (!string.Equals(transport.TransportProtocol, "unknown", StringComparison.OrdinalIgnoreCase) &&
+                        transport.OutboundPacketsSent > 0)
+                    {
+                        break;
+                    }
+
+                    await Task.Delay(250, ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[VoiceBot] Self-test GetRtcStatsAsync failed: {Message}", ex.Message);
+            }
+
+            var transportStepStatus = VoiceBotSelfTestStatus.Pass;
+            string transportDetail;
+            if (string.Equals(transport.TransportProtocol, "udp", StringComparison.OrdinalIgnoreCase) && transport.OutboundPacketsSent > 0)
+            {
+                var rttText = transport.RoundTripTimeMs.HasValue ? $", RTT {transport.RoundTripTimeMs.Value:F1} ms" : string.Empty;
+                transportDetail = $"Direct UDP media verified ({transport.RemoteEndpoint}), {transport.OutboundPacketsSent} RTP packets sent ({transport.OutboundBytesSent} B{rttText}).";
+            }
+            else if (string.Equals(transport.TransportProtocol, "tcp", StringComparison.OrdinalIgnoreCase))
+            {
+                transportStepStatus = VoiceBotSelfTestStatus.Warning;
+                transportDetail = $"Connected over TCP fallback ({transport.RemoteEndpoint}) instead of UDP Mux ({transport.OutboundPacketsSent} RTP packets sent). Verify LiveKit UDP Mux ports and container networking.";
+            }
+            else if (transport.OutboundPacketsSent > 0)
+            {
+                transportStepStatus = VoiceBotSelfTestStatus.Warning;
+                transportDetail = $"Sent {transport.OutboundPacketsSent} RTP packets, but ICE candidate transport protocol was not reported.";
+            }
+            else
+            {
+                transportStepStatus = VoiceBotSelfTestStatus.Fail;
+                transportDetail = string.Equals(transport.TransportProtocol, "unknown", StringComparison.OrdinalIgnoreCase)
+                    ? "WebRTC media transport did not establish a nominated ICE candidate pair or transmit RTP packets."
+                    : $"ICE transport ({transport.TransportProtocol.ToUpperInvariant()} {transport.RemoteEndpoint}) reported 0 outbound RTP packets.";
+            }
+
+            steps.Add(new VoiceBotSelfTestStep(
+                "WebRTC Media Transport",
+                transportStepStatus,
+                stepSw.ElapsedMilliseconds,
+                transportDetail));
+
+            // Step 5: Clean disconnect & ephemeral room deletion
+            stepSw.Restart();
+            try
+            {
+                audioSource.Dispose();
+                audioSource = null;
+            }
+            catch { }
+
+            try
+            {
+                await room.DisconnectAsync();
+            }
+            catch
+            {
+                try { room.Disconnect(); } catch { }
+            }
+            finally
+            {
+                try { room.Dispose(); } catch { }
+                room = null;
+            }
+
+            if (_liveKitService != null && !string.IsNullOrWhiteSpace(diagRoomName))
+            {
+                await _liveKitService.DeleteRoomAsync(diagRoomName, apiKey, apiSecret, CancellationToken.None);
+                diagRoomName = null;
+            }
+
+            steps.Add(new VoiceBotSelfTestStep(
+                "Cleanup",
+                VoiceBotSelfTestStatus.Pass,
+                stepSw.ElapsedMilliseconds,
+                "Disconnected cleanly and removed temporary diagnostic room."));
+
+            var overallStatus = steps.Any(s => s.Status == VoiceBotSelfTestStatus.Fail)
+                ? VoiceBotSelfTestStatus.Fail
+                : steps.Any(s => s.Status == VoiceBotSelfTestStatus.Warning)
+                    ? VoiceBotSelfTestStatus.Warning
+                    : VoiceBotSelfTestStatus.Pass;
+
+            var summary = overallStatus switch
+            {
+                VoiceBotSelfTestStatus.Pass => $"Voice Bot is healthy over UDP ({transport.RemoteEndpoint}).",
+                VoiceBotSelfTestStatus.Warning when string.Equals(transport.TransportProtocol, "tcp", StringComparison.OrdinalIgnoreCase)
+                    => $"Voice Bot connected, but fell back to TCP ({transport.RemoteEndpoint}) instead of UDP.",
+                VoiceBotSelfTestStatus.Warning => "Voice Bot connected with warnings — check step details below.",
+                _ => "Voice Bot self-test failed — check step details below."
+            };
+
+            return new VoiceBotSelfTestResult(
+                overallStatus,
+                summary,
+                totalSw.ElapsedMilliseconds,
+                testedAtUtc,
+                transport.TransportProtocol,
+                transport.LocalEndpoint,
+                transport.RemoteEndpoint,
+                transport.CandidateType,
+                transport.RoundTripTimeMs,
+                transport.OutboundPacketsSent,
+                transport.OutboundBytesSent,
+                loadedSoundCount,
+                steps);
+        }
+        catch (OperationCanceledException)
+        {
+            steps.Add(new VoiceBotSelfTestStep(
+                "Timeout",
+                VoiceBotSelfTestStatus.Fail,
+                totalSw.ElapsedMilliseconds,
+                "Voice Bot self-test timed out before completing."));
+
+            return new VoiceBotSelfTestResult(
+                VoiceBotSelfTestStatus.Fail,
+                "Voice Bot self-test timed out.",
+                totalSw.ElapsedMilliseconds,
+                testedAtUtc,
+                "unknown",
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                null,
+                0,
+                0,
+                loadedSoundCount,
+                steps);
+        }
+        finally
+        {
+            try { audioSource?.Dispose(); } catch { }
+            if (room != null)
+            {
+                try { room.Disconnect(); } catch { }
+                try { room.Dispose(); } catch { }
+            }
+            if (_liveKitService != null && !string.IsNullOrWhiteSpace(diagRoomName) && !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret))
+            {
+                try { await _liveKitService.DeleteRoomAsync(diagRoomName, apiKey, apiSecret, CancellationToken.None); } catch { }
+            }
+            _selfTestLock.Release();
+        }
+    }
+
+    internal static VoiceBotTransportStatsSnapshot ExtractTransportStats(RtcStats? rtcStats) =>
+        ExtractTransportStats(rtcStats?.PublisherStats);
+
+    internal static VoiceBotTransportStatsSnapshot ExtractTransportStats(IEnumerable<LiveKit.Proto.RtcStats>? statsList)
+    {
+        if (statsList == null)
+        {
+            return new VoiceBotTransportStatsSnapshot("unknown", string.Empty, string.Empty, string.Empty, null, 0, 0);
+        }
+
+        string? selectedPairId = null;
+        var candidatePairs = new Dictionary<string, LiveKit.Proto.CandidatePairStats>(StringComparer.Ordinal);
+        var localCandidates = new Dictionary<string, LiveKit.Proto.IceCandidateStats>(StringComparer.Ordinal);
+        var remoteCandidates = new Dictionary<string, LiveKit.Proto.IceCandidateStats>(StringComparer.Ordinal);
+        ulong outboundPackets = 0;
+        ulong outboundBytes = 0;
+        ulong transportPacketsSent = 0;
+        ulong transportBytesSent = 0;
+
+        foreach (var stat in statsList)
+        {
+            if (stat == null) continue;
+
+            switch (stat.StatsCase)
+            {
+                case LiveKit.Proto.RtcStats.StatsOneofCase.Transport when stat.Transport?.Transport_ != null:
+                    if (!string.IsNullOrWhiteSpace(stat.Transport.Transport_.SelectedCandidatePairId))
+                    {
+                        selectedPairId = stat.Transport.Transport_.SelectedCandidatePairId;
+                    }
+                    transportPacketsSent = Math.Max(transportPacketsSent, stat.Transport.Transport_.PacketsSent);
+                    transportBytesSent = Math.Max(transportBytesSent, stat.Transport.Transport_.BytesSent);
+                    break;
+
+                case LiveKit.Proto.RtcStats.StatsOneofCase.CandidatePair when stat.CandidatePair?.CandidatePair_ != null:
+                    var pairId = stat.CandidatePair.Rtc?.Id;
+                    if (!string.IsNullOrWhiteSpace(pairId))
+                    {
+                        candidatePairs[pairId] = stat.CandidatePair.CandidatePair_;
+                    }
+                    break;
+
+                case LiveKit.Proto.RtcStats.StatsOneofCase.LocalCandidate when stat.LocalCandidate?.Candidate != null:
+                    var localId = stat.LocalCandidate.Rtc?.Id;
+                    if (!string.IsNullOrWhiteSpace(localId))
+                    {
+                        localCandidates[localId] = stat.LocalCandidate.Candidate;
+                    }
+                    break;
+
+                case LiveKit.Proto.RtcStats.StatsOneofCase.RemoteCandidate when stat.RemoteCandidate?.Candidate != null:
+                    var remoteId = stat.RemoteCandidate.Rtc?.Id;
+                    if (!string.IsNullOrWhiteSpace(remoteId))
+                    {
+                        remoteCandidates[remoteId] = stat.RemoteCandidate.Candidate;
+                    }
+                    break;
+
+                case LiveKit.Proto.RtcStats.StatsOneofCase.OutboundRtp when stat.OutboundRtp?.Sent != null:
+                    outboundPackets += stat.OutboundRtp.Sent.PacketsSent;
+                    outboundBytes += stat.OutboundRtp.Sent.BytesSent;
+                    break;
+            }
+        }
+
+        LiveKit.Proto.CandidatePairStats? activePair = null;
+        if (!string.IsNullOrWhiteSpace(selectedPairId) && candidatePairs.TryGetValue(selectedPairId, out var selected))
+        {
+            activePair = selected;
+        }
+        else
+        {
+            activePair = candidatePairs.Values.FirstOrDefault(p => p.Nominated)
+                ?? candidatePairs.Values.FirstOrDefault(p => p.PacketsSent > 0 || p.BytesSent > 0);
+        }
+
+        LiveKit.Proto.IceCandidateStats? local = null;
+        LiveKit.Proto.IceCandidateStats? remote = null;
+        if (activePair != null)
+        {
+            if (!string.IsNullOrWhiteSpace(activePair.LocalCandidateId))
+            {
+                localCandidates.TryGetValue(activePair.LocalCandidateId, out local);
+            }
+            if (!string.IsNullOrWhiteSpace(activePair.RemoteCandidateId))
+            {
+                remoteCandidates.TryGetValue(activePair.RemoteCandidateId, out remote);
+            }
+        }
+
+        var rawProtocol = !string.IsNullOrWhiteSpace(remote?.Protocol)
+            ? remote!.Protocol
+            : (!string.IsNullOrWhiteSpace(local?.Protocol) ? local!.Protocol : "unknown");
+        var normalizedProtocol = rawProtocol.Trim().ToLowerInvariant();
+
+        string FormatEndpoint(LiveKit.Proto.IceCandidateStats? c) =>
+            c == null || string.IsNullOrWhiteSpace(c.Address)
+                ? string.Empty
+                : (c.Port > 0 ? $"{c.Address}:{c.Port}" : c.Address);
+
+        var candidateType = remote?.CandidateType.ToString() ?? local?.CandidateType.ToString() ?? string.Empty;
+        double? rttMs = activePair is { HasCurrentRoundTripTime: true }
+            ? Math.Round(activePair.CurrentRoundTripTime * 1000.0, 2)
+            : null;
+
+        ulong effectivePackets = outboundPackets > 0 ? outboundPackets : transportPacketsSent;
+        ulong effectiveBytes = outboundBytes > 0 ? outboundBytes : transportBytesSent;
+
+        return new VoiceBotTransportStatsSnapshot(
+            normalizedProtocol,
+            FormatEndpoint(local),
+            FormatEndpoint(remote),
+            candidateType,
+            rttMs,
+            effectivePackets,
+            effectiveBytes);
     }
 
     private sealed class BotRoomSession : IVoiceRoomMediaSessionContext, IDisposable

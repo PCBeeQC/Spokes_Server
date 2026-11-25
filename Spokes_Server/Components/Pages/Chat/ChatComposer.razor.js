@@ -501,3 +501,8 @@ export async function uploadSharedFilesToComposer(filesArray, uploadUrl, dotNetH
         }
     }
 }
+
+export function blurComposerInput(elementId) {
+    if (!elementId) return;
+    document.getElementById(elementId)?.blur();
+}

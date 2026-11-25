@@ -45,6 +45,16 @@ public class SequenceService
         }
     }
 
+    public void ReloadFromDisk()
+    {
+        lock (_lock)
+        {
+            _sequences.Clear();
+            Load();
+            _isLoaded = true;
+        }
+    }
+
     public int GetNextSequence(string entityType)
     {
         lock (_lock)

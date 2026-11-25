@@ -36,7 +36,7 @@ public class PurchaseOrder : IDataEntity, IHasDocumentHistory, IHasAssociatedFil
 
     // Financials
     public bool ApplyTax { get; set; } = true;
-    public decimal TaxRate { get; set; } = 0.14975m; // Default Quebec Tax (adjust as needed)
+    public decimal TaxRate { get; set; } = FinancialCalculationEngine.ActiveCombinedTaxRate;
 
     // The Content
     public List<PoItem> LineItems { get; set; } = [];

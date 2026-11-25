@@ -101,14 +101,14 @@ window.SoundManager = (function() {
         }
     }
 
-    const unlockEvents = ['pointerdown', 'keydown'];
+    const unlockEvents = ['click', 'keydown'];
     let unlockListenersAttached = false;
 
     function detachUnlockListeners() {
         if (!unlockListenersAttached) return;
         unlockListenersAttached = false;
         unlockEvents.forEach(evt => {
-            document.removeEventListener(evt, unlockAudio, { capture: true });
+            document.removeEventListener(evt, unlockAudio, { capture: false });
         });
     }
 
@@ -147,11 +147,12 @@ window.SoundManager = (function() {
         } catch (e) {}
     }
 
-    // Attach self-removing unlock listeners on Web/Desktop only (native mobile initializes WebAudio lazily on explicit playback)
+    // Attach self-removing bubble-phase unlock listeners on Web/Desktop only (avoids blocking pointerdown first-tap LoAF;
+    // native mobile initializes WebAudio lazily on explicit playback)
     if (!isNativeMobilePlatform() && typeof document !== 'undefined') {
         unlockListenersAttached = true;
         unlockEvents.forEach(evt => {
-            document.addEventListener(evt, unlockAudio, { passive: true, capture: true });
+            document.addEventListener(evt, unlockAudio, { passive: true, capture: false });
         });
     }
 

@@ -1,8 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
+using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -10,14 +10,13 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Spokes_Server.Aggregate;
-using Spokes_Server.Components.Shared;
 using Spokes_Server.Controllers;
 using Spokes_Server.Core.Data;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Helpers;
-using Spokes_Server.Core.Models.Core;
 using Spokes_Server.Core.Services.Maintenance;
 using Spokes_Server.Core.Services.Security;
 using Xunit;
@@ -26,8 +25,12 @@ namespace Spokes_Server.Tests.Controllers;
 
 public class SetupApiControllerTests : TestDataTestBase
 {
+    private const string TestMasterPassword = "UnitTest-Master-Password-2026!";
+
     private readonly Database _db;
     private readonly Mock<BackupService> _backupServiceMock;
+    private readonly BackupEncryptionService _encryption;
+    private readonly BackupRestoreUploadService _uploadService;
     private readonly Mock<ILogger<SetupApiController>> _loggerMock;
     private readonly SetupApiController _controller;
 
@@ -36,7 +39,7 @@ public class SetupApiControllerTests : TestDataTestBase
         var services = new ServiceCollection();
         var mockConfig = new Mock<IConfiguration>();
         mockConfig.Setup(c => c["DataPath"]).Returns(_testDataPath);
-        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns("UnitTest-Master-Password-2026!");
+        mockConfig.Setup(c => c["SPOKES_MASTER_PASSWORD"]).Returns(TestMasterPassword);
         services.AddSingleton<IConfiguration>(mockConfig.Object);
         services.AddLogging();
         services.AddSingleton<EncryptionService>();
@@ -46,10 +49,25 @@ public class SetupApiControllerTests : TestDataTestBase
         _db = sp.GetRequiredService<Database>();
 
         var companyProfiles = sp.GetRequiredService<CompanyProfileRepository>();
-        _backupServiceMock = new Mock<BackupService>(Mock.Of<ILogger<BackupService>>(), companyProfiles, mockConfig.Object, null);
+        _encryption = new BackupEncryptionService();
+        _backupServiceMock = new Mock<BackupService>(
+            Mock.Of<ILogger<BackupService>>(),
+            companyProfiles,
+            mockConfig.Object,
+            null,
+            null,
+            _encryption,
+            null,
+            null);
+
+        _uploadService = new BackupRestoreUploadService(
+            _backupServiceMock.Object,
+            _encryption,
+            NullLogger<BackupRestoreUploadService>.Instance);
+
         _loggerMock = new Mock<ILogger<SetupApiController>>();
 
-        _controller = new SetupApiController(_db, _backupServiceMock.Object, _loggerMock.Object)
+        _controller = new SetupApiController(_db, _uploadService, _loggerMock.Object)
         {
             ControllerContext = new ControllerContext
             {
@@ -58,61 +76,114 @@ public class SetupApiControllerTests : TestDataTestBase
         };
     }
 
-    private static IFormFile CreateTestFormFile(string fileName, string content = "dummy-zip-data")
+    private static byte[] CreateMinimalZipBytes()
     {
-        var bytes = Encoding.UTF8.GetBytes(content);
-        var stream = new MemoryStream(bytes);
-        return new FormFile(stream, 0, bytes.Length, "files", fileName)
+        using var ms = new MemoryStream();
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
         {
-            Headers = new HeaderDictionary(),
-            ContentType = "application/zip"
-        };
+            var entry = zip.CreateEntry("synthetic_company.json");
+            using var sw = new StreamWriter(entry.Open(), Encoding.UTF8);
+            sw.Write("{\"CompanyName\":\"Acme Demo Inc.\"}");
+        }
+        return ms.ToArray();
     }
 
     [Fact]
-    public async Task RestoreBackup_WhenSetupAlreadyComplete_ReturnsForbidden403()
+    public async Task ChunkedRestoreEndpoints_WhenSetupAlreadyComplete_ReturnForbidden403()
     {
         // Arrange
         var config = _db.SystemConfigs.Get();
         config.IsSetupComplete = true;
         _db.SystemConfigs.Save(config);
 
-        var file = CreateTestFormFile("backup.zip");
-        var formCollection = new FormFileCollection { file };
+        // Act & Assert across all 4 setup endpoints
+        var initResult = _controller.InitRestoreUpload(new BackupUploadInitRequest("backup.zip", 1024));
+        var initForbidden = Assert.IsType<ObjectResult>(initResult);
+        Assert.Equal(403, initForbidden.StatusCode);
+        Assert.Equal("SETUP_ALREADY_COMPLETE", Assert.IsType<SpokesResult>(initForbidden.Value).Code);
 
-        // Act
-        var result = await _controller.RestoreBackup(formCollection, CancellationToken.None);
+        var chunkResult = await _controller.UploadRestoreChunk("fake-id", 0, CancellationToken.None);
+        var chunkForbidden = Assert.IsType<ObjectResult>(chunkResult);
+        Assert.Equal(403, chunkForbidden.StatusCode);
+        Assert.Equal("SETUP_ALREADY_COMPLETE", Assert.IsType<SpokesResult>(chunkForbidden.Value).Code);
 
-        // Assert
-        var forbidden = Assert.IsType<ObjectResult>(result);
-        Assert.Equal(403, forbidden.StatusCode);
-        var payload = Assert.IsType<SpokesResult>(forbidden.Value);
-        Assert.False(payload.IsSuccess);
-        Assert.Equal("SETUP_ALREADY_COMPLETE", payload.Code);
+        var completeResult = await _controller.CompleteRestoreUpload("fake-id", CancellationToken.None);
+        var completeForbidden = Assert.IsType<ObjectResult>(completeResult);
+        Assert.Equal(403, completeForbidden.StatusCode);
+        Assert.Equal("SETUP_ALREADY_COMPLETE", Assert.IsType<SpokesResult>(completeForbidden.Value).Code);
+
+        var cancelResult = await _controller.CancelRestoreUpload("fake-id");
+        var cancelForbidden = Assert.IsType<ObjectResult>(cancelResult);
+        Assert.Equal(403, cancelForbidden.StatusCode);
+        Assert.Equal("SETUP_ALREADY_COMPLETE", Assert.IsType<SpokesResult>(cancelForbidden.Value).Code);
     }
 
     [Fact]
-    public async Task RestoreBackup_WhenNoFileProvided_ReturnsBadRequest()
+    public void InitRestoreUpload_WhenPayloadNullOrExtensionInvalid_ReturnsBadRequest()
     {
-        // Arrange
         var config = _db.SystemConfigs.Get();
         config.IsSetupComplete = false;
         _db.SystemConfigs.Save(config);
 
-        var formCollection = new FormFileCollection();
+        var nullRes = _controller.InitRestoreUpload(null);
+        Assert.IsType<BadRequestObjectResult>(nullRes);
 
-        // Act
-        var result = await _controller.RestoreBackup(formCollection, CancellationToken.None);
-
-        // Assert
-        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
-        var payload = Assert.IsType<SpokesResult>(badRequest.Value);
-        Assert.False(payload.IsSuccess);
-        Assert.Equal("No backup file provided.", payload.Error);
+        var badExtRes = _controller.InitRestoreUpload(new BackupUploadInitRequest("notes.txt", 1024));
+        var badExtObj = Assert.IsType<BadRequestObjectResult>(badExtRes);
+        var payload = Assert.IsType<SpokesResult>(badExtObj.Value);
+        Assert.Equal("INVALID_EXTENSION", payload.Code);
     }
 
     [Fact]
-    public async Task RestoreBackup_WhenRestoreSucceeds_ReturnsOkWithUploadResult()
+    public async Task UploadRestoreChunk_WhenChunkZeroIsInvalidArchive_FailsFastWithBadRequest()
+    {
+        var config = _db.SystemConfigs.Get();
+        config.IsSetupComplete = false;
+        _db.SystemConfigs.Save(config);
+
+        var bogus = Encoding.UTF8.GetBytes("not-a-valid-zip-or-encrypted-backup");
+        var initOk = Assert.IsType<OkObjectResult>(_controller.InitRestoreUpload(new BackupUploadInitRequest("bad.zip", bogus.Length)));
+        using var initDoc = JsonDocument.Parse(JsonSerializer.Serialize(initOk.Value));
+        var uploadId = initDoc.RootElement.GetProperty("uploadId").GetString()!;
+
+        _controller.HttpContext.Request.Body = new MemoryStream(bogus);
+        _controller.HttpContext.Request.ContentLength = bogus.Length;
+
+        var chunkRes = await _controller.UploadRestoreChunk(uploadId, 0, CancellationToken.None);
+        var badReq = Assert.IsType<BadRequestObjectResult>(chunkRes);
+        var payload = Assert.IsType<SpokesResult>(badReq.Value);
+        Assert.False(payload.IsSuccess);
+        Assert.Equal("INVALID_BACKUP_FORMAT", payload.Code);
+    }
+
+    [Fact]
+    public async Task UploadRestoreChunk_WhenEncryptedBackupPasswordMismatches_FailsFastWithBadRequest()
+    {
+        var config = _db.SystemConfigs.Get();
+        config.IsSetupComplete = false;
+        _db.SystemConfigs.Save(config);
+
+        using var input = new MemoryStream(CreateMinimalZipBytes());
+        using var encryptedMs = new MemoryStream();
+        await _encryption.EncryptBackupAsync(input, encryptedMs, "Wrong-Different-Master-Password!");
+        var encryptedBytes = encryptedMs.ToArray();
+
+        var initOk = Assert.IsType<OkObjectResult>(_controller.InitRestoreUpload(new BackupUploadInitRequest("wrong_key.spkbackup", encryptedBytes.Length)));
+        using var initDoc = JsonDocument.Parse(JsonSerializer.Serialize(initOk.Value));
+        var uploadId = initDoc.RootElement.GetProperty("uploadId").GetString()!;
+
+        _controller.HttpContext.Request.Body = new MemoryStream(encryptedBytes);
+        _controller.HttpContext.Request.ContentLength = encryptedBytes.Length;
+
+        var chunkRes = await _controller.UploadRestoreChunk(uploadId, 0, CancellationToken.None);
+        var badReq = Assert.IsType<BadRequestObjectResult>(chunkRes);
+        var payload = Assert.IsType<SpokesResult>(badReq.Value);
+        Assert.False(payload.IsSuccess);
+        Assert.Equal("MASTER_PASSWORD_MISMATCH", payload.Code);
+    }
+
+    [Fact]
+    public async Task ChunkedRestoreFlow_InitChunkCompleteAndRestoreStagedUpload_SucceedsAndCleansUpTempFile()
     {
         // Arrange
         var config = _db.SystemConfigs.Get();
@@ -121,55 +192,66 @@ public class SetupApiControllerTests : TestDataTestBase
 
         string? capturedTempPath = null;
         _backupServiceMock
-            .Setup(b => b.RestoreBackupAsync(It.IsAny<string>(), It.IsAny<ILogger>(), It.IsAny<CancellationToken>()))
-            .Callback<string, ILogger?, CancellationToken>((path, _, _) =>
+            .Setup(b => b.RestoreBackupAsync(
+                It.IsAny<string>(),
+                It.IsAny<ILogger?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<IProgress<BackupRestoreProgress>?>(),
+                It.IsAny<string?>()))
+            .Callback<string, ILogger?, CancellationToken, IProgress<BackupRestoreProgress>?, string?>((path, _, _, _, _) =>
             {
                 capturedTempPath = path;
-                Assert.True(File.Exists(path), "Temp backup file must exist during RestoreBackupAsync execution");
+                Assert.True(File.Exists(path), "Staged backup file must exist during RestoreBackupAsync execution");
             })
             .ReturnsAsync(BackupRestoreResult.Succeeded(casdoorRestarted: false));
 
-        var file = CreateTestFormFile("valid_backup.spkbackup", "encrypted-backup-bytes");
-        var formCollection = new FormFileCollection { file };
+        var zipBytes = CreateMinimalZipBytes();
 
-        // Act
-        var result = await _controller.RestoreBackup(formCollection, CancellationToken.None);
+        // Act: Init -> Chunk 0 -> Complete -> RestoreStagedUploadAsync
+        var initOk = Assert.IsType<OkObjectResult>(_controller.InitRestoreUpload(new BackupUploadInitRequest("valid_backup.zip", zipBytes.Length)));
+        using var initDoc = JsonDocument.Parse(JsonSerializer.Serialize(initOk.Value));
+        var uploadId = initDoc.RootElement.GetProperty("uploadId").GetString()!;
+
+        _controller.HttpContext.Request.Body = new MemoryStream(zipBytes);
+        _controller.HttpContext.Request.ContentLength = zipBytes.Length;
+        Assert.IsType<OkObjectResult>(await _controller.UploadRestoreChunk(uploadId, 0, CancellationToken.None));
+
+        var completeOk = Assert.IsType<OkObjectResult>(await _controller.CompleteRestoreUpload(uploadId, CancellationToken.None));
+        using var completeDoc = JsonDocument.Parse(JsonSerializer.Serialize(completeOk.Value));
+        Assert.Equal("valid_backup.zip", completeDoc.RootElement.GetProperty("fileName").GetString());
+        Assert.Equal(zipBytes.Length, completeDoc.RootElement.GetProperty("fileSizeBytes").GetInt64());
+
+        var restoreResult = await _uploadService.RestoreStagedUploadAsync(uploadId, BackupUploadScope.Setup, null);
 
         // Assert
-        var ok = Assert.IsType<OkObjectResult>(result);
-        var uploadResults = Assert.IsAssignableFrom<IEnumerable<ApiFileUpload.UploadResult>>(ok.Value);
-        var firstResult = Assert.Single(uploadResults);
-        Assert.Equal("valid_backup.spkbackup", firstResult.FileName);
+        Assert.True(restoreResult.Success);
+        _backupServiceMock.Verify(b => b.RestoreBackupAsync(
+            It.IsAny<string>(),
+            It.IsAny<ILogger?>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<IProgress<BackupRestoreProgress>?>(),
+            It.IsAny<string?>()), Times.Once);
 
-        _backupServiceMock.Verify(b => b.RestoreBackupAsync(It.IsAny<string>(), It.IsAny<ILogger>(), It.IsAny<CancellationToken>()), Times.Once);
-
-        // Verify temp file was cleaned up in finally block
         Assert.NotNull(capturedTempPath);
-        Assert.False(File.Exists(capturedTempPath), "Temp backup file must be cleaned up after request completes");
+        Assert.False(File.Exists(capturedTempPath), "Staged backup file must be cleaned up after restore completes");
     }
 
     [Fact]
-    public async Task RestoreBackup_WhenRestoreFails_ReturnsBadRequestWithErrorMessage()
+    public async Task CancelRestoreUpload_WhenSetupIncomplete_RemovesSessionAndReturnsOk()
     {
-        // Arrange
         var config = _db.SystemConfigs.Get();
         config.IsSetupComplete = false;
         _db.SystemConfigs.Save(config);
 
-        _backupServiceMock
-            .Setup(b => b.RestoreBackupAsync(It.IsAny<string>(), It.IsAny<ILogger>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(BackupRestoreResult.Failed("Master password mismatch."));
+        var initOk = Assert.IsType<OkObjectResult>(_controller.InitRestoreUpload(new BackupUploadInitRequest("cancel_me.zip", 4096)));
+        using var initDoc = JsonDocument.Parse(JsonSerializer.Serialize(initOk.Value));
+        var uploadId = initDoc.RootElement.GetProperty("uploadId").GetString()!;
 
-        var file = CreateTestFormFile("invalid_backup.spkbackup");
-        var formCollection = new FormFileCollection { file };
+        Assert.IsType<OkResult>(await _controller.CancelRestoreUpload(uploadId));
 
-        // Act
-        var result = await _controller.RestoreBackup(formCollection, CancellationToken.None);
-
-        // Assert
-        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
-        var payload = Assert.IsType<SpokesResult>(badRequest.Value);
-        Assert.False(payload.IsSuccess);
-        Assert.Equal("Master password mismatch.", payload.Error);
+        // Subsequent complete must report SESSION_NOT_FOUND (404)
+        var afterCancel = await _controller.CompleteRestoreUpload(uploadId, CancellationToken.None);
+        var notFound = Assert.IsType<NotFoundObjectResult>(afterCancel);
+        Assert.Equal("SESSION_NOT_FOUND", Assert.IsType<SpokesResult>(notFound.Value).Code);
     }
 }

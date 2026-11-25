@@ -1139,44 +1139,63 @@ public static partial class AccountingMigrationParser
     private static (string Type, string SubType) MapSageClassToTypeAndSubType(string classLabel, string code, string name)
     {
         var c = PartyMatchingHelper.StripDiacritics($"{classLabel} {name}").ToLowerInvariant();
+        var inferredType = InferTypeFromCode(code);
+        var trimmedCode = code?.Trim() ?? string.Empty;
 
-        if (c.Contains("encaisse") || c.Contains("banque") || c.Contains("liquidites") || c.Contains("bank") || c.Contains("cash"))
-            return (GlAccountType.Asset, GlAccountSubType.Bank);
-        if (c.Contains("comptes clients") || c.Contains("clients a recevoir") || c.Contains("accounts receivable"))
-            return (GlAccountType.Asset, GlAccountSubType.AccountsReceivable);
-        if (c.Contains("amortissement cumule") || c.Contains("accumulated depreciation") || c.Contains("immobilisations") || c.Contains("fixed asset"))
-            return (GlAccountType.Asset, GlAccountSubType.FixedAsset);
-        if (c.Contains("actif a court terme") || c.Contains("current asset") || c.Contains("frais payes d avance") || c.Contains("stock") || c.Contains("inventaire") || c.Contains("depots") || c.Contains("prets et avances"))
+        // 1xxx Assets
+        if (inferredType == GlAccountType.Asset)
+        {
+            if (c.Contains("comptes clients") || c.Contains("clients a recevoir") || c.Contains("accounts receivable"))
+                return (GlAccountType.Asset, GlAccountSubType.AccountsReceivable);
+            if (trimmedCode.StartsWith("18", StringComparison.Ordinal) || trimmedCode.StartsWith("19", StringComparison.Ordinal) ||
+                c.Contains("amortissement cumule") || c.Contains("accumulated depreciation") || c.Contains("immobilisations") ||
+                c.Contains("fixed asset") || c.Contains("ameliorations") || c.Contains("equipement") || c.Contains("vehicule") ||
+                c.Contains("terrain") || c.Contains("roulotte") || c.Contains("licences software") || c.Contains("acca"))
+                return (GlAccountType.Asset, GlAccountSubType.FixedAsset);
+            if (trimmedCode.StartsWith("10", StringComparison.Ordinal) &&
+                (c.Contains("encaisse") || c.Contains("banque") || c.Contains("liquidites") || c.Contains("bank") || c.Contains("cash") ||
+                 c.Contains("compte courant") || c.Contains("epargne") || c.Contains("petite caisse")))
+                return (GlAccountType.Asset, GlAccountSubType.Bank);
             return (GlAccountType.Asset, GlAccountSubType.PrepaidOrOtherAsset);
+        }
 
-        if (c.Contains("carte de credit") || c.Contains("credit card") || c.Contains("visa") || c.Contains("mastercard") || c.Contains("amex"))
-            return (GlAccountType.Liability, GlAccountSubType.CreditCard);
-        if (c.Contains("comptes fournisseurs") || c.Contains("accounts payable"))
-            return (GlAccountType.Liability, GlAccountSubType.AccountsPayable);
-        if (c.Contains("tps") || c.Contains("tvq") || c.Contains("gst") || c.Contains("qst") || c.Contains("taxe de vente"))
-            return (GlAccountType.Liability, GlAccountSubType.SalesTax);
-        if (c.Contains("das") || c.Contains("retenues") || c.Contains("salaires a payer") || c.Contains("vacances") || c.Contains("cnesst") || c.Contains("csst") || c.Contains("rrq") || c.Contains("rqap"))
-            return (GlAccountType.Liability, GlAccountSubType.PayrollLiability);
-        if (c.Contains("passif a long terme") || c.Contains("passif a court terme") || c.Contains("passif") || c.Contains("liability"))
+        // 2xxx Liabilities
+        if (inferredType == GlAccountType.Liability)
+        {
+            if (c.Contains("comptes fournisseurs") || c.Contains("accounts payable"))
+                return (GlAccountType.Liability, GlAccountSubType.AccountsPayable);
+            if (c.Contains("tps") || c.Contains("tvq") || c.Contains("gst") || c.Contains("qst") || c.Contains("taxe de vente"))
+                return (GlAccountType.Liability, GlAccountSubType.SalesTax);
+            if (c.Contains("marge de credit") || c.Contains("marge credit") || c.Contains("line of credit"))
+                return (GlAccountType.Liability, GlAccountSubType.LineOfCredit);
+            if (c.Contains("carte de credit") || c.Contains("credit card") || c.Contains("visa") || c.Contains("mastercard") || c.Contains("amex"))
+                return (GlAccountType.Liability, GlAccountSubType.CreditCard);
+            if (c.Contains("emprunt") || c.Contains("pret") || c.Contains("leasing") || c.Contains("actionnaire") || c.Contains("loan"))
+                return (GlAccountType.Liability, GlAccountSubType.Loan);
+            if (c.Contains("das") || c.Contains("retenues") || c.Contains("salaires a payer") || c.Contains("vacances") || c.Contains("cnesst") || c.Contains("csst") || c.Contains("rrq") || c.Contains("rqap") || c.Contains("assurance-emploi") || c.Contains("fssq"))
+                return (GlAccountType.Liability, GlAccountSubType.PayrollLiability);
             return (GlAccountType.Liability, GlAccountSubType.OtherLiability);
+        }
 
-        if (c.Contains("capital-actions") || c.Contains("capital actions") || c.Contains("benefices non repartis") || c.Contains("avoir") || c.Contains("equity"))
+        // 3xxx Equity
+        if (inferredType == GlAccountType.Equity)
             return (GlAccountType.Equity, GlAccountSubType.Equity);
 
-        if (c.Contains("autres produits") || c.Contains("other income") || c.Contains("interet"))
-            return (GlAccountType.Revenue, GlAccountSubType.OtherIncome);
-        if (c.Contains("produits d'exploitation") || c.Contains("produit") || c.Contains("revenu") || c.Contains("vente") || c.Contains("revenue"))
+        // 4xxx Revenue
+        if (inferredType == GlAccountType.Revenue)
+        {
+            if (c.Contains("autres produits") || c.Contains("other income") || c.Contains("interet"))
+                return (GlAccountType.Revenue, GlAccountSubType.OtherIncome);
             return (GlAccountType.Revenue, GlAccountSubType.OperatingRevenue);
+        }
 
-        if (c.Contains("cout des marchandises") || c.Contains("achats") || c.Contains("sous-trait") || c.Contains("cost of goods"))
+        // 5xxx Expenses
+        if (c.Contains("cout des marchandises") || c.Contains("achats") || c.Contains("sous-trait") || c.Contains("sous-contrat") || c.Contains("cost of goods"))
             return (GlAccountType.Expense, GlAccountSubType.DirectCost);
-        if (c.Contains("charges salariales") || c.Contains("salaires") || c.Contains("payroll") || c.Contains("avantages sociaux"))
+        if (c.Contains("charges salariales") || c.Contains("salaires") || c.Contains("payroll") || c.Contains("avantages sociaux") || c.Contains("charge de a-e") || c.Contains("charge du rrq") || c.Contains("charge du rqap") || c.Contains("charge du fssq") || c.Contains("charge cnt"))
             return (GlAccountType.Expense, GlAccountSubType.PayrollExpense);
-        if (c.Contains("frais generaux") || c.Contains("exploitation") || c.Contains("charge") || c.Contains("depense") || c.Contains("expense") || c.Contains("amortissement"))
-            return (GlAccountType.Expense, GlAccountSubType.Overhead);
 
-        var inferredType = InferTypeFromCode(code);
-        return (inferredType, GlAccountSubType.GetDefaultForAccountType(inferredType));
+        return (GlAccountType.Expense, GlAccountSubType.Overhead);
     }
 
     private static void ParseSageExportParties(

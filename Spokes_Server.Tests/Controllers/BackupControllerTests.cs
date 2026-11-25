@@ -1,11 +1,15 @@
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Security.Claims;
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Components.Authorization;
@@ -18,6 +22,7 @@ using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Security;
 using Spokes_Server.Core.Services.Identity;
+using Spokes_Server.Core.Services.Maintenance;
 
 namespace Spokes_Server.Tests.Controllers;
 
@@ -27,6 +32,7 @@ public class BackupControllerTests : TestDataTestBase
     private readonly EmployeeRepository _employeeRepo;
     private readonly OpenIdAccountRepository _openIdRepo;
     private readonly BackupService _backupService;
+    private readonly BackupRestoreUploadService _uploadService;
     private readonly string _backupsDir;
 
     public BackupControllerTests()
@@ -45,7 +51,9 @@ public class BackupControllerTests : TestDataTestBase
         var companyRepo = new CompanyProfileRepository(_persistence, config);
 
         var backupLogger = new Mock<ILogger<BackupService>>();
-        _backupService = new BackupService(backupLogger.Object, companyRepo, config);
+        var encryption = new BackupEncryptionService();
+        _backupService = new BackupService(backupLogger.Object, companyRepo, config, _persistence, null, encryption, null, null);
+        _uploadService = new BackupRestoreUploadService(_backupService, encryption, NullLogger<BackupRestoreUploadService>.Instance);
 
         _backupsDir = Path.Combine(_testDataPath, "Backups");
         Directory.CreateDirectory(_backupsDir);
@@ -70,7 +78,7 @@ public class BackupControllerTests : TestDataTestBase
             .ReturnsAsync(new AuthenticationState(user ?? new ClaimsPrincipal(new ClaimsIdentity())));
         var userService = new UserService(mockAuth.Object, _employeeRepo, _openIdRepo);
 
-        return new BackupController(_backupService, config, userService)
+        return new BackupController(_backupService, config, userService, _uploadService)
         {
             ControllerContext = new ControllerContext
             {
@@ -355,5 +363,108 @@ public class BackupControllerTests : TestDataTestBase
 
         Assert.NotEmpty(authAttrs);
         Assert.Equal(AppPermissions.Admin.PolicyName, authAttrs[0].Policy);
+    }
+
+    [Fact]
+    public void ChunkedRestoreEndpoints_AllHaveAdminPolicyAttribute()
+    {
+        var methodNames = new[]
+        {
+            nameof(BackupController.InitRestoreUpload),
+            nameof(BackupController.UploadRestoreChunk),
+            nameof(BackupController.CompleteRestoreUpload),
+            nameof(BackupController.CancelRestoreUpload)
+        };
+
+        foreach (var name in methodNames)
+        {
+            var method = typeof(BackupController).GetMethod(name);
+            Assert.NotNull(method);
+            var authAttrs = method!.GetCustomAttributes(typeof(AuthorizeAttribute), true)
+                .Cast<AuthorizeAttribute>()
+                .ToList();
+            Assert.NotEmpty(authAttrs);
+            Assert.Equal(AppPermissions.Admin.PolicyName, authAttrs[0].Policy);
+        }
+    }
+
+    [Fact]
+    public void InitRestoreUpload_WhenDemoModeIsTrue_ReturnsForbidden403()
+    {
+        var admin = new Employee { Id = "admin1", IsAdmin = true, IsActive = true };
+        _employeeRepo.Save(admin);
+        var controller = CreateController(CreateUserPrincipal("admin1"), demoMode: true);
+
+        var result = controller.InitRestoreUpload(new BackupUploadInitRequest("demo_backup.zip", 1024));
+
+        var forbidden = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(403, forbidden.StatusCode);
+        var payload = Assert.IsType<SpokesResult>(forbidden.Value);
+        Assert.Equal("DEMO_MODE_FORBIDDEN", payload.Code);
+    }
+
+    [Fact]
+    public void InitRestoreUpload_WhenNonAdminWithManageSettingsOnly_ReturnsForbidden403()
+    {
+        var manager = new Employee
+        {
+            Id = "manager_restore",
+            IsAdmin = false,
+            IsActive = true,
+            Permissions = new List<string> { AppPermissions.Admin.ManageSettings }
+        };
+        _employeeRepo.Save(manager);
+        var controller = CreateController(CreateUserPrincipal("manager_restore"));
+
+        var result = controller.InitRestoreUpload(new BackupUploadInitRequest("backup.zip", 1024));
+
+        var forbidden = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(403, forbidden.StatusCode);
+        var payload = Assert.IsType<SpokesResult>(forbidden.Value);
+        Assert.Equal("ADMIN_REQUIRED", payload.Code);
+    }
+
+    [Fact]
+    public async Task ChunkedRestoreEndpoints_AdminInitChunkCompleteAndCancel_WorksEndToEnd()
+    {
+        // Arrange
+        var admin = new Employee { Id = "admin1", IsAdmin = true, IsActive = true };
+        _employeeRepo.Save(admin);
+        var controller = CreateController(CreateUserPrincipal("admin1"));
+
+        byte[] zipBytes;
+        using (var ms = new MemoryStream())
+        {
+            using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                var entry = zip.CreateEntry("synthetic.json", CompressionLevel.NoCompression);
+                using var sw = new StreamWriter(entry.Open(), Encoding.UTF8);
+                sw.Write("{\"org\":\"Acme Demo Inc.\"}");
+            }
+            zipBytes = ms.ToArray();
+        }
+
+        // Act: Init
+        var initResult = Assert.IsType<OkObjectResult>(controller.InitRestoreUpload(
+            new BackupUploadInitRequest("Acme_Backup.zip", zipBytes.Length, BackupRestoreUploadService.MinChunkSizeBytes)));
+        using var initDoc = JsonDocument.Parse(JsonSerializer.Serialize(initResult.Value));
+        var uploadId = initDoc.RootElement.GetProperty("uploadId").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(uploadId));
+
+        // Act: Upload chunk 0
+        controller.HttpContext.Request.Body = new MemoryStream(zipBytes);
+        controller.HttpContext.Request.ContentLength = zipBytes.Length;
+        var chunkResult = Assert.IsType<OkObjectResult>(await controller.UploadRestoreChunk(uploadId!, 0, CancellationToken.None));
+        using var chunkDoc = JsonDocument.Parse(JsonSerializer.Serialize(chunkResult.Value));
+        Assert.Equal(zipBytes.Length, chunkDoc.RootElement.GetProperty("bytesReceived").GetInt64());
+
+        // Act: Complete
+        var completeResult = Assert.IsType<OkObjectResult>(await controller.CompleteRestoreUpload(uploadId!, CancellationToken.None));
+        using var completeDoc = JsonDocument.Parse(JsonSerializer.Serialize(completeResult.Value));
+        Assert.Equal(uploadId, completeDoc.RootElement.GetProperty("uploadId").GetString());
+        Assert.Equal(zipBytes.Length, completeDoc.RootElement.GetProperty("fileSizeBytes").GetInt64());
+
+        // Cleanup via Cancel
+        Assert.IsType<OkResult>(await controller.CancelRestoreUpload(uploadId!));
     }
 }

@@ -1,6 +1,7 @@
 @page "/setup"
 @attribute [AllowAnonymous]
 @attribute [Spokes_Server.Core.Security.AllowDuringSetup]
+@implements IDisposable
 @layout LoginLayout
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.Extensions.Hosting
@@ -8,11 +9,13 @@
 @using Spokes_Server.Core.Services.Licensing
 @using Spokes_Server.Core.Constants
 @using Spokes_Server.Core.Services.Content
+@using Spokes_Server.Core.Services.Maintenance
 @using Spokes_Server.Aggregate
 @using Spokes_Server.Core.Models.Core
 @using Microsoft.Extensions.Localization
 @using Spokes_Server.Resources
 @inject CasdoorProvisioningService CasdoorService
+@inject BackupRestoreUploadService BackupUploadSvc
 @inject Database Db
 @inject NavigationManager Nav
 @inject IJSRuntime JSRuntime
@@ -76,16 +79,30 @@
             @if (_isRestoringBackup)
             {
                 <div class="d-flex flex-column align-center pa-8">
-                    @if (_backupUploadProgress < 100)
+                    @if (_isUploadingBackup)
                     {
                         <MudProgressLinear Color="Color.Primary" Value="@_backupUploadProgress" Class="my-4 w-100" Size="Size.Large" />
                         <MudText Typo="Typo.h6">@Loc["Uploading backup archive..."] (@Math.Round(_backupUploadProgress)%)</MudText>
+                        @if (_backupUploadTotalBytes > 0)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
+                                @FileHelper.FormatBytes(_backupUploadedBytes) / @FileHelper.FormatBytes(_backupUploadTotalBytes)
+                            </MudText>
+                        }
+                        <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="CancelSetupBackupUploadAsync" Class="mt-4">
+                            @Loc["Cancel Upload"]
+                        </MudButton>
                     }
                     else
                     {
-                        <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" Class="mb-4" />
-                        <MudText Typo="Typo.h6">@Loc["Restoring system from backup..."]</MudText>
-                        <MudText Typo="Typo.body2" Color="Color.Secondary">@Loc["Verifying encryption, unpacking archives, and rebuilding databases."]</MudText>
+                        <MudProgressLinear Color="Color.Primary" Value="@_backupRestoreProgress" Class="my-4 w-100" Size="Size.Large" />
+                        <MudText Typo="Typo.h6">@_backupRestoreStage (@_backupRestoreProgress%)</MudText>
+                        @if (!string.IsNullOrEmpty(_backupRestoreDetail))
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1" Style="max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                @_backupRestoreDetail
+                            </MudText>
+                        }
                     }
                 </div>
             }
@@ -122,27 +139,21 @@
                     </MudAlert>
                 }
 
-                <ApiFileUpload Category="setup"
-                               ContextId="restore"
-                               UploadUrl="/setup/api/restore-backup"
-                               Accept=".zip,.spkbackup"
-                               MaxAllowedSize="long.MaxValue"
-                               Class="w-100"
-                               Style="width: 100%; display: block;"
-                               OnUploadStarted="HandleBackupUploadStarted"
-                               OnProgressUpdate="HandleBackupUploadProgress"
-                               OnUploadCompleted="HandleBackupUploadCompleted"
-                               OnUploadError="HandleBackupUploadError">
-                    <CustomContent>
-                        <div class="cursor-pointer" style="width: 100%;">
-                            <MudPaper Outlined="true" Class="pa-8 d-flex flex-column align-center justify-center hover-effect" Style="border-style: dashed !important; border-width: 2px !important; width: 100%;">
-                                <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Color="Color.Primary" Size="Size.Large" Class="mb-2" />
-                                <MudText Typo="Typo.subtitle1"><b>@Loc["Click to browse or drag and drop your backup archive"]</b></MudText>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Supports standard .zip and encrypted .spkbackup archives"]</MudText>
-                            </MudPaper>
-                        </div>
-                    </CustomContent>
-                </ApiFileUpload>
+                <input type="file"
+                       id="@_setupBackupInputId"
+                       accept=".zip,.spkbackup"
+                       style="position: absolute; width: 0; height: 0; opacity: 0; overflow: hidden; z-index: -1;" />
+                <div class="cursor-pointer"
+                     style="width: 100%;"
+                     onclick="@($"window.spokesUpload?.chunked?.openPicker('{_setupBackupInputId}')")"
+                     ondragover="event.preventDefault();"
+                     ondrop="@($"event.preventDefault(); window.spokesUpload?.chunked?.handleDrop(event, '{_setupBackupInputId}');")">
+                    <MudPaper Outlined="true" Class="pa-8 d-flex flex-column align-center justify-center hover-effect" Style="border-style: dashed !important; border-width: 2px !important; width: 100%;">
+                        <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Color="Color.Primary" Size="Size.Large" Class="mb-2" />
+                        <MudText Typo="Typo.subtitle1"><b>@Loc["Click to browse or drag and drop your backup archive"]</b></MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@Loc["Supports standard .zip and encrypted .spkbackup archives"]</MudText>
+                    </MudPaper>
+                </div>
 
                 <MudButton Variant="Variant.Text" OnClick="() => GoToStep(0)" FullWidth="true" Class="mt-6">
                     @Loc["Back to Setup Options"]
@@ -337,6 +348,13 @@
                         <MudTextField @bind-Value="_udpEndPort" Label="@Loc["UDP End Port"]" Variant="Variant.Outlined" Required="true" />
                     </MudItem>
                 </MudGrid>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
+                    @Loc["LiveKit multiplexes all voice and video traffic across these UDP ports (8 ports recommended, e.g. 30000-30007). Set Start and End to the same number to use a single UDP port."]
+                </MudText>
+                @if (!string.IsNullOrEmpty(ValidateLiveKitPorts()))
+                {
+                    <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@ValidateLiveKitPorts()</MudAlert>
+                }
             }
 
             @if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WATCHTOWER_HTTP_API_TOKEN")))
@@ -351,7 +369,7 @@
                     <MudButton Variant="Variant.Text" OnClick="() => GoToStep(3)" FullWidth="true" Class="mt-6">@Loc["Back"]</MudButton>
                 </MudItem>
                 <MudItem xs="6">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveServerConfig" FullWidth="true" Class="mt-6" Disabled="@(ValidateServerUrl(_serverPublicUrl) != null)">@Loc["Continue"]</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveServerConfig" FullWidth="true" Class="mt-6" Disabled="@(ValidateServerUrl(_serverPublicUrl) != null || ValidateLiveKitPorts() != null)">@Loc["Continue"]</MudButton>
                 </MudItem>
             </MudGrid>
         }
@@ -512,9 +530,19 @@
 @code {
     private int _step = 0;
     private bool _isRestoringBackup;
+    private bool _isUploadingBackup;
     private bool _backupRestoreSuccess;
     private string? _backupRestoreError;
     private double _backupUploadProgress;
+    private long _backupUploadedBytes;
+    private long _backupUploadTotalBytes;
+    private int _backupRestoreProgress;
+    private string _backupRestoreStage = "Restoring...";
+    private string? _backupRestoreDetail;
+    private string? _activeSetupFileToken;
+    private readonly string _setupBackupInputId = $"spokes-setup-backup-{Guid.NewGuid():N}";
+    private DotNetObjectReference<SetupWizard>? _setupUploadDotNetRef;
+    private bool _isDisposed;
     private IdpType _selectedType = IdpType.None;
     private bool _isProvisioning;
     private bool _isValidatingExternal;
@@ -534,8 +562,31 @@
 
     private string _serverPublicUrl = "https://";
     private int _fallbackPort = 7881;
-    private int _udpStartPort = 30000;
-    private int _udpEndPort = 30499;
+    private int _udpStartPort = Spokes_Server.Core.Services.Communication.Voice.LiveKitService.DefaultUdpStartPort;
+    private int _udpEndPort = Spokes_Server.Core.Services.Communication.Voice.LiveKitService.DefaultUdpEndPort;
+
+    private string? ValidateLiveKitPorts()
+    {
+        if (Environment.GetEnvironmentVariable("SPOKES_HOSTING_PROVIDER") == "digitalocean")
+        {
+            return null;
+        }
+
+        if (_fallbackPort < Spokes_Server.Core.Services.Communication.Voice.LiveKitService.MinValidPort ||
+            _fallbackPort > Spokes_Server.Core.Services.Communication.Voice.LiveKitService.MaxValidPort)
+        {
+            return Loc["TCP Fallback Port must be between 1024 and 65535."].Value;
+        }
+
+        return Spokes_Server.Core.Services.Communication.Voice.LiveKitService.ValidateUdpMuxRange(_udpStartPort, _udpEndPort) switch
+        {
+            Spokes_Server.Core.Services.Communication.Voice.UdpPortRangeValidationError.InvalidStartPort => Loc["UDP Start Port must be between 1024 and 65535."].Value,
+            Spokes_Server.Core.Services.Communication.Voice.UdpPortRangeValidationError.InvalidEndPort => Loc["UDP End Port must be between 1024 and 65535."].Value,
+            Spokes_Server.Core.Services.Communication.Voice.UdpPortRangeValidationError.EndBeforeStart => Loc["UDP End Port must be greater than or equal to UDP Start Port."].Value,
+            Spokes_Server.Core.Services.Communication.Voice.UdpPortRangeValidationError.ExceedsMaxMuxPorts => string.Format(Loc["UDP Mux supports between 1 and {0} ports."].Value, Spokes_Server.Core.Services.Communication.Voice.LiveKitService.MaxUdpMuxPortCount),
+            _ => null
+        };
+    }
 
     private string _authority = "";
     private string _clientId = "";
@@ -617,8 +668,18 @@
         var startPortStr = Environment.GetEnvironmentVariable("Spokes_Voice_UDP_Start_Port");
         var countStr = Environment.GetEnvironmentVariable("Spokes_VOICE_UDP_PORT_COUNT");
 
-        if (int.TryParse(startPortStr, out var startPort)) _udpStartPort = startPort;
-        if (int.TryParse(countStr, out var count)) _udpEndPort = _udpStartPort + count - 1;
+        if (int.TryParse(startPortStr, out var startPort))
+        {
+            _udpStartPort = startPort;
+            _udpEndPort = Math.Min(
+                Spokes_Server.Core.Services.Communication.Voice.LiveKitService.MaxValidPort,
+                _udpStartPort + Spokes_Server.Core.Services.Communication.Voice.LiveKitService.DefaultUdpMuxPortCount - 1);
+        }
+        if (int.TryParse(countStr, out var count) && count >= 1)
+        {
+            var rawEnd = Math.Min(Spokes_Server.Core.Services.Communication.Voice.LiveKitService.MaxValidPort, _udpStartPort + count - 1);
+            (_udpStartPort, _udpEndPort) = Spokes_Server.Core.Services.Communication.Voice.LiveKitService.NormalizeUdpMuxRange(_udpStartPort, rawEnd);
+        }
         
         var fallbackStr = Environment.GetEnvironmentVariable("Spokes_Voice_Fallback_Port");
         if (int.TryParse(fallbackStr, out var fallback)) _fallbackPort = fallback;
@@ -629,42 +690,144 @@
         _spokesAdminPassword = Guid.NewGuid().ToString("N").Substring(0, 16);
     }
 
-    private void HandleBackupUploadStarted()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (RejectIfPostSetup()) return;
+        if (_isDisposed || _isLockedPostSetup || _step != -1) return;
+        try
+        {
+            _setupUploadDotNetRef ??= DotNetObjectReference.Create(this);
+            await JSRuntime.InvokeVoidAsync("window.spokesUpload.chunked.initPicker", _setupBackupInputId, _setupUploadDotNetRef, new { onSelectedMethod = nameof(OnSetupBackupFileSelected) });
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException or ObjectDisposedException or InvalidOperationException)
+        {
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnSetupBackupFileSelected(string fileToken, string fileName, long fileSizeBytes)
+    {
+        if (_isDisposed || RejectIfPostSetup())
+        {
+            try { await JSRuntime.InvokeVoidAsync("window.spokesUpload.chunked.releaseFile", fileToken); } catch { }
+            return;
+        }
+
+        _activeSetupFileToken = fileToken;
         _isRestoringBackup = true;
+        _isUploadingBackup = true;
         _backupRestoreError = null;
         _backupUploadProgress = 0;
+        _backupUploadedBytes = 0;
+        _backupUploadTotalBytes = fileSizeBytes;
         StateHasChanged();
+
+        try
+        {
+            _setupUploadDotNetRef ??= DotNetObjectReference.Create(this);
+            await JSRuntime.InvokeVoidAsync(
+                "window.spokesUpload.chunked.startUpload",
+                fileToken,
+                "/setup/api/restore-upload",
+                _setupUploadDotNetRef,
+                new { chunkSizeBytes = BackupRestoreUploadService.DefaultChunkSizeBytes });
+        }
+        catch (Exception ex)
+        {
+            _activeSetupFileToken = null;
+            _isRestoringBackup = false;
+            _isUploadingBackup = false;
+            _backupRestoreError = ex.Message;
+            StateHasChanged();
+        }
     }
 
-    private void HandleBackupUploadProgress(double progress)
+    private async Task CancelSetupBackupUploadAsync()
     {
-        if (_isLockedPostSetup || !_isRestoringBackup) return;
+        if (!string.IsNullOrWhiteSpace(_activeSetupFileToken))
+        {
+            try { await JSRuntime.InvokeVoidAsync("window.spokesUpload.chunked.cancelUpload", _activeSetupFileToken); } catch { }
+        }
+    }
+
+    [JSInvokable]
+    public void OnChunkedUploadProgress(double progress, long uploadedBytes, long totalBytes)
+    {
+        if (_isDisposed || _isLockedPostSetup || !_isRestoringBackup) return;
         _backupUploadProgress = progress;
+        _backupUploadedBytes = uploadedBytes;
+        _backupUploadTotalBytes = totalBytes;
         StateHasChanged();
     }
 
-    private void HandleBackupUploadCompleted(List<ApiFileUpload.UploadResult> results)
+    [JSInvokable]
+    public async Task OnChunkedUploadCompleted(string uploadId)
     {
-        if (_isLockedPostSetup || !_isRestoringBackup)
+        if (_isDisposed) return;
+        _activeSetupFileToken = null;
+
+        if (_isLockedPostSetup || !_isRestoringBackup || RejectIfPostSetup())
         {
             _isLockedPostSetup = true;
             Nav.NavigateTo("/");
             return;
         }
+
+        _isUploadingBackup = false;
+        _backupRestoreStage = Loc["Restoring system from backup..."].Value;
+        _backupRestoreProgress = 0;
+        _backupRestoreDetail = null;
+        StateHasChanged();
+
+        var progress = new Progress<BackupRestoreProgress>(p =>
+        {
+            if (_isDisposed) return;
+            _backupRestoreStage = p.Stage;
+            _backupRestoreProgress = p.Percentage;
+            _backupRestoreDetail = p.Detail;
+            _ = InvokeAsync(StateHasChanged);
+        });
+
+        var result = await BackupUploadSvc.RestoreStagedUploadAsync(uploadId, BackupUploadScope.Setup, null, Logger, progress: progress);
+        if (_isDisposed) return;
+
         _isRestoringBackup = false;
-        _backupRestoreSuccess = true;
-        _completedInCurrentCircuit = true;
+        if (result.Success)
+        {
+            _backupRestoreSuccess = true;
+            _completedInCurrentCircuit = true;
+        }
+        else
+        {
+            _backupRestoreError = result.ErrorMessage ?? Loc["Failed to restore backup."].Value;
+        }
         StateHasChanged();
     }
 
-    private void HandleBackupUploadError(string errorMessage)
+    [JSInvokable]
+    public void OnChunkedUploadCancelled()
     {
-        if (_isLockedPostSetup || !_isRestoringBackup) return;
+        if (_isDisposed) return;
+        _activeSetupFileToken = null;
         _isRestoringBackup = false;
+        _isUploadingBackup = false;
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnChunkedUploadError(string errorMessage)
+    {
+        if (_isDisposed || _isLockedPostSetup || !_isRestoringBackup) return;
+        _activeSetupFileToken = null;
+        _isRestoringBackup = false;
+        _isUploadingBackup = false;
         _backupRestoreError = errorMessage;
         StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        _setupUploadDotNetRef?.Dispose();
     }
 
     private void AcceptEula()
@@ -756,6 +919,7 @@
     {
         if (RejectIfPostSetup()) return;
         if (string.IsNullOrWhiteSpace(_serverPublicUrl)) return;
+        if (ValidateLiveKitPorts() != null) return;
         
         var pubUrl = _serverPublicUrl.Trim();
         if (!pubUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !pubUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))

@@ -317,19 +317,25 @@ try {
 
     // 'spokes_last_hidden_at' is written when the page is hidden and cleared when it becomes visible
     // again, so if it is still set now, the previous page was destroyed while in the background
-    // (app or WebView process killed by the OS, or swiped away).
+    // (app or WebView process killed by the OS, or swiped away). Ignore reload teardown events.
+    const nav = performance.getEntriesByType('navigation')[0];
+    const origin = Math.round(performance.timeOrigin);
     const lastHiddenAt = parseInt(localStorage.getItem('spokes_last_hidden_at') || '0', 10);
     localStorage.removeItem('spokes_last_hidden_at');
-    facts.push(lastHiddenAt > 0
-        ? 'previous page was lost in background (hidden ' + ((Date.now() - lastHiddenAt) / 60000).toFixed(1) + ' min ago)'
-        : 'launch or navigation');
+    const hiddenAgeMs = lastHiddenAt > 0 ? Math.max(0, Date.now() - lastHiddenAt) : 0;
+    const isReloadNav = Boolean(nav && nav.type === 'reload');
+    if (isReloadNav) {
+        facts.push('page reload');
+    } else if (lastHiddenAt > 0 && hiddenAgeMs >= 2000) {
+        facts.push('previous page was lost in background (hidden ' + (hiddenAgeMs / 60000).toFixed(1) + ' min ago)');
+    } else {
+        facts.push('launch or navigation');
+    }
 
     window.startupTimings.boot_hidden = document.visibilityState === 'hidden';
     facts.push(window.startupTimings.boot_hidden ? 'booted while HIDDEN' : 'booted visible');
 
     // Network cost of this page's HTML request. Large dns/connect = cold radio/DNS/TLS; large ttfb = slow server.
-    const nav = performance.getEntriesByType('navigation')[0];
-    const origin = Math.round(performance.timeOrigin);
     if (nav) {
         facts.push('nav ' + nav.type
             + ', dns ' + ms(nav.domainLookupStart, nav.domainLookupEnd) + 'ms'
@@ -1380,7 +1386,7 @@ window.startupDiagnostics = {
                 .sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0))
                 .slice(0, 3)
                 .map(x => `${(x.url || '').split('/').pop().split('?')[0]}(${x.durationMs}ms,${fmtKb(x.transferBytes)})`);
-            console.log(`Startup Assets: ${resSnap.totalRequests} reqs, ${fmtKb(resSnap.totalTransferBytes)} xfer (js ${fmtKb(bc.js.transferBytes)}, css ${fmtKb(bc.css.transferBytes)}, font ${fmtKb(bc.font.transferBytes)}, img ${fmtKb(bc.image.transferBytes)})${blocking.length ? ' | Blocking: ' + blocking.join(', ') : ''}`);
+            console.log(`Startup Assets: ${resSnap.totalRequests} reqs (${resSnap.cachedRequests || 0} cached), ${fmtKb(resSnap.wireTransferBytes)} wire / ${fmtKb(resSnap.totalTransferBytes)} total (js ${fmtKb(bc.js.transferBytes)}, css ${fmtKb(bc.css.transferBytes)}, font ${fmtKb(bc.font.transferBytes)}, img ${fmtKb(bc.image.transferBytes)})${blocking.length ? ' | Blocking: ' + blocking.join(', ') : ''}`);
         }
         if (window.startupTimings.ws_render_batch_inspect) {
             console.log(`Startup WS Batch: ${window.startupTimings.ws_render_batch_inspect.summary}`);
@@ -1502,6 +1508,9 @@ Object.assign(window.startupDiagnostics, {
             const blockingHeadResources = [];
             const uncompressedLargeAssets = [];
             let totalRequests = 0;
+            let cachedRequests = 0;
+            let wireTransferBytes = nav ? (nav.transferSize || 0) : 0;
+            let cachedEncodedBytes = 0;
             let totalTransferBytes = nav ? (nav.transferSize || 0) : 0;
             let totalDecodedBytes = nav ? (nav.decodedBodySize || 0) : 0;
 
@@ -1511,8 +1520,16 @@ Object.assign(window.startupDiagnostics, {
                 const r = entries[i];
                 if (r.startTime > cutoffRelMs + 50) continue;
                 totalRequests++;
-                const xfer = r.transferSize || r.encodedBodySize || 0;
+                const rawWire = r.transferSize || 0;
+                const rawEnc = r.encodedBodySize || 0;
+                const xfer = rawWire || rawEnc || 0;
                 const dec = r.decodedBodySize || xfer || 0;
+                if (rawWire > 0) {
+                    wireTransferBytes += rawWire;
+                } else if (rawEnc > 0) {
+                    cachedRequests++;
+                    cachedEncodedBytes += rawEnc;
+                }
                 totalTransferBytes += xfer;
                 totalDecodedBytes += dec;
 
@@ -1540,6 +1557,9 @@ Object.assign(window.startupDiagnostics, {
 
             perf.resources = {
                 totalRequests: totalRequests,
+                cachedRequests: cachedRequests,
+                wireTransferBytes: wireTransferBytes,
+                cachedEncodedBytes: cachedEncodedBytes,
                 totalTransferBytes: totalTransferBytes,
                 totalDecodedBytes: totalDecodedBytes,
                 byCategory: buckets,
@@ -2347,6 +2367,13 @@ const ensureCookiesFlushed = async () => {
         }
     };
 
+    window.spokesInitializeDropZone = async function (elementId, dotNetHelper, maxAllowedSize, options) {
+        await window.ensureUploadScriptsLoaded();
+        if (window.spokesUpload && typeof window.spokesUpload.initDropZone === 'function') {
+            window.spokesUpload.initDropZone(elementId, dotNetHelper, maxAllowedSize, options);
+        }
+    };
+
     let voiceBundlePromise = null;
     window.ensureVoiceScriptsLoaded = function () {
         if (window.LivekitClient) return Promise.resolve(true);
@@ -2410,11 +2437,11 @@ const ensureCookiesFlushed = async () => {
     // Safe Capacitor-gated stubs so callers invoked before share-target.js finishes loading
     // no-op cleanly on Web/Desktop and lazy-load on Capacitor Native.
     if (typeof window.spokesPushDirectShareShortcut !== 'function') {
-        window.spokesPushDirectShareShortcut = async function (serverUrl, channelId, channelName, iconBase64) {
+        window.spokesPushDirectShareShortcut = async function (...args) {
             if (!window.Capacitor?.Plugins?.ShortcutManager) return;
             await window.ensureShareScriptsLoaded();
             if (window.spokesPushDirectShareShortcut && !window.spokesPushDirectShareShortcut._isStub) {
-                return window.spokesPushDirectShareShortcut(serverUrl, channelId, channelName, iconBase64);
+                return window.spokesPushDirectShareShortcut(...args);
             }
         };
         window.spokesPushDirectShareShortcut._isStub = true;

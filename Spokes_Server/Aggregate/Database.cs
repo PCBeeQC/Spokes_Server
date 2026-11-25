@@ -71,6 +71,7 @@ public class Database
     public virtual DirectTransactionRepository DirectTransactions => AccountingContext?.DirectTransactions!;
     public virtual FinancialAccountRepository FinancialAccounts => AccountingContext?.FinancialAccounts!;
     public virtual SuggestedInvoicePaymentRepository SuggestedInvoicePayments => AccountingContext?.SuggestedInvoicePayments!;
+    public virtual BankRuleRepository BankRules => AccountingContext?.BankRules!;
 
     // Communication Bounded Context
     public virtual ChatChannelRepository ChatChannels => CommunicationContext?.ChatChannels!;
@@ -111,6 +112,8 @@ public class Database
     public virtual BrandingConfig Branding => CoreContext?.GetBranding() ?? new BrandingConfig();
     public virtual ContactConfig Contact => CoreContext?.GetContact() ?? new ContactConfig();
 
+    private readonly Spokes_Server.Core.Data.SequenceService? _sequenceService;
+
     /// <summary>
     /// Protected parameterless constructor strictly reserved for mock proxy frameworks (e.g. Moq).
     /// </summary>
@@ -129,13 +132,15 @@ public class Database
         HrContext hrContext,
         AccountingContext accountingContext,
         CommunicationContext communicationContext,
-        CoreContext coreContext)
+        CoreContext coreContext,
+        Spokes_Server.Core.Data.SequenceService? sequenceService = null)
     {
         ProjectsContext = projectsContext;
         HrContext = hrContext;
         AccountingContext = accountingContext;
         CommunicationContext = communicationContext;
         CoreContext = coreContext;
+        _sequenceService = sequenceService;
     }
 
     private bool _isInitialized;
@@ -166,6 +171,7 @@ public class Database
     {
         lock (_initLock)
         {
+            _sequenceService?.ReloadFromDisk();
             _isInitialized = false;
             Initialize();
         }

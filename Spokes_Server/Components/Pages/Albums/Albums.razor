@@ -420,7 +420,7 @@ else
                     var isOwner = IsOwner(album);
                     var ownerName = GetOwnerName(album.OwnerId);
                     <MudItem xs="12" sm="6" md="4" lg="3" xl="2">
-                        <MudCard Elevation="1" Class="album-card cursor-pointer h-100 d-flex flex-column" Style="border-radius: 16px; overflow: hidden; border: 1px solid var(--mud-palette-lines-default);" @onclick="() => SelectAlbum(album)">
+                        <MudCard Elevation="1" Class="album-card cursor-pointer h-100 d-flex flex-column" Style="border-radius: 16px; overflow: hidden; border: 1px solid var(--mud-palette-lines-default);" data-diag-label="album-card" @onclick="() => SelectAlbum(album)">
                             <MudPaper Class="relative overflow-hidden flex-shrink-0 d-flex align-center justify-center" Style="height: 180px; background: var(--mud-palette-background-grey);" Elevation="0">
                                 @{
                                     bool isCoverLocked = IsAlbumLocked(album, out _);
@@ -476,17 +476,40 @@ else
                                 <div>
                                     <div class="d-flex align-start justify-space-between gap-1">
                                         <MudText Typo="Typo.subtitle1" Style="font-weight: 700; line-height: 1.3;" Class="text-truncate">@album.Title</MudText>
-                                        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Dense="true" @onclick:stopPropagation="true">
-                                            <MudMenuItem Icon="@Icons.Material.Filled.FolderOpen" OnClick="() => SelectAlbum(album)">@Loc["Open"]</MudMenuItem>
-                                            @if (isOwner && _currentUser?.IsActiveUnsuspended == true && _currentUser.HasPermission(AppPermissions.Chat.Use))
-                                            {
-                                                <MudMenuItem Icon="@Icons.Material.Filled.Share" OnClick="() => OpenShareDialogFor(album)">@Loc["Share to Chat"]</MudMenuItem>
-                                            }
-                                            @if (isOwner && _currentUser?.IsActiveUnsuspended == true)
-                                            {
-                                                <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="() => DeleteSpecificAlbumAction(album)">@Loc["Delete"]</MudMenuItem>
-                                            }
-                                        </MudMenu>
+                                        <div @onclick:stopPropagation="true">
+                                            <LazyMudMenu Icon="@Icons.Material.Filled.MoreVert"
+                                                         Size="Size.Small"
+                                                         AnchorOrigin="Origin.BottomRight"
+                                                         TransformOrigin="Origin.TopRight"
+                                                         Dense="true"
+                                                         ContentVersion="@HashCode.Combine(album.Id, isOwner, _currentUser?.IsActiveUnsuspended == true)"
+                                                         Context="closeMenu">
+                                                <MudListItem T="string" Class="mud-menu-item" OnClick="@(() => { closeMenu(); SelectAlbum(album); })">
+                                                    <div class="d-flex align-center gap-2">
+                                                        <MudIcon Icon="@Icons.Material.Filled.FolderOpen" Size="Size.Small" />
+                                                        <span>@Loc["Open"]</span>
+                                                    </div>
+                                                </MudListItem>
+                                                @if (isOwner && _currentUser?.IsActiveUnsuspended == true && _currentUser.HasPermission(AppPermissions.Chat.Use))
+                                                {
+                                                    <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { closeMenu(); await OpenShareDialogFor(album); })">
+                                                        <div class="d-flex align-center gap-2">
+                                                            <MudIcon Icon="@Icons.Material.Filled.Share" Size="Size.Small" />
+                                                            <span>@Loc["Share to Chat"]</span>
+                                                        </div>
+                                                    </MudListItem>
+                                                }
+                                                @if (isOwner && _currentUser?.IsActiveUnsuspended == true)
+                                                {
+                                                    <MudListItem T="string" Class="mud-menu-item" OnClick="@(async () => { closeMenu(); await DeleteSpecificAlbumAction(album); })">
+                                                        <div class="d-flex align-center gap-2">
+                                                            <MudIcon Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" />
+                                                            <span>@Loc["Delete"]</span>
+                                                        </div>
+                                                    </MudListItem>
+                                                }
+                                            </LazyMudMenu>
+                                        </div>
                                     </div>
                                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-block">
                                         @if (isOwner)
@@ -545,103 +568,15 @@ else
 
 </MudContainer>
 
-<style>
-    .album-card {
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-    }
-    .album-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important;
-        border-color: var(--mud-palette-primary-hover) !important;
-    }
-    .album-card:hover .album-cover-img {
-        transform: scale(1.04);
-    }
-    .album-media-card {
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-    }
-    .album-media-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 18px rgba(0,0,0,0.2) !important;
-    }
-    .album-media-card.album-media-not-deletable {
-        opacity: 0.45;
-        cursor: not-allowed;
-    }
-    .album-media-card.album-media-not-deletable:hover {
-        transform: none;
-        box-shadow: none !important;
-    }
-    .album-media-card .media-hover-overlay {
-        position: absolute;
-        inset: 0;
-        background: rgba(0,0,0,0.35);
-        opacity: 0;
-        transition: opacity 0.2s ease;
-        border-radius: 12px;
-    }
-    @@media (hover: hover) {
-        .album-media-card:hover .media-hover-overlay.desktop-only-hover {
-            opacity: 1;
-        }
-    }
-    .album-media-card .media-delete-btn {
-        z-index: 2;
-        opacity: 0;
-    }
-    @@media (hover: hover) {
-        .album-media-card:hover .media-delete-btn.desktop-only-hover {
-            opacity: 1;
-        }
-    }
-
-    /* --- album-sharing-row: flex container that wraps cleanly at every viewport width
-       so Shared with and Contributors sit side-by-side when space allows and never cause
-       horizontal page overflow on narrow screens or longer translations. --- */
-    .album-sharing-row {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
-        max-width: 100%;
-        min-width: 0;
-    }
-
-    .album-sharing-trigger {
-        white-space: nowrap;
-        flex-shrink: 0;
-        max-width: 100%;
-    }
-
-    /* --- Mobile-only overrides (≤ 599 px) --- */
-    @@media (max-width: 599px) {
-        /* Remove the desktop 52px left indent so metadata text starts flush left */
-        .album-meta-row {
-            margin-left: 0 !important;
-        }
-        /* Clean horizontal & vertical spacing when Shared-with and Contributors sit side-by-side or wrap */
-        .album-sharing-row {
-            gap: 6px 16px;
-        }
-        /* Fixed FAB — clears the mobile bottom navigation bar */
-        .album-fab {
-            position: fixed;
-            bottom: 80px;
-            right: 16px;
-            z-index: 1000;
-        }
-    }
-</style>
-
 @code {
     [Parameter] public string? Id { get; set; }
     [Parameter] [SupplyParameterFromQuery(Name = "tab")] public string? Tab { get; set; }
     [SupplyParameterFromQuery] public string? FromChannel { get; set; }
 
-    private IJSObjectReference? _jsModule;
     private DotNetObjectReference<Albums>? _objRef;
     private bool _isDraggingFiles;
     private bool _dropZoneInitialized;
+    private bool _externalDisplayInitialized;
 
     private Employee? _currentUser;
     private List<Employee> _employees = [];
@@ -751,36 +686,49 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        if (_selectedAlbum != null)
         {
-            try
-            {
-                _objRef = DotNetObjectReference.Create(this);
-                _jsModule = await JS.InvokeAsync<IJSObjectReference>("import", $"./{Assets.Bypassed("Components/Pages/Albums/Albums.razor.js")}");
-                _isExternalDisplayConnected = await JS.InvokeAsync<bool>("spokesExternalDisplay.checkAvailability");
-                await JS.InvokeVoidAsync("spokesExternalDisplay.initListener", _objRef);
-                StateHasChanged();
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex, "Error initializing Albums JS module: {Message}", ex.Message);
-            }
-        }
+            _objRef ??= DotNetObjectReference.Create(this);
 
-        if (_selectedAlbum != null && !_dropZoneInitialized && _jsModule != null)
-        {
-            try
+            if (!_externalDisplayInitialized)
             {
-                var maxAllowedSize = Db.CompanyProfile.Get()?.MaxFileUploadSizeBytes ?? WebUiExtensions.DefaultMaxFileUploadSizeBytes;
-                await _jsModule.InvokeVoidAsync("initFileHandlers", "album-drop-zone", _objRef, maxAllowedSize);
-                _dropZoneInitialized = true;
+                _externalDisplayInitialized = true;
+                try
+                {
+                    var connected = await JS.InvokeAsync<bool>("spokesExternalDisplay.checkAvailability");
+                    await JS.InvokeVoidAsync("spokesExternalDisplay.initListener", _objRef);
+                    if (_isExternalDisplayConnected != connected)
+                    {
+                        _isExternalDisplayConnected = connected;
+                        StateHasChanged();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Error initializing Albums external display listener: {Message}", ex.Message);
+                }
             }
-            catch (Exception ex)
+
+            if (!_dropZoneInitialized)
             {
-                Logger.LogWarning(ex, "Error initializing Albums drag and drop: {Message}", ex.Message);
+                try
+                {
+                    var maxAllowedSize = Db.CompanyProfile.Get()?.MaxFileUploadSizeBytes ?? WebUiExtensions.DefaultMaxFileUploadSizeBytes;
+                    await JS.InvokeVoidAsync("spokesInitializeDropZone", "album-drop-zone", _objRef, maxAllowedSize, new
+                    {
+                        forwardProcessing = true,
+                        compressionMaxDim = 3840,
+                        compressionQuality = 0.9
+                    });
+                    _dropZoneInitialized = true;
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Error initializing Albums drag and drop: {Message}", ex.Message);
+                }
             }
         }
-        else if (_selectedAlbum == null && _dropZoneInitialized)
+        else if (_dropZoneInitialized)
         {
             _dropZoneInitialized = false;
         }
@@ -801,17 +749,14 @@ else
         ResolveSelectedAlbum();
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         AlbumService.OnAlbumUpdated -= HandleAlbumUpdated;
         ScopedKeystoreService.OnUnlocked -= HandleVaultUnlocked;
         ScopedKeystoreService.OnLocked -= HandleVaultLockedInAlbums;
 
-        if (_jsModule != null)
-        {
-            try { await _jsModule.DisposeAsync(); } catch { }
-        }
         _objRef?.Dispose();
+        return ValueTask.CompletedTask;
     }
 
     [JSInvokable]

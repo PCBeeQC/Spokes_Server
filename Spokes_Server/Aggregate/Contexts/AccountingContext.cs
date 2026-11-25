@@ -35,6 +35,7 @@ public class AccountingContext
     public virtual DirectTransactionRepository DirectTransactions { get; }
     public virtual FinancialAccountRepository FinancialAccounts { get; }
     public virtual SuggestedInvoicePaymentRepository SuggestedInvoicePayments { get; }
+    public virtual BankRuleRepository BankRules { get; }
 
     protected AccountingContext()
     {
@@ -55,6 +56,7 @@ public class AccountingContext
         DirectTransactions = null!;
         FinancialAccounts = null!;
         SuggestedInvoicePayments = null!;
+        BankRules = null!;
     }
 
     [ActivatorUtilitiesConstructor]
@@ -76,7 +78,8 @@ public class AccountingContext
         FinancialReportRepository? financialReports = null,
         DirectTransactionRepository? directTransactions = null,
         FinancialAccountRepository? financialAccounts = null,
-        SuggestedInvoicePaymentRepository? suggestedInvoicePayments = null)
+        SuggestedInvoicePaymentRepository? suggestedInvoicePayments = null,
+        BankRuleRepository? bankRules = null)
     {
         Invoices = invoices;
         PurchaseOrders = purchases;
@@ -96,6 +99,7 @@ public class AccountingContext
         DirectTransactions = directTransactions!;
         FinancialAccounts = financialAccounts!;
         SuggestedInvoicePayments = suggestedInvoicePayments!;
+        BankRules = bankRules!;
     }
 
     /// <summary>
@@ -123,7 +127,8 @@ public class AccountingContext
             () => FinancialReports?.LoadFromDisk(),
             () => DirectTransactions?.LoadFromDisk(),
             () => FinancialAccounts?.LoadFromDisk(),
-            () => SuggestedInvoicePayments?.LoadFromDisk()
+            () => SuggestedInvoicePayments?.LoadFromDisk(),
+            () => BankRules?.LoadFromDisk()
         );
     }
 }

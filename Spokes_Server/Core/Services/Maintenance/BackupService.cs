@@ -132,6 +132,7 @@ public class BackupService : BackgroundService
     {
     }
 
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public BackupService(
         ILogger<BackupService> logger,
         CompanyProfileRepository companyProfiles,
@@ -180,6 +181,9 @@ public class BackupService : BackgroundService
             _logger?.LogWarning(ex, "Failed to purge leftover backup staging directories on startup");
         }
     }
+
+    internal string? ResolveMasterPasswordForValidation(string? explicitBackupPassword = null)
+        => ResolveMasterPassword(_companyProfiles.Get(), explicitBackupPassword);
 
     private string? ResolveMasterPassword(CompanyProfile? profile, string? explicitBackupPassword = null)
     {
@@ -535,6 +539,11 @@ public class BackupService : BackgroundService
             return BackupRestoreResult.Failed("Backup file not found.", exception: new FileNotFoundException("Backup file not found", filePath ?? string.Empty));
         }
 
+        if (Interlocked.CompareExchange(ref _isRunningState, 1, 0) != 0)
+        {
+            return BackupRestoreResult.Failed("A backup or restore operation is already in progress. Please wait for it to finish.");
+        }
+
         progress?.Report(new BackupRestoreProgress("Checking backup file...", 5));
 
         var fullFilePath = Path.GetFullPath(filePath);
@@ -781,6 +790,8 @@ public class BackupService : BackgroundService
                 }
             }
             catch { }
+
+            Interlocked.Exchange(ref _isRunningState, 0);
         }
     }
 

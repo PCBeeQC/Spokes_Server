@@ -1,5 +1,5 @@
 # Specify explicit versions for external dependencies so they can be tested and updated manually
-ARG LIVEKIT_VERSION=v1.11.0
+ARG LIVEKIT_VERSION=v1.13.11
 ARG CASDOOR_VERSION=4.15.0
 ARG APP_VERSION=dev
 ARG SPOKES_RELAY_KEY=

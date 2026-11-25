@@ -53,12 +53,14 @@ public class SetupWizardTests : BunitContext
         Services.AddSingleton<IHttpClientFactory>(Mock.Of<IHttpClientFactory>());
         Services.AddSingleton<IHostApplicationLifetime>(Mock.Of<IHostApplicationLifetime>());
         Services.AddSingleton<ICompanyBrandingService>(Mock.Of<ICompanyBrandingService>());
+        Services.AddSingleton<IBackupEncryptionService, BackupEncryptionService>();
         Services.AddSingleton<BackupService>(sp =>
             new Mock<BackupService>(
                 Mock.Of<ILogger<BackupService>>(),
                 sp.GetRequiredService<CompanyProfileRepository>(),
                 mockConfig.Object,
                 null).Object);
+        Services.AddSingleton<BackupRestoreUploadService>();
 
         _db = Services.GetRequiredService<Database>();
     }

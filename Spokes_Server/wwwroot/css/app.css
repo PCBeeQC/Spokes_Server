@@ -1647,3 +1647,80 @@ html.keyboard-open-ios {
     top: 0;
     left: 100%;
 }
+
+/* --- Albums page cards, media tiles, sharing row & mobile overrides --- */
+.album-card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.album-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important;
+    border-color: var(--mud-palette-primary-hover) !important;
+}
+.album-card:hover .album-cover-img {
+    transform: scale(1.04);
+}
+.album-media-card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.album-media-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.2) !important;
+}
+.album-media-card.album-media-not-deletable {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.album-media-card.album-media-not-deletable:hover {
+    transform: none;
+    box-shadow: none !important;
+}
+.album-media-card .media-hover-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    border-radius: 12px;
+}
+@media (hover: hover) {
+    .album-media-card:hover .media-hover-overlay.desktop-only-hover {
+        opacity: 1;
+    }
+}
+.album-media-card .media-delete-btn {
+    z-index: 2;
+    opacity: 0;
+}
+@media (hover: hover) {
+    .album-media-card:hover .media-delete-btn.desktop-only-hover {
+        opacity: 1;
+    }
+}
+.album-sharing-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    max-width: 100%;
+    min-width: 0;
+}
+.album-sharing-trigger {
+    white-space: nowrap;
+    flex-shrink: 0;
+    max-width: 100%;
+}
+@media (max-width: 599px) {
+    .album-meta-row {
+        margin-left: 0 !important;
+    }
+    .album-sharing-row {
+        gap: 6px 16px;
+    }
+    .album-fab {
+        position: fixed;
+        bottom: 80px;
+        right: 16px;
+        z-index: 1000;
+    }
+}

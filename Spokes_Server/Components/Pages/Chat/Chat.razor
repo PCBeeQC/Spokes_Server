@@ -896,6 +896,8 @@
     private Dictionary<string, Employee> _discoverableEmployeeLookup = [];
     private CancellationTokenSource? _channelCts;
     private string? _sessionId;
+    private readonly Dictionary<string, string> _pushedShortcutSignatures = [];
+    private readonly HashSet<string> _sentShortcutIconKeys = [];
 
     [JSInvokable]
     public void OnScrollPositionChanged(bool isScrolledUp)
@@ -2351,28 +2353,60 @@
                     if (token.IsCancellationRequested || _selectedChannel == null) return;
                     var serverUrl = Configuration["ServerUrl"] ?? Nav.BaseUri;
                     var channelName = GetChannelDisplayName(_selectedChannel);
-                    string? channelIconBase64 = null;
+                    Employee? dmTarget = null;
                     if (_selectedChannel.ChannelType == ChatChannelType.Direct && _currentUser != null)
                     {
                         var otherEmpId = _selectedChannel.ParticipantIds.FirstOrDefault(id => id != _currentUser.Id) ?? _currentUser.Id;
                         if (otherEmpId != null)
                         {
-                            channelIconBase64 = ShortcutIconService.GetShortcutIconBase64(GetEmployee(otherEmpId));
+                            dmTarget = GetEmployee(otherEmpId);
                         }
                     }
 
-                    if (string.IsNullOrEmpty(channelIconBase64))
-                    {
-                        var companyProfile = Db.CompanyProfile.Get();
-                        channelIconBase64 = ShortcutIconService.GetCompanyLogoBase64(companyProfile?.LogoBase64);
-                    }
-                    
+                    var companyProfile = dmTarget == null ? Db.CompanyProfile.Get() : null;
+                    string iconKey = dmTarget != null
+                        ? ShortcutIconService.GetEmployeeIconCacheKey(dmTarget)
+                        : ShortcutIconService.GetCompanyLogoCacheKey(companyProfile?.LogoBase64, companyProfile?.LogoVersion ?? 0);
+                    string shortcutSignature = $"{channelName}|{iconKey}";
+
                     await InvokeAsync(async () =>
                     {
-                        if (!token.IsCancellationRequested && _module != null)
+                        if (token.IsCancellationRequested || _module == null) return;
+
+                        if (_pushedShortcutSignatures.TryGetValue(channelId, out var existingSig) &&
+                            string.Equals(existingSig, shortcutSignature, StringComparison.Ordinal))
                         {
-                            await JS.InvokeVoidAsync("spokesPushDirectShareShortcut", serverUrl, channelId, channelName, channelIconBase64 ?? "");
+                            return;
                         }
+
+                        string iconPayload = string.Empty;
+                        bool hasIconKey = !string.IsNullOrEmpty(iconKey);
+                        if (!hasIconKey || !_sentShortcutIconKeys.Contains(iconKey))
+                        {
+                            iconPayload = dmTarget != null
+                                ? ShortcutIconService.GetShortcutIconBase64(dmTarget)
+                                : ShortcutIconService.GetCompanyLogoBase64(companyProfile?.LogoBase64);
+
+                            if (string.IsNullOrEmpty(iconPayload) && dmTarget != null)
+                            {
+                                var fallbackProfile = Db.CompanyProfile.Get();
+                                iconKey = ShortcutIconService.GetCompanyLogoCacheKey(fallbackProfile?.LogoBase64, fallbackProfile?.LogoVersion ?? 0);
+                                shortcutSignature = $"{channelName}|{iconKey}";
+                                hasIconKey = !string.IsNullOrEmpty(iconKey);
+                                if (!hasIconKey || !_sentShortcutIconKeys.Contains(iconKey))
+                                {
+                                    iconPayload = ShortcutIconService.GetCompanyLogoBase64(fallbackProfile?.LogoBase64);
+                                }
+                            }
+                        }
+
+                        await JS.InvokeVoidAsync("spokesPushDirectShareShortcut", serverUrl, channelId, channelName, iconPayload, iconKey);
+
+                        if (hasIconKey && !string.IsNullOrEmpty(iconPayload))
+                        {
+                            _sentShortcutIconKeys.Add(iconKey);
+                        }
+                        _pushedShortcutSignatures[channelId] = shortcutSignature;
                     });
                 }
                 catch (OperationCanceledException) { }

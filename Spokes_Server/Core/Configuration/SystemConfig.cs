@@ -29,7 +29,7 @@ public class SystemConfig : IDataEntity
     public string LiveKitApiSecret { get; set; } = Guid.NewGuid().ToString("N");
     public int LiveKitFallbackPort { get; set; } = 7881;
     public int LiveKitUdpStartPort { get; set; } = 30000;
-    public int LiveKitUdpEndPort { get; set; } = 30499;
+    public int LiveKitUdpEndPort { get; set; } = 30007;
     public string LiveKitLogLevel { get; set; } = "info";
 
     // OIDC Info

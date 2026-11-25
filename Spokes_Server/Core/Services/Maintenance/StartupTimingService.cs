@@ -200,6 +200,24 @@ public class StartupTimingService
         }
     }
 
+    /// <summary>
+    /// Returns true when a client-initiated transition already carries a specific high-level name
+    /// (such as <c>NavLink (/albums)</c> or <c>DialogClose (Back)</c>) that must not be overwritten
+    /// by secondary server-side transitions like <c>DrawerToggle (Close)</c>.
+    /// Generic client labels (<c>UIAction (...)</c>, <c>SelectChannel</c>, <c>SwitchChannel</c>)
+    /// remain enrichable so server handlers can attach the concrete dialog or channel name.
+    /// </summary>
+    public static bool ShouldPreserveClientTransitionName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        return name.StartsWith("NavLink (", StringComparison.Ordinal)
+            || name.StartsWith("PopState (", StringComparison.Ordinal)
+            || name.StartsWith("DrawerToggle (", StringComparison.Ordinal)
+            || name.StartsWith("DrawerClose (", StringComparison.Ordinal)
+            || name.StartsWith("DialogClose (", StringComparison.Ordinal)
+            || name.StartsWith("OverlayClose (", StringComparison.Ordinal);
+    }
+
     /// <summary>Starts a new transition (client-initiated transitions start unnamed and are named by the first <see cref="EnsureTransition"/>).</summary>
     public int BeginTransition(string name, bool isNamed = true)
     {

@@ -17,7 +17,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using SkiaSharp;
 using Spokes_Server.Core.Helpers;
 
 namespace Spokes_Server.Tests.Controllers;
@@ -89,7 +91,8 @@ public class MediaControllerTests : TestDataTestBase
     private MediaController CreateController(
         ClaimsPrincipal? user = null,
         IEnumerable<IFileAccessProvider>? providers = null,
-        IDataProtectionProvider? dataProtection = null)
+        IDataProtectionProvider? dataProtection = null,
+        IMemoryCache? memoryCache = null)
     {
         var provs = providers ?? new List<IFileAccessProvider> { new AvatarFileAccessProvider() };
         var dp = dataProtection ?? _dataProtection;
@@ -104,7 +107,8 @@ public class MediaControllerTests : TestDataTestBase
             _avatarGenerator,
             _userService,
             fileService,
-            fileAuth);
+            fileAuth,
+            memoryCache: memoryCache);
 
         var httpContext = new DefaultHttpContext();
         if (user != null)
@@ -232,6 +236,99 @@ public class MediaControllerTests : TestDataTestBase
 
         Assert.NotEmpty(iconAllowAnon);
         Assert.NotEmpty(logoAllowAnon);
+    }
+
+    private static byte[] CreateSyntheticPng(int width, int height)
+    {
+        using var bitmap = new SKBitmap(width, height);
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.SteelBlue);
+        using var paint = new SKPaint { Color = SKColors.White, IsAntialias = true };
+        canvas.DrawCircle(width / 2f, height / 2f, Math.Min(width, height) / 3f, paint);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var encoded = image.Encode(SKEncodedImageFormat.Png, 100);
+        return encoded.ToArray();
+    }
+
+    [Fact]
+    public void GetLogo_WithHeightParam_ResizesToWebpPreservingAspectRatio()
+    {
+        var pngBytes = CreateSyntheticPng(512, 256);
+        _companyRepo.Save(new CompanyProfile
+        {
+            LogoBase64 = "data:image/png;base64," + Convert.ToBase64String(pngBytes),
+            LogoVersion = 2
+        });
+
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var controller = CreateController(memoryCache: cache);
+
+        var result = controller.GetLogo(h: 96);
+        var fileResult = Assert.IsType<FileContentResult>(result);
+        Assert.Equal("image/webp", fileResult.ContentType);
+
+        using var decoded = SKBitmap.Decode(fileResult.FileContents);
+        Assert.NotNull(decoded);
+        Assert.Equal(192, decoded.Width);
+        Assert.Equal(96, decoded.Height);
+    }
+
+    [Fact]
+    public void GetIcon_WithHeightParam_ResizesAndCachesInMemoryCache()
+    {
+        var pngBytes = CreateSyntheticPng(256, 256);
+        _companyRepo.Save(new CompanyProfile
+        {
+            IconBase64 = "data:image/png;base64," + Convert.ToBase64String(pngBytes),
+            IconVersion = 3
+        });
+
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var controller = CreateController(memoryCache: cache);
+
+        var first = Assert.IsType<FileContentResult>(controller.GetIcon(h: 96));
+        var second = Assert.IsType<FileContentResult>(controller.GetIcon(h: 96));
+
+        Assert.Equal("image/webp", first.ContentType);
+        Assert.Same(first.FileContents, second.FileContents);
+
+        using var decoded = SKBitmap.Decode(first.FileContents);
+        Assert.NotNull(decoded);
+        Assert.Equal(96, decoded.Width);
+        Assert.Equal(96, decoded.Height);
+    }
+
+    [Fact]
+    public void GetLogo_WithHeightParam_SkipsResizeForGif()
+    {
+        var gifBytes = new byte[] { 0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00 };
+        _companyRepo.Save(new CompanyProfile
+        {
+            LogoBase64 = "data:image/gif;base64," + Convert.ToBase64String(gifBytes),
+            LogoVersion = 1
+        });
+
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var controller = CreateController(memoryCache: cache);
+
+        var result = Assert.IsType<FileContentResult>(controller.GetLogo(h: 96));
+        Assert.Equal("image/gif", result.ContentType);
+        Assert.Equal(gifBytes, result.FileContents);
+    }
+
+    [Fact]
+    public void GetLogo_WithoutHeightParam_ReturnsOriginalPngBytes()
+    {
+        var pngBytes = CreateSyntheticPng(512, 256);
+        _companyRepo.Save(new CompanyProfile
+        {
+            LogoBase64 = "data:image/png;base64," + Convert.ToBase64String(pngBytes),
+            LogoVersion = 1
+        });
+
+        var result = Assert.IsType<FileContentResult>(_controller.GetLogo());
+        Assert.Equal("image/png", result.ContentType);
+        Assert.Equal(pngBytes, result.FileContents);
     }
 
     // ==========================================

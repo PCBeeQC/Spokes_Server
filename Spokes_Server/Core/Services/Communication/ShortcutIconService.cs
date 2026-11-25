@@ -30,6 +30,14 @@ public class ShortcutIconService
         _fileService = fileService;
     }
 
+    public const int DefaultShortcutIconSize = 128;
+
+    public static string GetEmployeeIconCacheKey(Employee? employee)
+        => employee == null ? string.Empty : $"emp:{employee.Id}:{employee.AvatarVersion}";
+
+    public static string GetCompanyLogoCacheKey(string? logoBase64, int logoVersion = 0)
+        => string.IsNullOrEmpty(logoBase64) ? string.Empty : $"company:{logoVersion}:{logoBase64.Length}:{logoBase64.GetHashCode()}";
+
     public string GetShortcutIconBase64(Employee? employee)
     {
         if (employee == null) return string.Empty;
@@ -70,11 +78,11 @@ public class ShortcutIconService
                 originalBytes = _avatarGenerator.GenerateAvatar(employee.FirstName, employee.LastName, employee.ProfileColor);
             }
 
-            return ResizeAndEncodeBase64(originalBytes, 192);
+            return ResizeAndEncodeBase64(originalBytes, DefaultShortcutIconSize);
         }) ?? string.Empty;
     }
 
-    public virtual string GetCompanyLogoBase64(string? logoBase64, int size = 192)
+    public virtual string GetCompanyLogoBase64(string? logoBase64, int size = DefaultShortcutIconSize)
     {
         if (string.IsNullOrEmpty(logoBase64)) return string.Empty;
 

@@ -205,7 +205,7 @@ else
                                     </MudText>
                                 }
                                 @{
-                                    var reportTaxRegs = JurisdictionService.GetCompanyTaxRegistrations();
+                                    var reportTaxRegs = JurisdictionService.GetCompanyTaxRegistrations(Template);
                                 }
                                 @if (reportTaxRegs.Count > 0)
                                 {

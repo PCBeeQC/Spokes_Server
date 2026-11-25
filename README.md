@@ -37,7 +37,7 @@ Spokes is available on both Docker Hub and GitHub Container Registry :
 
 **Prerequisites:**
 - A Linux host (or Unraid, TrueNAS, Synology, CasaOS, Portainer, Proxmox) with Docker installed
-- Ports 80, 443, 7881, and 30000-30499 available and forwarded
+- Ports 80, 443, 7881, and 30000-30007 available and forwarded
 - A domain name (e.g., `spokes.yourdomain.com`) pointing to your server's public IP
 
 ```yaml
@@ -53,8 +53,8 @@ services:
       # LiveKit TCP Fallback (Must be mapped 1-to-1)
       - "7881:7881"
 
-      # LiveKit UDP Range (Must be mapped 1-to-1)
-      - "30000-30499:30000-30499/udp"
+      # LiveKit UDP Mux Range (Must be mapped 1-to-1)
+      - "30000-30007:30000-30007/udp"
     volumes:
       # Persistent data storage (databases, configuration, uploads)
       - ./spokes-data:/data

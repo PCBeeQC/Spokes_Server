@@ -11,6 +11,7 @@ using Spokes_Server.Core.Constants;
 using Spokes_Server.Core.Data.Repositories.Accounting;
 using Spokes_Server.Core.Data.Repositories.Core;
 using Spokes_Server.Core.Models.Accounting;
+using Spokes_Server.Core.Models.Documents;
 using Spokes_Server.Core.Models.HR;
 using Spokes_Server.Core.Services.Security;
 
@@ -27,7 +28,7 @@ public interface IJurisdictionTemplateService
     GlAccount EnsureOpeningBalanceEquitySeeded();
     GlAccount EnsureBadDebtsAndWriteOffsSeeded(JurisdictionTemplate? template = null);
     string ExportTemplateJson(JurisdictionTemplate? template = null);
-    IReadOnlyList<(string Label, string Number)> GetCompanyTaxRegistrations();
+    IReadOnlyList<(string Label, string Number)> GetCompanyTaxRegistrations(DocumentTemplate? template = null);
 }
 
 public class JurisdictionTemplateService : IJurisdictionTemplateService
@@ -341,7 +342,7 @@ public class JurisdictionTemplateService : IJurisdictionTemplateService
         return JsonSerializer.Serialize(target, JsonOptions);
     }
 
-    public IReadOnlyList<(string Label, string Number)> GetCompanyTaxRegistrations()
+    public IReadOnlyList<(string Label, string Number)> GetCompanyTaxRegistrations(DocumentTemplate? template = null)
     {
         var profile = _companyProfileRepo.Get();
         var map = profile?.Accounting?.TaxRegistrationNumbersByCode;
@@ -359,9 +360,10 @@ public class JurisdictionTemplateService : IJurisdictionTemplateService
                 if (string.IsNullOrWhiteSpace(tax.Code)) continue;
                 if (map.TryGetValue(tax.Code, out var number) && !string.IsNullOrWhiteSpace(number))
                 {
-                    var label = !string.IsNullOrWhiteSpace(tax.RegistrationNumberLabel)
-                        ? tax.RegistrationNumberLabel
-                        : tax.Code;
+                    var label = TryGetTemplateTaxLabel(template, tax.Code)
+                        ?? (!string.IsNullOrWhiteSpace(tax.RegistrationNumberLabel)
+                            ? tax.RegistrationNumberLabel
+                            : tax.Code);
                     results.Add((label.TrimEnd(':', ' ') + ":", number.Trim()));
                     seen.Add(tax.Code);
                 }
@@ -371,10 +373,29 @@ public class JurisdictionTemplateService : IJurisdictionTemplateService
         foreach (var kvp in map)
         {
             if (seen.Contains(kvp.Key) || string.IsNullOrWhiteSpace(kvp.Value)) continue;
-            results.Add((kvp.Key.Trim() + ":", kvp.Value.Trim()));
+            var label = TryGetTemplateTaxLabel(template, kvp.Key) ?? kvp.Key.Trim();
+            results.Add((label.TrimEnd(':', ' ') + ":", kvp.Value.Trim()));
         }
 
         return results;
+    }
+
+    private static string? TryGetTemplateTaxLabel(DocumentTemplate? template, string code)
+    {
+        var labels = template?.TaxRegistrationLabelsByCode;
+        if (labels == null || labels.Count == 0 || string.IsNullOrWhiteSpace(code))
+            return null;
+
+        if (labels.TryGetValue(code, out var exact) && !string.IsNullOrWhiteSpace(exact))
+            return exact.Trim();
+
+        foreach (var kvp in labels)
+        {
+            if (string.Equals(kvp.Key, code, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(kvp.Value))
+                return kvp.Value.Trim();
+        }
+
+        return null;
     }
 
     private void InitializeActiveTemplateAndChartOfAccounts()

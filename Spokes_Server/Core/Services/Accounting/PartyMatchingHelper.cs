@@ -336,7 +336,9 @@ public static partial class PartyMatchingHelper
         string sourceCode,
         string sourceName,
         string? sourceTypeOrGifi,
-        IReadOnlyList<GlAccount> spokesAccounts)
+        IReadOnlyList<GlAccount> spokesAccounts,
+        IReadOnlyList<FinancialAccount>? financialAccounts = null,
+        bool hasBalance = false)
     {
         if (spokesAccounts.Count == 0)
             return new GlAccountSuggestion(null, 0m, "No Chart of Accounts loaded");
@@ -346,6 +348,14 @@ public static partial class PartyMatchingHelper
         var haystack = StripDiacritics($"{sourceName} {gifi}").ToLowerInvariant();
         string? inferredRole = InferSystemRoleFromText(haystack, code);
         var candNorm = StripDiacritics(sourceName).ToLowerInvariant();
+
+        // 0. Smart FinancialAccount matching (Chequing CAD/USD, Savings, Credit Card) configured in Business Settings
+        if (financialAccounts is { Count: > 0 })
+        {
+            var finMatch = TryMatchFinancialAccount(code, candNorm, financialAccounts, spokesAccounts, hasBalance);
+            if (finMatch != null)
+                return finMatch;
+        }
 
         // 1. Singleton system control accounts FIRST (e.g., AR, AP, Retained Earnings, TPS/TVQ Collected & Recoverable)
         // so Sage 2310/2315/2340/2345/2365 map cleanly to Spokes 2160/2165/2170/2175/2180 without code collisions.
@@ -368,12 +378,12 @@ public static partial class PartyMatchingHelper
             bool roleMatches = !string.IsNullOrEmpty(exactCode.SystemRole) &&
                                string.Equals(exactCode.SystemRole, inferredRole, StringComparison.OrdinalIgnoreCase);
 
-            if (string.IsNullOrEmpty(exactCode.SystemRole) || roleMatches || codeNameSim >= 0.45m)
+            if (roleMatches || codeNameSim >= 0.45m)
             {
                 return new GlAccountSuggestion(exactCode.Code, 1.00m, $"Exact code match ({exactCode.Code})");
             }
 
-            // Incompatible collision with a Spokes system account — do NOT silently map into the wrong system account
+            // Incompatible collision with an existing Spokes account — do NOT silently map into the wrong account
             return new GlAccountSuggestion(null, 0m, $"Code {code} collides with Spokes '{exactCode.Name}' — creating separate account");
         }
 
@@ -396,6 +406,88 @@ public static partial class PartyMatchingHelper
             return new GlAccountSuggestion(bestAcct.Code, Math.Round(bestSim, 2), $"Exact name match ({bestAcct.Code})");
 
         return new GlAccountSuggestion(null, 0m, "Create new account preserving Sage code & GIFI");
+    }
+
+    private static GlAccountSuggestion? TryMatchFinancialAccount(
+        string sourceCode,
+        string normalizedSourceName,
+        IReadOnlyList<FinancialAccount> financialAccounts,
+        IReadOnlyList<GlAccount> spokesAccounts,
+        bool hasBalance)
+    {
+        // Never match FX conversion adjustment accounts or fee/receivable accounts as bank/card accounts
+        if (ContainsAny(normalizedSourceName, "conversion", "frais", "interet", "recevoir", "autres cartes", "marge", "emprunt", "pret"))
+            return null;
+
+        bool isUsd = ContainsAny(normalizedSourceName, "usd", "$e.-u.", "e.-u.", "u.s.", "us ", " us", "(us)");
+        string sourceCurrency = isUsd ? "USD" : "CAD";
+
+        bool isBankChequing = sourceCode.StartsWith("10", StringComparison.Ordinal) &&
+                              ContainsAny(normalizedSourceName, "compte courant", "chequing", "checking", "operating bank", "banque");
+        bool isSavings = sourceCode.StartsWith("10", StringComparison.Ordinal) &&
+                         ContainsAny(normalizedSourceName, "epargne", "savings");
+        bool isCreditCard = sourceCode.StartsWith("2", StringComparison.Ordinal) &&
+                            ContainsAny(normalizedSourceName, "mastercard", "visa", "amex", "american express", "carte de credit", "credit card");
+
+        if (!isBankChequing && !isSavings && !isCreditCard)
+            return null;
+
+        FinancialAccount? best = null;
+        decimal bestScore = 0m;
+
+        foreach (var fa in financialAccounts)
+        {
+            if (string.IsNullOrWhiteSpace(fa.LinkedGlAccountCode)) continue;
+            if (!spokesAccounts.Any(a => string.Equals(a.Code, fa.LinkedGlAccountCode, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            bool typeMatches =
+                (isBankChequing && string.Equals(fa.AccountType, FinancialAccountType.Chequing, StringComparison.OrdinalIgnoreCase)) ||
+                (isSavings && string.Equals(fa.AccountType, FinancialAccountType.Savings, StringComparison.OrdinalIgnoreCase)) ||
+                (isCreditCard && string.Equals(fa.AccountType, FinancialAccountType.CreditCard, StringComparison.OrdinalIgnoreCase));
+            if (!typeMatches) continue;
+
+            var faCur = string.IsNullOrWhiteSpace(fa.Currency) ? "CAD" : fa.Currency.Trim().ToUpperInvariant();
+            if (!string.Equals(faCur, sourceCurrency, StringComparison.OrdinalIgnoreCase)) continue;
+
+            decimal score = 0.65m;
+            var faInst = StripDiacritics(fa.InstitutionName).ToLowerInvariant().Trim();
+            var faName = StripDiacritics(fa.Name).ToLowerInvariant().Trim();
+
+            bool instMatch = !string.IsNullOrEmpty(faInst) && faInst.Length >= 2 && normalizedSourceName.Contains(faInst, StringComparison.OrdinalIgnoreCase);
+            bool brandMatch =
+                (normalizedSourceName.Contains("mastercard") && faName.Contains("mastercard")) ||
+                (normalizedSourceName.Contains("visa") && faName.Contains("visa")) ||
+                (normalizedSourceName.Contains("amex") && faName.Contains("amex"));
+
+            // Avoid matching a clearly different institution (e.g. Scotia account into a BNC FinancialAccount)
+            bool conflictingInst = !string.IsNullOrEmpty(faInst) && !instMatch &&
+                                   ContainsAny(normalizedSourceName, "scotia", "desjardins", "rbc", "td", "bmo", "cibc", "bnc");
+            if (conflictingInst) continue;
+
+            if (instMatch) score += 0.20m;
+            if (brandMatch) score += 0.15m;
+            if (fa.IsDefaultOperating || fa.IsDefaultCreditCard) score += 0.05m;
+
+            // Require either non-zero balance or explicit institution/brand match so dormant $0 bank accounts stay separate
+            if (!hasBalance && !instMatch && !brandMatch) continue;
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = fa;
+            }
+        }
+
+        if (best != null && bestScore >= 0.65m)
+        {
+            return new GlAccountSuggestion(
+                best.LinkedGlAccountCode,
+                Math.Min(0.96m, Math.Round(bestScore, 2)),
+                $"Matched Financial Account '{best.Name}' ({best.LinkedGlAccountCode})");
+        }
+
+        return null;
     }
 
     private static readonly HashSet<string> SingletonControlRoles = new(StringComparer.OrdinalIgnoreCase)
@@ -436,14 +528,14 @@ public static partial class PartyMatchingHelper
             return GlSystemRole.SalesTaxRemittancePayable;
         if (ContainsAny(text, "tps percu", "tps/tvh percu", "tps collect", "gst collect", "gst charged") && !ContainsAny(text, "taux 2"))
             return GlSystemRole.FederalTaxCollected;
-        if (ContainsAny(text, "cti", "itc", "tps paye", "tps/tvh paye", "tps a recevoir", "gst paid", "gst input"))
+        if (ContainsWholeWord(text, "cti", "itc") || ContainsAny(text, "tps paye", "tps/tvh paye", "tps a recevoir", "gst paid", "gst input"))
             return GlSystemRole.FederalTaxRecoverable;
         if (ContainsAny(text, "tvq percu", "tvq collect", "qst collect", "qst charged", "pst collect") && !ContainsAny(text, "taux 2"))
             return GlSystemRole.RegionalTaxCollected;
-        if (ContainsAny(text, "rti", "itr", "tvq paye", "tvq a recevoir", "qst paid", "qst input"))
+        if (ContainsWholeWord(text, "rti", "itr") || ContainsAny(text, "tvq paye", "tvq a recevoir", "qst paid", "qst input"))
             return GlSystemRole.RegionalTaxRecoverable;
 
-        if (ContainsAny(text, "source deduction", "deductions a la source", "das", "payroll tax payable", "retenues a la source"))
+        if (ContainsWholeWord(text, "das") || ContainsAny(text, "source deduction", "deductions a la source", "payroll tax payable", "retenues a la source"))
             return GlSystemRole.PayrollDeductionsPayable;
         if (ContainsAny(text, "wages payable", "salaires a payer", "net pay payable"))
             return GlSystemRole.WagesPayable;
@@ -486,6 +578,15 @@ public static partial class PartyMatchingHelper
         foreach (var n in needles)
         {
             if (text.Contains(n, StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
+    private static bool ContainsWholeWord(string text, params string[] words)
+    {
+        foreach (var w in words)
+        {
+            if (Regex.IsMatch(text, $@"\b{Regex.Escape(w)}\b", RegexOptions.IgnoreCase)) return true;
         }
         return false;
     }

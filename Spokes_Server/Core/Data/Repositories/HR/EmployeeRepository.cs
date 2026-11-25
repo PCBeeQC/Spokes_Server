@@ -74,6 +74,7 @@ public class EmployeeRepository : JsonRepository<Employee>
         {
             if (!Directory.Exists(_basePath))
             {
+                RawCache.Clear();
                 _isLoaded = true;
                 RaiseOnLoaded();
                 return;

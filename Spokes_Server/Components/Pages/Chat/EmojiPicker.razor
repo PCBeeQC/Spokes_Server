@@ -320,6 +320,7 @@
         {
             _recentEmojis = _currentEmployee.RecentEmojis.ToList();
             _recentGifs = _currentEmployee.RecentGifs.ToList();
+            _recentEmojisVersion++;
         }
         
         var profile = Db.CompanyProfile.Get();
@@ -654,6 +655,7 @@
         {
             _recentEmojis = _recentEmojis.Take(27).ToList();
         }
+        _recentEmojisVersion++;
         
         if (_currentEmployee != null)
         {
@@ -701,15 +703,28 @@
         public List<string> Emojis { get; set; } = [];
     }
 
+    private List<VirtualizeItem>? _cachedVirtualizedItems;
+    private string? _cachedVirtualizedSearch;
+    private int _recentEmojisVersion;
+    private int _cachedRecentEmojisVersion = -1;
+
     private List<VirtualizeItem> GetVirtualizedItems()
     {
+        var searchKey = _sharedSearchText ?? string.Empty;
+        if (_cachedVirtualizedItems != null &&
+            _cachedRecentEmojisVersion == _recentEmojisVersion &&
+            string.Equals(_cachedVirtualizedSearch, searchKey, StringComparison.Ordinal))
+        {
+            return _cachedVirtualizedItems;
+        }
+
         List<VirtualizeItem> items = [];
         var emojisToShow = GetFilteredEmojis();
         int itemsPerRow = 8;
 
         foreach (var group in emojisToShow)
         {
-            if (string.IsNullOrEmpty(_sharedSearchText))
+            if (string.IsNullOrEmpty(searchKey))
             {
                 items.Add(new VirtualizeItem { IsHeader = true, HeaderText = group.Key });
             }
@@ -724,6 +739,10 @@
                 });
             }
         }
+
+        _cachedVirtualizedItems = items;
+        _cachedVirtualizedSearch = searchKey;
+        _cachedRecentEmojisVersion = _recentEmojisVersion;
         return items;
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -11,6 +12,15 @@ using Microsoft.Extensions.Logging;
 using Spokes_Server.Core.Models.Core;
 
 namespace Spokes_Server.Core.Services.Communication.Voice;
+
+public enum UdpPortRangeValidationError
+{
+    None = 0,
+    InvalidStartPort,
+    InvalidEndPort,
+    EndBeforeStart,
+    ExceedsMaxMuxPorts
+}
 
 public sealed record LiveKitParticipantSnapshot(
     string Identity,
@@ -24,6 +34,13 @@ public sealed record LiveKitParticipantSnapshot(
 
 public class LiveKitService
 {
+    public const int DefaultUdpStartPort = 30000;
+    public const int DefaultUdpMuxPortCount = 8;
+    public const int DefaultUdpEndPort = DefaultUdpStartPort + DefaultUdpMuxPortCount - 1;
+    public const int MaxUdpMuxPortCount = 64;
+    public const int MinValidPort = 1024;
+    public const int MaxValidPort = 65535;
+
     private readonly ILogger<LiveKitService> _logger;
     private readonly IConfiguration? _configuration;
 
@@ -53,27 +70,151 @@ public class LiveKitService
     }
 
     /// <summary>
-    /// Builds the livekit.yaml configuration payload with structured component-level logging
-    /// and log sampling so routine SDP payloads, WebSocket pings, and Twirp polling do not flood stdout.
+    /// Validates a LiveKit UDP Mux port range (1 to <see cref="MaxUdpMuxPortCount"/> ports within 1024-65535).
+    /// </summary>
+    public static UdpPortRangeValidationError ValidateUdpMuxRange(int startPort, int endPort)
+    {
+        if (startPort < MinValidPort || startPort > MaxValidPort)
+        {
+            return UdpPortRangeValidationError.InvalidStartPort;
+        }
+
+        if (endPort < MinValidPort || endPort > MaxValidPort)
+        {
+            return UdpPortRangeValidationError.InvalidEndPort;
+        }
+
+        if (endPort < startPort)
+        {
+            return UdpPortRangeValidationError.EndBeforeStart;
+        }
+
+        if ((endPort - startPort + 1) > MaxUdpMuxPortCount)
+        {
+            return UdpPortRangeValidationError.ExceedsMaxMuxPorts;
+        }
+
+        return UdpPortRangeValidationError.None;
+    }
+
+    /// <summary>
+    /// Normalizes a configured UDP port range to a safe LiveKit UDP Mux range (1..64 ports).
+    /// Preserves any valid custom start port; oversized legacy ranges (e.g. 500 ports from
+    /// pre-migration configs, older backups, or legacy env templates) are narrowed to
+    /// <see cref="DefaultUdpMuxPortCount"/> ports starting at the configured start port.
+    /// </summary>
+    public static (int StartPort, int EndPort) NormalizeUdpMuxRange(int startPort, int endPort)
+    {
+        int normalizedStart = startPort is >= MinValidPort and <= MaxValidPort
+            ? startPort
+            : DefaultUdpStartPort;
+
+        int normalizedEnd = endPort;
+        if (normalizedEnd < normalizedStart)
+        {
+            normalizedEnd = normalizedStart;
+        }
+        else if (normalizedEnd > MaxValidPort)
+        {
+            normalizedEnd = MaxValidPort;
+        }
+
+        if ((normalizedEnd - normalizedStart + 1) > MaxUdpMuxPortCount)
+        {
+            normalizedEnd = Math.Min(MaxValidPort, normalizedStart + DefaultUdpMuxPortCount - 1);
+        }
+
+        return (normalizedStart, normalizedEnd);
+    }
+
+    /// <summary>
+    /// Formats a normalized UDP Mux range as a single port (<c>"30000"</c>) when start equals end,
+    /// or a range (<c>"30000-30007"</c>) for multi-port UDP Mux.
+    /// </summary>
+    public static string FormatUdpMuxPortSpec(int startPort, int endPort)
+    {
+        var (start, end) = NormalizeUdpMuxRange(startPort, endPort);
+        return start == end
+            ? start.ToString(CultureInfo.InvariantCulture)
+            : $"{start.ToString(CultureInfo.InvariantCulture)}-{end.ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    /// <summary>
+    /// Resolves the effective UDP Mux range from <paramref name="systemConfig"/> and pre-setup environment overrides.
+    /// </summary>
+    public (int StartPort, int EndPort) ResolveUdpMuxRange(SystemConfig systemConfig)
+    {
+        ArgumentNullException.ThrowIfNull(systemConfig);
+
+        var envUdpStart = GetSetting("Spokes_Voice_UDP_Start_Port");
+        var envUdpCount = GetSetting("Spokes_VOICE_UDP_PORT_COUNT");
+
+        int udpStartPort = systemConfig.LiveKitUdpStartPort;
+        int udpEndPort = systemConfig.LiveKitUdpEndPort;
+
+        if (!systemConfig.IsSetupComplete && !string.IsNullOrWhiteSpace(envUdpStart) && int.TryParse(envUdpStart, out var parsedStart))
+        {
+            udpStartPort = parsedStart;
+            if (string.IsNullOrWhiteSpace(envUdpCount))
+            {
+                udpEndPort = Math.Min(MaxValidPort, udpStartPort + DefaultUdpMuxPortCount - 1);
+            }
+        }
+
+        if (!systemConfig.IsSetupComplete && !string.IsNullOrWhiteSpace(envUdpCount) && int.TryParse(envUdpCount, out var parsedCount))
+        {
+            if (parsedCount > MaxUdpMuxPortCount)
+            {
+                _logger.LogInformation(
+                    "[LiveKit] Spokes_VOICE_UDP_PORT_COUNT={Count} exceeds UDP Mux limit ({Max}); normalizing to {DefaultCount} mux ports starting at {StartPort}.",
+                    parsedCount,
+                    MaxUdpMuxPortCount,
+                    DefaultUdpMuxPortCount,
+                    udpStartPort);
+                udpEndPort = Math.Min(MaxValidPort, udpStartPort + DefaultUdpMuxPortCount - 1);
+            }
+            else if (parsedCount >= 1)
+            {
+                udpEndPort = Math.Min(MaxValidPort, udpStartPort + parsedCount - 1);
+            }
+        }
+
+        if ((udpEndPort - udpStartPort + 1) > MaxUdpMuxPortCount)
+        {
+            var clamped = NormalizeUdpMuxRange(udpStartPort, udpEndPort);
+            _logger.LogWarning(
+                "[LiveKit] Configured UDP range {RawStart}-{RawEnd} exceeds UDP Mux maximum ({Max} ports); clamping to {ClampedStart}-{ClampedEnd}.",
+                udpStartPort,
+                udpEndPort,
+                MaxUdpMuxPortCount,
+                clamped.StartPort,
+                clamped.EndPort);
+            return clamped;
+        }
+
+        return NormalizeUdpMuxRange(udpStartPort, udpEndPort);
+    }
+
+    /// <summary>
+    /// Builds the livekit.yaml configuration payload using LiveKit's UDP Mux (<c>rtc.udp_port</c>)
+    /// with structured component-level logging and log sampling so routine SDP payloads, WebSocket pings,
+    /// and Twirp polling do not flood stdout.
     /// </summary>
     public virtual string BuildConfigurationYaml(SystemConfig systemConfig)
     {
         ArgumentNullException.ThrowIfNull(systemConfig);
 
         var voicePort = GetSetting("Spokes_Voice_Port") ?? "7880";
-
         var envFallback = GetSetting("Spokes_Voice_Fallback_Port");
-        var envUdpStart = GetSetting("Spokes_Voice_UDP_Start_Port");
-        var envUdpCount = GetSetting("Spokes_VOICE_UDP_PORT_COUNT");
 
-        var fallbackPort = !systemConfig.IsSetupComplete && !string.IsNullOrWhiteSpace(envFallback) ? int.Parse(envFallback) : systemConfig.LiveKitFallbackPort;
-        var udpStartPort = !systemConfig.IsSetupComplete && !string.IsNullOrWhiteSpace(envUdpStart) ? int.Parse(envUdpStart) : systemConfig.LiveKitUdpStartPort;
-        var udpEndPort = systemConfig.LiveKitUdpEndPort;
+        var fallbackPort = !systemConfig.IsSetupComplete &&
+                           !string.IsNullOrWhiteSpace(envFallback) &&
+                           int.TryParse(envFallback, out var parsedFallback)
+            ? parsedFallback
+            : systemConfig.LiveKitFallbackPort;
 
-        if (!systemConfig.IsSetupComplete && !string.IsNullOrWhiteSpace(envUdpCount))
-        {
-            udpEndPort = udpStartPort + int.Parse(envUdpCount) - 1;
-        }
+        var (udpStartPort, udpEndPort) = ResolveUdpMuxRange(systemConfig);
+        var udpPortSpec = FormatUdpMuxPortSpec(udpStartPort, udpEndPort);
 
         var envLogLevel = GetSetting("Spokes_LiveKit_Log_Level");
         var rawLogLevel = !systemConfig.IsSetupComplete && !string.IsNullOrWhiteSpace(envLogLevel)
@@ -129,8 +270,7 @@ public class LiveKitService
 port: {voicePort}
 rtc:
   tcp_port: {fallbackPort}
-  port_range_start: {udpStartPort}
-  port_range_end: {udpEndPort}
+  udp_port: {udpPortSpec}
   use_external_ip: true
 keys:
   {systemConfig.LiveKitApiKey}: {systemConfig.LiveKitApiSecret}
@@ -418,6 +558,37 @@ keys:
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[LiveKit] Failed to evict user {UserId} from LiveKit room channel-{ChannelId}: {Message}", userId, channelId, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Deletes a LiveKit room by its exact room name (for example, ephemeral diagnostic rooms).
+    /// Treats "room does not exist" as an idempotent success.
+    /// </summary>
+    public virtual async Task DeleteRoomAsync(string roomName, string apiKey, string apiSecret, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(roomName) || string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(apiSecret))
+        {
+            return;
+        }
+
+        try
+        {
+            var roomServiceClient = CreateRoomServiceClient(apiKey, apiSecret);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
+            await roomServiceClient.DeleteRoom(new DeleteRoomRequest
+            {
+                Room = roomName
+            }).WaitAsync(timeoutCts.Token);
+        }
+        catch (Exception ex) when (IsParticipantOrRoomAbsentError(ex))
+        {
+            _logger.LogDebug("[LiveKit] Room {RoomName} is already absent; delete is a no-op.", roomName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[LiveKit] Failed to delete room {RoomName}: {Message}", roomName, ex.Message);
         }
     }
 

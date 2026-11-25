@@ -143,6 +143,7 @@ public abstract class JsonRepository<T> where T : class, IDataEntity
         {
             if (!Directory.Exists(_basePath))
             {
+                _storage.Clear();
                 _isLoaded = true;
                 RaiseOnLoaded();
                 return;
@@ -218,6 +219,7 @@ public abstract class JsonRepository<T> where T : class, IDataEntity
             var projectsPath = Path.Combine(_basePath, "Projects");
             if (!Directory.Exists(projectsPath))
             {
+                RawCache.Clear();
                 _isLoaded = true;
             }
             else

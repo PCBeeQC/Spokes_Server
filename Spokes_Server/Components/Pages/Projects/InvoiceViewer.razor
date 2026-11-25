@@ -267,28 +267,44 @@ else
                         </MudPaper>
                     }
                     @{
-                        var taxRegs = JurisdictionService.GetCompanyTaxRegistrations();
+                        var taxRegs = JurisdictionService.GetCompanyTaxRegistrations(Template);
+                        var hasPaymentInstructions = !string.IsNullOrWhiteSpace(Template.PaymentInstructions);
+                        var hasBankingInfo = !string.IsNullOrWhiteSpace(Template.BankName)
+                            || !string.IsNullOrWhiteSpace(Template.BankSwiftCode)
+                            || !string.IsNullOrWhiteSpace(Template.BankAccountNumber);
                     }
-                    @if (!string.IsNullOrEmpty(Template.PaymentInstructions) || !string.IsNullOrEmpty(Template.BankAccountNumber) || taxRegs.Count > 0)
+                    @if (hasPaymentInstructions || hasBankingInfo || taxRegs.Count > 0)
                     {
                         <MudPaper Class="pa-3" Style="background-color: #f8f9fa; -webkit-print-color-adjust: exact; print-color-adjust: exact;" Elevation="0">
-                            @if (!string.IsNullOrEmpty(Template.PaymentInstructions))
+                            @if (hasPaymentInstructions)
                             {
                                 <MudText Typo="Typo.subtitle2" Class="mb-1" Style="@($"color: {Profile.PrimaryColor};")"><b>@Template.Label_PaymentInstructions</b></MudText>
                                 <MudText Typo="Typo.caption" Style="white-space: pre-line;">@Template.PaymentInstructions</MudText>
                             }
 
-                            @if (!string.IsNullOrEmpty(Template.BankName))
+                            @if (hasBankingInfo)
                             {
-                                <MudDivider Class="my-2" />
-                                <MudText Typo="Typo.caption"><b>@Template.Label_BankName:</b> @Template.BankName</MudText>
-                                <MudText Typo="Typo.caption" Class="d-block"><b>@Template.Label_SwiftCode:</b> @Template.BankSwiftCode</MudText>
-                                <MudText Typo="Typo.caption" Class="d-block"><b>@Template.Label_BankAccount:</b> @Template.BankAccountNumber</MudText>
+                                @if (hasPaymentInstructions)
+                                {
+                                    <MudDivider Class="my-2" />
+                                }
+                                @if (!string.IsNullOrWhiteSpace(Template.BankName))
+                                {
+                                    <MudText Typo="Typo.caption" Class="d-block"><b>@Template.Label_BankName:</b> @Template.BankName</MudText>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(Template.BankSwiftCode))
+                                {
+                                    <MudText Typo="Typo.caption" Class="d-block"><b>@Template.Label_SwiftCode:</b> @Template.BankSwiftCode</MudText>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(Template.BankAccountNumber))
+                                {
+                                    <MudText Typo="Typo.caption" Class="d-block"><b>@Template.Label_BankAccount:</b> @Template.BankAccountNumber</MudText>
+                                }
                             }
 
                             @if (taxRegs.Count > 0)
                             {
-                                @if (!string.IsNullOrEmpty(Template.PaymentInstructions) || !string.IsNullOrEmpty(Template.BankName))
+                                @if (hasPaymentInstructions || hasBankingInfo)
                                 {
                                     <MudDivider Class="my-2" />
                                 }

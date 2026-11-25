@@ -474,10 +474,18 @@
                         <MudText Color="Color.Success"><b>-@CreditToApply.ToString("C")</b></MudText>
                     </div>
                 }
-                <div class="d-flex gap-4" style="min-width: 250px; justify-content: space-between;">
+                <div class="d-flex gap-4 align-center" style="min-width: 250px; justify-content: space-between;">
+                    <MudText>@BizLoc["Tax Exempt"]:</MudText>
+                    <MudSwitch T="bool"
+                               Value="@IsTaxExempt"
+                               ValueChanged="OnTaxExemptChanged"
+                               Color="Color.Primary"
+                               Disabled="@_isReadOnly" />
+                </div>
+                <div class="d-flex gap-4 align-center" style="min-width: 250px; justify-content: space-between;">
                     <MudText>Tax Rate:</MudText>
                     <div style="width: 100px;">
-                        <MudNumericField Value="@(Invoice.TaxRate * 100)" ValueChanged="@((decimal v) => { if (!_isReadOnly) Invoice.TaxRate = v / 100; })" Format="@FinancialCalculationEngine.TaxRatePercentFormat" Margin="Margin.Dense" HideSpinButtons="true" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" ReadOnly="@_isReadOnly" />
+                        <MudNumericField T="decimal" Value="@(Invoice.TaxRate * 100)" ValueChanged="OnTaxRatePercentChanged" Format="@FinancialCalculationEngine.TaxRatePercentFormat" Margin="Margin.Dense" HideSpinButtons="true" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Percent" ReadOnly="@_isReadOnly" Disabled="@(_isReadOnly || IsTaxExempt)" />
                     </div>
                 </div>
                 <div class="d-flex gap-4" style="min-width: 250px; justify-content: space-between;">
@@ -514,6 +522,44 @@
     private bool _canEditDraftAuthorized;
     private bool _canApproveAuthorized;
     private Spokes_Server.Core.Models.HR.Employee? _currentActor;
+    private decimal _lastNonZeroTaxRate;
+
+    private bool IsTaxExempt => Invoice.TaxRate <= 0m;
+
+    private void OnTaxExemptChanged(bool exempt)
+    {
+        if (_isReadOnly) return;
+        if (exempt)
+        {
+            if (Invoice.TaxRate > 0m)
+            {
+                _lastNonZeroTaxRate = Invoice.TaxRate;
+            }
+            Invoice.TaxRate = 0m;
+            Invoice.TaxComponents.Clear();
+        }
+        else
+        {
+            Invoice.TaxRate = _lastNonZeroTaxRate > 0m
+                ? _lastNonZeroTaxRate
+                : FinancialCalculationEngine.ActiveCombinedTaxRate;
+        }
+    }
+
+    private void OnTaxRatePercentChanged(decimal percent)
+    {
+        if (_isReadOnly) return;
+        var rate = Math.Max(0m, percent / 100m);
+        Invoice.TaxRate = rate;
+        if (rate > 0m)
+        {
+            _lastNonZeroTaxRate = rate;
+        }
+        else
+        {
+            Invoice.TaxComponents.Clear();
+        }
+    }
 
     // Wrappers
     private DateTime? Date { get => Invoice.Date; set { if (!_isReadOnly && value.HasValue) Invoice.Date = value.Value; } }
@@ -559,6 +605,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _lastNonZeroTaxRate = Invoice.TaxRate > 0m ? Invoice.TaxRate : FinancialCalculationEngine.ActiveCombinedTaxRate;
         _currentActor = await UserService.GetEmployeeAsync();
         Templates = Db.DocumentTemplates.GetAll();
         WorkTypes = Db.WorkTypes.GetAll().ToDictionary(w => w.Id, w => w);

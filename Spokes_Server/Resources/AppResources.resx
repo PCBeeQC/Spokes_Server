@@ -4155,9 +4155,6 @@
   <data name="Username" xml:space="preserve">
     <value>Username</value>
   </data>
-  <data name="Verifying encryption, unpacking archives, and rebuilding databases." xml:space="preserve">
-    <value>Verifying encryption, unpacking archives, and rebuilding databases.</value>
-  </data>
   <data name="WebDAV" xml:space="preserve">
     <value>WebDAV</value>
   </data>
@@ -6455,5 +6452,56 @@
   </data>
   <data name="raw" xml:space="preserve">
     <value>raw</value>
+  </data>
+  <data name="{0} of 7 days active" xml:space="preserve">
+    <value>{0} of 7 days active</value>
+  </data>
+  <data name="Cancel Upload" xml:space="preserve">
+    <value>Cancel Upload</value>
+  </data>
+  <data name="Chimes" xml:space="preserve">
+    <value>Chimes</value>
+  </data>
+  <data name="Endpoint" xml:space="preserve">
+    <value>Endpoint</value>
+  </data>
+  <data name="LiveKit multiplexes all voice and video traffic across these UDP ports (8 ports recommended, e.g. 30000-30007). Set Start and End to the same number to use a single UDP port." xml:space="preserve">
+    <value>LiveKit multiplexes all voice and video traffic across these UDP ports (8 ports recommended, e.g. 30000-30007). Set Start and End to the same number to use a single UDP port.</value>
+  </data>
+  <data name="RTP Packets" xml:space="preserve">
+    <value>RTP Packets</value>
+  </data>
+  <data name="TCP Fallback Port must be between 1024 and 65535." xml:space="preserve">
+    <value>TCP Fallback Port must be between 1024 and 65535.</value>
+  </data>
+  <data name="Test Voice Bot" xml:space="preserve">
+    <value>Test Voice Bot</value>
+  </data>
+  <data name="Transport" xml:space="preserve">
+    <value>Transport</value>
+  </data>
+  <data name="UDP End Port must be between 1024 and 65535." xml:space="preserve">
+    <value>UDP End Port must be between 1024 and 65535.</value>
+  </data>
+  <data name="UDP End Port must be greater than or equal to UDP Start Port." xml:space="preserve">
+    <value>UDP End Port must be greater than or equal to UDP Start Port.</value>
+  </data>
+  <data name="UDP Mux supports between 1 and {0} ports." xml:space="preserve">
+    <value>UDP Mux supports between 1 and {0} ports.</value>
+  </data>
+  <data name="UDP Start Port must be between 1024 and 65535." xml:space="preserve">
+    <value>UDP Start Port must be between 1024 and 65535.</value>
+  </data>
+  <data name="Verifies that the internal LiveKit voice bot connects over UDP, publishes audio frames, and loads built-in chime sounds without disrupting active channels." xml:space="preserve">
+    <value>Verifies that the internal LiveKit voice bot connects over UDP, publishes audio frames, and loads built-in chime sounds without disrupting active channels.</value>
+  </data>
+  <data name="Voice Bot Self-Test" xml:space="preserve">
+    <value>Voice Bot Self-Test</value>
+  </data>
+  <data name="You do not have permission to run voice diagnostics." xml:space="preserve">
+    <value>You do not have permission to run voice diagnostics.</value>
+  </data>
+  <data name="You have unsaved LiveKit port changes. Save your settings first if you want to test the new port configuration." xml:space="preserve">
+    <value>You have unsaved LiveKit port changes. Save your settings first if you want to test the new port configuration.</value>
   </data>
 </root>

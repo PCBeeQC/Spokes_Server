@@ -296,6 +296,7 @@
             ProjectId = auth.Value.Project.Id,
             QuoteNumber = nextNum,
             Date = DateTime.Today,
+            TaxRate = FinancialCalculationEngine.ActiveCombinedTaxRate,
             History =
             [
                 new DocumentHistoryEntry
@@ -328,7 +329,6 @@
                 {
                     newQuote.TermsAndConditions = template.DefaultTermsAndConditions;
                 }
-                newQuote.TaxRate = template.TaxRate;
                 newQuote.TermsStartOnNewPage = template.TermsStartOnNewPage;
             }
         }
@@ -453,7 +453,7 @@
             InvoiceNumber = Db.Invoices.GenerateInvoiceNumber(profile.InvoicePrefix),
             Date = DateTime.Today,
             Status = InvoiceStatus.Draft,
-            TaxRate = template.TaxRate,
+            TaxRate = FinancialCalculationEngine.ActiveCombinedTaxRate,
             History =
             [
                 new DocumentHistoryEntry

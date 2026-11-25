@@ -49,6 +49,9 @@ public class EmailMessageRepository
 
     public virtual void LoadFromDisk()
     {
+        _cache.Clear();
+        _indices.Clear();
+
         if (!Directory.Exists(_basePath)) return;
 
         var accountDirs = Directory.GetDirectories(_basePath);

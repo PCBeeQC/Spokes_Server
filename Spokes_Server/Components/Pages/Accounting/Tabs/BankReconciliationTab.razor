@@ -4,6 +4,7 @@
 @using Spokes_Server.Core.Models.Accounting
 @using Spokes_Server.Core.Services.Accounting
 @using Spokes_Server.Components.Shared
+@using Spokes_Server.Components.Dialogs.Accounting
 @inject Database Db
 @inject IBankReconciliationService ReconciliationService
 @inject IAccountingService AccountingService
@@ -106,9 +107,29 @@
                             </b>
                         </MudText>
                     </div>
-                    <div class="d-flex align-center gap-2">
+                    <div class="d-flex align-center gap-2 flex-wrap">
+                        @if (_canWriteAccounting)
+                        {
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Secondary"
+                                       Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Rule"
+                                       OnClick="@(() => OpenBankRulesDialog(null))">
+                                @BizLoc["Bank Rules"] (@_bankRuleCount)
+                            </MudButton>
+                        }
                         @if (_selectedStatement.Status != BankStatementStatus.Reconciled && _canWriteAccounting)
                         {
+                            @if (_postCutoverRuleMatchCount > 0)
+                            {
+                                <MudButton Variant="Variant.Outlined"
+                                           Color="Color.Primary"
+                                           Size="Size.Small"
+                                           StartIcon="@Icons.Material.Filled.PlaylistAddCheck"
+                                           OnClick="ApplyRuleMatches">
+                                    @BizLoc["Post Rule Matches"] (@_postCutoverRuleMatchCount)
+                                </MudButton>
+                            }
                             <MudButton Variant="Variant.Outlined"
                                        Color="Color.Info"
                                        Size="Size.Small"
@@ -235,13 +256,27 @@
                             }
                             else if (_selectedStatement.Status != BankStatementStatus.Reconciled && _canWriteAccounting)
                             {
-                                <div style="min-width: 200px;">
-                                    <GlAccountSelect Value="@GetTargetGlForLine(line)"
-                                                     ValueChanged="@((string? v) => SetTargetGlForLine(line, v))"
-                                                     Dense="true"
-                                                     Margin="Margin.Dense"
-                                                     Variant="Variant.Outlined"
-                                                     Placeholder="@(line.Amount < 0 ? BizLoc["Bank Fees"].Value : BizLoc["Misc. Income"].Value)" />
+                                var matchedRule = ReconciliationService.MatchRuleForLine(_selectedStatement, line);
+                                <div class="d-flex align-center gap-1" style="min-width: 220px;">
+                                    <div class="flex-grow-1">
+                                        @if (matchedRule != null)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Text" Icon="@Icons.Material.Filled.Rule" Class="mb-1">
+                                                @matchedRule.Name
+                                            </MudChip>
+                                        }
+                                        <GlAccountSelect Value="@GetTargetGlForLine(line)"
+                                                         ValueChanged="@((string? v) => SetTargetGlForLine(line, v))"
+                                                         Dense="true"
+                                                         Margin="Margin.Dense"
+                                                         Variant="Variant.Outlined"
+                                                         Placeholder="@(line.Amount < 0 ? BizLoc["Bank Fees"].Value : BizLoc["Misc. Income"].Value)" />
+                                    </div>
+                                    <MudIconButton Icon="@Icons.Material.Filled.BookmarkAdd"
+                                                   Size="Size.Small"
+                                                   Color="Color.Secondary"
+                                                   title="@BizLoc["Save as Bank Rule"]"
+                                                   OnClick="@(() => OpenSaveRuleForLine(line))" />
                                 </div>
                             }
                             else
@@ -334,6 +369,8 @@
     private List<BankStatement> _statements = [];
     private BankStatement? _selectedStatement;
     private BankCutoverSanityReport? _cutoverSanity;
+    private int _bankRuleCount;
+    private int _postCutoverRuleMatchCount;
     private bool _includeSalesTaxOnDirectPost;
     private bool _canWriteAccounting;
     private Spokes_Server.Core.Models.HR.Employee? _currentUser;
@@ -380,6 +417,64 @@
         _cutoverSanity = _selectedStatement != null
             ? ReconciliationService.EvaluateCutoverSanity(_selectedStatement, _currentUser)
             : null;
+        _bankRuleCount = ReconciliationService.GetBankRules().Count;
+        _postCutoverRuleMatchCount = 0;
+        if (_selectedStatement != null)
+        {
+            var cutover = _cutoverSanity?.CutoverDate;
+            foreach (var l in _selectedStatement.Lines)
+            {
+                if (l.IsMatchedOrCategorized || string.Equals(l.MatchStatus, BankLineMatchStatus.Excluded, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var rule = ReconciliationService.MatchRuleForLine(_selectedStatement, l);
+                if (rule == null) continue;
+                if (string.Equals(rule.Action, BankRuleAction.Exclude, StringComparison.OrdinalIgnoreCase) ||
+                    !cutover.HasValue || l.Date.Date > cutover.Value.Date)
+                {
+                    _postCutoverRuleMatchCount++;
+                }
+            }
+        }
+    }
+
+    private async Task OpenBankRulesDialog(BankRule? prefill)
+    {
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        var parameters = new DialogParameters<BankRulesDialog>
+        {
+            { x => x.Actor, _currentUser },
+            { x => x.PrefillRule, prefill }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+        var dlg = await DialogService.ShowAsync<BankRulesDialog>(BizLoc["Bank Categorization Rules"].Value, parameters, options);
+        await dlg.Result;
+        _selectedGlByLineId.Clear();
+        RefreshCutoverSanity();
+        StateHasChanged();
+    }
+
+    private Task OpenSaveRuleForLine(BankTransactionLine line)
+    {
+        var prefill = new BankRule
+        {
+            Name = line.Description,
+            Keywords = line.Description,
+            Direction = line.Amount < 0 ? BankRuleDirection.MoneyOut : BankRuleDirection.MoneyIn,
+            BankGlAccountCode = _selectedStatement?.GlAccountCode,
+            Action = BankRuleAction.CategorizeToAccount,
+            TargetGlAccountCode = GetTargetGlForLine(line),
+            IncludeSalesTax = _includeSalesTaxOnDirectPost
+        };
+        return OpenBankRulesDialog(prefill);
+    }
+
+    private async Task ApplyRuleMatches()
+    {
+        if (_selectedStatement == null) return;
+        if (!await EnsureCanWriteAccountingAsync()) return;
+        int applied = ReconciliationService.ApplyBankRulesToStatement(_selectedStatement, autoPostOnly: false, actor: _currentUser);
+        LoadStatements();
+        Snackbar.Add($"Applied bank rules to {applied} post-cutover line(s).", Severity.Success);
     }
 
     private void SelectStatement(BankStatement statement)
@@ -493,6 +588,12 @@
     {
         if (_selectedGlByLineId.TryGetValue(line.Id, out var code) && !string.IsNullOrWhiteSpace(code))
             return code;
+        if (_selectedStatement != null)
+        {
+            var rule = ReconciliationService.MatchRuleForLine(_selectedStatement, line);
+            if (rule != null && string.Equals(rule.Action, BankRuleAction.CategorizeToAccount, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(rule.TargetGlAccountCode))
+                return rule.TargetGlAccountCode;
+        }
         return line.Amount < 0
             ? (Db.GlAccounts?.GetBySystemRole(GlSystemRole.BankChargesAndInterest)?.Code ?? "5800")
             : (Db.GlAccounts?.GetBySystemRole(GlSystemRole.InterestAndOtherIncome)?.Code ?? "4800");

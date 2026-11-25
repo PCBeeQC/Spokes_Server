@@ -33,6 +33,7 @@ public class EmailFolderRepository : JsonRepository<EmailFolder>
         {
             if (!Directory.Exists(_basePath))
             {
+                RawCache.Clear();
                 _isLoaded = true;
                 return;
             }

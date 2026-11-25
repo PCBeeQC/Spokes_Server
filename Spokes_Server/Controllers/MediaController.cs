@@ -1,5 +1,8 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.Caching.Memory;
+using SkiaSharp;
 using Spokes_Server.Core.Helpers;
 using Spokes_Server.Core.Services.Communication;
 using Microsoft.AspNetCore.Mvc;
@@ -29,6 +32,7 @@ public class MediaController : SpokesControllerBase
     private readonly IFileService _fileService;
     private readonly IFileAuthorizationService _fileAuthService;
     private readonly ILogger<MediaController>? _logger;
+    private readonly IMemoryCache? _memoryCache;
 
     [ActivatorUtilitiesConstructor]
     public MediaController(
@@ -40,7 +44,8 @@ public class MediaController : SpokesControllerBase
         UserService userService,
         IFileService fileService,
         IFileAuthorizationService fileAuthService,
-        ILogger<MediaController>? logger = null)
+        ILogger<MediaController>? logger = null,
+        IMemoryCache? memoryCache = null)
     {
         _companyProfile = companyProfile;
         _employeeRepo = employeeRepo;
@@ -51,6 +56,7 @@ public class MediaController : SpokesControllerBase
         _fileService = fileService;
         _fileAuthService = fileAuthService;
         _logger = logger;
+        _memoryCache = memoryCache;
     }
 
     [HttpGet("Icon")]
@@ -58,7 +64,7 @@ public class MediaController : SpokesControllerBase
     [Spokes_Server.Core.Security.AllowDuringSetup]
     [Microsoft.AspNetCore.Authorization.AllowAnonymous]
     [ResponseCache(Duration = 3600, Location = ResponseCacheLocation.Client)] // Cache for 1 hour locally
-    public IActionResult GetIcon()
+    public IActionResult GetIcon([FromQuery] int? h = null)
     {
         if (HttpContext?.Response?.Headers != null)
         {
@@ -68,7 +74,8 @@ public class MediaController : SpokesControllerBase
         var profile = _companyProfile.Get();
         if (DataUriHelper.TryParseImage(profile?.IconBase64, out var bytes, out var mimeType))
         {
-            return File(bytes, mimeType);
+            var (outBytes, outMime) = ResolveSizedBrandingImage("icon", profile?.IconVersion ?? 0, bytes, mimeType, h);
+            return File(outBytes, outMime);
         }
 
         // Fallback to default-icon-192.png
@@ -87,7 +94,7 @@ public class MediaController : SpokesControllerBase
     [Spokes_Server.Core.Security.AllowDuringSetup]
     [Microsoft.AspNetCore.Authorization.AllowAnonymous]
     [ResponseCache(Duration = 3600, Location = ResponseCacheLocation.Client)]
-    public IActionResult GetLogo()
+    public IActionResult GetLogo([FromQuery] int? h = null)
     {
         if (HttpContext?.Response?.Headers != null)
         {
@@ -97,11 +104,99 @@ public class MediaController : SpokesControllerBase
         var profile = _companyProfile.Get();
         if (DataUriHelper.TryParseImage(profile?.LogoBase64, out var bytes, out var mimeType))
         {
-            return File(bytes, mimeType);
+            var (outBytes, outMime) = ResolveSizedBrandingImage("logo", profile?.LogoVersion ?? 0, bytes, mimeType, h);
+            return File(outBytes, outMime);
         }
 
         // Fallback to icon if no custom logo is uploaded
-        return GetIcon();
+        return GetIcon(h);
+    }
+
+    private (byte[] Bytes, string MimeType) ResolveSizedBrandingImage(
+        string kind,
+        int version,
+        byte[] originalBytes,
+        string originalMimeType,
+        int? requestedHeight)
+    {
+        if (!requestedHeight.HasValue || requestedHeight.Value <= 0)
+        {
+            return (originalBytes, originalMimeType);
+        }
+
+        if (originalMimeType.Contains("svg", StringComparison.OrdinalIgnoreCase) ||
+            originalMimeType.Contains("gif", StringComparison.OrdinalIgnoreCase) ||
+            originalMimeType.Contains("icon", StringComparison.OrdinalIgnoreCase))
+        {
+            return (originalBytes, originalMimeType);
+        }
+
+        int targetHeight = Math.Clamp(requestedHeight.Value, 32, 512);
+        string contentHash = Convert.ToHexString(SHA256.HashData(originalBytes));
+        string cacheKey = $"BrandingMedia_{kind}_v{version}_h{targetHeight}_{contentHash}";
+
+        if (_memoryCache != null && _memoryCache.TryGetValue<(byte[] Bytes, string MimeType)>(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
+        var computed = EncodeResizedWebpOrOriginal(originalBytes, originalMimeType, targetHeight);
+        _memoryCache?.Set(cacheKey, computed, new MemoryCacheEntryOptions
+        {
+            SlidingExpiration = TimeSpan.FromHours(12)
+        });
+        return computed;
+    }
+
+    private static (byte[] Bytes, string MimeType) EncodeResizedWebpOrOriginal(
+        byte[] originalBytes,
+        string originalMimeType,
+        int targetHeight)
+    {
+        try
+        {
+            using var originalBitmap = SKBitmap.Decode(originalBytes);
+            if (originalBitmap == null || originalBitmap.Width <= 0 || originalBitmap.Height <= 0)
+            {
+                return (originalBytes, originalMimeType);
+            }
+
+            SKBitmap? resizedBitmap = null;
+            try
+            {
+                SKBitmap sourceForEncode = originalBitmap;
+                if (originalBitmap.Height > targetHeight)
+                {
+                    int targetWidth = Math.Max(1, (int)Math.Round(originalBitmap.Width * ((double)targetHeight / originalBitmap.Height)));
+                    resizedBitmap = originalBitmap.Resize(new SKImageInfo(targetWidth, targetHeight), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+                    if (resizedBitmap != null)
+                    {
+                        sourceForEncode = resizedBitmap;
+                    }
+                }
+
+                using var image = SKImage.FromBitmap(sourceForEncode);
+                using var encoded = image.Encode(SKEncodedImageFormat.Webp, 85);
+                if (encoded != null)
+                {
+                    var webpBytes = encoded.ToArray();
+                    if (webpBytes.Length > 0 && (resizedBitmap != null || webpBytes.Length < originalBytes.Length))
+                    {
+                        return (webpBytes, "image/webp");
+                    }
+                }
+            }
+            finally
+            {
+                resizedBitmap?.Dispose();
+            }
+        }
+        catch
+        {
+            // Fall back to original bytes on decode/encode failure
+        }
+
+        return (originalBytes, originalMimeType);
     }
 
     [HttpGet("Avatar/{userId}")]

@@ -195,7 +195,7 @@ public class AccountingHealthService : IAccountingHealthService
         var openArTotal = Math.Round(allInvoices
             .Where(i => InvoiceStatus.IsPosted(i.Status) &&
                         !InvoiceStatus.IsSettled(i.Status) &&
-                        i.BalanceDue > 0m)
+                        (i.BalanceDue > 0m || (i.IsOpeningBalance && i.BalanceDue < 0m)))
             .Sum(i => i.BalanceDue), 2);
         var glArBalance = tbByCode.TryGetValue(arAcctCode, out var glArRow) ? glArRow.EndingBalance : 0m;
         if (!suspectedZeroedLedger && Math.Abs(openArTotal - glArBalance) > 0.50m)
@@ -221,7 +221,7 @@ public class AccountingHealthService : IAccountingHealthService
                         !string.Equals(b.Status, BillStatus.AwaitingApproval, StringComparison.OrdinalIgnoreCase) &&
                         !BillStatus.IsSettled(b.Status) &&
                         b.BalanceDue > 0m)
-            .Sum(b => b.BalanceDue), 2);
+            .Sum(b => b.IsCreditNote ? -b.BalanceDue : b.BalanceDue), 2);
         var glApBalance = tbByCode.TryGetValue(apAcctCode, out var glApRow) ? glApRow.EndingBalance : 0m;
         if (!suspectedZeroedLedger && Math.Abs(openApTotal - glApBalance) > 0.50m)
         {
@@ -296,6 +296,7 @@ public class AccountingHealthService : IAccountingHealthService
 
         var billsMissingTax = allBills.Where(b =>
             !b.IsVoid &&
+            !b.IsOpeningBalance &&
             !string.Equals(b.Status, BillStatus.Void, StringComparison.OrdinalIgnoreCase) &&
             !b.IsTaxExempt &&
             b.Amount > 0m &&
@@ -358,7 +359,7 @@ public class AccountingHealthService : IAccountingHealthService
             });
         }
 
-        // 12. Bank Reconciliation Coverage
+        // 12. Bank Reconciliation Coverage & Actionable Cutover Balance Clues
         int reconciledCount = allEntries.Count(e => e.IsReconciled);
         if (allStatements.Count == 0 && allEntries.Count > 0)
         {
@@ -374,11 +375,89 @@ public class AccountingHealthService : IAccountingHealthService
                 ActionLabel = "Import Statements"
             });
         }
+        else if (allStatements.Count > 0)
+        {
+            var latestCutoverBatch = allMigrationBatches
+                .Where(b => string.Equals(b.Status, AccountingMigrationBatchStatus.Applied, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(b => b.AsOfDate)
+                .FirstOrDefault();
+            if (latestCutoverBatch != null)
+            {
+            var latestCutover = latestCutoverBatch.AsOfDate.Date;
+            var cutoverTb = _ledger.CalculateTrialBalance(_ledger.GetFiscalYearStart(latestCutover), latestCutover, includeZeroAccounts: true);
+            var cutoverTbByCode = cutoverTb.Rows.ToDictionary(r => r.AccountCode, StringComparer.OrdinalIgnoreCase);
+
+            var openInvAmounts = allInvoices
+                .Where(i => !string.Equals(i.Status, InvoiceStatus.Void, StringComparison.OrdinalIgnoreCase) && !InvoiceStatus.IsSettled(i.Status))
+                .Select(i => i.BalanceDue > 0m ? i.BalanceDue : i.GrandTotal)
+                .Where(a => a > 0m)
+                .ToList();
+            var openBillAmounts = allBills
+                .Where(b => !b.IsVoid && !string.Equals(b.Status, BillStatus.Void, StringComparison.OrdinalIgnoreCase) && !BillStatus.IsSettled(b.Status))
+                .Select(b => b.BalanceDue > 0m ? b.BalanceDue : b.Amount)
+                .Where(a => a > 0m)
+                .ToList();
+
+            foreach (var stmt in allStatements)
+            {
+                var preLines = stmt.Lines.Where(l => l.Date.Date <= latestCutover).ToList();
+                var lastPreWithBal = preLines.LastOrDefault(l => l.RunningBalance.HasValue);
+                if (lastPreWithBal?.RunningBalance == null) continue;
+
+                decimal bankAtCutover = lastPreWithBal.RunningBalance.Value;
+                decimal glAtCutover = cutoverTbByCode.TryGetValue(stmt.GlAccountCode, out var row)
+                    ? Math.Round(row.IsDebitNormal ? row.EndingBalance : -row.EndingBalance, 2)
+                    : 0m;
+                decimal diff = Math.Round(bankAtCutover - glAtCutover, 2);
+                if (Math.Abs(diff) <= 0.05m) continue;
+
+                var clues = new List<string>();
+                bool hasLocSweeps = preLines.Any(l =>
+                    (l.Description?.Contains("MCR", StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (l.Description?.Contains("MARGE", StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (l.Description?.Contains("CREDIT LINE", StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (l.Description?.Contains("SWEEP", StringComparison.OrdinalIgnoreCase) ?? false));
+                if (hasLocSweeps)
+                {
+                    clues.Add("Credit-line sweep transfers (MCR/LOC) detected: if your prior software combined Chequing + Line of Credit in one account, post a cutover-date reclass JE moving your exact Line of Credit statement balance to your Line of Credit GL account.");
+                }
+
+                var unmatchedPre = preLines.Where(l => !l.IsMatchedOrCategorized && !string.Equals(l.MatchStatus, BankLineMatchStatus.Excluded, StringComparison.OrdinalIgnoreCase)).ToList();
+                var matchedOpenInv = unmatchedPre.Where(l => l.Amount > 0m && openInvAmounts.Any(a => Math.Abs(a - l.Amount) <= 0.05m)).ToList();
+                var matchedOpenBill = unmatchedPre.Where(l => l.Amount < 0m && openBillAmounts.Any(a => Math.Abs(a - Math.Abs(l.Amount)) <= 0.05m)).ToList();
+                if (matchedOpenInv.Count > 0 || matchedOpenBill.Count > 0)
+                {
+                    clues.Add($"Found {matchedOpenInv.Count} pre-cutover deposit(s) ({matchedOpenInv.Sum(l => l.Amount):C2}) and {matchedOpenBill.Count} withdrawal(s) ({matchedOpenBill.Sum(l => Math.Abs(l.Amount)):C2}) matching currently Open Invoices/Bills.");
+                }
+
+                clues.Add("Any remaining gap reflects uncleared cheques, deposits in transit, or unrecorded pre-cutover entries on the cutover date.");
+
+                report.Issues.Add(new AccountingHealthIssue
+                {
+                    Code = "BANK_CUTOVER_DISCREPANCY",
+                    Category = "Bank Reconciliation",
+                    Severity = AccountingHealthSeverity.Warning,
+                    Title = $"Cutover Bank vs. GL Difference on {stmt.GlAccountCode} ({latestCutover:yyyy-MM-dd})",
+                    Details = $"Bank = {bankAtCutover:C2} vs. GL = {glAtCutover:C2} (diff {diff:C2}). {string.Join(" ", clues)}",
+                    AffectedCount = 1,
+                    AffectedAmount = diff,
+                    ActionKey = AccountingHealthActionKey.OpenBankReconciliation,
+                    ActionLabel = "Inspect Reconciliation"
+                });
+            }
+            }
+        }
 
         // 13. Payroll / External Payroll Coverage (Informational)
         var activeEmployees = (_hr?.Employees.GetAll() ?? []).Count(e => e.IsActive && !e.IsSystem);
         var wagesCode = _ledger.ResolveAccountCodeByRole(GlSystemRole.WagesAndSalariesExpense, "5400");
-        bool hasPayrollPosted = tbByCode.TryGetValue(wagesCode, out var wagesRow) && Math.Abs(wagesRow.EndingBalance) > 0.01m;
+        var payrollGlCodes = (_accounting.GlAccounts?.GetAll() ?? [])
+            .Where(a => string.Equals(a.Code, wagesCode, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(a.SubType, GlAccountSubType.PayrollExpense, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(a.SystemRole, GlSystemRole.WagesAndSalariesExpense, StringComparison.OrdinalIgnoreCase))
+            .Select(a => a.Code)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool hasPayrollPosted = tb.Rows.Any(r => payrollGlCodes.Contains(r.AccountCode) && Math.Abs(r.EndingBalance) > 0.01m);
         if (activeEmployees > 0 && !hasPayrollPosted)
         {
             report.Issues.Add(new AccountingHealthIssue

@@ -3382,9 +3382,6 @@
   <data name="Years of Service for Senior Rate" xml:space="preserve">
     <value>Years of Service for Senior Rate</value>
   </data>
-  <data name="Company Tax Registration Numbers (printed on invoices) are configured per jurisdiction in Business Settings → Accounting, Tax &amp; Jurisdiction." xml:space="preserve">
-    <value>Company Tax Registration Numbers (printed on invoices) are configured per jurisdiction in Business Settings → Accounting, Tax &amp; Jurisdiction.</value>
-  </data>
   <data name="3900 Residual" xml:space="preserve">
     <value>3900 Residual</value>
   </data>
@@ -5100,5 +5097,95 @@
   </data>
   <data name="unmatched pre-cutover" xml:space="preserve">
     <value>unmatched pre-cutover</value>
+  </data>
+  <data name="Add Bank Rule" xml:space="preserve">
+    <value>Add Bank Rule</value>
+  </data>
+  <data name="Any (In or Out)" xml:space="preserve">
+    <value>Any (In or Out)</value>
+  </data>
+  <data name="Assign Account" xml:space="preserve">
+    <value>Assign Account</value>
+  </data>
+  <data name="Auto-Post" xml:space="preserve">
+    <value>Auto-Post</value>
+  </data>
+  <data name="Auto-Post on Import (post-cutover lines only)" xml:space="preserve">
+    <value>Auto-Post on Import (post-cutover lines only)</value>
+  </data>
+  <data name="Bank Categorization Rules" xml:space="preserve">
+    <value>Bank Categorization Rules</value>
+  </data>
+  <data name="Bank rule deleted." xml:space="preserve">
+    <value>Bank rule deleted.</value>
+  </data>
+  <data name="Bank rule saved." xml:space="preserve">
+    <value>Bank rule saved.</value>
+  </data>
+  <data name="Bank Rules" xml:space="preserve">
+    <value>Bank Rules</value>
+  </data>
+  <data name="Description Keywords (comma-separated)" xml:space="preserve">
+    <value>Description Keywords (comma-separated)</value>
+  </data>
+  <data name="Direction" xml:space="preserve">
+    <value>Direction</value>
+  </data>
+  <data name="Edit Bank Rule" xml:space="preserve">
+    <value>Edit Bank Rule</value>
+  </data>
+  <data name="Exclude" xml:space="preserve">
+    <value>Exclude</value>
+  </data>
+  <data name="Exclude Line" xml:space="preserve">
+    <value>Exclude Line</value>
+  </data>
+  <data name="Extract Sales Tax" xml:space="preserve">
+    <value>Extract Sales Tax</value>
+  </data>
+  <data name="Keywords" xml:space="preserve">
+    <value>Keywords</value>
+  </data>
+  <data name="Money In (Deposit)" xml:space="preserve">
+    <value>Money In (Deposit)</value>
+  </data>
+  <data name="Money Out (Withdrawal)" xml:space="preserve">
+    <value>Money Out (Withdrawal)</value>
+  </data>
+  <data name="No bank rules configured yet. Create a rule above or click the bookmark icon on any bank statement line." xml:space="preserve">
+    <value>No bank rules configured yet. Create a rule above or click the bookmark icon on any bank statement line.</value>
+  </data>
+  <data name="Post Rule Matches" xml:space="preserve">
+    <value>Post Rule Matches</value>
+  </data>
+  <data name="Priority" xml:space="preserve">
+    <value>Priority</value>
+  </data>
+  <data name="Rule" xml:space="preserve">
+    <value>Rule</value>
+  </data>
+  <data name="Rule Name" xml:space="preserve">
+    <value>Rule Name</value>
+  </data>
+  <data name="Save as Bank Rule" xml:space="preserve">
+    <value>Save as Bank Rule</value>
+  </data>
+  <data name="Save Rule" xml:space="preserve">
+    <value>Save Rule</value>
+  </data>
+  <data name="Target Account" xml:space="preserve">
+    <value>Target Account</value>
+  </data>
+  <data name="Default sales tax rates and company tax registration numbers are configured per jurisdiction in Business Settings → Accounting, Tax &amp; Jurisdiction. Customize the printed registration labels under Labels / Translations." xml:space="preserve">
+    <value>Default sales tax rates and company tax registration numbers are configured per jurisdiction in Business Settings → Accounting, Tax &amp; Jurisdiction. Customize the printed registration labels under Labels / Translations.</value>
+  </data>
+  <data name="Formatting &amp; Currency" xml:space="preserve">
+    <value>Formatting &amp; Currency</value>
+  </data>
+  <data name="Tax Exempt" xml:space="preserve">
+    <value>Tax Exempt</value>
+  </data>
+  <data name="Tax Registration Number Labels" xml:space="preserve">
+    <value>Tax Registration Number Labels</value>
   </data>
 </root>

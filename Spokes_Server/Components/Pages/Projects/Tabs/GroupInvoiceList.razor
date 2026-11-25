@@ -270,7 +270,7 @@
             InvoiceNumber = Db.Invoices.GenerateInvoiceNumber(profile.InvoicePrefix),
             Date = DateTime.Today,
             Status = InvoiceStatus.Draft,
-            TaxRate = template?.TaxRate ?? 0.14975m,
+            TaxRate = FinancialCalculationEngine.ActiveCombinedTaxRate,
             PaymentTerms = template?.DefaultPaymentTerms ?? string.Empty,
             History =
             [
